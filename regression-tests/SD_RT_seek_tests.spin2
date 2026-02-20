@@ -35,6 +35,7 @@ testEmpty       BYTE    "RTEMPTY.BIN", 0
 ' Buffers
 writeBuffer     BYTE    0[TEST_FILE_SIZE]
 readBuffer      BYTE    0[64]
+readBuffer_guard BYTE   0[16]
 
 PUB go() | result, bytesRead, idx, fileSize, expectedByte, actualByte
 '' Main entry point for seek operation regression tests
@@ -102,7 +103,9 @@ PUB go() | result, bytesRead, idx, fileSize, expectedByte, actualByte
     utils.evaluateBool(result, @"seek(0)", true)
 
     utils.startTest(@"Read byte at position 0")
+    utils.initGuard(@readBuffer_guard)
     bytesRead := sd.read(@readBuffer, 1)
+    utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
     utils.evaluateSingleValue(readBuffer[0], @"byte at 0", 0)
 
     utils.startTest(@"seek(100) - position 100")
@@ -110,7 +113,9 @@ PUB go() | result, bytesRead, idx, fileSize, expectedByte, actualByte
     utils.evaluateBool(result, @"seek(100)", true)
 
     utils.startTest(@"Read byte at position 100")
+    utils.initGuard(@readBuffer_guard)
     bytesRead := sd.read(@readBuffer, 1)
+    utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
     utils.evaluateSingleValue(readBuffer[0], @"byte at 100", 100)
 
     utils.startTest(@"seek(255) - position 255")
@@ -118,7 +123,9 @@ PUB go() | result, bytesRead, idx, fileSize, expectedByte, actualByte
     utils.evaluateBool(result, @"seek(255)", true)
 
     utils.startTest(@"Read byte at position 255")
+    utils.initGuard(@readBuffer_guard)
     bytesRead := sd.read(@readBuffer, 1)
+    utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
     utils.evaluateSingleValue(readBuffer[0], @"byte at 255", 255)
 
     utils.startTest(@"seek(256) - position 256 (wraps to 0 in pattern)")
@@ -126,7 +133,9 @@ PUB go() | result, bytesRead, idx, fileSize, expectedByte, actualByte
     utils.evaluateBool(result, @"seek(256)", true)
 
     utils.startTest(@"Read byte at position 256")
+    utils.initGuard(@readBuffer_guard)
     bytesRead := sd.read(@readBuffer, 1)
+    utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
     utils.evaluateSingleValue(readBuffer[0], @"byte at 256", 0)  ' 256 & $FF = 0
 
     sd.closeFile()
@@ -146,7 +155,9 @@ PUB go() | result, bytesRead, idx, fileSize, expectedByte, actualByte
     utils.evaluateBool(result, @"seek(511)", true)
 
     utils.startTest(@"Read byte at 511")
+    utils.initGuard(@readBuffer_guard)
     bytesRead := sd.read(@readBuffer, 1)
+    utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
     utils.evaluateSingleValue(readBuffer[0], @"byte at 511", 511 & $FF)
 
     utils.startTest(@"seek(512) - first byte of second sector")
@@ -154,7 +165,9 @@ PUB go() | result, bytesRead, idx, fileSize, expectedByte, actualByte
     utils.evaluateBool(result, @"seek(512)", true)
 
     utils.startTest(@"Read byte at 512")
+    utils.initGuard(@readBuffer_guard)
     bytesRead := sd.read(@readBuffer, 1)
+    utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
     utils.evaluateSingleValue(readBuffer[0], @"byte at 512", 512 & $FF)
 
     utils.startTest(@"seek(1023) - last byte of second sector")
@@ -162,7 +175,9 @@ PUB go() | result, bytesRead, idx, fileSize, expectedByte, actualByte
     utils.evaluateBool(result, @"seek(1023)", true)
 
     utils.startTest(@"Read byte at 1023")
+    utils.initGuard(@readBuffer_guard)
     bytesRead := sd.read(@readBuffer, 1)
+    utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
     utils.evaluateSingleValue(readBuffer[0], @"byte at 1023", 1023 & $FF)
 
     utils.startTest(@"seek(1024) - first byte of third sector")
@@ -170,7 +185,9 @@ PUB go() | result, bytesRead, idx, fileSize, expectedByte, actualByte
     utils.evaluateBool(result, @"seek(1024)", true)
 
     utils.startTest(@"Read byte at 1024")
+    utils.initGuard(@readBuffer_guard)
     bytesRead := sd.read(@readBuffer, 1)
+    utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
     utils.evaluateSingleValue(readBuffer[0], @"byte at 1024", 1024 & $FF)
 
     sd.closeFile()
@@ -244,7 +261,9 @@ PUB go() | result, bytesRead, idx, fileSize, expectedByte, actualByte
     utils.evaluateBool(result, @"seek(EOF-1)", true)
 
     utils.startTest(@"Read at EOF position")
+    utils.initGuard(@readBuffer_guard)
     bytesRead := sd.read(@readBuffer, 1)
+    utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
     utils.evaluateSingleValue(readBuffer[0], @"byte at EOF-1", (TEST_FILE_SIZE - 1) & $FF)
 
     sd.closeFile()
@@ -260,14 +279,18 @@ PUB go() | result, bytesRead, idx, fileSize, expectedByte, actualByte
 
     utils.startTest(@"Sequential read first 10 bytes")
     utils.setCheckCountPerTest(10)
+    utils.initGuard(@readBuffer_guard)
     bytesRead := sd.read(@readBuffer, 10)
+    utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
     repeat idx from 0 to 9
         utils.evaluateSubValue(readBuffer[idx], @"sequential byte", idx)
 
     utils.startTest(@"Seek back and re-read")
     sd.seek(0)
     utils.setCheckCountPerTest(10)
+    utils.initGuard(@readBuffer_guard)
     bytesRead := sd.read(@readBuffer, 10)
+    utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
     repeat idx from 0 to 9
         utils.evaluateSubValue(readBuffer[idx], @"re-read byte", idx)
 
@@ -288,7 +311,9 @@ PUB go() | result, bytesRead, idx, fileSize, expectedByte, actualByte
         result := sd.seek(0)
         utils.evaluateSubBool(result, @"seek(0)", true)
         ' Read first byte - verifies we're at position 0
+        utils.initGuard(@readBuffer_guard)
         bytesRead := sd.read(@readBuffer, 1)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
         utils.evaluateSubValue(readBuffer[0], @"first byte", 0)
         sd.closeFile()
 
@@ -302,7 +327,9 @@ PUB go() | result, bytesRead, idx, fileSize, expectedByte, actualByte
         ' (seeking past EOF is what fails)
         debug("  seek(", udec_(TEST_FILE_SIZE), ") = ", sdec_(result))
         ' Try to read - should get 0 bytes
+        utils.initGuard(@readBuffer_guard)
         bytesRead := sd.read(@readBuffer, 10)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
         utils.evaluateSingleValue(bytesRead, @"read at EOF", 0)
         sd.closeFile()
 
@@ -318,7 +345,9 @@ PUB go() | result, bytesRead, idx, fileSize, expectedByte, actualByte
         result := sd.seek(0)
         utils.evaluateSubBool(result, @"seek(0) in empty", true)
         ' Try to read - should get 0 bytes
+        utils.initGuard(@readBuffer_guard)
         bytesRead := sd.read(@readBuffer, 1)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
         utils.evaluateSubValue(bytesRead, @"read from empty", 0)
         ' Try seek(1) in empty file - should fail (beyond EOF)
         result := sd.seek(1)
@@ -353,7 +382,9 @@ PRI testSeekPosition(position) | result, bytesRead, expectedByte
 
     result := sd.seek(position)
     expectedByte := position & $FF
+    utils.initGuard(@readBuffer_guard)
     bytesRead := sd.read(@readBuffer, 1)
+    utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
     utils.evaluateSubBool(result, @"seek()", true)
     utils.evaluateSubValue(readBuffer[0], @"byte value", expectedByte)
     debug("  Position ", udec_(position), ": expected $", uhex_(expectedByte), " got $", uhex_(readBuffer[0]))

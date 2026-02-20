@@ -55,7 +55,9 @@ testdir1        BYTE    "RTDIR1", 0
 nonexistent     BYTE    "NOEXIST.TXT", 0
 
 readBuffer      BYTE    0[128]
+readBuffer_guard BYTE   0[16]
 sectorBuffer    BYTE    0[512]        ' For reading raw sectors during diagnostics
+sectorBuffer_guard BYTE 0[16]
 
 PUB go() | result, handle, h1, h2, h3, pFilename, fileSize, attrs, bytesWritten, bytesRead, root_sec, i, pEntry, d_sec, d_buftype, d_token, d_b0, d_b1, d_b2, d_b3, d_pbuf, d_bef0, d_bef1, d_bef2, d_bef3, d_spi
 '' Main entry point for file operations regression tests
@@ -103,7 +105,9 @@ PUB go() | result, handle, h1, h2, h3, pFilename, fileSize, attrs, bytesWritten,
             4: root_sec := 1000
             5: root_sec := sd.debugGetRootSec()
         bytefill(@sectorBuffer, $EE, 512)
+        utils.initGuard(@sectorBuffer_guard)
         result := sd.readSectorRaw(root_sec, @sectorBuffer)
+        utils.checkGuard(@sectorBuffer_guard, @"sectorBuffer guard")
         debug("  Sector ", udec_(root_sec), ": $", uhex_byte_(sectorBuffer[0]), " $", uhex_byte_(sectorBuffer[1]), " $", uhex_byte_(sectorBuffer[2]), " $", uhex_byte_(sectorBuffer[3]))
         ' For high sectors, also show internal diagnostic data
         if root_sec > 30000
@@ -156,7 +160,9 @@ PUB go() | result, handle, h1, h2, h3, pFilename, fileSize, attrs, bytesWritten,
     debug("  DIAG: @sectorBuffer = $", uhex_long_(@sectorBuffer))
     debug("  DIAG: Testing basic sector read (MBR)...")
     bytefill(@sectorBuffer, $AA, 512)
+    utils.initGuard(@sectorBuffer_guard)
     result := sd.readSectorRaw(0, @sectorBuffer)
+    utils.checkGuard(@sectorBuffer_guard, @"sectorBuffer guard")
     debug("  DIAG: readSectorRaw(0) returned ", sdec_(result))
     debug("  DIAG: MBR bytes 510-511: $", uhex_byte_(sectorBuffer[510]), " $", uhex_byte_(sectorBuffer[511]))
     if sectorBuffer[510] == $55 and sectorBuffer[511] == $AA
@@ -167,14 +173,18 @@ PUB go() | result, handle, h1, h2, h3, pFilename, fileSize, attrs, bytesWritten,
     ' Try reading sector 1 (partition table area) to see if issue is sector-specific
     debug("  DIAG: Reading sector 1...")
     bytefill(@sectorBuffer, $CC, 512)
+    utils.initGuard(@sectorBuffer_guard)
     result := sd.readSectorRaw(1, @sectorBuffer)
+    utils.checkGuard(@sectorBuffer_guard, @"sectorBuffer guard")
     debug("  DIAG: Sector 1 first bytes: $", uhex_byte_(sectorBuffer[0]), " $", uhex_byte_(sectorBuffer[1]), " $", uhex_byte_(sectorBuffer[2]), " $", uhex_byte_(sectorBuffer[3]))
 
     ' Now read root directory sector
     root_sec := sd.debugGetRootSec()
     debug("  DIAG: root_sec = ", udec_(root_sec), " ($", uhex_long_(root_sec), ")")
     bytefill(@sectorBuffer, $BB, 512)
+    utils.initGuard(@sectorBuffer_guard)
     result := sd.readSectorRaw(root_sec, @sectorBuffer)
+    utils.checkGuard(@sectorBuffer_guard, @"sectorBuffer guard")
     debug("  DIAG: readSectorRaw(root) returned ", sdec_(result))
     debug("  DIAG: First 8 bytes: $", uhex_byte_(sectorBuffer[0]), " $", uhex_byte_(sectorBuffer[1]), " $", uhex_byte_(sectorBuffer[2]), " $", uhex_byte_(sectorBuffer[3]), " $", uhex_byte_(sectorBuffer[4]), " $", uhex_byte_(sectorBuffer[5]), " $", uhex_byte_(sectorBuffer[6]), " $", uhex_byte_(sectorBuffer[7]))
     ' Check if buffer was written at all
@@ -217,7 +227,9 @@ PUB go() | result, handle, h1, h2, h3, pFilename, fileSize, attrs, bytesWritten,
     utils.startTest(@"readHandle() returns correct content")
     if handle >= 0
         bytefill(@readBuffer, 0, 128)
+        utils.initGuard(@readBuffer_guard)
         bytesRead := sd.readHandle(handle, @readBuffer, strsize(@testContent1))
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
         utils.evaluateSubValue(bytesRead, @"bytesRead", strsize(@testContent1))
         utils.evaluateSubBool(strcomp(@readBuffer, @testContent1), @"content matches", true)
 
@@ -353,17 +365,23 @@ PUB go() | result, handle, h1, h2, h3, pFilename, fileSize, attrs, bytesWritten,
 
     if h1 >= 0
         bytefill(@readBuffer, 0, 128)
+        utils.initGuard(@readBuffer_guard)
         bytesRead := sd.readHandle(h1, @readBuffer, 14)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
         utils.evaluateSubBool(strcomp(@readBuffer, @"File 1 content"), @"file1 content", true)
 
     if h2 >= 0
         bytefill(@readBuffer, 0, 128)
+        utils.initGuard(@readBuffer_guard)
         bytesRead := sd.readHandle(h2, @readBuffer, 14)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
         utils.evaluateSubBool(strcomp(@readBuffer, @"File 2 content"), @"file2 content", true)
 
     if h3 >= 0
         bytefill(@readBuffer, 0, 128)
+        utils.initGuard(@readBuffer_guard)
         bytesRead := sd.readHandle(h3, @readBuffer, 14)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
         utils.evaluateSubBool(strcomp(@readBuffer, @"File 3 content"), @"file3 content", true)
 
     ' Close all handles

@@ -66,6 +66,7 @@ dhContent       BYTE    "Directory handle test content", 0
 
 ' Read buffer
 readBuffer      BYTE    0[256]
+readBuffer_guard BYTE   0[16]
 
 PUB go() | result, h1, h2, h3, h4, h5, h6, hDir, hDir2, pEntry, pName, attrs, entryCount, foundFiles, foundDirs
 '' Main entry point for directory handle regression tests
@@ -343,7 +344,9 @@ PUB go() | result, h1, h2, h3, h4, h5, h6, hDir, hDir2, pEntry, pName, attrs, en
     utils.evaluateSubBool(hDir >= 0, @"dir handle valid", true)
     ' Read from file handle
     if h1 >= 0
+        utils.initGuard(@readBuffer_guard)
         result := sd.readHandle(h1, @readBuffer, 10)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
         utils.evaluateSubBool(result > 0, @"file read works", true)
         sd.closeFileHandle(h1)
     ' Read from dir handle

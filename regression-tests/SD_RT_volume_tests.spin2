@@ -61,7 +61,9 @@ syncContent     BYTE    "Sync test data chunk one", 0
 
 ' Buffers
 vbrBuf          BYTE    0[512]
+vbrBuf_guard    BYTE    0[16]
 readBuffer      BYTE    0[256]
+readBuffer_guard BYTE   0[16]
 
 ' Saved original label
 origLabel       BYTE    0[12]
@@ -373,7 +375,9 @@ PUB go() | result, handle, h1, h2, h3, bytesWritten, bytesRead, pLabel, idx, pEn
     ' Read MBR (sector 0) to find VBR sector
     utils.startTest(@"Read MBR to find VBR sector")
     bytefill(@vbrBuf, 0, 512)
+    utils.initGuard(@vbrBuf_guard)
     result := sd.readSectorRaw(0, @vbrBuf)
+    utils.checkGuard(@vbrBuf_guard, @"vbrBuf guard")
     utils.evaluateBool(result, @"readSectorRaw(0)", true)
 
     ' Get VBR sector from partition table (offset $1C6 = 454, 4-byte LE)
@@ -386,7 +390,9 @@ PUB go() | result, handle, h1, h2, h3, bytesWritten, bytesRead, pLabel, idx, pEn
     ' Read VBR sector
     utils.startTest(@"VBR has boot signature $AA55")
     bytefill(@vbrBuf, 0, 512)
+    utils.initGuard(@vbrBuf_guard)
     result := sd.readSectorRaw(vbrSector, @vbrBuf)
+    utils.checkGuard(@vbrBuf_guard, @"vbrBuf guard")
     if result
         result := WORD[@vbrBuf + $1FE]
         utils.evaluateSingleValueHex(result, @"boot signature", MBR_SIGNATURE)

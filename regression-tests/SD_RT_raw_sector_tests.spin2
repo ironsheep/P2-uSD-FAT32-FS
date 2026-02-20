@@ -50,11 +50,13 @@ CON
 #PRAGMA EXPORTDEF SD_INCLUDE_ALL
 
 OBJ
-    sd : "micro_sd_fat32_fs"
+    sd    : "micro_sd_fat32_fs"
+    utils : "isp_rt_utilities"
 
 VAR
     BYTE    write_buf[512]
     BYTE    read_buf[512]
+    BYTE    read_buf_guard[16]
     LONG    pass_count
     LONG    fail_count
 
@@ -223,7 +225,9 @@ PUB go() | result, i, sector
 
     ' Test: Sector 0 (MBR) - verify MBR signature
     debug("* Test: Read sector 0 (MBR) and verify signature $55 $AA")
+    utils.initGuard(@read_buf_guard)
     sd.readSectorRaw(0, @read_buf)
+    utils.checkGuard(@read_buf_guard, @"read_buf guard")
     if read_buf[510] == $55 and read_buf[511] == $AA
         debug("  MBR signature verified: $55 $AA at bytes 510-511")
         debug("  -> pass")
@@ -235,7 +239,9 @@ PUB go() | result, i, sector
 
     ' Test: High sector number (1,000,000) - verify large LBA addressing
     debug("* Test: Read high sector number 1,000,000 (large LBA)")
+    utils.initGuard(@read_buf_guard)
     result := sd.readSectorRaw(1_000_000, @read_buf)
+    utils.checkGuard(@read_buf_guard, @"read_buf guard")
     ' This tests that the driver can address high sector numbers
     ' The read may or may not succeed depending on card size, but it shouldn't crash
     if result == 0 or result == -1
@@ -298,7 +304,9 @@ PRI writeAndVerify(sector, expectedPattern) : success
         return false
 
     ' Read back immediately
+    utils.initGuard(@read_buf_guard)
     sd.readSectorRaw(sector, @read_buf)
+    utils.checkGuard(@read_buf_guard, @"read_buf guard")
 
     ' Quick verify of markers
     success := verifyMarkers(sector, expectedPattern)
@@ -314,7 +322,9 @@ PRI verifyPattern(sector, expectedPattern) : success
 ' @param expectedPattern - expected pattern ID
 ' @returns success - true if verified OK, false if mismatch
 
+    utils.initGuard(@read_buf_guard)
     sd.readSectorRaw(sector, @read_buf)
+    utils.checkGuard(@read_buf_guard, @"read_buf guard")
     success := verifyMarkers(sector, expectedPattern)
     if success
         debug("  -> pass")
@@ -365,7 +375,9 @@ PRI verifyFullPattern(sector, patternId, baseOffset) : success | i, expected, ac
 ' @param baseOffset - offset added to sequential count (0 for A, $E0 for E)
 ' @returns success - true if all data bytes match
 
+    utils.initGuard(@read_buf_guard)
     sd.readSectorRaw(sector, @read_buf)
+    utils.checkGuard(@read_buf_guard, @"read_buf guard")
     success := true
 
     repeat i from 8 to 503
@@ -386,7 +398,9 @@ PRI verifyFullPatternAlt(sector, patternId) : success | i, expected, actual
 ' @param patternId - pattern identifier (for boundary markers)
 ' @returns success - true if all data bytes match AA/55 pattern
 
+    utils.initGuard(@read_buf_guard)
     sd.readSectorRaw(sector, @read_buf)
+    utils.checkGuard(@read_buf_guard, @"read_buf guard")
     success := true
 
     repeat i from 8 to 503

@@ -41,6 +41,7 @@ DAT
 
 ' CSD register buffer (16 bytes)
 csdBuf          BYTE    0[16]
+csdBuf_guard    BYTE    0[16]
 
 PUB go() | result, csdVer, tranSpeed, capacity, cardSectors, readTimeout, writeTimeout, maxSpeed
 '' Main entry point for register access regression tests
@@ -71,7 +72,9 @@ PUB go() | result, csdVer, tranSpeed, capacity, cardSectors, readTimeout, writeT
     ' Test: readCSDRaw returns data
     utils.startTest(@"readCSDRaw() returns data successfully")
     bytefill(@csdBuf, 0, 16)
+    utils.initGuard(@csdBuf_guard)
     result := sd.readCSDRaw(@csdBuf)
+    utils.checkGuard(@csdBuf_guard, @"csdBuf guard")
     utils.evaluateBool(result, @"readCSDRaw()", true)
 
     ' Test: CSD version is valid (0 for SDSC, 1 for SDHC/SDXC)
@@ -113,7 +116,9 @@ PUB go() | result, csdVer, tranSpeed, capacity, cardSectors, readTimeout, writeT
     result := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
     utils.evaluateSubBool(result, @"initCardOnly()", true)
     bytefill(@csdBuf, 0, 16)
+    utils.initGuard(@csdBuf_guard)
     result := sd.readCSDRaw(@csdBuf)
+    utils.checkGuard(@csdBuf_guard, @"csdBuf guard")
     utils.evaluateSubBool(result, @"readCSDRaw() unmounted", true)
     ' Verify same version
     result := (csdBuf[0] >> 6) & $03

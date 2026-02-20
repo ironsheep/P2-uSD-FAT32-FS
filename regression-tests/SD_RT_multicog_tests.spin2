@@ -49,6 +49,7 @@ worker_stacks   LONG    0[NUM_WORKER_COGS * STACK_SIZE]
 
 ' Read buffers for worker cogs (separate from stacks!)
 worker_buffers  BYTE    0[NUM_WORKER_COGS * 64]   ' 64 bytes per worker
+worker_buffers_guard BYTE 0[16]
 
 ' Worker status and results (shared between cogs)
 worker_status   LONG    0[NUM_WORKER_COGS]    ' Current status
@@ -119,6 +120,7 @@ PUB go() | result, i, firstCogId, allSame, totalErrors
     utils.startTest(@"Launch worker cogs to call start()")
     test_phase := 1   ' Singleton test phase
     sync_barrier := 0
+    utils.initGuard(@worker_buffers_guard)
 
     ' Launch worker cogs
     repeat i from 0 to NUM_WORKER_COGS - 1
@@ -134,6 +136,7 @@ PUB go() | result, i, firstCogId, allSame, totalErrors
 
     ' Wait for all workers to complete
     waitForWorkers()
+    utils.checkGuard(@worker_buffers_guard, @"worker_buffers guard")
 
     ' Verify all workers got the same cog ID
     utils.startTest(@"All workers see same cog ID (singleton)")
@@ -163,6 +166,7 @@ PUB go() | result, i, firstCogId, allSame, totalErrors
     utils.startTest(@"Launch workers for concurrent file reads")
     test_phase := 2   ' Concurrent read phase
     sync_barrier := 0
+    utils.initGuard(@worker_buffers_guard)
 
     ' Reset worker status
     repeat i from 0 to NUM_WORKER_COGS - 1
@@ -183,6 +187,7 @@ PUB go() | result, i, firstCogId, allSame, totalErrors
 
     ' Wait for all workers to complete
     waitForWorkers()
+    utils.checkGuard(@worker_buffers_guard, @"worker_buffers guard")
 
     ' NOTE: Due to driver limitation (one open file at a time), interleaved
     ' open/read/close operations may fail when another cog's openFile() resets
@@ -210,6 +215,7 @@ PUB go() | result, i, firstCogId, allSame, totalErrors
     utils.startTest(@"Launch workers for stress test")
     test_phase := 3   ' Stress test phase
     sync_barrier := 0
+    utils.initGuard(@worker_buffers_guard)
 
     ' Reset worker status
     repeat i from 0 to NUM_WORKER_COGS - 1
@@ -230,6 +236,7 @@ PUB go() | result, i, firstCogId, allSame, totalErrors
 
     ' Wait for all workers to complete
     waitForWorkers()
+    utils.checkGuard(@worker_buffers_guard, @"worker_buffers guard")
 
     ' NOTE: Stress test verifies lock mechanism under load. Due to single-file
     ' limitation, some operations fail when interleaved, but this proves the

@@ -53,6 +53,7 @@ testdir2        BYTE    "NONEXIST", 0
 testContent     BYTE    "0123456789", 0       ' Exactly 10 bytes
 
 readBuffer      BYTE    0[64]
+readBuffer_guard BYTE   0[16]
 
 PUB go() | result, handle, h1, h2, h3, h4, h5, bytesRead, bytesWritten
 '' Main entry point for error handling regression tests
@@ -106,11 +107,15 @@ PUB go() | result, handle, h1, h2, h3, h4, h5, bytesRead, bytesWritten
     handle := sd.openFileRead(@testfile1)
     if handle >= 0
         bytefill(@readBuffer, 0, 64)
+        utils.initGuard(@readBuffer_guard)
         bytesRead := sd.readHandle(handle, @readBuffer, 20)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
         ' Should get exactly 10 bytes (file size), not 20
         utils.evaluateSubValue(bytesRead, @"first read gets 10 bytes", 10)
         ' Second read should get 0 (EOF)
+        utils.initGuard(@readBuffer_guard)
         bytesRead := sd.readHandle(handle, @readBuffer, 10)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
         utils.evaluateSubValue(bytesRead, @"second read gets 0 (EOF)", 0)
         sd.closeFileHandle(handle)
 

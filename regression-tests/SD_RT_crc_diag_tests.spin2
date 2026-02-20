@@ -51,6 +51,7 @@ crcTestFile2    BYTE    "CRCTEST2.BIN", 0
 ' Buffers
 writeBuffer     BYTE    0[BUFFER_SIZE]
 readBuffer      BYTE    0[BUFFER_SIZE]
+readBuffer_guard BYTE   0[16]
 
 PUB go() | result, handle, bytesRead, bytesWritten, matchCount, mismatchCount, retryCount, lastRecvCRC, lastCalcCRC, lastSentCRC, matchBefore, matchAfter, cmd13val, cmd13err
 '' Main entry point for CRC diagnostic regression tests
@@ -123,7 +124,9 @@ PUB go() | result, handle, bytesRead, bytesWritten, matchCount, mismatchCount, r
         sd.closeFileHandle(handle)
     handle := sd.openFileRead(@crcTestFile)
     if handle >= 0
+        utils.initGuard(@readBuffer_guard)
         bytesRead := sd.readHandle(handle, @readBuffer, BUFFER_SIZE)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
         sd.closeFileHandle(handle)
 
     matchAfter := sd.getCRCMatchCount()
@@ -163,7 +166,9 @@ PUB go() | result, handle, bytesRead, bytesWritten, matchCount, mismatchCount, r
     matchBefore := sd.getCRCMatchCount()
     handle := sd.openFileRead(@crcTestFile)
     if handle >= 0
+        utils.initGuard(@readBuffer_guard)
         bytesRead := sd.readHandle(handle, @readBuffer, BUFFER_SIZE)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
         sd.closeFileHandle(handle)
     matchAfter := sd.getCRCMatchCount()
     debug("   CRC enabled - before: ", udec(matchBefore), " after: ", udec(matchAfter))
@@ -175,7 +180,9 @@ PUB go() | result, handle, bytesRead, bytesWritten, matchCount, mismatchCount, r
     matchBefore := sd.getCRCMatchCount()
     handle := sd.openFileRead(@crcTestFile)
     if handle >= 0
+        utils.initGuard(@readBuffer_guard)
         bytesRead := sd.readHandle(handle, @readBuffer, BUFFER_SIZE)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
         sd.closeFileHandle(handle)
     matchAfter := sd.getCRCMatchCount()
     debug("   CRC disabled - before: ", udec(matchBefore), " after: ", udec(matchAfter))
@@ -185,7 +192,9 @@ PUB go() | result, handle, bytesRead, bytesWritten, matchCount, mismatchCount, r
     utils.startTest(@"Reads work with CRC disabled")
     handle := sd.openFileRead(@crcTestFile)
     if handle >= 0
+        utils.initGuard(@readBuffer_guard)
         bytesRead := sd.readHandle(handle, @readBuffer, BUFFER_SIZE)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
         sd.closeFileHandle(handle)
     result := utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $30)
     utils.evaluateBool(result, @"data correct with CRC off", true)
@@ -195,7 +204,9 @@ PUB go() | result, handle, bytesRead, bytesWritten, matchCount, mismatchCount, r
     sd.setCRCValidation(true)
     handle := sd.openFileRead(@crcTestFile)
     if handle >= 0
+        utils.initGuard(@readBuffer_guard)
         bytesRead := sd.readHandle(handle, @readBuffer, BUFFER_SIZE)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
         sd.closeFileHandle(handle)
     result := utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $30)
     utils.evaluateBool(result, @"data correct with CRC on", true)

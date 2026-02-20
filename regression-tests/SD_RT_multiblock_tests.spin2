@@ -44,14 +44,17 @@ CON
 #PRAGMA EXPORTDEF SD_INCLUDE_ALL
 
 OBJ
-    sd : "micro_sd_fat32_fs"
+    sd    : "micro_sd_fat32_fs"
+    utils : "isp_rt_utilities"
 
 VAR
     ' Buffers for multi-sector operations
     BYTE    write_buf[SMALL_COUNT * SECTOR_SIZE]     ' 4KB for 8 sectors
     BYTE    read_buf[SMALL_COUNT * SECTOR_SIZE]
+    BYTE    read_buf_guard[16]
     BYTE    large_write_buf[LARGE_COUNT * SECTOR_SIZE]  ' 32KB for 64 sectors
     BYTE    large_read_buf[LARGE_COUNT * SECTOR_SIZE]
+    BYTE    large_read_buf_guard[16]
 
     LONG    pass_count
     LONG    fail_count
@@ -137,7 +140,9 @@ PRI testRoundTripMultiBlock() | sector, i, written, readCt, errors
 
     ' Read all 8 sectors at once
     debug("* Reading 8 sectors starting at ", udec_(sector))
+    utils.initGuard(@read_buf_guard)
     readCt := sd.readSectorsRaw(sector, SMALL_COUNT, @read_buf)
+    utils.checkGuard(@read_buf_guard, @"read_buf guard")
     if readCt <> SMALL_COUNT
         debug("  FAIL: readSectorsRaw returned ", udec_(readCt), " (expected ", udec_(SMALL_COUNT), ")")
         recordFail()
@@ -180,9 +185,11 @@ PRI testMultiWriteSingleRead() | sector, i, j, written, errors, expected, actual
 
     ' Read back with 8 individual reads and verify each
     errors := 0
+    utils.initGuard(@read_buf_guard)
     repeat i from 0 to SMALL_COUNT - 1
         ' Read single sector into read_buf (reuse first 512 bytes)
         sd.readSectorRaw(sector + i, @read_buf)
+        utils.initAndCheckGuard(@read_buf_guard, @"read_buf guard")
 
         ' Verify this sector's data against write_buf
         bufOffset := i * SECTOR_SIZE
@@ -228,7 +235,9 @@ PRI testSingleWriteMultiRead() | sector, i, j, readCt, errors, expected, actual,
 
     ' Read all 8 sectors at once
     debug("* Reading 8 sectors with readSectorsRaw")
+    utils.initGuard(@read_buf_guard)
     readCt := sd.readSectorsRaw(sector, SMALL_COUNT, @read_buf)
+    utils.checkGuard(@read_buf_guard, @"read_buf guard")
     if readCt <> SMALL_COUNT
         debug("  FAIL: readSectorsRaw returned ", udec_(readCt))
         recordFail()
@@ -274,7 +283,9 @@ PRI testEdgeCases() | sector, i, written, readCt, errors
         recordFail()
     else
         bytefill(@read_buf, $00, SECTOR_SIZE)
+        utils.initGuard(@read_buf_guard)
         readCt := sd.readSectorsRaw(sector, 1, @read_buf)
+        utils.checkGuard(@read_buf_guard, @"read_buf guard")
         if readCt <> 1
             debug("  FAIL: count=1 read returned ", udec_(readCt))
             recordFail()
@@ -329,7 +340,9 @@ PRI testLargeMultiBlock() | sector, i, written, readCt, errors
 
     ' Read 64 sectors at once
     debug("* Reading 64 sectors starting at ", udec_(sector))
+    utils.initGuard(@large_read_buf_guard)
     readCt := sd.readSectorsRaw(sector, LARGE_COUNT, @large_read_buf)
+    utils.checkGuard(@large_read_buf_guard, @"large_read_buf guard")
     if readCt <> LARGE_COUNT
         debug("  FAIL: readSectorsRaw returned ", udec_(readCt), " (expected ", udec_(LARGE_COUNT), ")")
         recordFail()

@@ -53,7 +53,9 @@ OBJ
 VAR
 
     BYTE    buf[512]
+    BYTE    buf_guard[16]
     BYTE    buf2[512]
+    BYTE    buf2_guard[16]
     LONG    sectorsPerFat
     LONG    totalSectors
     LONG    partitionStart
@@ -99,7 +101,9 @@ PUB go() | result, dataStart, fat1Start, fat2Start, idx, mismatch, cardSectors
     ' ========================================
     utils.startTestGroup(@"MBR Verification")
 
+    utils.initGuard(@buf_guard)
     sd.readSectorRaw(0, @buf)
+    utils.checkGuard(@buf_guard, @"buf guard")
 
     utils.startTest(@"MBR boot signature")
     result := WORD[@buf + $1FE]
@@ -128,7 +132,9 @@ PUB go() | result, dataStart, fat1Start, fat2Start, idx, mismatch, cardSectors
     ' ========================================
     utils.startTestGroup(@"VBR Verification")
 
+    utils.initGuard(@buf_guard)
     sd.readSectorRaw(partitionStart, @buf)
+    utils.checkGuard(@buf_guard, @"buf guard")
 
     utils.startTest(@"VBR jump instruction")
     ' Must start with $EB xx $90 or $E9 xx xx
@@ -224,7 +230,9 @@ PUB go() | result, dataStart, fat1Start, fat2Start, idx, mismatch, cardSectors
 
     utils.startTest(@"Backup VBR matches primary")
     ' Read backup boot sector at partition + 6
+    utils.initGuard(@buf2_guard)
     sd.readSectorRaw(partitionStart + 6, @buf2)
+    utils.checkGuard(@buf2_guard, @"buf2 guard")
 
     ' Compare the two boot sectors
     mismatch := false
@@ -240,7 +248,9 @@ PUB go() | result, dataStart, fat1Start, fat2Start, idx, mismatch, cardSectors
     ' ========================================
     utils.startTestGroup(@"FSInfo Verification")
 
+    utils.initGuard(@buf_guard)
     sd.readSectorRaw(partitionStart + 1, @buf)
+    utils.checkGuard(@buf_guard, @"buf guard")
 
     utils.startTest(@"FSInfo lead signature")
     result := LONG[@buf + 0]
@@ -267,7 +277,9 @@ PUB go() | result, dataStart, fat1Start, fat2Start, idx, mismatch, cardSectors
     debug("  Next free hint: ", udec(result))
 
     utils.startTest(@"Backup FSInfo matches primary")
+    utils.initGuard(@buf2_guard)
     sd.readSectorRaw(partitionStart + 7, @buf2)
+    utils.checkGuard(@buf2_guard, @"buf2 guard")
     mismatch := false
     repeat idx from 0 to 511
         if buf[idx] <> buf2[idx]
@@ -284,7 +296,9 @@ PUB go() | result, dataStart, fat1Start, fat2Start, idx, mismatch, cardSectors
     fat2Start := fat1Start + sectorsPerFat
 
     ' Read FAT1 first sector for multiple tests
+    utils.initGuard(@buf_guard)
     sd.readSectorRaw(fat1Start, @buf)
+    utils.checkGuard(@buf_guard, @"buf guard")
 
     utils.startTest(@"FAT[0] media type entry")
     result := LONG[@buf + 0]
@@ -303,7 +317,9 @@ PUB go() | result, dataStart, fat1Start, fat2Start, idx, mismatch, cardSectors
     utils.evaluateBool(result == 0, @"FAT[3] = 0 (free)", true)
 
     utils.startTest(@"FAT2 mirrors FAT1 (first sector)")
+    utils.initGuard(@buf2_guard)
     sd.readSectorRaw(fat2Start, @buf2)
+    utils.checkGuard(@buf2_guard, @"buf2 guard")
     mismatch := false
     repeat idx from 0 to 511
         if buf[idx] <> buf2[idx]
@@ -313,7 +329,9 @@ PUB go() | result, dataStart, fat1Start, fat2Start, idx, mismatch, cardSectors
     utils.evaluateBool(mismatch == false, @"FAT1 and FAT2 identical", true)
 
     utils.startTest(@"FAT1 second sector is zeroed")
+    utils.initGuard(@buf_guard)
     sd.readSectorRaw(fat1Start + 1, @buf)
+    utils.checkGuard(@buf_guard, @"buf guard")
     mismatch := false
     repeat idx from 0 to 511
         if buf[idx] <> 0
@@ -322,7 +340,9 @@ PUB go() | result, dataStart, fat1Start, fat2Start, idx, mismatch, cardSectors
     utils.evaluateBool(mismatch == false, @"All zeros", true)
 
     utils.startTest(@"FAT2 second sector is zeroed")
+    utils.initGuard(@buf_guard)
     sd.readSectorRaw(fat2Start + 1, @buf)
+    utils.checkGuard(@buf_guard, @"buf guard")
     mismatch := false
     repeat idx from 0 to 511
         if buf[idx] <> 0
@@ -338,7 +358,9 @@ PUB go() | result, dataStart, fat1Start, fat2Start, idx, mismatch, cardSectors
     dataStart := partitionStart + 32 + 2 * sectorsPerFat
     debug("  Data region starts at sector ", udec(dataStart))
 
+    utils.initGuard(@buf_guard)
     sd.readSectorRaw(dataStart, @buf)
+    utils.checkGuard(@buf_guard, @"buf guard")
 
     utils.startTest(@"Volume label entry present")
     ' First entry should be volume label

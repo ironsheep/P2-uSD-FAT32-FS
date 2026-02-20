@@ -61,6 +61,7 @@ content4        BYTE    "Content for file FOUR - fourth test file", 0
 
 ' Buffer for read operations
 readBuffer      BYTE    0[256]
+readBuffer_guard BYTE   0[16]
 
 PUB go() | result, h1, h2, h3, h4, h5, h6, bytesRead, bytesWritten, pos, size
 '' Main entry point for multi-handle regression tests
@@ -114,19 +115,27 @@ PUB go() | result, h1, h2, h3, h4, h5, h6, bytesRead, bytesWritten, pos, size
     utils.setCheckCountPerTest(4)
 
     bytefill(@readBuffer, 0, 256)
+    utils.initGuard(@readBuffer_guard)
     bytesRead := sd.readHandle(h1, @readBuffer, strsize(@content1))
+    utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
     utils.evaluateSubBool(strcomp(@readBuffer, @content1), @"Handle 1 content", true)
 
     bytefill(@readBuffer, 0, 256)
+    utils.initGuard(@readBuffer_guard)
     bytesRead := sd.readHandle(h2, @readBuffer, strsize(@content2))
+    utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
     utils.evaluateSubBool(strcomp(@readBuffer, @content2), @"Handle 2 content", true)
 
     bytefill(@readBuffer, 0, 256)
+    utils.initGuard(@readBuffer_guard)
     bytesRead := sd.readHandle(h3, @readBuffer, strsize(@content3))
+    utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
     utils.evaluateSubBool(strcomp(@readBuffer, @content3), @"Handle 3 content", true)
 
     bytefill(@readBuffer, 0, 256)
+    utils.initGuard(@readBuffer_guard)
     bytesRead := sd.readHandle(h4, @readBuffer, strsize(@content4))
+    utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
     utils.evaluateSubBool(strcomp(@readBuffer, @content4), @"Handle 4 content", true)
     utils.setCheckCountPerTest(1)
 
@@ -155,11 +164,15 @@ PUB go() | result, h1, h2, h3, h4, h5, h6, bytesRead, bytesWritten, pos, size
 
     ' Read from both - should get different data
     bytefill(@readBuffer, 0, 256)
+    utils.initGuard(@readBuffer_guard)
     bytesRead := sd.readHandle(h1, @readBuffer, 8)  ' Read "file ONE"
+    utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
     utils.evaluateSubBool(strncmp(@readBuffer, @"file ONE", 8), @"Handle 1 at pos 12", true)
 
     bytefill(@readBuffer, 0, 256)
+    utils.initGuard(@readBuffer_guard)
     bytesRead := sd.readHandle(h2, @readBuffer, 7)  ' Read "Content"
+    utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
     utils.evaluateSubBool(strncmp(@readBuffer, @"Content", 7), @"Handle 2 at pos 0", true)
 
     sd.closeFileHandle(h1)
@@ -291,7 +304,9 @@ PUB go() | result, h1, h2, h3, h4, h5, h6, bytesRead, bytesWritten, pos, size
 
     ' Read back and verify
     bytefill(@readBuffer, 0, 256)
+    utils.initGuard(@readBuffer_guard)
     bytesRead := sd.readHandle(h1, @readBuffer, 21)
+    utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
     utils.evaluateSubValue(bytesRead, @"Bytes read", 21)
     utils.evaluateSubBool(strcomp(@readBuffer, @"Persistence Test Data"), @"Data matches", true)
 
@@ -333,7 +348,9 @@ PUB go() | result, h1, h2, h3, h4, h5, h6, bytesRead, bytesWritten, pos, size
     utils.evaluateSubValue(size, @"Final size", 14)
 
     bytefill(@readBuffer, 0, 256)
+    utils.initGuard(@readBuffer_guard)
     bytesRead := sd.readHandle(h1, @readBuffer, 14)
+    utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
     utils.evaluateSubBool(strcomp(@readBuffer, @"Sync Test More"), @"All data present", true)
 
     sd.closeFileHandle(h1)
@@ -353,7 +370,9 @@ PUB go() | result, h1, h2, h3, h4, h5, h6, bytesRead, bytesWritten, pos, size
     ' Read entire file
     size := sd.fileSizeHandle(h1)
     bytefill(@readBuffer, 0, 256)
+    utils.initGuard(@readBuffer_guard)
     bytesRead := sd.readHandle(h1, @readBuffer, size)
+    utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
 
     ' Now should be at EOF
     result := sd.eofHandle(h1)

@@ -49,8 +49,10 @@ testLarge256    BYTE    "RTLG256.BIN", 0
 ' Buffers
 writeBuffer     BYTE    0[BUFFER_SIZE]
 readBuffer      BYTE    0[BUFFER_SIZE]
+readBuffer_guard BYTE   0[16]
 largeWriteBuf   BYTE    0[LARGE_BUFFER_SIZE]
 largeReadBuf    BYTE    0[LARGE_BUFFER_SIZE]
+largeReadBuf_guard BYTE 0[16]
 
 ' Test strings
 testStr1        BYTE    "Hello, World!", 0
@@ -113,7 +115,9 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize
     utils.startTest(@"Verify byte values")
     utils.setCheckCountPerTest(10)
     if handle >= 0
+        utils.initGuard(@readBuffer_guard)
         bytesRead := sd.readHandle(handle, @readBuffer, 10)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
         repeat idx from 0 to 9
             utils.evaluateSubValue(readBuffer[idx], @"byte value", idx + 1)
 
@@ -187,7 +191,9 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize
 
     utils.startTest(@"Verify bytes read count")
     if handle >= 0
+        utils.initGuard(@readBuffer_guard)
         bytesRead := sd.readHandle(handle, @readBuffer, 256)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
         utils.evaluateSingleValue(bytesRead, @"bytes read", 256)
 
     utils.startTest(@"Verify buffer content")
@@ -224,7 +230,9 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize
 
     utils.startTest(@"Read and verify content")
     if handle >= 0
+        utils.initGuard(@largeReadBuf_guard)
         bytesRead := sd.readHandle(handle, @largeReadBuf, LARGE_BUFFER_SIZE)
+        utils.checkGuard(@largeReadBuf_guard, @"largeReadBuf guard")
         utils.evaluateSingleValue(bytesRead, @"bytes read", LARGE_BUFFER_SIZE)
 
     utils.startTest(@"Verify large buffer pattern")
@@ -299,14 +307,18 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize
     utils.startTest(@"Read 0 bytes returns 0")
     handle := sd.openFileRead(@testPattern)
     if handle >= 0
+        utils.initGuard(@readBuffer_guard)
         bytesRead := sd.readHandle(handle, @readBuffer, 0)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
         utils.evaluateSingleValue(bytesRead, @"readHandle(0)", 0)
         sd.closeFileHandle(handle)
 
     utils.startTest(@"Read more than file size")
     handle := sd.openFileRead(@testBytes)  ' 10 byte file
     if handle >= 0
+        utils.initGuard(@readBuffer_guard)
         bytesRead := sd.readHandle(handle, @readBuffer, 100)  ' Request 100
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
         utils.evaluateSingleValue(bytesRead, @"readHandle() at EOF", 10)  ' Should get 10
         sd.closeFileHandle(handle)
 
@@ -325,7 +337,9 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize
     if handle >= 0
         fileSize := sd.fileSizeHandle(handle)
         utils.evaluateSubValue(fileSize, @"fileSize of empty file", 0)
+        utils.initGuard(@readBuffer_guard)
         bytesRead := sd.readHandle(handle, @readBuffer, 10)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
         utils.evaluateSubValue(bytesRead, @"read from empty file", 0)
         result := sd.eofHandle(handle)
         utils.evaluateSubBool(result <> 0, @"EOF true immediately", true)
@@ -343,7 +357,9 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize
     if handle >= 0
         fileSize := sd.fileSizeHandle(handle)
         utils.evaluateSubValue(fileSize, @"fileSize of 1-byte file", 1)
+        utils.initGuard(@readBuffer_guard)
         bytesRead := sd.readHandle(handle, @readBuffer, 1)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
         utils.evaluateSubValue(bytesRead, @"read 1 byte", 1)
         utils.evaluateSubValue(readBuffer[0], @"byte value", $42)
         sd.closeFileHandle(handle)
@@ -360,7 +376,9 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize
     if handle >= 0
         fileSize := sd.fileSizeHandle(handle)
         utils.evaluateSubValue(fileSize, @"fileSize 512 bytes", 512)
+        utils.initGuard(@readBuffer_guard)
         bytesRead := sd.readHandle(handle, @readBuffer, 512)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
         utils.evaluateSubValue(bytesRead, @"read 512 bytes", 512)
         result := utils.verifyBufferPattern(@readBuffer, 512, $B0)
         utils.evaluateSubBool(result, @"512-byte pattern match", true)
@@ -381,9 +399,13 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize
         fileSize := sd.fileSizeHandle(handle)
         utils.evaluateSubValue(fileSize, @"fileSize 513 bytes", 513)
         bytefill(@readBuffer, 0, 512)
+        utils.initGuard(@readBuffer_guard)
         bytesRead := sd.readHandle(handle, @readBuffer, 512)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
         utils.evaluateSubValue(bytesRead, @"read first 512", 512)
+        utils.initGuard(@readBuffer_guard)
         bytesRead := sd.readHandle(handle, @readBuffer, 1)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
         utils.evaluateSubValue(bytesRead, @"read 513th byte", 1)
         utils.evaluateSubValue(readBuffer[0], @"513th byte value", $C1)
         sd.closeFileHandle(handle)
@@ -404,7 +426,9 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize
         fileSize := sd.fileSizeHandle(handle)
         utils.evaluateSubValue(fileSize, @"fileSize 65536 bytes", 65536)
         ' Read back and verify first chunk
+        utils.initGuard(@largeReadBuf_guard)
         bytesRead := sd.readHandle(handle, @largeReadBuf, LARGE_BUFFER_SIZE)
+        utils.checkGuard(@largeReadBuf_guard, @"largeReadBuf guard")
         utils.evaluateSubValue(bytesRead, @"read first 2KB", LARGE_BUFFER_SIZE)
         result := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, $D0)
         utils.evaluateSubBool(result, @"first chunk pattern", true)
@@ -440,7 +464,9 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize
     utils.startTest(@"Verify first 2KB chunk of 128KB file")
     handle := sd.openFileRead(@testLarge128)
     if handle >= 0
+        utils.initGuard(@largeReadBuf_guard)
         bytesRead := sd.readHandle(handle, @largeReadBuf, LARGE_BUFFER_SIZE)
+        utils.checkGuard(@largeReadBuf_guard, @"largeReadBuf guard")
         utils.evaluateSubValue(bytesRead, @"read 2KB", LARGE_BUFFER_SIZE)
         result := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, 0)
         utils.evaluateSubBool(result, @"first chunk pattern(0)", true)
@@ -452,7 +478,9 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize
     if handle >= 0
         result := sd.seekHandle(handle, 65536)
         utils.evaluateSubValue(result, @"seek to 65536", 0)
+        utils.initGuard(@largeReadBuf_guard)
         bytesRead := sd.readHandle(handle, @largeReadBuf, LARGE_BUFFER_SIZE)
+        utils.checkGuard(@largeReadBuf_guard, @"largeReadBuf guard")
         utils.evaluateSubValue(bytesRead, @"read middle 2KB", LARGE_BUFFER_SIZE)
         result := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, 256)
         utils.evaluateSubBool(result, @"middle chunk pattern", true)
@@ -464,7 +492,9 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize
     if handle >= 0
         result := sd.seekHandle(handle, 129024)
         utils.evaluateSubValue(result, @"seek to 129024", 0)
+        utils.initGuard(@largeReadBuf_guard)
         bytesRead := sd.readHandle(handle, @largeReadBuf, LARGE_BUFFER_SIZE)
+        utils.checkGuard(@largeReadBuf_guard, @"largeReadBuf guard")
         utils.evaluateSubValue(bytesRead, @"read last 2KB", LARGE_BUFFER_SIZE)
         ' Pattern start: chunk 63 * 8 = 504, but masked to 8 bits = $F8
         result := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, (63 * 8) & $FF)
@@ -476,8 +506,10 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize
     utils.setCheckCountPerTest(64)
     handle := sd.openFileRead(@testLarge128)
     if handle >= 0
+        utils.initGuard(@largeReadBuf_guard)
         repeat idx from 0 to 63
             bytesRead := sd.readHandle(handle, @largeReadBuf, LARGE_BUFFER_SIZE)
+            utils.initAndCheckGuard(@largeReadBuf_guard, @"largeReadBuf guard")
             result := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, (idx * 8) & $FF)
             utils.evaluateSubBool(result, @"chunk pattern match", true)
         sd.closeFileHandle(handle)
@@ -507,25 +539,33 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize
     if handle >= 0
         ' Position 0 (cluster 0)
         sd.seekHandle(handle, 0)
+        utils.initGuard(@largeReadBuf_guard)
         bytesRead := sd.readHandle(handle, @largeReadBuf, LARGE_BUFFER_SIZE)
+        utils.checkGuard(@largeReadBuf_guard, @"largeReadBuf guard")
         result := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, 0)
         utils.evaluateSubBool(result, @"pos 0 pattern", true)
 
         ' Position 32768 (cluster boundary area)
         sd.seekHandle(handle, 32768)
+        utils.initGuard(@largeReadBuf_guard)
         bytesRead := sd.readHandle(handle, @largeReadBuf, LARGE_BUFFER_SIZE)
+        utils.checkGuard(@largeReadBuf_guard, @"largeReadBuf guard")
         result := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, (16 * 8) & $FF)
         utils.evaluateSubBool(result, @"pos 32768 pattern", true)
 
         ' Position 131072 (halfway, cluster 16)
         sd.seekHandle(handle, 131072)
+        utils.initGuard(@largeReadBuf_guard)
         bytesRead := sd.readHandle(handle, @largeReadBuf, LARGE_BUFFER_SIZE)
+        utils.checkGuard(@largeReadBuf_guard, @"largeReadBuf guard")
         result := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, (64 * 8) & $FF)
         utils.evaluateSubBool(result, @"pos 131072 pattern", true)
 
         ' Position 260096 (near end, last 2KB chunk)
         sd.seekHandle(handle, 260096)
+        utils.initGuard(@largeReadBuf_guard)
         bytesRead := sd.readHandle(handle, @largeReadBuf, LARGE_BUFFER_SIZE)
+        utils.checkGuard(@largeReadBuf_guard, @"largeReadBuf guard")
         result := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, (127 * 8) & $FF)
         utils.evaluateSubBool(result, @"pos 260096 pattern", true)
 
@@ -538,13 +578,17 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize
     if handle >= 0
         ' Read near end first
         sd.seekHandle(handle, 260096)
+        utils.initGuard(@largeReadBuf_guard)
         bytesRead := sd.readHandle(handle, @largeReadBuf, LARGE_BUFFER_SIZE)
+        utils.checkGuard(@largeReadBuf_guard, @"largeReadBuf guard")
         result := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, (127 * 8) & $FF)
         utils.evaluateSubBool(result, @"near-end read OK", true)
 
         ' Seek backward to beginning
         sd.seekHandle(handle, 0)
+        utils.initGuard(@largeReadBuf_guard)
         bytesRead := sd.readHandle(handle, @largeReadBuf, LARGE_BUFFER_SIZE)
+        utils.checkGuard(@largeReadBuf_guard, @"largeReadBuf guard")
         result := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, 0)
         utils.evaluateSubBool(result, @"backward seek read OK", true)
 

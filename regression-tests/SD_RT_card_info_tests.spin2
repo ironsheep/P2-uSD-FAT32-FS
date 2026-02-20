@@ -40,15 +40,18 @@ CON
 #PRAGMA EXPORTDEF SD_INCLUDE_ALL
 
 OBJ
-    sd : "micro_sd_fat32_fs"
+    sd    : "micro_sd_fat32_fs"
+    utils : "isp_rt_utilities"
 
 DAT
 
     ' Sector buffer for MBR/VBR reads
     sect_buf      BYTE    0[512]
+    sect_buf_guard BYTE   0[16]
 
     ' SD Status buffer (ACMD13 - 64 bytes)
     sdst_buf      BYTE    0[64]
+    sdst_buf_guard BYTE   0[16]
 
     ' Parsed field buffers
     pnm_buf       BYTE    0[6]         ' Product name (5 chars + null)
@@ -242,7 +245,9 @@ PRI testStructAccess() | sd.cid_t cid, sd.scr_t scr, result, ocr, sectors, spiHz
         fail_count++
 
     debug("--- Test: readSectorRaw(0) MBR ---")
+    utils.initGuard(@sect_buf_guard)
     result := sd.readSectorRaw(0, @sect_buf)
+    utils.checkGuard(@sect_buf_guard, @"sect_buf guard")
     if WORD[@sect_buf + $1FE] == MBR_SIGNATURE
         debug("  MBR: valid, type=$", uhex_byte_(sect_buf[$1C2]), " start=", udec_(LONG[@sect_buf + $1C6]))
         pass_count++
@@ -254,7 +259,9 @@ PRI testStructAccess() | sd.cid_t cid, sd.scr_t scr, result, ocr, sectors, spiHz
     ' === ACMD13 SD STATUS TEST ===
     debug("--- Test: readSDStatusRaw() ACMD13 ---")
     bytefill(@sdst_buf, $EE, 64)
+    utils.initGuard(@sdst_buf_guard)
     result := sd.readSDStatusRaw(@sdst_buf)
+    utils.checkGuard(@sdst_buf_guard, @"sdst_buf guard")
     if result
         debug("  readSDStatusRaw: OK (64 bytes)")
 
@@ -326,7 +333,9 @@ PRI generateTwoLineDisplay() | sd.cid_t cid, sd.scr_t scr, ...
     readOEMName()
 
     ' Read SD Status (ACMD13) for speed class info
+    utils.initGuard(@sdst_buf_guard)
     sdstOk := sd.readSDStatusRaw(@sdst_buf)
+    utils.checkGuard(@sdst_buf_guard, @"sdst_buf guard")
     if sdstOk
         speedClass := decodeSpeedClass(sdst_buf[8])
         uhsGrade := sdst_buf[14] >> 4
@@ -416,7 +425,9 @@ PRI getCardType(ocr, sizeMB) : p_type
 
 PRI detectFilesystem() : p_fsName | pType
 
+    utils.initGuard(@sect_buf_guard)
     sd.readSectorRaw(0, @sect_buf)
+    utils.checkGuard(@sect_buf_guard, @"sect_buf guard")
     if WORD[@sect_buf + $1FE] <> MBR_SIGNATURE
         return @fsUnknown
 
@@ -434,11 +445,15 @@ PRI detectFilesystem() : p_fsName | pType
 
 PRI readOEMName() | partStart, i
 
+    utils.initGuard(@sect_buf_guard)
     sd.readSectorRaw(0, @sect_buf)
+    utils.checkGuard(@sect_buf_guard, @"sect_buf guard")
     if WORD[@sect_buf + $1FE] == MBR_SIGNATURE
         partStart := LONG[@sect_buf + $1C6]
         if partStart > 0
+            utils.initGuard(@sect_buf_guard)
             sd.readSectorRaw(partStart, @sect_buf)
+            utils.checkGuard(@sect_buf_guard, @"sect_buf guard")
             bytemove(@oemBuf, @sect_buf + 3, 8)
             oemBuf[8] := 0
             i := 7

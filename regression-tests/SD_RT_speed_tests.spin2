@@ -54,6 +54,7 @@ spTestFile2     BYTE    "SPTEST2.BIN", 0
 ' Buffers
 writeBuffer     BYTE    0[BUFFER_SIZE]
 readBuffer      BYTE    0[BUFFER_SIZE]
+readBuffer_guard BYTE   0[16]
 
 PUB go() | result, handle, spiFreq, maxSpeed, hsActive, cmd6Sup, hsCap, hsResult, bytesRead, bytesWritten, readTimeout, writeTimeout
 '' Main entry point for speed API regression tests
@@ -125,7 +126,9 @@ PUB go() | result, handle, spiFreq, maxSpeed, hsActive, cmd6Sup, hsCap, hsResult
         sd.closeFileHandle(handle)
     handle := sd.openFileRead(@spTestFile)
     if handle >= 0
+        utils.initGuard(@readBuffer_guard)
         bytesRead := sd.readHandle(handle, @readBuffer, BUFFER_SIZE)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
         sd.closeFileHandle(handle)
     result := utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $50)
     utils.evaluateBool(result, @"data integrity at 20 MHz", true)
@@ -171,7 +174,9 @@ PUB go() | result, handle, spiFreq, maxSpeed, hsActive, cmd6Sup, hsCap, hsResult
         sd.closeFileHandle(handle)
         handle := sd.openFileRead(@spTestFile2)
         if handle >= 0
+            utils.initGuard(@readBuffer_guard)
             bytesRead := sd.readHandle(handle, @readBuffer, BUFFER_SIZE)
+            utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
             sd.closeFileHandle(handle)
         result := utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $70)
         utils.evaluateBool(result, @"data integrity post-HS", true)
@@ -209,7 +214,9 @@ PUB go() | result, handle, spiFreq, maxSpeed, hsActive, cmd6Sup, hsCap, hsResult
     ' Verify data still works at low speed (read existing file)
     handle := sd.openFileRead(@spTestFile)
     if handle >= 0
+        utils.initGuard(@readBuffer_guard)
         bytesRead := sd.readHandle(handle, @readBuffer, BUFFER_SIZE)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
         utils.evaluateSubBool(bytesRead == BUFFER_SIZE, @"read at 400 kHz", true)
         sd.closeFileHandle(handle)
 

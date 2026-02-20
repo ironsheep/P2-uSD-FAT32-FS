@@ -37,6 +37,7 @@ DAT
 testfile1       BYTE    "TEST1.TXT", 0
 testfile2       BYTE    "TEST2.BIN", 0
 sectorBuffer    BYTE    0[512]
+sectorBuffer_guard BYTE 0[16]
 
 PUB go() | result, pLabel, freeSpace, handle
 '' Main entry point for mount/unmount regression tests
@@ -80,7 +81,9 @@ PUB go() | result, pLabel, freeSpace, handle
     utils.evaluateSingleValue(handle, @"createFileNew()", E_NOT_MOUNTED)
 
     utils.startTest(@"readSectorRaw() before mount returns false")
+    utils.initGuard(@sectorBuffer_guard)
     result := sd.readSectorRaw(0, @sectorBuffer)
+    utils.checkGuard(@sectorBuffer_guard, @"sectorBuffer guard")
     utils.evaluateSingleValue(result, @"readSectorRaw()", 0)
 
     utils.startTest(@"changeDirectory() before mount returns false")
@@ -103,7 +106,9 @@ PUB go() | result, pLabel, freeSpace, handle
     debug("  DIAG: CRC match=", udec_(sd.getCRCMatchCount()), " mismatch=", udec_(sd.getCRCMismatchCount()), " retry=", udec_(sd.getCRCRetryCount()))
     debug("  DIAG: recvCRC=$", uhex_(sd.getLastReceivedCRC()), " calcCRC=$", uhex_(sd.getLastCalculatedCRC()))
     ' Read sector 0 raw to inspect MBR partition table bytes
+    utils.initGuard(@sectorBuffer_guard)
     if sd.readSectorRaw(0, @sectorBuffer)
+      utils.checkGuard(@sectorBuffer_guard, @"sectorBuffer guard")
       debug("  DIAG MBR: sig=$", uhex_byte_(sectorBuffer[$1FE]), " $", uhex_byte_(sectorBuffer[$1FF]))
       debug("  DIAG MBR: part1 type=$", uhex_byte_(sectorBuffer[$1C2]), " lba=$", uhex_byte_(sectorBuffer[$1C9]), uhex_byte_(sectorBuffer[$1C8]), uhex_byte_(sectorBuffer[$1C7]), uhex_byte_(sectorBuffer[$1C6]))
       debug("  DIAG MBR[0..7]: $", uhex_byte_(sectorBuffer[0]), " $", uhex_byte_(sectorBuffer[1]), " $", uhex_byte_(sectorBuffer[2]), " $", uhex_byte_(sectorBuffer[3]), " $", uhex_byte_(sectorBuffer[4]), " $", uhex_byte_(sectorBuffer[5]), " $", uhex_byte_(sectorBuffer[6]), " $", uhex_byte_(sectorBuffer[7]))

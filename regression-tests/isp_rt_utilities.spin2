@@ -14,6 +14,9 @@ CON
 
   TEST_SIGNATURE = $12345678
 
+  GUARD_SIZE    = 16          ' Guard bytes after each buffer
+  GUARD_BYTE    = $CC         ' Sentinel value (distinct from $00, $FF, $AA, $55)
+
   ' Pin configuration for P2 Edge with SD card
   SD_CS   = 60
   SD_MOSI = 59
@@ -438,6 +441,49 @@ PUB verifyBufferValue(pBuffer, length, value) : bMatch | idx
             debug("  Value mismatch at ", udec_(idx), ": got $", uhex_(BYTE[pBuffer][idx]), " expected $", uhex_(value))
             quit
 
+
+' -------
+' Buffer overflow guard utilities
+
+PUB initGuard(pGuardStart)
+'' Fill guard zone with sentinel bytes
+''
+'' @param pGuardStart - pointer to start of guard zone (immediately after buffer)
+''
+'' Call BEFORE driver operation to initialize the guard zone.
+
+    bytefill(pGuardStart, GUARD_BYTE, GUARD_SIZE)
+
+PUB checkGuard(pGuardStart, pMessage) : bIntact | idx
+'' Verify all guard bytes are intact
+''
+'' @param pGuardStart - pointer to start of guard zone
+'' @param pMessage - pointer to description string for failure reporting
+'' @returns bIntact - true if all guard bytes are $CC
+''
+'' Call AFTER driver operation. Reports offset and corrupt value on failure.
+'' Silent on pass - does NOT affect test counters.
+
+    bIntact := true
+    repeat idx from 0 to GUARD_SIZE - 1
+        if BYTE[pGuardStart][idx] <> GUARD_BYTE
+            bIntact := false
+            debug("  GUARD VIOLATION: ", zstr_(pMessage), " at offset ", udec_(idx), ": $", uhex_byte_(BYTE[pGuardStart][idx]), " (expected $CC)")
+            quit
+    ifnot bIntact
+        debug("   -> GUARD FAIL")
+
+PUB initAndCheckGuard(pGuardStart, pMessage) : bIntact
+'' Combined check + re-init for use inside loops
+''
+'' @param pGuardStart - pointer to start of guard zone
+'' @param pMessage - pointer to description string for failure reporting
+'' @returns bIntact - true if all guard bytes were $CC before re-init
+''
+'' Checks guard, then re-initializes for next iteration.
+
+    bIntact := checkGuard(pGuardStart, pMessage)
+    initGuard(pGuardStart)
 
 con { license }
 
