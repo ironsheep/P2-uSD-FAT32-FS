@@ -182,6 +182,8 @@ CON '' V3 multi-file handle configuration
 
 CON '' worker cog stack size
   STACK_SIZE = 128              ' 128 longs = 512 bytes (original)
+  STACK_GUARD_LONGS = 4         ' 4 longs = 16 bytes guard zone after stack
+  STACK_GUARD_BYTE  = $CC       ' Sentinel value (matches isp_rt_utilities convention)
 
 CON '' streamer configuration (compile-time constants for bulk sector transfers)
   ' Reference: flash_loader.spin2 pattern, P2 Silicon Doc streamer section
@@ -316,6 +318,7 @@ DAT '' singleton control - SHARED across all object instances
   ' WORKER COG STACK
   ' ═══════════════════════════════════════════════════════════════════════
   cog_stack     LONG    0[STACK_SIZE]   ' Worker cog stack
+  cog_stack_guard LONG  0[STACK_GUARD_LONGS]  ' Stack overflow sentinel ($CC fill)
 
   ' ═══════════════════════════════════════════════════════════════════════
   ' SPI PIN CONFIGURATION (set once at start)
@@ -482,6 +485,9 @@ PUB start(_cs, _mosi, _miso, _sck) : result
   pb_status := SUCCESS
   sec_in_buf := -1                                                              ' Invalidate buffer
 
+  ' Initialize stack guard zone before launching worker
+  bytefill(@cog_stack_guard, STACK_GUARD_BYTE, STACK_GUARD_LONGS * 4)
+
   ' Launch worker cog
   cog_id := cogspin(NEWCOG, fs_worker(), @cog_stack)
   if cog_id == -1
@@ -516,6 +522,20 @@ PUB stop()
   driver_mode := MODE_NONE   ' Reset mode so next init/mount starts fresh
   flags := 0
   sec_in_buf := -1
+
+PUB checkStackGuard() : bIntact | idx
+'' Verify worker cog stack guard is intact.
+'' Returns TRUE if all guard bytes are $CC (no overflow detected).
+'' Returns FALSE and reports via debug if any guard byte is corrupted.
+''
+'' @returns bIntact - TRUE if stack guard is intact, FALSE if overflow detected
+
+  bIntact := true
+  repeat idx from 0 to (STACK_GUARD_LONGS * 4) - 1
+    if BYTE[@cog_stack_guard][idx] <> STACK_GUARD_BYTE
+      bIntact := false
+      debug("  STACK GUARD VIOLATION at offset ", udec_(idx), ": $", uhex_byte_(BYTE[@cog_stack_guard][idx]), " (expected $CC)")
+      quit
 
 PUB error() : status
 '' Get last error for this cog - returns the error code from the most recent operation.
@@ -902,6 +922,10 @@ PRI send_command(op_cmd, p0, p1, p2, p3) : status
 
   ' Wait for completion using WAITATN (efficient sleep)
   WAITATN()
+
+  ' Check worker cog stack guard after every command
+  if not checkStackGuard()
+    debug("  [send_command] STACK OVERFLOW after cmd ", udec_(op_cmd))
 
   ' Get result
   status := pb_status
@@ -4484,7 +4508,7 @@ PRI allocateCluster(cluster) : result | fat_idx, buf_idx, high_bits
       writeSector(fat2_sec + result >> 7, BUF_FAT)                              '  write FAT2 sector (MIRROR)
       if cluster <> 0                                                           '  if allocateCluster was called with a non-zero cluster parameter
         if readSector(fat_sec + cluster >> 7, BUF_FAT) < 0                     '   read FAT sector containing cluster cell
-          debug("  [allocateCluster] FAT chain-link read FAILED — cluster orphaned")
+          debug("  [allocateCluster] FAT chain-link read FAILED - cluster orphaned")
           return -1
         buf_idx := (cluster << 2) & 511
         high_bits := long[@fat_buf + buf_idx] & $F000_0000                      '  preserve high 4 bits
@@ -5130,7 +5154,7 @@ PRI readSector(sector, buf_type) : result | _sck, _miso, data, loop_ctr, timeout
 
   ' ════════════════════════════════════════════════════════════════════════════
   ' CRC RETRY LOOP: Re-read on CRC mismatch (industry standard practice)
-  ' Card has no CRC-error state — it just sees another CMD17 on retry
+  ' Card has no CRC-error state - it just sees another CMD17 on retry
   ' ════════════════════════════════════════════════════════════════════════════
   repeat attempt from 1 to MAX_READ_CRC_RETRIES
 
@@ -5211,7 +5235,7 @@ PRI readSector(sector, buf_type) : result | _sck, _miso, data, loop_ctr, timeout
     diag_calc_crc := calcDataCRC(p_buf, 512)
     if diag_calc_crc == diag_recv_crc
       diag_crc_matches++
-      pinh(cs)                                                                  ' Deselect card — CRC OK
+      pinh(cs)                                                                  ' Deselect card - CRC OK
       quit                                                                      ' Exit retry loop on success
     else
       diag_crc_mismatches++
@@ -5219,7 +5243,7 @@ PRI readSector(sector, buf_type) : result | _sck, _miso, data, loop_ctr, timeout
       sp_transfer_8($FF)                                                        ' 8 NCS recovery clocks (CS HIGH, SD spec)
       if attempt < MAX_READ_CRC_RETRIES
         diag_crc_retries++
-        debug("  [readSector] CRC MISMATCH attempt ", udec_(attempt), "/", udec_(MAX_READ_CRC_RETRIES), " recv=$", uhex_(diag_recv_crc), " calc=$", uhex_(diag_calc_crc), " — retrying")
+        debug("  [readSector] CRC MISMATCH attempt ", udec_(attempt), "/", udec_(MAX_READ_CRC_RETRIES), " recv=$", uhex_(diag_recv_crc), " calc=$", uhex_(diag_calc_crc), " - retrying")
         long[p_cache] := -1                                                     ' Invalidate cache before retry
       else
         debug("  [readSector] CRC FAILED after ", udec_(MAX_READ_CRC_RETRIES), " attempts recv=$", uhex_(diag_recv_crc), " calc=$", uhex_(diag_calc_crc))
@@ -5370,9 +5394,9 @@ PRI readSectors(start_sector, count, p_buffer) : sectors_read | _sck, _miso, p_b
 
     sectors_read++
 
-  ' Send CMD12 to stop transmission — card is in DATA_OUT mode, must terminate cleanly
+  ' Send CMD12 to stop transmission - card is in DATA_OUT mode, must terminate cleanly
   if sendStopTransmission() < 0
-    debug("  [readSectors] CMD12 failed — card still in DATA_OUT, recovering")
+    debug("  [readSectors] CMD12 failed - card still in DATA_OUT, recovering")
     recoverToIdle()                                                               ' Force card back to idle
     sectors_read := 0                                                             ' Data can't be trusted
     return
@@ -5382,7 +5406,7 @@ PRI readSectors(start_sector, count, p_buffer) : sectors_read | _sck, _miso, p_b
   ' CMD13: Verify card internal state after multi-block read
   if checkCardStatus(@"readSectors") < 0
     debug("  [readSectors] CMD13 status check FAILED")
-    sectors_read := 0                                                             ' Card reports error — data can't be trusted
+    sectors_read := 0                                                             ' Card reports error - data can't be trusted
     return
 
 PRI writeSector(sector, buf_type) : result | _sck, _mosi, p_buf, stream_mode, clk_count, xfrq, t, resp, p_cache, align_delay
@@ -5467,7 +5491,7 @@ PRI writeSector(sector, buf_type) : result | _sck, _mosi, p_buf, stream_mode, cl
   '      (DIR=0 resets counter, output, Y without clearing WRPIN/WXPIN config)
   '   2. xinit starts streamer NCO from phase=0
   '   3. waitx gives NCO time to output first data bit before first SCK edge
-  '   4. wypin starts clock — base period counter phase is now deterministic
+  '   4. wypin starts clock - base period counter phase is now deterministic
   '      (not dependent on free-running counter from init)
   '
   ' Timing (all relative to pinl, each PASM instruction = 2 sysclk cycles):
@@ -5484,7 +5508,7 @@ PRI writeSector(sector, buf_type) : result | _sck, _mosi, p_buf, stream_mode, cl
         rdfast  #0, p_buf                         ' Setup RDFAST from hub buffer
         xinit   stream_mode, #0                    ' Start streamer; NCO ramps from zero
         waitx   align_delay                        ' Wait for NCO to output first data bit
-        wypin   clk_count, _sck                   ' Start clock — deterministic phase from drvl
+        wypin   clk_count, _sck                   ' Start clock - deterministic phase from drvl
         waitxfi                                   ' Wait for streamer to complete
   end
 
@@ -5623,7 +5647,7 @@ PRI writeSectors(start_sector, count, p_buffer) : sectors_written | _sck, _mosi,
           rdfast  #0, p_buf
           xinit   stream_mode, #0                  ' Start streamer; NCO ramps from zero
           waitx   align_delay                      ' Wait for NCO to output first bit
-          wypin   clk_count, _sck                 ' Start clock — deterministic phase from drvl
+          wypin   clk_count, _sck                 ' Start clock - deterministic phase from drvl
           waitxfi
     end
 
@@ -5657,9 +5681,9 @@ PRI writeSectors(start_sector, count, p_buffer) : sectors_written | _sck, _mosi,
   sp_transfer_8(TOKEN_STOP_TRAN)                                                ' $FD
   sp_transfer_8($FF)                                                            ' Stuff byte (NWR=1, required by spec)
 
-  ' Wait for card to finish any final programming — card is in PROGRAMMING state
+  ' Wait for card to finish any final programming - card is in PROGRAMMING state
   if waitBusyComplete() < 0
-    debug("  [writeSectors] Final busy timeout — card still programming, recovering")
+    debug("  [writeSectors] Final busy timeout - card still programming, recovering")
     recoverToIdle()                                                               ' Force card back to idle
     sectors_written := 0                                                          ' Write integrity unknown
     return
@@ -5669,7 +5693,7 @@ PRI writeSectors(start_sector, count, p_buffer) : sectors_written | _sck, _mosi,
   ' CMD13: Verify card internal state after multi-block write
   if checkCardStatus(@"writeSectors") < 0
     debug("  [writeSectors] CMD13 status check FAILED after writing ", udec_(sectors_written), " sectors")
-    sectors_written := 0                                                          ' Card reports error — writes can't be trusted
+    sectors_written := 0                                                          ' Card reports error - writes can't be trusted
     return
 
 ' ════════════════════════════════════════════════════════════════════════════════
@@ -5788,21 +5812,21 @@ PRI recoverToIdle() : result
 '
 ' @returns result - 0 if card released bus, -1 if card still holding MISO low
 
-  pinh(cs)                                                                        ' CS HIGH — abort any pending operation
+  pinh(cs)                                                                        ' CS HIGH - abort any pending operation
   repeat 10
-    sp_transfer_8($FF)                                                            ' 80 clocks with CS deasserted — let card release bus
+    sp_transfer_8($FF)                                                            ' 80 clocks with CS deasserted - let card release bus
 
   ' Verify card released MISO (should be high via pull-up when CS is deasserted)
   if pinr(miso) == 0
-    ' Card still holding MISO low — try extended clocking
+    ' Card still holding MISO low - try extended clocking
     debug("  [recoverToIdle] MISO still low after 80 clocks, extending...")
     repeat 20
-      sp_transfer_8($FF)                                                          ' 160 more clocks — extended recovery
+      sp_transfer_8($FF)                                                          ' 160 more clocks - extended recovery
     if pinr(miso) == 0
       debug("  [recoverToIdle] FAILED: card holding MISO low after 240 clocks")
-      return -1                                                                   ' Card stuck — caller must handle
+      return -1                                                                   ' Card stuck - caller must handle
 
-  return 0                                                                        ' Card released bus — back to idle
+  return 0                                                                        ' Card released bus - back to idle
 
 PRI checkCardStatus(caller) : result | r1, status
 ' Send CMD13 to verify card status after operation - checks R2 response for errors.

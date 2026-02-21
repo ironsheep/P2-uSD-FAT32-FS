@@ -1,0 +1,395 @@
+{Spin2_v49}
+'' =================================================================================================
+''
+''   File....... SD_RT_card_display_test.spin2
+''   Purpose.... Debug-only test of card info formatting (headless via run_test.sh)
+''   Authors.... Claude + Stephen M Moraco
+''   Started.... FEB 2026
+''   Updated.... 20 FEB 2026
+''
+'' =================================================================================================
+''
+''   Exercises EVERY formatting path used by the demo shell's 'card' command:
+''     1. Raw register dump (debug native) — ground truth
+''     2. Parsed field values (debug native) — verify parsing
+''     3. Individual formatting calls (itoa, fmt_number, padstr) — test building blocks
+''     4. sFormatStr composites (sFormatStr6/5/3) — test full format strings
+''
+''   Assumes formatting routines are correct; diagnoses how they are called.
+''
+''   Usage: ./run_test.sh ../regression-tests/SD_RT_card_display_test.spin2
+''
+'' =================================================================================================
+
+CON
+
+  CLK_FREQ = 270_000_000
+  _clkfreq = CLK_FREQ
+
+  ' P2 Edge module SD slot pins
+  SD_CS    = 60
+  SD_SCK   = 61
+  SD_MOSI  = 59
+  SD_MISO  = 58
+
+  MBR_SIGNATURE = $AA55
+
+  OUTBUF_SIZE = 256
+
+#PRAGMA EXPORTDEF SD_INCLUDE_ALL
+
+
+OBJ
+
+  sd     : "micro_sd_fat32_fs"
+  fmt    : "isp_mem_strings"
+
+
+DAT
+
+  ' Sector buffer for MBR/VBR reads
+  buf2            byte    0[512]
+
+  ' Output buffer for sFormatStr results
+  outBuf          byte    0[256]
+
+  ' Manufacturer lookup table - word pairs: MID, pointer to name
+  midTable
+              word    $02, @midKioxia
+              word    $03, @midSanDisk
+              word    $09, @midATP
+              word    $1B, @midSamsung
+              word    $1D, @midADATA
+              word    $27, @midPhison
+              word    $28, @midLexar
+              word    $41, @midKingston
+              word    $45, @midTeam
+              word    $6F, @midHiksemi
+              word    $74, @midGigastone
+              word    $82, @midSony
+              word    $9C, @midAngelbird
+              word    $9F, @midSharedOEM
+              word    $AD, @midLongsys
+              word    $00, 0                                           ' end sentinel
+
+  midKioxia       byte    "Kioxia", 0
+  midSanDisk      byte    "SanDisk", 0
+  midATP          byte    "ATP", 0
+  midSamsung      byte    "Samsung", 0
+  midADATA        byte    "ADATA", 0
+  midPhison       byte    "Phison", 0
+  midLexar        byte    "Lexar", 0
+  midKingston     byte    "Kingston", 0
+  midTeam         byte    "TEAM", 0
+  midHiksemi      byte    "Hiksemi", 0
+  midGigastone    byte    "Gigastone", 0
+  midSony         byte    "Sony", 0
+  midAngelbird    byte    "Angelbird", 0
+  midSharedOEM    byte    "OEM", 0
+  midLongsys      byte    "Longsys", 0
+  midUnknown      byte    "MID:$", 0
+
+  ' Filesystem type strings
+  fsUnknown       byte    "Unknown", 0
+  fsFAT32         byte    "FAT32", 0
+  fsFAT16         byte    "FAT16", 0
+  fsFAT12         byte    "FAT12", 0
+  fsEmpty         byte    "Empty", 0
+
+  ' Card type strings
+  ctSDSC          byte    "SDSC", 0
+  ctSDHC          byte    "SDHC", 0
+  ctSDXC          byte    "SDXC", 0
+
+  ' Unknown MID formatting buffer
+  midBuf          byte    0[8]
+
+
+PUB go() | result
+
+  debug("========================================")
+  debug("  Card Format Debug Test (debug-only)")
+  debug("========================================")
+
+  ' Mount the card
+  debug("--- Mounting card ---")
+  result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+  if (not result)
+    debug("Mount FAILED, error: ", sdec(sd.error()))
+    debug("END_SESSION")
+    return
+
+  debug("Mount OK")
+
+  ' Run the formatting tests
+  testCardInfo()
+
+  ' Unmount
+  sd.unmount()
+  debug("========================================")
+  debug("  Test complete")
+  debug("========================================")
+  debug("END_SESSION")
+
+
+PRI testCardInfo() | sd.cid_t cid, sd.scr_t scr, ...
+                     ocr, sizeMB, spiHz, psn, mdtYear, mdtMonth, ...
+                     pnm[2], p_mfr, p_type, p_spec, p_fs, ...
+                     oemBuf[3], partStart, i, pPart
+
+'' Exercise every formatting path used by the demo shell 'card' command.
+
+  ' ============================================================
+  ' STAGE 1: Read card registers
+  ' ============================================================
+  sd.readCIDRaw(@cid)
+  sd.readSCRRaw(@scr)
+  ocr := sd.getOCR()
+  sizeMB := sd.cardSizeSectors() / 2048
+  spiHz := sd.getSPIFrequency()
+
+  ' ============================================================
+  ' STAGE 2: Raw register dump — ground truth
+  ' ============================================================
+  debug("--- Raw CID register (16 bytes) ---")
+  debug(uhex_byte_array_(@cid, 16))
+
+  ' ============================================================
+  ' STAGE 3: Parsed field values — verify parsing is correct
+  ' ============================================================
+  debug("--- Parsed CID fields ---")
+
+  ' Product name (5 bytes, null-terminated)
+  bytemove(@pnm, @cid.pnm, 5)
+  BYTE[@pnm + 5] := 0
+
+  ' Serial number (4 bytes big-endian -> 32-bit LONG)
+  psn := (cid.psn[0] << 24) | (cid.psn[1] << 16) | (cid.psn[2] << 8) | cid.psn[3]
+
+  ' Manufacturing date
+  mdtYear := 2000 + ((cid.mdt[0] & $0F) << 4) + ((cid.mdt[1] >> 4) & $0F)
+  mdtMonth := cid.mdt[1] & $0F
+
+  debug("  MID:   $", uhex_(cid.mid))
+  debug("  OID:   $", uhex_(cid.oid[0]), " $", uhex_(cid.oid[1]))
+  debug("  PNM:   [", zstr_(@pnm), "]")
+  debug("  PRV:   ", udec_(cid.prv), " (", udec_(cid.prv >> 4), ".", udec_(cid.prv & $0F), ")")
+  debug("  PSN:   $", uhex_long_(psn))
+  debug("  MDT:   raw[$", uhex_(cid.mdt[0]), " $", uhex_(cid.mdt[1]), "] -> ", udec_(mdtYear), "/", udec_(mdtMonth))
+  debug("  OCR:   $", uhex_long_(ocr))
+  debug("  sizeMB:", udec_(sizeMB), " (", udec_(sizeMB / 1024), "GB)")
+  debug("  spiHz: ", udec_(spiHz))
+
+  ' Look up descriptive strings
+  p_mfr := lookupMID(cid.mid)
+  p_type := getCardType(ocr, sizeMB)
+  p_spec := getSDSpecVersion(@scr)
+  p_fs := detectFilesystem()
+
+  debug("--- Lookup results ---")
+  debug("  Mfr:  [", zstr_(p_mfr), "]")
+  debug("  Type: [", zstr_(p_type), "]")
+  debug("  Spec: [", zstr_(p_spec), "]")
+  debug("  FS:   [", zstr_(p_fs), "]")
+
+  ' ============================================================
+  ' STAGE 4: Read VBR OEM name
+  ' ============================================================
+  sd.readSectorRaw(0, @buf2)
+  if WORD[@buf2 + $1FE] == MBR_SIGNATURE
+    pPart := @buf2 + $1BE
+    partStart := LONG[pPart + 8]
+    if partStart > 0
+      sd.readSectorRaw(partStart, @buf2)
+      bytemove(@oemBuf, @buf2 + 3, 8)
+      BYTE[@oemBuf + 8] := 0
+      ' Trim trailing spaces
+      i := 7
+      repeat while i >= 0 AND BYTE[@oemBuf + i] == " "
+        BYTE[@oemBuf + i] := 0
+        i--
+    else
+      bytemove(@oemBuf, @"n/a", 4)
+  else
+    bytemove(@oemBuf, @"n/a", 4)
+
+  debug("  OEM:  [", zstr_(@oemBuf), "]")
+
+  ' ============================================================
+  ' STAGE 5: Individual formatting calls — test building blocks
+  ' ============================================================
+  debug("--- Individual fmt calls (itoa/fmt_number) ---")
+
+  ' Test itoa decimal — equivalent of serial.dec()
+  debug("  itoa(sizeMB,10,0) = [", zstr_(fmt.itoa(sizeMB, 10, 0)), "]")
+  debug("  itoa(spiHz,10,0)  = [", zstr_(fmt.itoa(spiHz, 10, 0)), "]")
+  debug("  itoa(mdtYear,10,0)= [", zstr_(fmt.itoa(mdtYear, 10, 0)), "]")
+  debug("  itoa(mdtMonth,10,0)=[", zstr_(fmt.itoa(mdtMonth, 10, 0)), "]")
+
+  ' Test itoa hex — equivalent of serial.hex()
+  debug("  itoa(psn,16,0)    = [", zstr_(fmt.itoa(psn, 16, 0)), "]")
+
+  ' Test itoa fixed-width — equivalent of serial.fwhex() and serial.fwdec()
+  debug("  itoa(psn,16,8)    = [", zstr_(fmt.itoa(psn, 16, 8)), "]  (fwhex 8)")
+  debug("  itoa(mdtMonth,10,2)=[", zstr_(fmt.itoa(mdtMonth, 10, 2)), "]  (fwdec 2)")
+
+  ' Test fmt_number decimal — used by %d
+  debug("  fmt_number(sizeMB,10,0,0,' ') = [", zstr_(fmt.fmt_number(sizeMB, 10, 0, 0, " ")), "]")
+  debug("  fmt_number(mdtYear,10,0,0,' ')= [", zstr_(fmt.fmt_number(mdtYear, 10, 0, 0, " ")), "]")
+
+  ' Test fmt_number hex with precision — used by %.8x
+  debug("  fmt_number(psn,16,8,0,' ')    = [", zstr_(fmt.fmt_number(psn, 16, 8, 0, " ")), "]  (%.8x)")
+
+  ' Test fmt_number decimal with precision — used by %.2d
+  debug("  fmt_number(mdtMonth,10,2,0,' ')=[", zstr_(fmt.fmt_number(mdtMonth, 10, 2, 0, " ")), "]  (%.2d)")
+
+  ' Test PRV formatting
+  debug("  itoa(prv>>4,10,0) = [", zstr_(fmt.itoa(cid.prv >> 4, 10, 0)), "]")
+  debug("  itoa(prv&$0F,10,0)= [", zstr_(fmt.itoa(cid.prv & $0F, 10, 0)), "]")
+
+  ' Test SPI frequency formatting
+  debug("  itoa(spiHz/1M,10,0)       = [", zstr_(fmt.itoa(spiHz / 1_000_000, 10, 0)), "]")
+  debug("  itoa((spiHz/100K)//10,10,0)= [", zstr_(fmt.itoa((spiHz / 100_000) // 10, 10, 0)), "]")
+
+  ' ============================================================
+  ' STAGE 6: sFormatStr composites — test full format strings
+  ' ============================================================
+  debug("--- sFormatStr composites ---")
+
+  ' Simple %s test
+  fmt.sFormatStr1(@outBuf, OUTBUF_SIZE, @"Mfr=[%s]", p_mfr)
+  debug("  fstr1 %%s: [", zstr_(@outBuf), "]")
+
+  ' Simple %d test
+  fmt.sFormatStr1(@outBuf, OUTBUF_SIZE, @"Size=%d", sizeMB)
+  debug("  fstr1 %%d: [", zstr_(@outBuf), "]")
+
+  ' Simple %x test
+  fmt.sFormatStr1(@outBuf, OUTBUF_SIZE, @"PSN=%x", psn)
+  debug("  fstr1 %%x: [", zstr_(@outBuf), "]")
+
+  ' Fixed-width hex test: %.8x
+  fmt.sFormatStr1(@outBuf, OUTBUF_SIZE, @"PSN=%.8x", psn)
+  debug("  fstr1 %%.8x: [", zstr_(@outBuf), "]")
+
+  ' Fixed-width dec test: %.2d
+  fmt.sFormatStr1(@outBuf, OUTBUF_SIZE, @"Month=%.2d", mdtMonth)
+  debug("  fstr1 %%.2d: [", zstr_(@outBuf), "]")
+
+  ' ============================================================
+  ' STAGE 7: Full two-line card display — the actual output
+  ' ============================================================
+  debug("--- Full card display (sFormatStr) ---")
+
+  ' Line 1 part A: Mfr Product Type Size [FS] Spec
+  if sizeMB < 1024
+    fmt.sFormatStr6(@outBuf, OUTBUF_SIZE, @"%s %s %s %dMB [%s] %s", p_mfr, @pnm, p_type, sizeMB, p_fs, p_spec)
+  else
+    fmt.sFormatStr6(@outBuf, OUTBUF_SIZE, @"%s %s %s %dGB [%s] %s", p_mfr, @pnm, p_type, sizeMB / 1024, p_fs, p_spec)
+  debug("  Line1a: [", zstr_(@outBuf), "]")
+
+  ' Line 1 part B: rev SN date
+  fmt.sFormatStr5(@outBuf, OUTBUF_SIZE, @" rev%d.%d SN:%.8x %d/%.2d", cid.prv >> 4, cid.prv & $0F, psn, mdtYear, mdtMonth)
+  debug("  Line1b: [", zstr_(@outBuf), "]")
+
+  ' Line 2: SPI frequency and OEM name
+  fmt.sFormatStr3(@outBuf, OUTBUF_SIZE, @"SPI %d.%d MHz  [%s]", spiHz / 1_000_000, (spiHz / 100_000) // 10, @oemBuf)
+  debug("  Line2:  [", zstr_(@outBuf), "]")
+
+  ' ============================================================
+  ' STAGE 8: Expected vs actual comparison
+  ' ============================================================
+  debug("--- Expected output (from raw values) ---")
+  debug("  Line1: <Mfr> <PNM> <Type> <Size>GB [<FS>] <Spec> rev<N>.<M> SN:<8hex> <Year>/<MM>")
+  debug("  Line2: SPI <N>.<D> MHz  [<OEM>]")
+
+
+PRI lookupMID(mid) : p_name | p, entryMID
+
+'' Look up manufacturer name from MID byte.
+'' Returns pointer to name string, or "MID:$NN" for unknown.
+
+  p := @midTable
+  repeat
+    entryMID := WORD[p]
+    if entryMID == $00
+      ' Unknown - format hex into buffer and return
+      bytemove(@midBuf, @midUnknown, 6)
+      midBuf[5] := hexDigit(mid >> 4)
+      midBuf[6] := hexDigit(mid & $0F)
+      midBuf[7] := 0
+      return @midBuf
+    if entryMID == mid
+      return @@WORD[p + 2]
+    p += 4
+
+
+PRI hexDigit(nibble) : ch
+
+'' Convert 0-15 to ASCII hex digit
+
+  if nibble < 10
+    return "0" + nibble
+  return "A" + nibble - 10
+
+
+PRI getCardType(ocr, sizeMB) : p_type
+
+'' Determine card type from OCR CCS bit and capacity.
+
+  if (ocr & (1 << 30)) == 0
+    return @ctSDSC
+  if sizeMB > 32768
+    return @ctSDXC
+  return @ctSDHC
+
+
+PRI getSDSpecVersion(^sd.scr_t p_scr) : p_version | sdSpec, spec3, spec4, specX
+
+'' Decode SD spec version from SCR register struct.
+
+  sdSpec := p_scr.sdSpec & $0F
+  spec3 := (p_scr.sdSpec3Ext >> 7) & 1
+  spec4 := (p_scr.sdSpec3Ext >> 2) & 1
+  specX := ((p_scr.sdSpec3Ext & $03) << 2) | ((p_scr.sdSpecXLo >> 6) & $03)
+
+  if sdSpec < 2
+    return @"SD 1.x"
+  if spec3 == 0
+    return @"SD 2.0"
+  if spec4 == 0
+    return @"SD 3.x"
+  if specX == 0
+    return @"SD 4.x"
+  if specX == 1
+    return @"SD 5.x"
+  if specX == 2
+    return @"SD 6.x"
+  if specX == 3
+    return @"SD 7.x"
+  if specX == 4
+    return @"SD 8.x"
+  if specX == 5
+    return @"SD 9.x"
+  return @"SD ??"
+
+
+PRI detectFilesystem() : p_fsName | pType
+
+'' Read MBR sector 0 to determine filesystem type from partition type byte.
+'' Uses buf2 for the read. Returns pointer to filesystem name string.
+
+  sd.readSectorRaw(0, @buf2)
+
+  ' Check MBR signature
+  if WORD[@buf2 + $1FE] <> MBR_SIGNATURE
+    return @fsUnknown
+
+  pType := BYTE[@buf2 + $1C2]
+
+  case pType
+    $00 : return @fsEmpty
+    $01 : return @fsFAT12
+    $04, $06, $0E : return @fsFAT16
+    $0B, $0C : return @fsFAT32
+    other : return @fsUnknown

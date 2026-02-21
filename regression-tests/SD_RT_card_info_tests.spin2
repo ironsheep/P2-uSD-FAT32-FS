@@ -29,10 +29,16 @@ CON
     _CLKFREQ        = 270_000_000
 
     ' P2 Edge module SD slot pins
-    SD_CS   = 60
-    SD_MOSI = 59
-    SD_MISO = 58
-    SD_SCK  = 61
+    'SD_CS   = 60
+    'SD_MOSI = 59
+    'SD_MISO = 58
+    'SD_SCK  = 61
+
+    ' External SD header (base pin 16)
+    SD_CS   = 20
+    SD_MOSI = 19
+    SD_MISO = 18
+    SD_SCK  = 21
 
     MBR_SIGNATURE = $AA55
 
@@ -62,7 +68,8 @@ DAT
     fail_count    LONG    0
 
     ' Manufacturer lookup table (MID byte, then name string, null-terminated)
-    midTable      BYTE    $01, "Panasonic", 0
+    midTable      BYTE    $00, "Gigastone", 0
+                  BYTE    $01, "Panasonic", 0
                   BYTE    $02, "Toshiba", 0
                   BYTE    $03, "SanDisk", 0
                   BYTE    $1B, "Samsung", 0

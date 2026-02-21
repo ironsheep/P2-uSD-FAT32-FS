@@ -2,7 +2,6 @@
 ''
 ''   File....... isp_mem_strings.spin2
 ''   Purpose.... provide sprintf() c-like functions for Spin2 developers
-''               -- includes inlined number-to-string primitives (from jm_nstr by Jon McPhalen)
 ''   Authors.... Stephen M. Moraco
 ''                (Highly leveraged from jm_serial.spin2 by Jon McPhalen)
 ''                (Number-to-string code adapted from jm_nstr.spin2 by Jon McPhalen)
@@ -11,6 +10,10 @@
 ''   Updated.... 20 Feb 2026
 ''
 '' =================================================================================================
+
+CON { suppress debug protocol output - this file is used via OBJ alongside serial on pin 62 }
+
+  DEBUG_DISABLE = 1
 
 CON { number-to-string buffer sizes }
 
@@ -84,53 +87,58 @@ CON { formatted strings }
 
 }}
 
-PUB sFormatStr0(pUserBuff, p_str) : nPlaced
+PUB sFormatStr0(pUserBuff, maxLen, p_str) : nPlaced
 '' Format string without args into {pUserBuff} with formatting characters, zero terminated
 ''
 '' @param pUserBuff - buffer to receive formatted string
+'' @param maxLen - size of buffer in bytes (including null terminator)
 '' @param p_str - pointer to the format control string
 '' @returns nPlaced - count of characters placed into the users buffer (excl zero term.)
 
-    nPlaced := sFormat(pUserBuff, p_str, 0)
+    nPlaced := sFormat(pUserBuff, maxLen, p_str, 0)
 
 
-PUB sFormatStr1(pUserBuff, p_str, arg1) : nPlaced
+PUB sFormatStr1(pUserBuff, maxLen, p_str, arg1) : nPlaced
 '' Format string and 1-arg into {pUserBuff} with formatting characters, zero terminated
 ''
 '' @param pUserBuff - buffer to receive formatted string
+'' @param maxLen - size of buffer in bytes (including null terminator)
 '' @param p_str - pointer to the format control string
 '' @param arg1 - first argument value
 '' @returns nPlaced - count of characters placed into the users buffer (excl zero term.)
 
-    nPlaced := sFormat(pUserBuff, p_str, @arg1)
+    nPlaced := sFormat(pUserBuff, maxLen, p_str, @arg1)
 
-PUB sFormatStr2(pUserBuff, p_str, arg1, arg2) : nPlaced
+PUB sFormatStr2(pUserBuff, maxLen, p_str, arg1, arg2) : nPlaced
 '' Format string and 2-args into {pUserBuff} with formatting characters, zero terminated
 ''
 '' @param pUserBuff - buffer to receive formatted string
+'' @param maxLen - size of buffer in bytes (including null terminator)
 '' @param p_str - pointer to the format control string
 '' @param arg1 - first argument value
 '' @param arg2 - second argument value
 '' @returns nPlaced - count of characters placed into the users buffer (excl zero term.)
 
-    nPlaced := sFormat(pUserBuff, p_str, @arg1)
+    nPlaced := sFormat(pUserBuff, maxLen, p_str, @arg1)
 
-PUB sFormatStr3(pUserBuff, p_str, arg1, arg2, arg3) : nPlaced
+PUB sFormatStr3(pUserBuff, maxLen, p_str, arg1, arg2, arg3) : nPlaced
 '' Format string and 3-args into {pUserBuff} with formatting characters, zero terminated
 ''
 '' @param pUserBuff - buffer to receive formatted string
+'' @param maxLen - size of buffer in bytes (including null terminator)
 '' @param p_str - pointer to the format control string
 '' @param arg1 - first argument value
 '' @param arg2 - second argument value
 '' @param arg3 - third argument value
 '' @returns nPlaced - count of characters placed into the users buffer (excl zero term.)
 
-    nPlaced := sFormat(pUserBuff, p_str, @arg1)
+    nPlaced := sFormat(pUserBuff, maxLen, p_str, @arg1)
 
-PUB sFormatStr4(pUserBuff, p_str, arg1, arg2, arg3, arg4) : nPlaced
+PUB sFormatStr4(pUserBuff, maxLen, p_str, arg1, arg2, arg3, arg4) : nPlaced
 '' Format string and 4-args into {pUserBuff} with formatting characters, zero terminated
 ''
 '' @param pUserBuff - buffer to receive formatted string
+'' @param maxLen - size of buffer in bytes (including null terminator)
 '' @param p_str - pointer to the format control string
 '' @param arg1 - first argument value
 '' @param arg2 - second argument value
@@ -138,12 +146,13 @@ PUB sFormatStr4(pUserBuff, p_str, arg1, arg2, arg3, arg4) : nPlaced
 '' @param arg4 - fourth argument value
 '' @returns nPlaced - count of characters placed into the users buffer (excl zero term.)
 
-    nPlaced := sFormat(pUserBuff, p_str, @arg1)
+    nPlaced := sFormat(pUserBuff, maxLen, p_str, @arg1)
 
-PUB sFormatStr5(pUserBuff, p_str, arg1, arg2, arg3, arg4, arg5) : nPlaced
+PUB sFormatStr5(pUserBuff, maxLen, p_str, arg1, arg2, arg3, arg4, arg5) : nPlaced
 '' Format string and 5-args into {pUserBuff} with formatting characters, zero terminated
 ''
 '' @param pUserBuff - buffer to receive formatted string
+'' @param maxLen - size of buffer in bytes (including null terminator)
 '' @param p_str - pointer to the format control string
 '' @param arg1 - first argument value
 '' @param arg2 - second argument value
@@ -152,12 +161,13 @@ PUB sFormatStr5(pUserBuff, p_str, arg1, arg2, arg3, arg4, arg5) : nPlaced
 '' @param arg5 - fifth argument value
 '' @returns nPlaced - count of characters placed into the users buffer (excl zero term.)
 
-    nPlaced := sFormat(pUserBuff, p_str, @arg1)
+    nPlaced := sFormat(pUserBuff, maxLen, p_str, @arg1)
 
-PUB sFormatStr6(pUserBuff, p_str, arg1, arg2, arg3, arg4, arg5, arg6) : nPlaced
+PUB sFormatStr6(pUserBuff, maxLen, p_str, arg1, arg2, arg3, arg4, arg5, arg6) : nPlaced
 '' Format string and 6-args into {pUserBuff} with formatting characters, zero terminated
 ''
 '' @param pUserBuff - buffer to receive formatted string
+'' @param maxLen - size of buffer in bytes (including null terminator)
 '' @param p_str - pointer to the format control string
 '' @param arg1 - first argument value
 '' @param arg2 - second argument value
@@ -167,12 +177,13 @@ PUB sFormatStr6(pUserBuff, p_str, arg1, arg2, arg3, arg4, arg5, arg6) : nPlaced
 '' @param arg6 - sixth argument value
 '' @returns nPlaced - count of characters placed into the users buffer (excl zero term.)
 
-    nPlaced := sFormat(pUserBuff, p_str, @arg1)
+    nPlaced := sFormat(pUserBuff, maxLen, p_str, @arg1)
 
-PUB sFormatStr7(pUserBuff, p_str, arg1, arg2, arg3, arg4, arg5, arg6, arg7) : nPlaced
+PUB sFormatStr7(pUserBuff, maxLen, p_str, arg1, arg2, arg3, arg4, arg5, arg6, arg7) : nPlaced
 '' Format string and 7-args into {pUserBuff} with formatting characters, zero terminated
 ''
 '' @param pUserBuff - buffer to receive formatted string
+'' @param maxLen - size of buffer in bytes (including null terminator)
 '' @param p_str - pointer to the format control string
 '' @param arg1 - first argument value
 '' @param arg2 - second argument value
@@ -183,12 +194,13 @@ PUB sFormatStr7(pUserBuff, p_str, arg1, arg2, arg3, arg4, arg5, arg6, arg7) : nP
 '' @param arg7 - seventh argument value
 '' @returns nPlaced - count of characters placed into the users buffer (excl zero term.)
 
-    nPlaced := sFormat(pUserBuff, p_str, @arg1)
+    nPlaced := sFormat(pUserBuff, maxLen, p_str, @arg1)
 
-PUB sFormatStr8(pUserBuff, p_str, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8) : nPlaced
+PUB sFormatStr8(pUserBuff, maxLen, p_str, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8) : nPlaced
 '' Format string and 8-args into {pUserBuff} with formatting characters, zero terminated
 ''
 '' @param pUserBuff - buffer to receive formatted string
+'' @param maxLen - size of buffer in bytes (including null terminator)
 '' @param p_str - pointer to the format control string
 '' @param arg1 - first argument value
 '' @param arg2 - second argument value
@@ -200,13 +212,14 @@ PUB sFormatStr8(pUserBuff, p_str, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8
 '' @param arg8 - eighth argument value
 '' @returns nPlaced - count of characters placed into the users buffer (excl zero term.)
 
-    nPlaced := sFormat(pUserBuff, p_str, @arg1)
+    nPlaced := sFormat(pUserBuff, maxLen, p_str, @arg1)
 
 
-PUB sFormat(pUserBuff, p_str, p_args) : nPlaced | idx, c, asc, fld, digits, pBffr
+PUB sFormat(pUserBuff, maxLen, p_str, p_args) : nPlaced | idx, c, asc, fld, digits, pBffr, pBffrEnd
 '' Format string with escape sequences and embedded values to {pOutBuf}
 ''
 '' @param pUserBuff - pointer to the users buffer to receive the formatted string
+'' @param maxLen - size of buffer in bytes (including null terminator)
 '' @param p_str - pointer to the format control string
 '' @param p_args - pointer to array of longs that hold field values (numbers, characters, or pointers to strings)
 '' @returns nPlaced - count of characters placed into the users buffer (excl zero term.)
@@ -216,11 +229,14 @@ PUB sFormat(pUserBuff, p_str, p_args) : nPlaced | idx, c, asc, fld, digits, pBff
 '' @local fld - field width
 '' @local digits - precision digits
 '' @local pBffr - working buffer pointer
+'' @local pBffrEnd - boundary pointer (one past last writable position)
 
-  'debug("sfmt: fstr(", udec_(strsize(p_str)), ")=[", zstr_(p_str), "]")
+  if maxLen < 1
+    return 0
 
   idx := 0                                                     ' value index
   pBffr := pUserBuff
+  pBffrEnd := pUserBuff + maxLen - 1                           ' reserve 1 byte for null terminator
   repeat
     c := byte[p_str++]
     if (c == 0)
@@ -229,85 +245,88 @@ PUB sFormat(pUserBuff, p_str, p_args) : nPlaced | idx, c, asc, fld, digits, pBff
     elseif (c == "\")
       c := byte[p_str++]
       if (c == "\")
-        sTx("\", pBffr++)
+        sTx("\", pBffr++, pBffrEnd)
       elseif (c == "%")
-        sTx("%", pBffr++)
+        sTx("%", pBffr++, pBffrEnd)
       elseif (c == "q")
-        sTx(34, pBffr++)
+        sTx(34, pBffr++, pBffrEnd)
       elseif (c == "b")
-        sTx(BKSP, pBffr++)
+        sTx(BKSP, pBffr++, pBffrEnd)
       elseif (c == "t")
-        sTx(TAB, pBffr++)
+        sTx(TAB, pBffr++, pBffrEnd)
       elseif (c == "n")
-        sTx(LF, pBffr++)
+        sTx(LF, pBffr++, pBffrEnd)
       elseif (c == "r")
-        sTx(CR, pBffr++)
+        sTx(CR, pBffr++, pBffrEnd)
       elseif ((c >= "0") and (c <= "9"))
         --p_str
         p_str, asc, _ := get_nargs(p_str)
         if ((asc >= 0) and (asc <= 255))
-          sTx(asc, pBffr++)
+          sTx(asc, pBffr++, pBffrEnd)
 
     elseif (c == "%")
       p_str, fld, digits := get_nargs(p_str)
       c := byte[p_str++]
       if (c == "f")
-        pBffr := sStr(fmt_number(long[p_args][idx++], 99, digits, fld, " "), pBffr)
+        pBffr := sStr(fmt_number(long[p_args][idx++], 99, digits, fld, " "), pBffr, pBffrEnd)
       elseif (c == "d")
-        pBffr := sStr(fmt_number(long[p_args][idx++], 10, digits, fld, " "), pBffr)
+        pBffr := sStr(fmt_number(long[p_args][idx++], 10, digits, fld, " "), pBffr, pBffrEnd)
       elseif (c == "x")
-        pBffr := sStr(fmt_number(long[p_args][idx++], 16, digits, fld, " "), pBffr)
+        pBffr := sStr(fmt_number(long[p_args][idx++], 16, digits, fld, " "), pBffr, pBffrEnd)
       elseif (c == "o")
-        pBffr := sStr(fmt_number(long[p_args][idx++], 08, digits, fld, " "), pBffr)
+        pBffr := sStr(fmt_number(long[p_args][idx++], 08, digits, fld, " "), pBffr, pBffrEnd)
       elseif (c == "q")
-        pBffr := sStr(fmt_number(long[p_args][idx++], 04, digits, fld, " "), pBffr)
+        pBffr := sStr(fmt_number(long[p_args][idx++], 04, digits, fld, " "), pBffr, pBffrEnd)
       elseif (c == "b")
-        pBffr := sStr(fmt_number(long[p_args][idx++], 02, digits, fld, " "), pBffr)
+        pBffr := sStr(fmt_number(long[p_args][idx++], 02, digits, fld, " "), pBffr, pBffrEnd)
       elseif (c == "s")
-        pBffr := sStr(padstr(long[p_args][idx++], fld, " "), pBffr)
+        pBffr := sStr(padstr(long[p_args][idx++], fld, " "), pBffr, pBffrEnd)
       elseif (c == "c")
-        pBffr := sTxn(long[p_args][idx++], (abs fld) #> 1, pBffr)
+        pBffr := sTxn(long[p_args][idx++], (abs fld) #> 1, pBffr, pBffrEnd)
 
     else
-      sTx(c, pBffr++)
+      sTx(c, pBffr++, pBffrEnd)
 
-  byte[pBffr] := 0  ' place terminator
-  nPlaced := strsize(pUserBuff)
-  'debug("sfmt: ", UHEX_BYTE_ARRAY_(pUserBuff, 48))
-  debug("sfmt: str(", udec_(nPlaced), ")=[", zstr_(pUserBuff), "]")
+  pBffr := pBffr <# pBffrEnd                                  ' clamp to buffer boundary
+  byte[pBffr] := 0                                             ' place terminator
+  nPlaced := pBffr - pUserBuff
 
 CON { --- Internal Methods --- }
 
-PRI sTx(nChr, pOutBuf)
-' Write a single character to the output buffer
+PRI sTx(nChr, pOutBuf, pBffrEnd)
+' Write a single character to the output buffer (bounds-checked)
 '
 ' @param nChr - character to write
 ' @param pOutBuf - pointer to output buffer position
+' @param pBffrEnd - boundary pointer (one past last writable position)
 
-    byte[pOutBuf] := nChr
+    if pOutBuf < pBffrEnd
+        byte[pOutBuf] := nChr
 
-PRI sTxn(nChr, nCount, pOutBuf) : pBufNext
-' Emit a character n times to the output buffer
+PRI sTxn(nChr, nCount, pOutBuf, pBffrEnd) : pBufNext
+' Emit a character n times to the output buffer (bounds-checked)
 '
 ' @param nChr - character to emit
 ' @param nCount - number of times to emit the character
 ' @param pOutBuf - pointer to output buffer position
+' @param pBffrEnd - boundary pointer (one past last writable position)
 ' @returns pBufNext - pointer to next position in buffer after emitted characters
 
     repeat nCount
-        sTx(nChr, pOutBuf++)
+        sTx(nChr, pOutBuf++, pBffrEnd)
 
     pBufNext := pOutBuf
 
-PRI sStr(pStr, pOutBuf) : pBufNext
-' Write a string to the output buffer
+PRI sStr(pStr, pOutBuf, pBffrEnd) : pBufNext
+' Write a string to the output buffer (bounds-checked)
 '
 ' @param pStr - pointer to source string
 ' @param pOutBuf - pointer to output buffer position
+' @param pBffrEnd - boundary pointer (one past last writable position)
 ' @returns pBufNext - pointer to next position in buffer after written string
 
     repeat (strsize(pStr))
-        sTx(byte[pStr++], pOutBuf++)
+        sTx(byte[pStr++], pOutBuf++, pBffrEnd)
 
     pBufNext := pOutBuf
 
@@ -532,7 +551,6 @@ CON { license }
   MIT License
 
   Copyright (c) 2022 Iron Sheep Productions, LLC
-  Number-to-string code Copyright (c) 2020-2023 Jon McPhalen
 
   Permission is hereby granted, free of charge, to any person obtaining a copy
   of this software and associated documentation files (the "Software"), to deal

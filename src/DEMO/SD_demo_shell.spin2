@@ -120,16 +120,26 @@ OBJ
 
   sd     : "micro_sd_fat32_fs"                                  '   SD card filesystem driver
   serial : "isp_serial_singleton"                               '   serial IO for terminal (singleton)
+  fmt    : "isp_mem_strings"                                    '   string formatting (for card display)
 
 
 VAR { application }
 
   byte  buffer[BUFFER_SIZE]                                     ' general purpose buffer
-  byte  pathbuf[MAX_PATH]                                       ' path buffer
   byte  cwd[MAX_PATH]                                           ' current working directory
   byte  ntokens                                                 ' number of parsed tokens
   byte  mounted                                                 ' mount status flag
 
+
+VAR { card info - driver receive buffers (moved from locals to avoid stack issues) }
+
+  sd.cid_t  cid                                                  ' CID register from card
+  sd.scr_t  scr                                                  ' SCR register from card
+
+'DAT { card info - driver receive buffers (moved from locals to avoid stack issues) }
+
+'  cid      sd.cid_t                                                    ' CID register from card
+'  scr      sd.scr_t                                                    ' SCR register from card
 
 VAR { audit/fsck/bench }
 
@@ -201,7 +211,7 @@ PUB main() | len, eCmd
     show_prompt()                                               ' prompt user
     len := get_command()                                        ' get input
     if (len > 0)                                                ' if command entered
-      ' no echo — pnut-term-ts provides local echo
+      ' no echo - pnut-term-ts provides local echo
       debug("CMD: [", zstr_(@cliBuf), "] len=", udec_(len))
       ntokens := parse()                                        ' parse and count tokens
       if (ntokens)                                              ' if !0 tokens
@@ -751,10 +761,10 @@ PUB do_demo() | handle, i
   serial.fstr0(@"Demo files created.\r\n")
 
 
-PUB do_card_info() | sd.cid_t cid, sd.scr_t scr, wasMounted, ...
+PUB do_card_info() | wasMounted, ...
                      ocr, sizeMB, spiHz, psn, mdtYear, mdtMonth, ...
                      pnm[2], p_mfr, p_type, p_spec, p_fs, ...
-                     oemBuf[3], partStart, i
+                     oemBuf[3], partStart, i, nLen
 
 '' Display compact two-line card identification summary
 '' Works mounted or unmounted
@@ -775,6 +785,7 @@ PUB do_card_info() | sd.cid_t cid, sd.scr_t scr, wasMounted, ...
       serial.fstr0(@"ERROR: Cannot initialize card\r\n")
       return
 
+  serial.fstr0(@"card ready...\r\n")
   ' Read card registers into struct locals
   sd.readCIDRaw(@cid)
   sd.readSCRRaw(@scr)
@@ -810,7 +821,9 @@ PUB do_card_info() | sd.cid_t cid, sd.scr_t scr, wasMounted, ...
       BYTE[@oemBuf + 8] := 0
       ' Trim trailing spaces
       i := 7
-      repeat while i >= 0 AND BYTE[@oemBuf + i] == " "
+      repeat while i >= 0
+        if BYTE[@oemBuf + i] <> " "
+          quit
         BYTE[@oemBuf + i] := 0
         i--
     else
@@ -818,48 +831,17 @@ PUB do_card_info() | sd.cid_t cid, sd.scr_t scr, wasMounted, ...
   else
     bytemove(@oemBuf, @"n/a", 4)
 
-  ' Line 1 part A: Mfr Product Type Size [FS] Spec
-  serial.str(p_mfr)
-  serial.tx(" ")
-  serial.str(@pnm)
-  serial.tx(" ")
-  serial.str(p_type)
-  serial.tx(" ")
+  ' Line 1: Mfr Product Type Size [FS] Spec revN.M SN:hex Year/MM
   if sizeMB < 1024
-    serial.dec(sizeMB)
-    serial.str(@"MB")
+    nLen := fmt.sFormatStr6(@buf2, SECTOR_SIZE, @"%s %s %s %dMB [%s] %s", p_mfr, @pnm, p_type, sizeMB, p_fs, p_spec)
   else
-    serial.dec(sizeMB / 1024)
-    serial.str(@"GB")
-  serial.str(@" [")
-  serial.str(p_fs)
-  serial.str(@"] ")
-  serial.str(p_spec)
-
-  ' Line 1 part B: rev SN date
-  serial.str(@" rev")
-  serial.dec(cid.prv >> 4)
-  serial.tx(".")
-  serial.dec(cid.prv & $0F)
-  serial.str(@" SN:")
-  serial.fwhex(psn, 8)
-  serial.tx(" ")
-  serial.dec(mdtYear)
-  serial.tx("/")
-  serial.fwdec(mdtMonth, 2)
-  serial.tx(13)
-  serial.tx(10)
+    nLen := fmt.sFormatStr6(@buf2, SECTOR_SIZE, @"%s %s %s %dGB [%s] %s", p_mfr, @pnm, p_type, sizeMB / 1024, p_fs, p_spec)
+  fmt.sFormatStr5(@BYTE[@buf2][nLen], SECTOR_SIZE - nLen, @" rev%d.%d SN:%.8x %d/%.2d\r\n", cid.prv >> 4, cid.prv & $0F, psn, mdtYear, mdtMonth)
+  serial.str(@buf2)
 
   ' Line 2: SPI frequency and OEM name
-  serial.str(@"SPI ")
-  serial.dec(spiHz / 1_000_000)
-  serial.tx(".")
-  serial.dec((spiHz / 100_000) // 10)
-  serial.str(@" MHz  [")
-  serial.str(@oemBuf)
-  serial.tx("]")
-  serial.tx(13)
-  serial.tx(10)
+  fmt.sFormatStr3(@buf2, SECTOR_SIZE, @"SPI %d.%d MHz  [%s]\r\n", spiHz / 1_000_000, (spiHz / 100_000) // 10, @oemBuf)
+  serial.str(@buf2)
 
   ' Clean up if we initialized raw access
   if (not wasMounted)
@@ -2074,7 +2056,10 @@ PRI initRawAccess() : ok
 '' Initialize card for raw sector access (no mount)
 '' Used by audit/fsck/bench when card is not mounted
 
+  serial.fstr0(@"* initRawAccess\r\n")
   ok := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+  serial.fstr1(@"* back from init. ok=%d\r\n", ok)
+
 
 
 PRI lookupMID(mid) : p_name | p, entryMID
@@ -2086,12 +2071,10 @@ PRI lookupMID(mid) : p_name | p, entryMID
   repeat
     entryMID := WORD[p]
     if entryMID == $00                                                ' end sentinel
-      ' Unknown - format hex into buffer and return
-      bytemove(@buffer, @midUnknown, 6)                               ' "MID:$"
-      buffer[5] := hexDigit(mid >> 4)
-      buffer[6] := hexDigit(mid & $0F)
-      buffer[7] := 0
-      return @buffer
+      ' Unknown - format hex into dedicated DAT buffer (not shared buffer!)
+      BYTE[@midFmtBuf + 5] := hexDigit(mid >> 4)
+      BYTE[@midFmtBuf + 6] := hexDigit(mid & $0F)
+      return @midFmtBuf
     if entryMID == mid
       return @@WORD[p + 2]                                            ' convert DAT relative offset to absolute address
     p += 4                                                            ' next entry: word MID + word ptr
@@ -2283,28 +2266,6 @@ PRI parserReset()
   cliIdx := 0
   longfill(@tkPtrs, 0, CLI_MAX_TKNS)
   ntokens := 0
-
-
-PRI enqueue(c) : done
-
-' Add character to input buffer
-' -- returns true when CR received
-
-  if (c == 13)                                                  ' CR = end of input
-    cliBuf[cliIdx] := 0                                         '  terminate buffer
-    return true
-
-  if (c == 10)                                                  ' LF = ignore
-    return false
-
-  if (c == 8) and (cliIdx > 0)                                 ' backspace?
-    cliBuf[--cliIdx] := 0                                       '  erase last char
-    return false
-
-  if (cliIdx < CLI_BUF_SIZE - 2)                                ' room in buffer?
-    cliBuf[cliIdx++] := c                                       '  add character
-
-  return false
 
 
 PRI parse() : count | p
@@ -2502,6 +2463,7 @@ DAT { manufacturer lookup table - word pairs: MID, pointer to name }
   midSharedOEM    byte    "OEM", 0
   midLongsys      byte    "Longsys", 0
   midUnknown      byte    "MID:$", 0
+  midFmtBuf       byte    "MID:$XX", 0                           ' scratch buffer for unknown MID display
 
 DAT { filesystem type strings }
 
