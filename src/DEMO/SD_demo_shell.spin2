@@ -62,34 +62,16 @@ CON { constants }
   BUFFER_SIZE = 512                                             ' read/write buffer
 
 
-CON { FAT32 structure constants }
+CON { FAT32 / bench constants }
 
-  ' FAT32 structure signatures
+  ' FAT32 structure signatures (used by detectFilesystem / do_card_info)
   MBR_SIGNATURE               = $AA55
   PARTITION_TYPE_FAT32_LBA    = $0C
-  FSINFO_SIG1                 = $41615252      ' "RRaA"
-  FSINFO_SIG2                 = $61417272      ' "rrAa"
-  FSINFO_TRAIL_SIG            = $AA550000      ' Trail signature
-  EXT_BOOT_SIG                = $29            ' Extended boot signature
-
-  ' FAT entry constants
-  FAT_MASK        = $0FFFFFFF     ' Lower 28 bits (cluster value)
-  FAT_EOC_MIN     = $0FFFFFF8     ' Minimum end-of-chain marker
-  FAT_EOC         = $0FFFFFFF     ' Standard EOC
-  FAT_FREE        = $00000000     ' Free cluster
-  FAT_BAD         = $0FFFFFF7     ' Bad cluster marker
-
-  ' Bitmap capacity (256KB covers up to 2M clusters)
-  BITMAP_LONGS        = 65536             ' 256KB
-  MAX_BITMAP_CLUSTERS = BITMAP_LONGS * 32 ' 2,097,152 clusters
-
-  ' Safety limits
-  MAX_DIR_DEPTH       = 16
-  MAX_CHAIN_LENGTH    = 2_000_000
 
   ' Bench test parameters
   BENCH_SECTOR_BASE   = 1_000_000         ' Safe area past filesystem
   BENCH_SECTOR_RANGE  = 10_000            ' Range of test sectors
+  BENCH_BUF_LONGS     = 8192             ' 32 KB for multi-sector reads
 
 
 CON { parser }
@@ -118,9 +100,11 @@ CON { command enums }
 
 OBJ
 
-  sd     : "micro_sd_fat32_fs"                                  '   SD card filesystem driver
-  serial : "isp_serial_singleton"                               '   serial IO for terminal (singleton)
-  fmt    : "isp_mem_strings"                                    '   string formatting (for card display)
+  sd       : "micro_sd_fat32_fs"                                '   SD card filesystem driver
+  serial   : "isp_serial_singleton"                             '   serial IO for terminal (singleton)
+  fmt      : "isp_mem_strings"                                  '   string formatting (for card display)
+  fsckUtil : "isp_fsck_utility"                                 '   FSCK/audit library (cog-based)
+  fmtUtil  : "isp_format_utility"                               '   format library (cog-based)
 
 
 VAR { application }
@@ -141,46 +125,16 @@ VAR { card info - driver receive buffers (moved from locals to avoid stack issue
 '  cid      sd.cid_t                                                    ' CID register from card
 '  scr      sd.scr_t                                                    ' SCR register from card
 
-VAR { audit/fsck/bench }
+VAR { card info / bench }
 
-  byte  buf2[SECTOR_SIZE]                                       ' comparison buffer
-  byte  fatBuf[SECTOR_SIZE]                                     ' FAT sector cache
+  byte  buf2[SECTOR_SIZE]                                       ' card info / detect buffer
 
   ' Struct overlay pointers (set before use, overlaid on buf2)
   long  pVBR                                                    ' ^sd.vbr_t overlay
   long  pPart                                                   ' ^sd.mbr_partition_t overlay
-  long  pFSInfo                                                 ' ^sd.fsinfo_t overlay
 
-  ' FAT cache state
-  long  fatBufSector                                            ' cached FAT1 sector (-1 = none)
-  long  fatBufDirty                                             ' TRUE if fatBuf needs writing
-
-  ' Filesystem geometry (populated by readGeometry)
-  long  geoPartStart                                            ' partition start sector
-  long  geoSecPerFat                                            ' sectors per FAT
-  long  geoSecPerClus                                           ' sectors per cluster
-  long  geoTotalClus                                            ' total data clusters
-  long  geoTotalSec                                             ' total sectors
-  long  geoReservedSec                                          ' reserved sectors
-  long  geoFat1Start                                            ' FAT1 first sector
-  long  geoFat2Start                                            ' FAT2 first sector
-  long  geoDataStart                                            ' data region first sector
-  long  geoRootClus                                             ' root directory cluster
-
-  ' Audit/FSCK statistics
-  long  passCount                                               ' tests passed
-  long  failCount                                               ' tests failed
-  long  repairCount                                             ' repairs made
-  long  errorCount                                              ' errors found
-  long  warningCount                                            ' warnings issued
-  long  dirCount                                                ' directories scanned
-  long  fileCount                                               ' files scanned
-  long  scanDepth                                               ' current recursion depth
-  long  bitmapCapable                                           ' TRUE if card fits in bitmap
-  long  bitmapField                                             ' FIELD pointer for 1-bit bitmap access
-
-  ' Shared pool: FSCK bitmap or bench read buffer (256KB)
-  long  sharedPool[BITMAP_LONGS]
+  ' Bench multi-sector read buffer (32 KB)
+  long  benchBuf[BENCH_BUF_LONGS]
 
 
 VAR { parser }
@@ -377,17 +331,71 @@ PUB do_unmount()
   serial.fstr0(@"SD card unmounted\r\n")
 
 
-PUB do_format()
+PUB do_format() | p_label, pStr, ok
 
-'' Format SD card (dangerous!)
+'' Format SD card via format utility library (cog-based)
+'' Usage: format          - format with default label
+''        format LABEL    - format with specified label (max 11 chars)
 
-  if (ntokens <> 1)
+  if (ntokens > 2)
     bad_syntax()
     return
 
   serial.fstr0(@"WARNING: Format will erase ALL data on the SD card!\r\n")
-  serial.fstr0(@"This feature is not yet implemented in this shell.\r\n")
-  serial.fstr0(@"Use SD_format_card.spin2 instead.\r\n")
+  if (not confirmYN(@"Continue with format"))
+    return
+
+  ' Must unmount first
+  if (mounted)
+    sd.unmount()
+    mounted := false
+    serial.fstr0(@"Unmounted.\r\n")
+  else
+    ' Stop any existing driver so format library can use SPI
+    sd.stop()
+
+  ' Parse optional label argument
+  p_label := 0
+  if (ntokens == 2)
+    p_label := token(1)
+    if strsize(p_label) > 11
+      serial.fstr0(@"Label too long (max 11 characters)\r\n")
+      return
+
+  ' Launch format in utility cog
+  if (p_label)
+    ok := fmtUtil.startFormatWithLabel(SD_CS, SD_MOSI, SD_MISO, SD_SCK, p_label)
+  else
+    ok := fmtUtil.startFormat(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+
+  if (not ok)
+    serial.fstr0(@"ERROR: Could not start format cog\r\n")
+    return
+
+  ' Pump FIFO output to terminal
+  repeat
+    pStr := fmtUtil.getOutput()
+    if pStr
+      serial.str(pStr)
+      serial.str(@"\r\n")
+    elseif fmtUtil.isDone()
+      repeat while (pStr := fmtUtil.getOutput())
+        serial.str(pStr)
+        serial.str(@"\r\n")
+      quit
+
+  ok := fmtUtil.getResult()
+  fmtUtil.stopCog()
+
+  if (ok)
+    serial.fstr0(@"Format complete.\r\n")
+  else
+    serial.fstr0(@"Format FAILED.\r\n")
+
+  ' Offer to re-mount
+  serial.fstr0(@"\r\n")
+  if (confirmYN(@"Mount card"))
+    do_mount()
 
 
 PUB do_stats() | total_sectors, total_mb, free_sectors, free_mb
@@ -781,7 +789,7 @@ PUB do_card_info() | wasMounted, ...
   ' If not mounted, initialize card for raw access
   if (not mounted)
     serial.fstr0(@"Initializing card...\r\n")
-    if (not initRawAccess())
+    if (not sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK))
       serial.fstr0(@"ERROR: Cannot initialize card\r\n")
       return
 
@@ -848,65 +856,51 @@ PUB do_card_info() | wasMounted, ...
     sd.stop()
 
 
-PUB do_audit() | wasMounted, result
+PUB do_audit() | pStr
 
-'' Audit FAT32 filesystem integrity (read-only)
-'' Works mounted or unmounted - uses raw sector reads
+'' Audit FAT32 filesystem integrity via FSCK library (read-only)
+'' Unmounts if mounted, runs audit in utility cog, offers re-mount
 
   if (ntokens <> 1)
     bad_syntax()
     return
 
-  wasMounted := mounted
-
-  ' If not mounted, initialize card for raw access
-  if (not mounted)
-    serial.fstr0(@"Initializing card...\r\n")
-    if (not initRawAccess())
-      serial.fstr0(@"ERROR: Cannot initialize card\r\n")
-      return
-
-  ' Reset statistics
-  passCount := 0
-  failCount := 0
-
-  serial.fstr0(@"\r\n=== FAT32 Filesystem Audit (read-only) ===\r\n")
-  serial.fstr1(@"Card: %d MB\r\n\r\n", sd.cardSizeSectors() / 2048)
-
-  ' Read geometry
-  if (not readGeometry())
-    serial.fstr0(@"ERROR: Cannot read filesystem geometry\r\n")
-    if (not wasMounted)
-      sd.stop()
-    return
-
-  ' Run all audit checks
-  auditMBR()
-  auditVBR()
-  auditBackupVBR()
-  auditFSInfo()
-  auditFAT()
-  auditRootDir()
-
-  ' Mount test only if we weren't already mounted
-  if (not wasMounted)
-    auditMountTest()
+  ' Must unmount so library can use SPI
+  if (mounted)
+    sd.unmount()
+    mounted := false
+    serial.fstr0(@"Unmounted for audit.\r\n")
+  else
     sd.stop()
 
-  ' Summary
-  serial.fstr0(@"\r\n=== AUDIT COMPLETE ===\r\n")
-  serial.fstr2(@"Tests: %d  Pass: %d", passCount + failCount, passCount)
-  serial.fstr1(@"  Fail: %d\r\n", failCount)
-  if (failCount == 0)
-    serial.fstr0(@"FILESYSTEM INTEGRITY: OK\r\n")
-  else
-    serial.fstr0(@"FILESYSTEM INTEGRITY: ISSUES DETECTED\r\n")
-    serial.fstr0(@"  Consider running 'fsck' to repair.\r\n")
+  ' Launch audit in utility cog
+  if (not fsckUtil.startAudit(SD_CS, SD_MOSI, SD_MISO, SD_SCK))
+    serial.fstr0(@"ERROR: Could not start audit cog\r\n")
+    return
+
+  ' Pump FIFO output to terminal
+  repeat
+    pStr := fsckUtil.getOutput()
+    if pStr
+      serial.str(pStr)
+      serial.str(@"\r\n")
+    elseif fsckUtil.isDone()
+      repeat while (pStr := fsckUtil.getOutput())
+        serial.str(pStr)
+        serial.str(@"\r\n")
+      quit
+
+  fsckUtil.stop()
+
+  ' Offer to re-mount
+  serial.fstr0(@"\r\n")
+  if (confirmYN(@"Re-mount card"))
+    do_mount()
 
 
-PUB do_fsck() | cardSectors
+PUB do_fsck() | pStr
 
-'' Check and repair FAT32 filesystem
+'' Check and repair FAT32 filesystem via FSCK library (cog-based)
 '' Requires unmount for write access to FAT sectors
 
   if (ntokens <> 1)
@@ -920,70 +914,27 @@ PUB do_fsck() | cardSectors
     sd.unmount()
     mounted := false
     serial.fstr0(@"Unmounted.\r\n")
-
-  ' Initialize card for raw access
-  serial.fstr0(@"Initializing card...\r\n")
-  if (not initRawAccess())
-    serial.fstr0(@"ERROR: Cannot initialize card\r\n")
-    return
-
-  ' Reset statistics
-  repairCount := 0
-  errorCount := 0
-  warningCount := 0
-  dirCount := 0
-  fileCount := 0
-  scanDepth := 0
-  fatBufSector := -1
-  fatBufDirty := false
-
-  cardSectors := sd.cardSizeSectors()
-  serial.fstr0(@"\r\n=== FAT32 Filesystem Check & Repair ===\r\n")
-  serial.fstr2(@"Card: %d sectors (%d MB)\r\n\r\n", cardSectors, cardSectors / 2048)
-
-  ' Read filesystem geometry
-  if (not readGeometry())
-    serial.fstr0(@"FATAL: Cannot read filesystem geometry\r\n")
-    sd.stop()
-    return
-
-  ' Determine if bitmap can cover the whole card
-  bitmapCapable := (geoTotalClus <= MAX_BITMAP_CLUSTERS)
-  if (not bitmapCapable)
-    serial.fstr2(@"NOTE: Card has %d clusters (bitmap max: %d)\r\n", geoTotalClus, MAX_BITMAP_CLUSTERS)
-    serial.fstr0(@"  Deep scan (passes 2-3) skipped.\r\n")
-    warningCount++
-
-  serial.fstr0(@"\r\n")
-
-  ' Pass 1: Structural integrity
-  fsckPass1()
-
-  ' Pass 2: Directory walk + chain validation (requires bitmap)
-  if (bitmapCapable)
-    fsckPass2()
-
-  ' Pass 3: Lost cluster recovery (requires bitmap)
-  if (bitmapCapable)
-    fsckPass3()
-
-  ' Pass 4: FAT sync + free count
-  fsckPass4()
-
-  ' Summary
-  serial.fstr0(@"\r\n=== FSCK COMPLETE ===\r\n")
-  serial.fstr2(@"Errors: %d  Repairs: %d", errorCount, repairCount)
-  serial.fstr1(@"  Warnings: %d\r\n", warningCount)
-  if (bitmapCapable)
-    serial.fstr2(@"Directories: %d  Files: %d\r\n", dirCount, fileCount)
-  if (errorCount == 0 AND repairCount == 0)
-    serial.fstr0(@"STATUS: CLEAN\r\n")
-  elseif (errorCount == 0)
-    serial.fstr0(@"STATUS: REPAIRED\r\n")
   else
-    serial.fstr0(@"STATUS: ERRORS REMAIN\r\n")
+    sd.stop()
 
-  sd.stop()
+  ' Launch FSCK in utility cog
+  if (not fsckUtil.startFsck(SD_CS, SD_MOSI, SD_MISO, SD_SCK))
+    serial.fstr0(@"ERROR: Could not start FSCK cog\r\n")
+    return
+
+  ' Pump FIFO output to terminal
+  repeat
+    pStr := fsckUtil.getOutput()
+    if pStr
+      serial.str(pStr)
+      serial.str(@"\r\n")
+    elseif fsckUtil.isDone()
+      repeat while (pStr := fsckUtil.getOutput())
+        serial.str(pStr)
+        serial.str(@"\r\n")
+      quit
+
+  fsckUtil.stop()
 
   ' Offer to re-mount
   serial.fstr0(@"\r\n")
@@ -1005,7 +956,7 @@ PUB do_bench() | wasMounted, tStart, tElapsed, sector, i, rate, nSectors, readRe
   ' If not mounted, initialize card for raw access
   if (not mounted)
     serial.fstr0(@"Initializing card...\r\n")
-    if (not initRawAccess())
+    if (not sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK))
       serial.fstr0(@"ERROR: Cannot initialize card\r\n")
       return
 
@@ -1032,7 +983,7 @@ PUB do_bench() | wasMounted, tStart, tElapsed, sector, i, rate, nSectors, readRe
   sector := BENCH_SECTOR_BASE
   tStart := getct()
   repeat 100
-    readResult := sd.readSectorsRaw(sector, 8, @sharedPool)
+    readResult := sd.readSectorsRaw(sector, 8, @benchBuf)
     sector += 8
   tElapsed := getct() - tStart
 
@@ -1044,7 +995,7 @@ PUB do_bench() | wasMounted, tStart, tElapsed, sector, i, rate, nSectors, readRe
   sector := BENCH_SECTOR_BASE
   tStart := getct()
   repeat 25
-    readResult := sd.readSectorsRaw(sector, 32, @sharedPool)
+    readResult := sd.readSectorsRaw(sector, 32, @benchBuf)
     sector += 32
   tElapsed := getct() - tStart
 
@@ -1056,7 +1007,7 @@ PUB do_bench() | wasMounted, tStart, tElapsed, sector, i, rate, nSectors, readRe
   sector := BENCH_SECTOR_BASE
   tStart := getct()
   repeat 16
-    readResult := sd.readSectorsRaw(sector, 64, @sharedPool)
+    readResult := sd.readSectorsRaw(sector, 64, @benchBuf)
     sector += 64
   tElapsed := getct() - tStart
 
@@ -1211,729 +1162,10 @@ PRI bad_syntax()
   serial.fstr0(@"Syntax error. Type 'help' for command list.\r\n")
 
 
-CON { audit sub-methods }
-
-
-PRI auditRunTest(pTestName, passed)
-
-'' Record and display a single audit test result
-
-  if (passed)
-    passCount++
-    serial.fstr1(@"  [PASS] %s\r\n", pTestName)
-  else
-    failCount++
-    serial.fstr1(@"  [FAIL] %s\r\n", pTestName)
-
-
-PRI auditMBR() | result
-
-'' Audit MBR structure (sector 0)
-
-  serial.fstr0(@"--- MBR ---\r\n")
-
-  sd.readSectorRaw(0, @buffer)
-
-  auditRunTest(@"MBR boot signature ($AA55)", WORD[@buffer + $1FE] == MBR_SIGNATURE)
-
-  pPart := @buffer + $1BE
-  result := partBootFlag(pPart)
-  auditRunTest(@"Partition 1 boot flag ($00/$80)", result == $00 OR result == $80)
-
-  result := partType(pPart)
-  auditRunTest(@"Partition type ($0C = FAT32 LBA)", result == PARTITION_TYPE_FAT32_LBA)
-
-  result := partLbaStart(pPart)
-  auditRunTest(@"Partition start > 0", result > 0)
-  serial.fstr1(@"    Partition start: sector %d\r\n", result)
-
-  result := partLbaSize(pPart)
-  auditRunTest(@"Partition size > 0", result > 0)
-  serial.fstr1(@"    Partition size: %d sectors\r\n\r\n", result)
-
-
-PRI auditVBR() | result
-
-'' Audit VBR (primary boot sector at partition start)
-
-  serial.fstr0(@"--- VBR ---\r\n")
-
-  sd.readSectorRaw(geoPartStart, @buffer)
-  pVBR := @buffer
-
-  result := vbrJumpBoot0(pVBR)
-  auditRunTest(@"VBR jump ($EB or $E9)", result == $EB OR result == $E9)
-
-  auditRunTest(@"VBR boot signature ($AA55)", vbrBootSignature(pVBR) == MBR_SIGNATURE)
-
-  result := vbrBytesPerSec(pVBR)
-  auditRunTest(@"Bytes/sector = 512", result == 512)
-
-  result := vbrSecPerClus(pVBR)
-  auditRunTest(@"Sectors/cluster power of 2", result >= 1 AND result <= 128 AND (result & (result - 1)) == 0)
-  serial.fstr1(@"    Sectors/cluster: %d\r\n", result)
-
-  result := vbrReservedSec(pVBR)
-  auditRunTest(@"Reserved sectors = 32", result == 32)
-
-  result := vbrNumFats(pVBR)
-  auditRunTest(@"Number of FATs = 2", result == 2)
-
-  result := vbrRootEntCnt(pVBR)
-  auditRunTest(@"Root entry count = 0 (FAT32)", result == 0)
-
-  result := vbrTotalSec16(pVBR)
-  auditRunTest(@"Total sectors 16-bit = 0", result == 0)
-
-  result := vbrMediaType(pVBR)
-  auditRunTest(@"Media type = $F8", result == $F8)
-
-  result := vbrSecPerFat16(pVBR)
-  auditRunTest(@"FAT size 16-bit = 0", result == 0)
-
-  result := vbrHiddenSec(pVBR)
-  auditRunTest(@"Hidden sectors = partition start", result == geoPartStart)
-
-  auditRunTest(@"Total sectors 32-bit > 0", geoTotalSec > 0)
-  serial.fstr1(@"    Total sectors: %d\r\n", geoTotalSec)
-
-  auditRunTest(@"Sectors per FAT > 0", geoSecPerFat > 0)
-  serial.fstr1(@"    Sectors/FAT: %d\r\n", geoSecPerFat)
-
-  result := vbrRootCluster(pVBR)
-  auditRunTest(@"Root cluster = 2", result == 2)
-
-  result := vbrFsInfoSec(pVBR)
-  auditRunTest(@"FSInfo at sector 1", result == 1)
-
-  result := vbrBackBootSec(pVBR)
-  auditRunTest(@"Backup boot at sector 6", result == 6)
-
-  result := vbrBootSigByte(pVBR)
-  auditRunTest(@"Extended boot sig = $29", result == EXT_BOOT_SIG)
-
-  result := true
-  if vbrFsTypeByte(pVBR, 0) <> "F" OR vbrFsTypeByte(pVBR, 1) <> "A" OR vbrFsTypeByte(pVBR, 2) <> "T" OR vbrFsTypeByte(pVBR, 3) <> "3" OR vbrFsTypeByte(pVBR, 4) <> "2"
-    result := false
-  auditRunTest(@"FS type = FAT32", result)
-  serial.fstr0(@"\r\n")
-
-
-PRI auditBackupVBR() | idx, mismatch
-
-'' Verify backup VBR matches primary
-
-  serial.fstr0(@"--- Backup VBR ---\r\n")
-
-  sd.readSectorRaw(geoPartStart, @buffer)
-  sd.readSectorRaw(geoPartStart + 6, @buf2)
-
-  mismatch := false
-  repeat idx from 0 to 511
-    if (buffer[idx] <> buf2[idx])
-      mismatch := true
-      quit
-
-  auditRunTest(@"Backup VBR matches primary", mismatch == false)
-  serial.fstr0(@"\r\n")
-
-
-PRI auditFSInfo() | result, idx, mismatch
-
-'' Verify FSInfo sector and backup
-
-  serial.fstr0(@"--- FSInfo ---\r\n")
-
-  sd.readSectorRaw(geoPartStart + 1, @buffer)
-  pFSInfo := @buffer
-
-  result := fsiLeadSig(pFSInfo)
-  auditRunTest(@"Lead signature ($41615252)", result == FSINFO_SIG1)
-
-  result := fsiStructSig(pFSInfo)
-  auditRunTest(@"Struct signature ($61417272)", result == FSINFO_SIG2)
-
-  result := fsiTrailSig(pFSInfo)
-  auditRunTest(@"Trail signature ($AA550000)", result == FSINFO_TRAIL_SIG)
-
-  result := fsiFreeClusters(pFSInfo)
-  auditRunTest(@"Free cluster count set", result <> 0)
-  serial.fstr1(@"    Free clusters: %d\r\n", result)
-
-  result := fsiNextFreeHint(pFSInfo)
-  auditRunTest(@"Next free hint valid", result == $FFFFFFFF OR result >= 2)
-
-  ' Check backup FSInfo
-  sd.readSectorRaw(geoPartStart + 1, @buffer)
-  sd.readSectorRaw(geoPartStart + 7, @buf2)
-
-  mismatch := false
-  repeat idx from 0 to 511
-    if (buffer[idx] <> buf2[idx])
-      mismatch := true
-      quit
-
-  auditRunTest(@"Backup FSInfo matches primary", mismatch == false)
-  serial.fstr0(@"\r\n")
-
-
-PRI auditFAT() | result, idx, mismatch
-
-'' Verify FAT table entries and consistency
-
-  serial.fstr0(@"--- FAT Table ---\r\n")
-
-  sd.readSectorRaw(geoFat1Start, @buffer)
-
-  result := LONG[@buffer]
-  auditRunTest(@"FAT[0] = $0FFFFFF8 (media)", result == $0FFFFFF8)
-
-  result := LONG[@buffer + 4]
-  auditRunTest(@"FAT[1] = $0FFFFFFF (EOC)", result == $0FFFFFFF)
-
-  result := LONG[@buffer + 8]
-  auditRunTest(@"FAT[2] = $0FFFFFFF (root EOC)", result == $0FFFFFFF)
-
-  result := LONG[@buffer + 12]
-  auditRunTest(@"FAT[3] = 0 (free)", result == 0)
-
-  ' Compare FAT1 and FAT2 first sector
-  sd.readSectorRaw(geoFat2Start, @buf2)
-
-  mismatch := false
-  repeat idx from 0 to 511
-    if (buffer[idx] <> buf2[idx])
-      mismatch := true
-      quit
-
-  auditRunTest(@"FAT1 first sector == FAT2", mismatch == false)
-  serial.fstr0(@"\r\n")
-
-
-PRI auditRootDir() | result, pEntry
-
-'' Verify root directory structure
-'' Note: pEntry is untyped LONG (pnut-ts v51a limitation: ^structName not supported
-''   in locals). Struct member access via dirEnt*() helper methods.
-
-  serial.fstr0(@"--- Root Directory ---\r\n")
-
-  sd.readSectorRaw(geoDataStart, @buffer)
-
-  ' Check first directory entry (volume label)
-  pEntry := @buffer
-  result := dirEntAttr(pEntry)
-  auditRunTest(@"Volume label entry (attr=$08)", result == $08)
-
-  result := dirEntName0(pEntry)
-  auditRunTest(@"Valid volume label chars", result >= $20 AND result <= $7E)
-
-  ' Check second directory entry
-  pEntry := @buffer + SIZEOF(sd.dir_entry_t)
-  result := dirEntName0(pEntry)
-  auditRunTest(@"Second entry valid or end", result == $00 OR result == $E5 OR (result >= $20 AND result <= $7E))
-  serial.fstr0(@"\r\n")
-
-
-PRI auditMountTest() | result
-
-'' Test mount/unmount cycle
-
-  serial.fstr0(@"--- Mount Test ---\r\n")
-
-  result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-  auditRunTest(@"mount() succeeds", result)
-
-  if (result)
-    result := sd.freeSpace()
-    auditRunTest(@"Free space > 0", result > 0)
-    serial.fstr1(@"    Free: %d sectors\r\n", result)
-    sd.unmount()
-
-  serial.fstr0(@"\r\n")
-
-
-CON { fsck sub-methods }
-
-
-PRI fsckPass1() | idx, mismatch, fsinfoDirty, startRepairs
-
-'' Pass 1: Check and repair structural elements
-
-  serial.fstr0(@"--- Pass 1: Structural Integrity ---\r\n")
-  startRepairs := repairCount
-
-  ' === VBR backup (sector 6) ===
-  sd.readSectorRaw(geoPartStart, @buffer)
-  sd.readSectorRaw(geoPartStart + 6, @buf2)
-
-  mismatch := false
-  repeat idx from 0 to 511
-    if (buffer[idx] <> buf2[idx])
-      mismatch := true
-      quit
-
-  if (mismatch)
-    serial.fstr0(@"  REPAIR: Backup VBR mismatch - copying\r\n")
-    sd.writeSectorRaw(geoPartStart + 6, @buffer)
-    repairCount++
-  else
-    serial.fstr0(@"  [OK] Backup VBR matches\r\n")
-
-  ' === FSInfo signatures (sector 1) ===
-  sd.readSectorRaw(geoPartStart + 1, @buffer)
-  pFSInfo := @buffer
-  fsinfoDirty := false
-
-  if (fsiLeadSig(pFSInfo) <> FSINFO_SIG1)
-    serial.fstr0(@"  REPAIR: FSInfo lead signature\r\n")
-    fsiSetLeadSig(pFSInfo, FSINFO_SIG1)
-    fsinfoDirty := true
-    repairCount++
-
-  if (fsiStructSig(pFSInfo) <> FSINFO_SIG2)
-    serial.fstr0(@"  REPAIR: FSInfo struct signature\r\n")
-    fsiSetStructSig(pFSInfo, FSINFO_SIG2)
-    fsinfoDirty := true
-    repairCount++
-
-  if (fsiTrailSig(pFSInfo) <> FSINFO_TRAIL_SIG)
-    serial.fstr0(@"  REPAIR: FSInfo trail signature\r\n")
-    fsiSetTrailSig(pFSInfo, FSINFO_TRAIL_SIG)
-    fsinfoDirty := true
-    repairCount++
-
-  if (fsinfoDirty)
-    sd.writeSectorRaw(geoPartStart + 1, @buffer)
-  else
-    serial.fstr0(@"  [OK] FSInfo signatures\r\n")
-
-  ' === FSInfo backup (sector 7) ===
-  sd.readSectorRaw(geoPartStart + 1, @buffer)
-  sd.readSectorRaw(geoPartStart + 7, @buf2)
-
-  mismatch := false
-  repeat idx from 0 to 511
-    if (buffer[idx] <> buf2[idx])
-      mismatch := true
-      quit
-
-  if (mismatch)
-    serial.fstr0(@"  REPAIR: Backup FSInfo mismatch - copying\r\n")
-    sd.writeSectorRaw(geoPartStart + 7, @buffer)
-    repairCount++
-  else
-    serial.fstr0(@"  [OK] Backup FSInfo matches\r\n")
-
-  ' === FAT[0] media type ===
-  sd.readSectorRaw(geoFat1Start, @buffer)
-
-  if ((LONG[@buffer] & FAT_MASK) <> ($0FFFFFF8 & FAT_MASK))
-    serial.fstr0(@"  REPAIR: FAT[0] media type\r\n")
-    LONG[@buffer] := $0FFFFFF8 | (LONG[@buffer] & $F0000000)
-    sd.writeSectorRaw(geoFat1Start, @buffer)
-    repairCount++
-  else
-    serial.fstr0(@"  [OK] FAT[0] media type\r\n")
-
-  ' === FAT[1] EOC marker ===
-  if ((LONG[@buffer + 4] & FAT_MASK) <> FAT_EOC)
-    serial.fstr0(@"  REPAIR: FAT[1] EOC marker\r\n")
-    LONG[@buffer + 4] := FAT_EOC | (LONG[@buffer + 4] & $F0000000)
-    sd.writeSectorRaw(geoFat1Start, @buffer)
-    repairCount++
-  else
-    serial.fstr0(@"  [OK] FAT[1] EOC marker\r\n")
-
-  ' === FAT[2] root cluster ===
-  if ((LONG[@buffer + 8] & FAT_MASK) == FAT_FREE)
-    serial.fstr0(@"  REPAIR: FAT[2] root cluster was free\r\n")
-    LONG[@buffer + 8] := FAT_EOC | (LONG[@buffer + 8] & $F0000000)
-    sd.writeSectorRaw(geoFat1Start, @buffer)
-    repairCount++
-  else
-    serial.fstr0(@"  [OK] FAT[2] root cluster\r\n")
-
-  serial.fstr1(@"  Pass 1: %d repairs\r\n\r\n", repairCount - startRepairs)
-
-
-PRI fsckPass2() | startRepairs
-
-'' Pass 2: Walk directory tree and validate all cluster chains
-
-  serial.fstr0(@"--- Pass 2: Directory & Chain Validation ---\r\n")
-  startRepairs := repairCount
-
-  ' Clear cluster bitmap
-  longfill(@sharedPool, 0, BITMAP_LONGS)
-  bitmapField := ^@sharedPool.[0]                               ' 1-bit FIELD pointer for bitmap
-
-  ' Mark clusters 0 and 1 as used
-  fsckSetBit(0)
-  fsckSetBit(1)
-
-  ' CRITICAL: Validate root chain BEFORE scanning directories
-  fsckValidateChain(geoRootClus, 0, true)
-
-  ' Scan directory tree
-  dirCount := 0
-  fileCount := 0
-  scanDepth := 0
-  fsckScanDir(geoRootClus)
-
-  serial.fstr2(@"  Dirs: %d  Files: %d\r\n", dirCount, fileCount)
-  serial.fstr1(@"  Pass 2: %d repairs\r\n\r\n", repairCount - startRepairs)
-
-
-PRI fsckScanDir(dirCluster) | sector, entSector, entIdx, pEntry, attr, startClus, fSize, name0, nextClus
-
-'' Recursively scan directory, validating all entries and chains
-'' Note: pEntry is untyped LONG (pnut-ts v51a limitation: ^structName not supported
-''   in locals). Struct member access via dirEnt*() helper methods which accept
-''   ^sd.dir_entry_t parameter.
-
-  dirCount++
-  scanDepth++
-
-  if (scanDepth > MAX_DIR_DEPTH)
-    serial.fstr0(@"  WARNING: Max dir depth exceeded\r\n")
-    warningCount++
-    scanDepth--
-    return
-
-  ' Follow directory cluster chain
-  repeat while dirCluster >= 2 AND dirCluster < (geoTotalClus + 2)
-    sector := fsckClus2Sec(dirCluster)
-
-    ' Read each sector in this cluster
-    repeat entSector from 0 to geoSecPerClus - 1
-      sd.readSectorRaw(sector + entSector, @buffer)
-
-      ' Process 16 directory entries per sector
-      repeat entIdx from 0 to 15
-        pEntry := @buffer + (entIdx * SIZEOF(sd.dir_entry_t))
-        name0 := dirEntName0(pEntry)
-
-        ' $00 = end of directory
-        if (name0 == $00)
-          scanDepth--
-          return
-
-        ' $E5 = deleted entry
-        if (name0 == $E5)
-          next
-
-        attr := dirEntAttr(pEntry)
-
-        ' Long filename entry (attr $0F)
-        if ((attr & $3F) == $0F)
-          next
-
-        ' Volume label
-        if (attr & $08)
-          next
-
-        ' Skip . and .. entries
-        if (fsckIsDot(pEntry))
-          next
-
-        ' Extract start cluster and file size
-        startClus := dirEntStartClus(pEntry)
-        fSize := dirEntFileSize(pEntry)
-
-        if (attr & $10)
-          ' --- Subdirectory ---
-          if (startClus >= 2 AND startClus < (geoTotalClus + 2))
-            fsckValidateChain(startClus, 0, true)
-            fsckScanDir(startClus)
-            ' Re-read our sector after recursion
-            sd.readSectorRaw(sector + entSector, @buffer)
-          elseif (startClus <> 0)
-            serial.fstr1(@"  ERROR: Bad dir start cluster %d\r\n", startClus)
-            errorCount++
-        else
-          ' --- Regular file ---
-          fileCount++
-          if (startClus >= 2 AND startClus < (geoTotalClus + 2))
-            fsckValidateChain(startClus, fSize, false)
-          elseif (startClus == 0 AND fSize > 0)
-            serial.fstr1(@"  ERROR: File has size %d but no cluster\r\n", fSize)
-            errorCount++
-
-    ' Advance to next cluster in directory chain
-    nextClus := fsckReadFAT(dirCluster) & FAT_MASK
-    if (nextClus >= FAT_EOC_MIN)
-      quit
-    if (nextClus < 2 OR nextClus >= (geoTotalClus + 2))
-      serial.fstr1(@"  ERROR: Bad cluster in dir chain: %d\r\n", nextClus)
-      errorCount++
-      quit
-    dirCluster := nextClus
-
-  scanDepth--
-
-
-PRI fsckValidateChain(startClus, fSize, isDir) | clus, nextClus, chainLen, expectedLen
-
-'' Follow and validate a cluster chain, marking bitmap
-
-  chainLen := 0
-  clus := startClus
-
-  repeat while clus >= 2 AND clus < (geoTotalClus + 2)
-    ' Check for cross-link
-    if (fsckTestBit(clus))
-      serial.fstr1(@"  ERROR: Cross-linked cluster %d\r\n", clus)
-      errorCount++
-      return
-
-    ' Mark as referenced
-    fsckSetBit(clus)
-    chainLen++
-
-    ' Safety: detect loops
-    if (chainLen > MAX_CHAIN_LENGTH)
-      serial.fstr1(@"  ERROR: Chain too long from cluster %d\r\n", startClus)
-      errorCount++
-      return
-
-    ' Read next in chain
-    nextClus := fsckReadFAT(clus) & FAT_MASK
-
-    ' End of chain?
-    if (nextClus >= FAT_EOC_MIN)
-      quit
-
-    ' Bad reference?
-    if (nextClus < 2 OR (nextClus >= (geoTotalClus + 2) AND nextClus <> FAT_BAD))
-      serial.fstr1(@"  ERROR: Bad ref %d", nextClus)
-      serial.fstr1(@" from cluster %d\r\n", startClus)
-      ' Truncate chain
-      fsckWriteFAT(clus, FAT_EOC)
-      serial.fstr1(@"  REPAIR: Truncated at cluster %d\r\n", clus)
-      repairCount++
-      quit
-
-    ' Bad cluster marker
-    if (nextClus == FAT_BAD)
-      quit
-
-    clus := nextClus
-
-  ' Check chain length vs expected for files
-  if (not isDir AND fSize > 0)
-    expectedLen := (fSize + (geoSecPerClus * 512) - 1) / (geoSecPerClus * 512)
-    if (chainLen <> expectedLen)
-      serial.fstr2(@"  WARNING: Chain %d clusters, expected %d\r\n", chainLen, expectedLen)
-      warningCount++
-
-
-PRI fsckPass3() | clus, fatVal, lostCount, startRepairs
-
-'' Pass 3: Find and free lost clusters
-
-  serial.fstr0(@"--- Pass 3: Lost Cluster Recovery ---\r\n")
-  startRepairs := repairCount
-  lostCount := 0
-
-  repeat clus from 2 to geoTotalClus + 1
-    if (clus >= MAX_BITMAP_CLUSTERS)
-      quit
-
-    ' Progress dot every 100K clusters
-    if ((clus & $1FFFF) == 0)
-      serial.tx(".")
-
-    if (not fsckTestBit(clus))
-      fatVal := fsckReadFAT(clus) & FAT_MASK
-      if (fatVal <> FAT_FREE AND fatVal <> FAT_BAD)
-        fsckWriteFAT(clus, FAT_FREE)
-        lostCount++
-
-  ' Flush pending FAT writes
-  fsckFlushFAT()
-
-  if (lostCount > 0)
-    serial.fstr1(@"\r  REPAIR: Freed %d lost clusters\r\n", lostCount)
-    repairCount += lostCount
-  else
-    serial.fstr0(@"  [OK] No lost clusters\r\n")
-
-  serial.fstr1(@"  Pass 3: %d repairs\r\n\r\n", repairCount - startRepairs)
-
-
-PRI fsckPass4() | fatSector, entIdx, clus, fatVal, freeCount, syncCount, mismatch, idx, startRepairs
-
-'' Pass 4: Sync FAT1 -> FAT2 and correct free cluster count
-
-  serial.fstr0(@"--- Pass 4: FAT Sync & Free Count ---\r\n")
-  startRepairs := repairCount
-
-  ' Ensure prior writes flushed
-  fsckFlushFAT()
-
-  freeCount := 0
-  syncCount := 0
-  clus := 0
-
-  repeat fatSector from 0 to geoSecPerFat - 1
-    ' Progress dot every 1000 sectors
-    if ((fatSector & $3FF) == 0)
-      serial.tx(".")
-
-    ' Read FAT1 sector
-    sd.readSectorRaw(geoFat1Start + fatSector, @buffer)
-
-    ' Count free clusters
-    repeat entIdx from 0 to 127
-      if (clus >= 2 AND clus < (geoTotalClus + 2))
-        fatVal := LONG[@buffer + (entIdx * 4)] & FAT_MASK
-        if (fatVal == FAT_FREE)
-          freeCount++
-      clus++
-
-    ' Compare with FAT2
-    sd.readSectorRaw(geoFat2Start + fatSector, @buf2)
-
-    mismatch := false
-    repeat idx from 0 to 511
-      if (buffer[idx] <> buf2[idx])
-        mismatch := true
-        quit
-
-    if (mismatch)
-      sd.writeSectorRaw(geoFat2Start + fatSector, @buffer)
-      syncCount++
-
-  if (syncCount > 0)
-    serial.fstr1(@"\r  REPAIR: Synced %d FAT sectors\r\n", syncCount)
-    repairCount += syncCount
-  else
-    serial.fstr0(@"\r  [OK] FAT1 and FAT2 in sync\r\n")
-
-  serial.fstr1(@"  Free clusters: %d\r\n", freeCount)
-
-  ' Update FSInfo free cluster count
-  sd.readSectorRaw(geoPartStart + 1, @buffer)
-  pFSInfo := @buffer
-
-  if (fsiFreeClusters(pFSInfo) <> freeCount)
-    serial.fstr2(@"  REPAIR: FSInfo free count %d -> %d\r\n", fsiFreeClusters(pFSInfo), freeCount)
-    fsiSetFreeClusters(pFSInfo, freeCount)
-    sd.writeSectorRaw(geoPartStart + 1, @buffer)
-    sd.writeSectorRaw(geoPartStart + 7, @buffer)
-    repairCount++
-  else
-    serial.fstr0(@"  [OK] FSInfo free count correct\r\n")
-
-  serial.fstr1(@"  Pass 4: %d repairs\r\n\r\n", repairCount - startRepairs)
-
-
-PRI fsckReadFAT(cluster) : value | sector, offset
-
-'' Read a FAT entry with sector caching
-
-  sector := geoFat1Start + (cluster >> 7)
-  offset := (cluster & $7F) * 4
-
-  if (sector <> fatBufSector)
-    fsckFlushFAT()
-    sd.readSectorRaw(sector, @fatBuf)
-    fatBufSector := sector
-
-  value := LONG[@fatBuf + offset]
-
-
-PRI fsckWriteFAT(cluster, value) | sector, offset, existing
-
-'' Write a FAT entry with caching, preserving upper 4 bits
-
-  sector := geoFat1Start + (cluster >> 7)
-  offset := (cluster & $7F) * 4
-
-  if (sector <> fatBufSector)
-    fsckFlushFAT()
-    sd.readSectorRaw(sector, @fatBuf)
-    fatBufSector := sector
-
-  existing := LONG[@fatBuf + offset]
-  LONG[@fatBuf + offset] := (value & FAT_MASK) | (existing & $F0000000)
-  fatBufDirty := true
-
-
-PRI fsckFlushFAT()
-
-'' Write cached FAT sector to both FAT1 and FAT2 if dirty
-
-  if (fatBufDirty AND fatBufSector >= 0)
-    sd.writeSectorRaw(fatBufSector, @fatBuf)
-    sd.writeSectorRaw(fatBufSector - geoFat1Start + geoFat2Start, @fatBuf)
-    fatBufDirty := false
-
-
-PRI fsckClus2Sec(cluster) : sector
-
-'' Convert cluster number to absolute sector
-
-  sector := geoDataStart + ((cluster - 2) * geoSecPerClus)
-
-
-PRI fsckSetBit(cluster)
-
-'' Set bit in cluster bitmap
-
-  FIELD[bitmapField][cluster]~~
-
-
-PRI fsckTestBit(cluster) : result
-
-'' Test bit in cluster bitmap
-
-  result := FIELD[bitmapField][cluster]
-
-
-PRI fsckIsDot(^sd.dir_entry_t pEntry) : result
-
-'' Check if directory entry is . or ..
-
-  result := false
-  if (pEntry.name[0] == ".")
-    if (pEntry.name[1] == " " OR pEntry.name[1] == ".")
-      result := true
-
-
-PRI dirEntName0(^sd.dir_entry_t pEntry) : result
-
-'' Return first byte of directory entry filename
-
-  result := pEntry.name[0]
-
-
-PRI dirEntAttr(^sd.dir_entry_t pEntry) : result
-
-'' Return attribute byte of directory entry
-
-  result := pEntry.attr
-
-
-PRI dirEntStartClus(^sd.dir_entry_t pEntry) : result
-
-'' Return 32-bit start cluster (combined from clusHI and clusLO fields)
-
-  result := pEntry.clusLO | (pEntry.clusHI << 16)
-
-
-PRI dirEntFileSize(^sd.dir_entry_t pEntry) : result
-
-'' Return file size from directory entry
-
-  result := pEntry.fileSize
+CON { struct accessors (kept for do_card_info / detectFilesystem) }
 
 
 ' ── MBR partition entry accessors ──────────────────────────────────────────────
-
-PRI partBootFlag(^sd.mbr_partition_t p) : value
-  return p.bootFlag
 
 PRI partType(^sd.mbr_partition_t p) : value
   return p.partType
@@ -1941,96 +1173,10 @@ PRI partType(^sd.mbr_partition_t p) : value
 PRI partLbaStart(^sd.mbr_partition_t p) : value
   return p.lbaStart
 
-PRI partLbaSize(^sd.mbr_partition_t p) : value
-  return p.lbaSize
-
-' ── VBR (Volume Boot Record) accessors ────────────────────────────────────────
-
-PRI vbrJumpBoot0(^sd.vbr_t p) : value
-  return p.jumpBoot[0]
+' ── VBR accessor (used by resolveType07) ─────────────────────────────────────
 
 PRI vbrOemNameByte(^sd.vbr_t p, idx) : value
   return p.oemName[idx]
-
-PRI vbrBytesPerSec(^sd.vbr_t p) : value
-  return p.bytesPerSec
-
-PRI vbrSecPerClus(^sd.vbr_t p) : value
-  return p.secPerClus
-
-PRI vbrReservedSec(^sd.vbr_t p) : value
-  return p.reservedSec
-
-PRI vbrNumFats(^sd.vbr_t p) : value
-  return p.numFats
-
-PRI vbrRootEntCnt(^sd.vbr_t p) : value
-  return p.rootEntCnt
-
-PRI vbrTotalSec16(^sd.vbr_t p) : value
-  return p.totalSec16
-
-PRI vbrMediaType(^sd.vbr_t p) : value
-  return p.mediaType
-
-PRI vbrSecPerFat16(^sd.vbr_t p) : value
-  return p.secPerFat16
-
-PRI vbrHiddenSec(^sd.vbr_t p) : value
-  return p.hiddenSec
-
-PRI vbrTotalSec32(^sd.vbr_t p) : value
-  return p.totalSec32
-
-PRI vbrSecPerFat32(^sd.vbr_t p) : value
-  return p.secPerFat32
-
-PRI vbrRootCluster(^sd.vbr_t p) : value
-  return p.rootCluster
-
-PRI vbrFsInfoSec(^sd.vbr_t p) : value
-  return p.fsInfoSec
-
-PRI vbrBackBootSec(^sd.vbr_t p) : value
-  return p.backBootSec
-
-PRI vbrBootSigByte(^sd.vbr_t p) : value
-  return p.bootSig
-
-PRI vbrBootSignature(^sd.vbr_t p) : value
-  return p.bootSignature
-
-PRI vbrFsTypeByte(^sd.vbr_t p, idx) : value
-  return p.fsTypeLabel[idx]
-
-' ── FSInfo sector accessors ───────────────────────────────────────────────────
-
-PRI fsiLeadSig(^sd.fsinfo_t p) : value
-  return p.leadSig
-
-PRI fsiStructSig(^sd.fsinfo_t p) : value
-  return p.structSig
-
-PRI fsiTrailSig(^sd.fsinfo_t p) : value
-  return p.trailSig
-
-PRI fsiFreeClusters(^sd.fsinfo_t p) : value
-  return p.freeClusters
-
-PRI fsiNextFreeHint(^sd.fsinfo_t p) : value
-  return p.nextFreeHint
-
-PRI fsiSetLeadSig(^sd.fsinfo_t p, value)
-  p.leadSig := value
-
-PRI fsiSetStructSig(^sd.fsinfo_t p, value)
-  p.structSig := value
-
-PRI fsiSetTrailSig(^sd.fsinfo_t p, value)
-  p.trailSig := value
-
-PRI fsiSetFreeClusters(^sd.fsinfo_t p, value)
-  p.freeClusters := value
 
 
 CON { shared utility methods }
@@ -2049,17 +1195,6 @@ PRI confirmYN(p_prompt) : confirmed | c
   else
     serial.fstr0(@"no\r\n")
     confirmed := false
-
-
-PRI initRawAccess() : ok
-
-'' Initialize card for raw sector access (no mount)
-'' Used by audit/fsck/bench when card is not mounted
-
-  serial.fstr0(@"* initRawAccess\r\n")
-  ok := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-  serial.fstr1(@"* back from init. ok=%d\r\n", ok)
-
 
 
 PRI lookupMID(mid) : p_name | p, entryMID
@@ -2190,56 +1325,6 @@ PRI resolveType07() : p_fsName | partStart
     return @fsExFAT
 
   return @fsNTFS
-
-
-PRI readGeometry() : ok | numFats
-
-'' Read MBR and VBR to extract filesystem geometry.
-'' Populates all geo* VARs needed by audit and fsck.
-
-  ' Read MBR to get partition start
-  sd.readSectorRaw(0, @buf2)
-  if WORD[@buf2 + $1FE] <> MBR_SIGNATURE
-    serial.fstr0(@"  ERROR: Invalid MBR signature\r\n")
-    return false
-
-  pPart := @buf2 + $1BE                                           ' overlay partition entry 1
-  geoPartStart := partLbaStart(pPart)
-  if geoPartStart == 0
-    serial.fstr0(@"  ERROR: Partition start is 0\r\n")
-    return false
-
-  ' Read VBR (Volume Boot Record)
-  sd.readSectorRaw(geoPartStart, @buf2)
-  pVBR := @buf2                                                    ' overlay VBR
-  if vbrBootSignature(pVBR) <> MBR_SIGNATURE
-    serial.fstr0(@"  ERROR: Invalid VBR signature\r\n")
-    return false
-
-  ' Extract geometry fields
-  geoSecPerClus := vbrSecPerClus(pVBR)
-  geoReservedSec := vbrReservedSec(pVBR)
-  numFats := vbrNumFats(pVBR)
-  geoSecPerFat := vbrSecPerFat32(pVBR)
-  geoTotalSec := vbrTotalSec32(pVBR)
-  geoRootClus := vbrRootCluster(pVBR)
-
-  ' Validate critical fields
-  if geoSecPerClus == 0 OR geoSecPerFat == 0 OR geoTotalSec == 0
-    serial.fstr0(@"  ERROR: Zero in critical VBR field\r\n")
-    return false
-
-  if numFats < 1 OR numFats > 2
-    serial.fstr1(@"  ERROR: Invalid number of FATs: %d\r\n", numFats)
-    return false
-
-  ' Compute derived values
-  geoFat1Start := geoPartStart + geoReservedSec
-  geoFat2Start := geoFat1Start + geoSecPerFat
-  geoDataStart := geoFat1Start + (numFats * geoSecPerFat)
-  geoTotalClus := (geoTotalSec - geoReservedSec - (numFats * geoSecPerFat)) / geoSecPerClus
-
-  ok := true
 
 
 PRI lcstr(p_str) : p_lcstr | c

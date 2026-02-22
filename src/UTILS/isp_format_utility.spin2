@@ -54,9 +54,15 @@ CON
 '' Enable full driver features for this utility
 #PRAGMA EXPORTDEF SD_INCLUDE_ALL
 
+    ' Cog stack for async format
+    FMT_STACK_LONGS   = 256
+    FMT_GUARD_LONGS   = 4
+    FMT_GUARD_BYTE    = $CC
+
 OBJ
 
-    sd : "micro_sd_fat32_fs"             ' Use V3 driver with smart pins for formatting
+    sd   : "micro_sd_fat32_fs"           ' Use V3 driver with smart pins for formatting
+    fifo : "isp_string_fifo"            ' FIFO for cog-based output
 
 VAR
 
@@ -81,6 +87,20 @@ VAR
 
     ' Volume label (12 bytes: 11 chars + null)
     BYTE    volumeLabel[12]
+
+DAT { singleton cog state for async format }
+
+fmt_cog_id    LONG    -1                 ' cog number (-1 = not running)
+fmt_op_done   LONG    0                  ' TRUE when cog finished
+fmt_op_result LONG    0                  ' TRUE if format succeeded
+
+fmt_cog_stack LONG    0[FMT_STACK_LONGS]
+fmt_cog_guard LONG    0[FMT_GUARD_LONGS]
+
+
+'' =========================================================================
+'' Synchronous API (existing - unchanged)
+'' =========================================================================
 
 PUB format(cs, mosi, miso, sck) : result
 '' Format the SD card with default volume label "P2-XFER".
@@ -135,6 +155,210 @@ PUB stop()
 '' Call this after format() or formatWithLabel() to allow other drivers to use the card.
 
     sd.stop()
+
+
+'' =========================================================================
+'' Cog-based (asynchronous) API - for use from demo shell
+'' =========================================================================
+
+PUB startFormat(cs, mosi, miso, sck) : ok
+'' Launch format with default label in a new cog
+''
+'' @param cs, mosi, miso, sck - SD pin configuration
+'' @returns ok - TRUE if cog launched successfully
+
+    pinCS := cs
+    pinMOSI := mosi
+    pinMISO := miso
+    pinSCK := sck
+    setDefaultLabel()
+    ok := doStartCog()
+
+
+PUB startFormatWithLabel(cs, mosi, miso, sck, pLabel) : ok | i, ch
+'' Launch format with custom label in a new cog
+''
+'' @param cs, mosi, miso, sck - SD pin configuration
+'' @param pLabel - Pointer to null-terminated string (max 11 chars)
+'' @returns ok - TRUE if cog launched successfully
+
+    pinCS := cs
+    pinMOSI := mosi
+    pinMISO := miso
+    pinSCK := sck
+
+    ' Copy and pad label to 11 characters
+    bytefill(@volumeLabel, " ", 11)
+    volumeLabel[11] := 0
+
+    i := 0
+    repeat while i < 11
+        ch := BYTE[pLabel][i]
+        if ch == 0
+            quit
+        if ch >= "a"
+            if ch <= "z"
+                ch -= 32
+        volumeLabel[i] := ch
+        i++
+
+    ok := doStartCog()
+
+
+PUB hasOutput() : yes
+'' Check if the format utility has produced output strings
+''
+'' @returns yes - TRUE if strings are waiting in the FIFO
+
+    yes := fifo.hasOutput()
+
+
+PUB getOutput() : pStr
+'' Get the next output string
+''
+'' @returns pStr - pointer to string, or 0 if empty
+
+    pStr := fifo.getOutput()
+
+
+PUB isDone() : yes
+'' Check if the format cog has finished
+''
+'' @returns yes - TRUE if the cog has completed
+
+    yes := (fmt_op_done <> 0)
+
+
+PUB getResult() : ok
+'' Get the format result after isDone() returns TRUE
+''
+'' @returns ok - TRUE if format succeeded, FALSE if failed
+
+    ok := fmt_op_result
+
+
+PUB stopCog()
+'' Stop the format cog and clean up SD driver
+'' Safe to call even if cog already finished
+
+    if fmt_cog_id >= 0
+        cogstop(fmt_cog_id)
+    fmt_cog_id := -1
+    sd.stop()
+
+
+'' =========================================================================
+'' Cog launch and entry point (private)
+'' =========================================================================
+
+PRI doStartCog() : ok
+' Initialize FIFO and launch format cog
+'
+' @returns ok - TRUE if cog launched
+
+    fmt_op_done := false
+    fmt_op_result := false
+
+    fifo.init()
+
+    bytefill(@fmt_cog_guard, FMT_GUARD_BYTE, FMT_GUARD_LONGS * 4)
+
+    fmt_cog_id := cogspin(NEWCOG, runInCog(), @fmt_cog_stack)
+    ok := (fmt_cog_id >= 0)
+
+
+PRI runInCog() | result
+' Cog entry point for async format.
+' When this method returns, the cog stops automatically.
+
+    result := doFormatCog()
+    sd.stop()
+    fmt_op_result := result
+    fmt_op_done := true
+
+
+PRI doFormatCog() : result | i
+' Execute the format operation with FIFO output instead of debug().
+' Calls the same write methods (writeMBR, writeVBR, etc.) as doFormat().
+'
+' @returns result - TRUE if all steps succeeded
+
+    fifo.put(@"=== SD Card FAT32 Formatter ===")
+    fifo.putFmt1(@"Volume Label: %s", @volumeLabel)
+    fifo.put(@" ")
+
+    ' Initialize card
+    fifo.put(@"Initializing SD card...")
+    result := sd.initCardOnly(pinCS, pinMOSI, pinMISO, pinSCK)
+    if result == false
+        fifo.put(@"ERROR: Could not initialize SD card!")
+        return false
+
+    ' Get card size
+    totalSectors := sd.cardSizeSectors()
+    if totalSectors == 0
+        fifo.put(@"ERROR: Could not read card size!")
+        return false
+
+    fifo.putFmt2(@"Card: %d sectors (%d MB)", totalSectors, totalSectors / 2048)
+
+    ' Calculate filesystem parameters
+    if not calculateParameters()
+        fifo.put(@"ERROR: Card too small for FAT32!")
+        return false
+
+    fifo.putFmt1(@"Sectors/cluster: %d", sectorsPerCluster)
+    fifo.putFmt1(@"Sectors/FAT: %d", sectorsPerFat)
+    fifo.putFmt1(@"Total clusters: %d", totalClusters)
+
+    ' Write MBR
+    fifo.put(@"Writing MBR...")
+    if not writeMBR()
+        fifo.put(@"ERROR: Failed to write MBR!")
+        return false
+
+    ' Write VBR
+    fifo.put(@"Writing VBR...")
+    if not writeVBR()
+        fifo.put(@"ERROR: Failed to write VBR!")
+        return false
+
+    ' Write FSInfo
+    fifo.put(@"Writing FSInfo...")
+    if not writeFSInfo()
+        fifo.put(@"ERROR: Failed to write FSInfo!")
+        return false
+
+    ' Write backup boot
+    fifo.put(@"Writing backup boot...")
+    if not writeBackupBoot()
+        fifo.put(@"ERROR: Failed to write backup boot!")
+        return false
+
+    ' Initialize FAT tables
+    fifo.put(@"Initializing FAT1...")
+    if not initFAT(fat1Start)
+        fifo.put(@"ERROR: Failed to initialize FAT1!")
+        return false
+
+    fifo.put(@"Initializing FAT2...")
+    if not initFAT(fat2Start)
+        fifo.put(@"ERROR: Failed to initialize FAT2!")
+        return false
+
+    ' Initialize root directory
+    fifo.put(@"Initializing root directory...")
+    if not initRootDirectory()
+        fifo.put(@"ERROR: Failed to initialize root directory!")
+        return false
+
+    fifo.put(@" ")
+    fifo.put(@"=== FORMAT COMPLETE ===")
+    fifo.putFmt1(@"Volume: %s", @volumeLabel)
+    fifo.putFmt2(@"Size: %d MB, Clusters: %d", totalSectors / 2048, totalClusters)
+
+    return true
+
 
 PRI setDefaultLabel()
 ' Set default volume label "P2-XFER" (11 chars, space padded).

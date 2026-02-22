@@ -1,0 +1,321 @@
+'' =================================================================================================
+''
+''   File....... SD_RT_fifo_tests.spin2
+''   Purpose.... Regression tests for isp_string_fifo.spin2 SPSC string FIFO
+''   Author..... Stephen M Moraco
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... 21 FEB 2026
+''   Updated.... 21 FEB 2026
+''
+'' =================================================================================================
+
+CON
+
+     _CLKFREQ        = 270_000_000
+
+     SLOT_SIZE        = 128          ' must match isp_string_fifo SLOT_SIZE
+
+OBJ
+    fifo  : "isp_string_fifo"
+    utils : "isp_rt_utilities"
+
+DAT
+
+resultBuf       BYTE    0[256]
+
+PUB go() | pStr, i, ok, nLen
+
+    debug(" ")
+    debug("==============================================")
+    debug("  String FIFO - Regression Tests")
+    debug("==============================================")
+
+    ' ----------------------------------
+    ' TEST GROUP: Init and empty state
+    ' ----------------------------------
+    utils.startTestGroup(@"Init and empty state")
+
+    utils.startTest(@"init() resets FIFO to empty")
+    fifo.init()
+    utils.evaluateBool(fifo.hasOutput(), @"hasOutput() after init", false)
+
+    utils.startTest(@"getOutput() on empty returns 0")
+    pStr := fifo.getOutput()
+    utils.evaluateSingleValue(pStr, @"getOutput() when empty", 0)
+
+    ' ----------------------------------
+    ' TEST GROUP: Single put/get
+    ' ----------------------------------
+    utils.startTestGroup(@"Single put/get")
+
+    utils.startTest(@"put() then hasOutput() returns true")
+    fifo.init()
+    fifo.put(@"Hello World")
+    utils.evaluateBool(fifo.hasOutput(), @"hasOutput() after put", true)
+
+    utils.startTest(@"getOutput() returns correct string content")
+    pStr := fifo.getOutput()
+    if pStr
+        utils.evaluateStringMatch(pStr, @"put/get content", @"Hello World")
+    else
+        utils.recordFail()
+
+    utils.startTest(@"FIFO empty after consuming single item")
+    utils.evaluateBool(fifo.hasOutput(), @"hasOutput() after get", false)
+
+    ' ----------------------------------
+    ' TEST GROUP: Multiple put/get in sequence
+    ' ----------------------------------
+    utils.startTestGroup(@"Multiple put/get in sequence")
+
+    utils.startTest(@"put 3 strings then get them in order")
+    fifo.init()
+    fifo.put(@"First")
+    fifo.put(@"Second")
+    fifo.put(@"Third")
+
+    pStr := fifo.getOutput()
+    ok := true
+    if pStr
+        if not strcomp(pStr, @"First")
+            ok := false
+    else
+        ok := false
+
+    pStr := fifo.getOutput()
+    if pStr
+        if not strcomp(pStr, @"Second")
+            ok := false
+    else
+        ok := false
+
+    pStr := fifo.getOutput()
+    if pStr
+        if not strcomp(pStr, @"Third")
+            ok := false
+    else
+        ok := false
+
+    if ok
+        utils.recordPass()
+    else
+        utils.recordFail()
+
+    utils.startTest(@"FIFO empty after consuming all 3")
+    utils.evaluateBool(fifo.hasOutput(), @"hasOutput() after all consumed", false)
+
+    ' ----------------------------------
+    ' TEST GROUP: Fill to capacity (15 slots usable)
+    ' ----------------------------------
+    utils.startTestGroup(@"Fill to capacity (15 usable slots)")
+
+    utils.startTest(@"Fill 15 slots without blocking")
+    fifo.init()
+    repeat i from 1 to 15
+        fifo.put(@"slot")
+    utils.evaluateBool(fifo.hasOutput(), @"hasOutput() when full", true)
+
+    utils.startTest(@"Drain all 15 slots")
+    ok := true
+    repeat i from 1 to 15
+        pStr := fifo.getOutput()
+        if pStr == 0
+            ok := false
+            quit
+    if ok
+        utils.recordPass()
+    else
+        utils.recordFail()
+
+    utils.startTest(@"FIFO empty after draining")
+    utils.evaluateBool(fifo.hasOutput(), @"hasOutput() after drain", false)
+
+    ' ----------------------------------
+    ' TEST GROUP: Wrap-around
+    ' ----------------------------------
+    utils.startTestGroup(@"Wrap-around behavior")
+
+    utils.startTest(@"put/get cycles wrap head and tail past NUM_SLOTS")
+    fifo.init()
+    ok := true
+    ' Do 32 put/get cycles — head and tail both wrap past 16
+    repeat i from 1 to 32
+        bytemove(@resultBuf, @"Cycle", 5)
+        resultBuf[5] := 0
+        fifo.put(@resultBuf)
+        pStr := fifo.getOutput()
+        if pStr == 0
+            ok := false
+            quit
+        if not strcomp(pStr, @"Cycle")
+            ok := false
+            quit
+
+    if ok
+        utils.recordPass()
+    else
+        utils.recordFail()
+
+    utils.startTest(@"FIFO empty after wrap-around cycles")
+    utils.evaluateBool(fifo.hasOutput(), @"hasOutput() after cycles", false)
+
+    ' ----------------------------------
+    ' TEST GROUP: Truncation
+    ' ----------------------------------
+    utils.startTestGroup(@"String truncation at SLOT_SIZE")
+
+    utils.startTest(@"Long string truncated to SLOT_SIZE-1 chars")
+    fifo.init()
+    ' Fill resultBuf with 200 'A' characters
+    bytefill(@resultBuf, "A", 200)
+    resultBuf[200] := 0
+    fifo.put(@resultBuf)
+    pStr := fifo.getOutput()
+    if pStr
+        nLen := strsize(pStr)
+        utils.evaluateSingleValue(nLen, @"truncated length", SLOT_SIZE - 1)
+    else
+        debug("  ERROR: getOutput() returned null")
+        utils.recordFail()
+
+    ' ----------------------------------
+    ' TEST GROUP: putFmtN formatting
+    ' ----------------------------------
+    utils.startTestGroup(@"putFmtN formatting helpers")
+
+    utils.startTest(@"putFmt0 with plain string")
+    fifo.init()
+    fifo.putFmt0(@"No args here")
+    pStr := fifo.getOutput()
+    if pStr
+        utils.evaluateStringMatch(pStr, @"putFmt0 content", @"No args here")
+    else
+        utils.recordFail()
+
+    utils.startTest(@"putFmt1 with decimal arg")
+    fifo.init()
+    fifo.putFmt1(@"Value=%d", 42)
+    pStr := fifo.getOutput()
+    if pStr
+        utils.evaluateStringMatch(pStr, @"putFmt1 content", @"Value=42")
+    else
+        utils.recordFail()
+
+    utils.startTest(@"putFmt2 with two args")
+    fifo.init()
+    fifo.putFmt2(@"A=%d B=%d", 10, 20)
+    pStr := fifo.getOutput()
+    if pStr
+        utils.evaluateStringMatch(pStr, @"putFmt2 content", @"A=10 B=20")
+    else
+        utils.recordFail()
+
+    utils.startTest(@"putFmt3 with three args")
+    fifo.init()
+    fifo.putFmt3(@"X=%d Y=%d Z=%d", 1, 2, 3)
+    pStr := fifo.getOutput()
+    if pStr
+        utils.evaluateStringMatch(pStr, @"putFmt3 content", @"X=1 Y=2 Z=3")
+    else
+        utils.recordFail()
+
+    utils.startTest(@"putFmt1 with hex arg")
+    fifo.init()
+    fifo.putFmt1(@"Hex=$%x", $DEAD)
+    pStr := fifo.getOutput()
+    if pStr
+        utils.evaluateStringMatch(pStr, @"putFmt1 hex content", @"Hex=$DEAD")
+    else
+        utils.recordFail()
+
+    utils.startTest(@"putFmt1 with string arg")
+    fifo.init()
+    fifo.putFmt1(@"Name=%s", @"TestFile.txt")
+    pStr := fifo.getOutput()
+    if pStr
+        utils.evaluateStringMatch(pStr, @"putFmt1 string content", @"Name=TestFile.txt")
+    else
+        utils.recordFail()
+
+    ' ----------------------------------
+    ' TEST GROUP: Interleaved put/get
+    ' ----------------------------------
+    utils.startTestGroup(@"Interleaved put/get patterns")
+
+    utils.startTest(@"Alternating: put 2, get 1, put 2, get 3")
+    fifo.init()
+    fifo.put(@"A")
+    fifo.put(@"B")
+    pStr := fifo.getOutput()    ' get "A"
+    ok := true
+    if pStr
+        if not strcomp(pStr, @"A")
+            ok := false
+    else
+        ok := false
+    fifo.put(@"C")
+    fifo.put(@"D")
+    ' should have B, C, D in FIFO
+    pStr := fifo.getOutput()
+    if pStr
+        if not strcomp(pStr, @"B")
+            ok := false
+    else
+        ok := false
+    pStr := fifo.getOutput()
+    if pStr
+        if not strcomp(pStr, @"C")
+            ok := false
+    else
+        ok := false
+    pStr := fifo.getOutput()
+    if pStr
+        if not strcomp(pStr, @"D")
+            ok := false
+    else
+        ok := false
+
+    if ok
+        utils.recordPass()
+    else
+        utils.recordFail()
+
+    utils.startTest(@"FIFO empty after interleaved test")
+    utils.evaluateBool(fifo.hasOutput(), @"hasOutput() empty", false)
+
+    ' ----------------------------------
+    ' Done
+    ' ----------------------------------
+    utils.ShowTestEndCounts()
+    debug("END_SESSION")
+
+
+CON { license }
+
+{{
+
+ -------------------------------------------------------------------------------------------------
+  MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+ -------------------------------------------------------------------------------------------------
+}}
