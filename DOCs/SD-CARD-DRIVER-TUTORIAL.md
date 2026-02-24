@@ -220,7 +220,6 @@ The microSD add-on board works on any P2 8-pin header group — not just the def
 | P32–P39 | 32 | P36 | P35 | P34 | P37 |
 | P40–P47 | 40 | P44 | P43 | P42 | P45 |
 | P48–P55 | 48 | P52 | P51 | P50 | P53 |
-| P56–P63 (default) | 56 | P60 | P59 | P58 | P61 |
 
 **Example — External Header on P16–P23:**
 
