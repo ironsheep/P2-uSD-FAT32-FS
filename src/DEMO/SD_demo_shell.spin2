@@ -154,6 +154,7 @@ VAR { parser }
 PUB main() | len, eCmd
 
   serial.start(BR_TERM)                                           ' full pin init (debug disabled in this file)
+  waitms(250)                                                       ' let terminal connect after download
   serial.tx(serial.CLS)
   serial.fstr0(@"* Press return to start...\r\n")
   wait_for_terminal(false, 0)
@@ -172,7 +173,9 @@ PUB main() | len, eCmd
     show_prompt()                                               ' prompt user
     len := get_command()                                        ' get input
     if (len > 0)                                                ' if command entered
-      ' no echo - pnut-term-ts provides local echo
+      serial.tx(serial.CRSR_X)                                   ' position cursor past prompt
+      serial.tx(prompt_len())
+      serial.fstr1(@"%s\r\n", @cliBuf)                           ' command + CRLF flushes display
       debug("CMD: [", zstr_(@cliBuf), "] len=", udec_(len))
       ntokens := parse()                                        ' parse and count tokens
       if (ntokens)                                              ' if !0 tokens
@@ -202,9 +205,19 @@ PUB show_prompt()
 '' Display command prompt with current directory
 
   if (mounted)
-    serial.fstr1(@"\rSD:%s> ", @cwd)
+    serial.fstr1(@"SD:%s> \r", @cwd)
   else
-    serial.fstr0(@"\rSD:(unmounted)> ")
+    serial.fstr0(@"SD:(unmounted)> \r")
+
+
+PRI prompt_len() : len
+
+'' Return length of current prompt text (for cursor positioning)
+
+  if (mounted)
+    len := 5 + strsize(@cwd)                                    ' "SD:" + cwd + "> "
+  else
+    len := 16                                                    ' "SD:(unmounted)> "
 
 
 CON { command handlers }
@@ -482,7 +495,6 @@ PUB do_dir() | dh, result, count, total_size, attrib, size, p_name
 
   serial.fstr0(@"\r\n")
   serial.fstr2(@"  %d file(s), %d bytes\r\n", count, total_size)
-  serial.fstr1(@"  %d bytes free\r\n", sd.freeSpace() * SECTOR_SIZE)
 
 
 PUB do_cd() | p_path
@@ -1021,7 +1033,7 @@ PUB do_bench() | wasMounted, tStart, tElapsed, sector, i, rate, nSectors, readRe
   rate := (16 * 64 * 512 * (msPerTick / 10)) / (tElapsed / 10)
   serial.fstr2(@"%d ms, %d KB/s\r\n", tElapsed / msPerTick, rate)
 
-  serial.fstr0(@"\rBenchmark complete.\r\n")
+  serial.fstr0(@"\r\nBenchmark complete.\r\n")
 
   ' Clean up if we initialized raw access
   if (not wasMounted)
@@ -1099,15 +1111,15 @@ PRI write_demo_file(p_name, p_content) | handle, len
   sd.closeFileHandle(handle)
 
 
-PRI show_card_summary() | total_mb, free_mb
+PRI show_card_summary() | total_mb, size_gb
 
-'' Show brief card summary after mount
+'' Show brief card summary after mount (no free space - that scan takes ~14s on 16GB cards)
 
   total_mb := sd.cardSizeSectors() / 2048
-  free_mb := sd.freeSpace() / 2048
+  size_gb := (total_mb + 953) / 954                                 ' decimal GB (marketed card size)
 
   serial.fstr1(@"  Volume: %s\r\n", sd.volumeLabel())
-  serial.fstr2(@"  Size: %d MB, Free: %d MB\r\n", total_mb, free_mb)
+  serial.fstr2(@"  Size: %d MB (%dGB)\r\n", total_mb, size_gb)
   serial.fstr1(@"  SPI: %d Hz\r\n", sd.getSPIFrequency())
 
 
