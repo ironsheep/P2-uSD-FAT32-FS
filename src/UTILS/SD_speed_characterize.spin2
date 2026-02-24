@@ -23,13 +23,19 @@
 }
 
 CON
-  _clkfreq  = 200_000_000                                       ' 200 MHz system clock
+  _clkfreq  = 270_000_000                                       ' 270 MHz system clock
 
-  ' SD Card Pin Assignments (P2 Edge microSD socket)
-  CS_PIN    = 60
-  MOSI_PIN  = 59
-  MISO_PIN  = 58
-  SCK_PIN   = 61
+  ' P2 Edge module SD slot pins
+  'CS_PIN    = 60
+  'MOSI_PIN  = 59
+  'MISO_PIN  = 58
+  'SCK_PIN   = 61
+
+  ' External SD header (base pin 16)
+  CS_PIN    = 20
+  MOSI_PIN  = 19
+  MISO_PIN  = 18
+  SCK_PIN   = 21
 
   ' Test Configuration
   TEST_SECTOR_BASE   = 1_000_000                                ' Safe area away from FAT
@@ -42,8 +48,11 @@ CON
   ' Speed test levels (Hz)
   NUM_SPEED_LEVELS   = 11
 
-'' Enable full driver features for this utility
-#PRAGMA EXPORTDEF SD_INCLUDE_ALL
+'' Enable driver features needed for speed characterization
+#PRAGMA EXPORTDEF SD_INCLUDE_RAW
+#PRAGMA EXPORTDEF SD_INCLUDE_REGISTERS
+#PRAGMA EXPORTDEF SD_INCLUDE_SPEED
+#PRAGMA EXPORTDEF SD_INCLUDE_DEBUG
 
 OBJ
   sd : "micro_sd_fat32_fs"
@@ -100,15 +109,15 @@ PUB main() | result, level, max_passed_level
   debug("##############################################")
   debug(" ")
 
-  ' Initialize card at safe slow speed
-  debug("Initializing SD card (no-mount mode)...")
-  result := sd.initCardOnly(CS_PIN, MOSI_PIN, MISO_PIN, SCK_PIN)
+  ' Mount card (use mount instead of initCardOnly for external header compatibility)
+  debug("Mounting SD card...")
+  result := sd.mount(CS_PIN, MOSI_PIN, MISO_PIN, SCK_PIN)
   if not result
-    debug("FATAL: Failed to initialize SD card!")
+    debug("FATAL: Failed to mount SD card!")
     debug("END_CHARACTERIZATION")
     repeat  ' Halt
 
-  debug("Card initialized successfully.")
+  debug("Card mounted successfully.")
   debug(" ")
 
   ' Display card information

@@ -17,6 +17,10 @@ OBEX/
 
 # Reference files (local only)
 REF/
+DOCs/Reference/
+
+# Logic analyzer captures (local only)
+LA/
 
 # Hardware audit tools (local only)
 src/HARDWARE_AUDIT/
