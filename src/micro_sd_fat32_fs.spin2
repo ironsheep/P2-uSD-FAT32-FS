@@ -5458,6 +5458,15 @@ PRI writeSector(sector, buf_type) : result | _sck, _mosi, p_buf, stream_mode, cl
   ' Invalidate cache for this buffer type after write
   long[p_cache] := -1
 
+  ' Cross-buffer cache coherence: if another buffer type has this
+  ' sector cached, its copy is now stale after our write
+  if dir_sec_in_buf == sector
+    dir_sec_in_buf := -1
+  if fat_sec_in_buf == sector
+    fat_sec_in_buf := -1
+  if sec_in_buf == sector
+    sec_in_buf := -1
+
   ' Capture sector for diagnostics
   diag_write_sector := sector
   diag_write_result := 0                                                         ' Reset: not yet determined

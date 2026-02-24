@@ -397,11 +397,11 @@ PUB do_format() | p_label, pStr, ok
     pStr := fmtUtil.getOutput()
     if pStr
       serial.str(pStr)
-      serial.str(@"\r\n")
+      serial.fstr0(@"\r\n")
     elseif fmtUtil.isDone()
       repeat while (pStr := fmtUtil.getOutput())
         serial.str(pStr)
-        serial.str(@"\r\n")
+        serial.fstr0(@"\r\n")
       quit
 
   ok := fmtUtil.getResult()
@@ -902,11 +902,11 @@ PUB do_audit() | pStr
     pStr := fsckUtil.getOutput()
     if pStr
       serial.str(pStr)
-      serial.str(@"\r\n")
+      serial.fstr0(@"\r\n")
     elseif fsckUtil.isDone()
       repeat while (pStr := fsckUtil.getOutput())
         serial.str(pStr)
-        serial.str(@"\r\n")
+        serial.fstr0(@"\r\n")
       quit
 
   fsckUtil.stop()
@@ -946,11 +946,11 @@ PUB do_fsck() | pStr
     pStr := fsckUtil.getOutput()
     if pStr
       serial.str(pStr)
-      serial.str(@"\r\n")
+      serial.fstr0(@"\r\n")
     elseif fsckUtil.isDone()
       repeat while (pStr := fsckUtil.getOutput())
         serial.str(pStr)
-        serial.str(@"\r\n")
+        serial.fstr0(@"\r\n")
       quit
 
   fsckUtil.stop()
@@ -1206,8 +1206,10 @@ PRI confirmYN(p_prompt) : confirmed | c
 '' Prompt user for y/n confirmation with 10-second timeout
 '' Default is NO (just pressing Enter returns false, timeout returns false)
 
-  serial.fstr1(@"%s (y/N)? ", p_prompt)
+  serial.fstr1(@"%s (y/N)? \r", p_prompt)
   c := serial.rxtime(10_000)
+  serial.tx(serial.CRSR_X)                                       ' position cursor past prompt
+  serial.tx(strsize(p_prompt) + 8)                               ' "<prompt> (y/N)? "
   if (c == "y" or c == "Y")
     serial.fstr0(@"yes\r\n")
     confirmed := true

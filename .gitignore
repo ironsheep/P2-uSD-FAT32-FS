@@ -6,6 +6,7 @@ logs/
 # Build artifacts
 *.bin
 *.lst
+*.map
 *.obj
 
 # macOS
@@ -16,6 +17,9 @@ OBEX/
 
 # Reference files (local only)
 REF/
+
+# Hardware audit tools (local only)
+src/HARDWARE_AUDIT/
 
 # Archived plans (local only)
 DOCs/Plans/Archive/
