@@ -5204,6 +5204,8 @@ PRI readSector(sector, buf_type) : result | _sck, _miso, data, loop_ctr, timeout
     ' STREAMER BULK TRANSFER: 512 bytes from MISO to hub via DMA
     ' ══════════════════════════════════════════════════════════════════════════
     org
+          dirl    _sck                              ' Reset SCK: counter stops, output LOW, Y=0
+          drvl    _sck                              ' Re-enable: DIR=1 restarts base period counter fresh
           setxfrq xfrq                              ' Set streamer NCO rate
           wrfast  #0, p_buf                         ' Setup WRFAST to hub buffer
           wypin   clk_count, _sck                   ' Start clock transitions
@@ -5367,6 +5369,8 @@ PRI readSectors(start_sector, count, p_buffer) : sectors_read | _sck, _miso, p_b
 
     ' Streamer bulk transfer: 512 bytes from MISO to hub
     org
+          dirl    _sck                              ' Reset SCK: counter stops, output LOW, Y=0
+          drvl    _sck                              ' Re-enable: DIR=1 restarts base period counter fresh
           setxfrq xfrq
           wrfast  #0, p_buf
           wypin   clk_count, _sck
