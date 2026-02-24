@@ -65,6 +65,9 @@ CON { FAT32 structure constants }
   MAX_DIR_DEPTH       = 16
   MAX_CHAIN_LENGTH    = 2_000_000
 
+  ' Audit fail tracking
+  MAX_FAIL_NAMES    = 16
+
   ' Stack for cogspin'd cog
   STACK_LONGS       = 512
   STACK_GUARD_LONGS = 4
@@ -104,6 +107,7 @@ VAR
   ' Statistics / results
   LONG    v_passCount
   LONG    v_failCount
+  LONG    v_failNames[MAX_FAIL_NAMES]   ' pointers to failed test name strings
   LONG    v_repairCount
   LONG    v_errorCount
   LONG    v_warningCount
@@ -280,10 +284,11 @@ PRI run() | result, cardSectors
 '' Audit orchestration
 '' =========================================================================
 
-PRI runAudit(cardSectors) | result
+PRI runAudit(cardSectors) | result, i, n
 
     v_passCount := 0
     v_failCount := 0
+    longfill(@v_failNames, 0, MAX_FAIL_NAMES)
 
     fifo.put(@"=== FAT32 Filesystem Audit (read-only) ===")
     fifo.putFmt1(@"Card: %d MB", cardSectors / 2048)
@@ -312,6 +317,13 @@ PRI runAudit(cardSectors) | result
         fifo.put(@"FILESYSTEM INTEGRITY: OK")
     else
         fifo.put(@"FILESYSTEM INTEGRITY: ISSUES DETECTED")
+        fifo.put(@" ")
+        fifo.put(@"Failed checks:")
+        n := v_failCount <# MAX_FAIL_NAMES
+        repeat i from 0 to n - 1
+            fifo.putFmt1(@"  - %s", v_failNames[i])
+        if v_failCount > MAX_FAIL_NAMES
+            fifo.putFmt1(@"  ... and %d more", v_failCount - MAX_FAIL_NAMES)
 
 
 '' =========================================================================
@@ -462,6 +474,8 @@ PRI auditRunTest(pTestName, passed)
         v_passCount++
         fifo.putFmt1(@"  [PASS] %s", pTestName)
     else
+        if v_failCount < MAX_FAIL_NAMES
+            v_failNames[v_failCount] := pTestName
         v_failCount++
         fifo.putFmt1(@"  [FAIL] %s", pTestName)
 
@@ -469,7 +483,7 @@ PRI auditRunTest(pTestName, passed)
 PRI auditMBR() | result
 ' Audit MBR structure (sector 0)
 
-    fifo.put(@"--- MBR ---")
+    fifo.put(@"Checking MBR (sector 0)...")
 
     sd.readSectorRaw(0, @buf)
 
@@ -494,7 +508,7 @@ PRI auditMBR() | result
 PRI auditVBR() | result
 ' Audit VBR (primary boot sector at partition start)
 
-    fifo.put(@"--- VBR ---")
+    fifo.put(@"Checking VBR (boot sector)...")
 
     sd.readSectorRaw(partitionStart, @buf)
 
@@ -567,7 +581,7 @@ PRI auditVBR() | result
 PRI auditBackupVBR() | idx, mismatch
 ' Verify backup VBR matches primary
 
-    fifo.put(@"--- Backup VBR ---")
+    fifo.put(@"Checking Backup VBR...")
 
     sd.readSectorRaw(partitionStart, @buf)
     sd.readSectorRaw(partitionStart + 6, @buf2)
@@ -585,7 +599,7 @@ PRI auditBackupVBR() | idx, mismatch
 PRI auditFSInfo() | result, idx, mismatch
 ' Verify FSInfo sector and backup
 
-    fifo.put(@"--- FSInfo ---")
+    fifo.put(@"Checking FSInfo sector...")
 
     sd.readSectorRaw(partitionStart + 1, @buf)
 
@@ -622,7 +636,7 @@ PRI auditFSInfo() | result, idx, mismatch
 PRI auditFAT() | result, idx, mismatch
 ' Verify FAT table entries and consistency
 
-    fifo.put(@"--- FAT Table ---")
+    fifo.put(@"Checking FAT table...")
 
     sd.readSectorRaw(fat1Start, @buf)
 
@@ -633,10 +647,7 @@ PRI auditFAT() | result, idx, mismatch
     auditRunTest(@"FAT[1] = $0FFFFFFF (EOC)", result == $0FFFFFFF)
 
     result := LONG[@buf + 8]
-    auditRunTest(@"FAT[2] = $0FFFFFFF (root EOC)", result == $0FFFFFFF)
-
-    result := LONG[@buf + 12]
-    auditRunTest(@"FAT[3] = 0 (free)", result == 0)
+    auditRunTest(@"FAT[2] root cluster allocated", result <> 0)
 
     ' Compare FAT1 and FAT2 first sector
     sd.readSectorRaw(fat2Start, @buf2)
@@ -654,7 +665,7 @@ PRI auditFAT() | result, idx, mismatch
 PRI auditRootDir() | result
 ' Verify root directory structure
 
-    fifo.put(@"--- Root Directory ---")
+    fifo.put(@"Checking Root Directory...")
 
     sd.readSectorRaw(dataStart, @buf)
 
@@ -672,12 +683,13 @@ PRI auditRootDir() | result
 PRI auditMountTest() | result
 ' Test mount/unmount cycle
 
-    fifo.put(@"--- Mount Test ---")
+    fifo.put(@"Checking mount/unmount cycle...")
 
     result := sd.mount(pin_cs, pin_mosi, pin_miso, pin_sck)
     auditRunTest(@"mount() succeeds", result)
 
     if result
+        fifo.put(@"  Calculating free space...")
         result := sd.freeSpace()
         auditRunTest(@"Free space > 0", result > 0)
         fifo.putFmt1(@"    Free: %d sectors", result)

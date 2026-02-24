@@ -1507,6 +1507,12 @@ PRI do_create(p_path) : handle | temp, first_cluster
     freeHandle(handle)
     return E_FILE_EXISTS
 
+  ' Guard: entry_address 0 means searchDirectory never found a valid directory
+  if entry_address == 0
+    debug("  [do_create] entry_address=0 — path not valid, aborting")
+    freeHandle(handle)
+    return E_FILE_NOT_FOUND
+
   ' searchDirectory() sets entry_address to first free directory entry
   ' Check if we need to allocate a new cluster for the directory
   temp := (entry_address + cluster_offset << 9) & (sec_per_clus << 9 - 1)
@@ -2272,6 +2278,12 @@ PRI do_newfile(name_ptr) : result | temp
   if searchDirectory(name_ptr)
     return E_FILE_EXISTS
 
+  ' Guard: entry_address 0 means searchDirectory never found a valid directory
+  ' (e.g., path component doesn't exist). Writing at address 0 would corrupt the MBR.
+  if entry_address == 0
+    debug("  [do_newfile] entry_address=0 — path not valid, aborting")
+    return E_FILE_NOT_FOUND
+
   temp := (entry_address + cluster_offset << 9) & (sec_per_clus << 9 - 1)
   if temp == (sec_per_clus << 9 - 32)
     if dir_buf[480] == $00                                                      ' Check dir buffer after searchDirectory
@@ -2296,6 +2308,12 @@ PRI do_newdir(name_ptr) : result | temp
   do_close()
   if searchDirectory(name_ptr)
     return E_FILE_EXISTS
+
+  ' Guard: entry_address 0 means searchDirectory never found a valid directory
+  ' (e.g., path component doesn't exist). Writing at address 0 would corrupt the MBR.
+  if entry_address == 0
+    debug("  [do_newdir] entry_address=0 — path not valid, aborting")
+    return E_FILE_NOT_FOUND
 
   temp := (entry_address + cluster_offset << 9) & (sec_per_clus << 9 - 1)
   if temp == sec_per_clus << 9 - 32
@@ -2483,15 +2501,16 @@ PRI do_rename(old_name, new_name) : result | bookmark, temp_sec, i, saved_entry[
         i++
       bytefill(p_buf, " ", 11)                                                 ' Clear name field
       bytemove(p_buf, new_name, i <# 12)                                       ' Copy name
-      ' Convert to uppercase and handle 8.3 extension
+      ' Convert to uppercase first (must happen before 8.3 rearrangement)
       repeat i from 0 to 10
         case byte[p_buf + i]
           "a".."z" : byte[p_buf + i] -= $20
-          "." :
-            ' Found extension separator - move extension to position 8
-            bytemove(p_buf + 8, p_buf + i + 1, 3)
-            bytefill(p_buf + i, " ", 8 - i)
-            quit
+      ' Handle 8.3 extension separator
+      repeat i from 0 to 10
+        if byte[p_buf + i] == "."
+          bytemove(p_buf + 8, p_buf + i + 1, 3)
+          bytefill(p_buf + i, " ", 8 - i)
+          quit
       writeSector(bookmark >> 9, BUF_DIR)
       cog_dir_sec[pb_caller] := temp_sec
       debug("  [do_rename] SUCCESS")
@@ -4191,7 +4210,7 @@ PUB seek(pos) : result
     return false
 
 CON     '' directory methods
-PRI searchDirectory(name_ptr) : result | p_temp, p_entry, i, search_sec
+PRI searchDirectory(name_ptr) : result | p_temp, p_entry, i, search_sec, j
 ' Search directory for a file/directory by name.
 '
 ' @param name_ptr - Pointer to null-terminated path string
@@ -4243,6 +4262,9 @@ PRI searchDirectory(name_ptr) : result | p_temp, p_entry, i, search_sec
       p_entry := @dir_buf + (i & 511)                                           '  locate entry in directory (FIXED precedence)
       bytemove(p_temp,p_entry,11)                                               '  copy short filename into p_temp
       byte[p_temp + 11] := 0                                                    '  null terminate for comparison
+      repeat j from 0 to 10                                                     '  uppercase on-disk entry for case-insensitive match
+        case byte[p_temp + j]
+          "a".."z" : byte[p_temp + j] -= $20
       if strcomp(@entry_buffer,p_temp)                                          '  if matching entry located
         entry_address := (n_sec << 9) | (i & 511)                               '   store the byte-level address of the entry
         bytemove(@entry_buffer,p_entry,32)                                      '   copy entire entry into entry_buffer
