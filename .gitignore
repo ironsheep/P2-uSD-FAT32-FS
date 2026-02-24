@@ -210,3 +210,4 @@ STUDY/
 .vscode/
 pnut-term-settings.json
 tests/
+tools/bible_verse.spin2
