@@ -1,0 +1,147 @@
+'' =================================================================================================
+''
+''   File....... SD_spi_limit_test.spin2
+''   Purpose.... Test one SPI frequency point for external header max speed characterization
+''   Author..... Stephen M Moraco + Claude
+''   Started.... FEB 2026
+''
+'' =================================================================================================
+''
+'' Mounts, sets SPI to the maximum speed achievable at this SYSCLK (the hp value
+'' just below 25 MHz), then runs 10 write-read-verify round-trips of 8 sectors each.
+'' Reports PASS/FAIL with actual SPI frequency.
+''
+'' _CLKFREQ is changed by the runner script to probe different SPI frequencies.
+''
+'' =================================================================================================
+
+CON
+
+     _CLKFREQ        = 350_000_000               ' Changed by runner script
+
+     ' External SD header (base pin 16)
+     SD_CS   = 20
+     SD_MOSI = 19
+     SD_MISO = 18
+     SD_SCK  = 21
+
+     SECTOR_SIZE      = 512
+     WRITE_SECTOR_BASE = 200_200                 ' Safe write area
+     MULTI_COUNT      = 8                        ' 8 sectors per round-trip
+     NUM_ITERS        = 10                       ' Write-read-verify iterations
+
+#PRAGMA EXPORTDEF SD_INCLUDE_RAW
+#PRAGMA EXPORTDEF SD_INCLUDE_DEBUG
+
+OBJ
+    sd    : "micro_sd_fat32_fs"
+    utils : "isp_rt_utilities"
+
+VAR
+    BYTE    writeBuffer[MULTI_COUNT * SECTOR_SIZE]
+    BYTE    readBuffer[MULTI_COUNT * SECTOR_SIZE]
+    BYTE    readBuffer_guard[16]
+
+PUB go() | result, hp, actualHz, errors, iter, i, sector, written, readCt, byteErrs
+'' Test write-read-verify at max SPI speed for this SYSCLK.
+'' Calls setSPISpeed(25_000_000) — the driver computes hp from clkfreq.
+'' At non-multiple-of-50MHz SYSCLK, hp rounds up and actual SPI < 25 MHz.
+'' This lets us probe SPI frequencies in the 22-25 MHz gap.
+
+    debug(" ")
+    debug("SPI_LIMIT_TEST")
+    debug("  SYSCLK=", udec_(clkfreq))
+
+    ' Mount
+    result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    if result == false
+        debug("  MOUNT_FAIL")
+        debug("END_SESSION")
+        return
+
+    ' Set SPI to 25 MHz target — driver computes hp = ceil(clkfreq / 50_000_000)
+    ' At 350 MHz: hp=7, actual=25.0 MHz
+    ' At 270 MHz: hp=6, actual=22.5 MHz
+    ' At 370 MHz: hp=8, actual=23.125 MHz — etc.
+    sd.setSPISpeed(25_000_000)
+
+    ' Report what we actually got
+    hp := (clkfreq + 49_999_999) / 50_000_000
+    if hp < 4
+        hp := 4
+    actualHz := clkfreq / (hp * 2)
+
+    debug("  hp=", udec_(hp), " actual=", udec_(actualHz), " Hz")
+
+    ' Run write-read-verify iterations
+    errors := 0
+    repeat iter from 0 to NUM_ITERS - 1
+        sector := WRITE_SECTOR_BASE + (iter * MULTI_COUNT)
+
+        ' Fill write buffer
+        repeat i from 0 to (MULTI_COUNT * SECTOR_SIZE) - 1
+            writeBuffer[i] := ((i / SECTOR_SIZE) * 41 + (i // SECTOR_SIZE) + iter * 67) & $FF
+
+        ' Write
+        written := sd.writeSectorsRaw(sector, MULTI_COUNT, @writeBuffer)
+        if written <> MULTI_COUNT
+            errors++
+            next
+
+        ' Clear and read
+        bytefill(@readBuffer, $00, MULTI_COUNT * SECTOR_SIZE)
+        utils.initGuard(@readBuffer_guard)
+        readCt := sd.readSectorsRaw(sector, MULTI_COUNT, @readBuffer)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+
+        if readCt <> MULTI_COUNT
+            errors++
+            next
+
+        ' Verify
+        byteErrs := 0
+        repeat i from 0 to (MULTI_COUNT * SECTOR_SIZE) - 1
+            if readBuffer[i] <> writeBuffer[i]
+                byteErrs++
+        if byteErrs > 0
+            errors++
+            if errors <= 3
+                debug("  iter ", udec_(iter), ": ", udec_(byteErrs), " byte errors")
+
+    if errors == 0
+        debug("  RESULT=PASS iters=", udec_(NUM_ITERS))
+    else
+        debug("  RESULT=FAIL errors=", udec_(errors), "/", udec_(NUM_ITERS))
+
+    sd.unmount()
+    debug("END_SESSION")
+
+
+con { license }
+
+{{
+  =================================================================================================
+
+  Terms of Use: MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this
+  software and associated documentation files (the "Software"), to deal in the Software
+  without restriction, including without limitation the rights to use, copy, modify,
+  merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies
+  or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+  INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+  HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+  CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+  OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+  =================================================================================================
+}}

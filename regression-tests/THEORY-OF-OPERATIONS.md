@@ -104,11 +104,15 @@ Each test is identified by:
 | Test File | Purpose |
 |-----------|---------|
 | `SD_RT_error_handling_tests.spin2` | Error conditions: invalid handles, EOF behavior, directory errors, handle reuse |
-| `SD_RT_card_info_tests.spin2` | Struct-based register access certification (CID, SCR, OCR, SD Status) |
-| `SD_RT_card_display_test.spin2` | Card info display via fstr output (demo shell pattern certification) |
 | `SD_RT_fifo_tests.spin2` | String FIFO (isp_string_fifo) inter-cog communication regression tests |
-| `SD_RT_fstr_tests.spin2` | Serial fstr mechanism test (not SD driver — serial library) |
-| `SD_RT_fstr_args_tests.spin2` | Serial fstr argument handling test (not SD driver — serial library) |
+
+**Diagnostic tests** (moved to `diagnostic-tests/`):
+
+| Test File | Purpose |
+|-----------|---------|
+| `SD_card_info_tests.spin2` | Struct-based register access certification (CID, SCR, OCR, SD Status) |
+| `SD_freq_sweep_tests.spin2` | SPI frequency sweep characterization (15-25 MHz) |
+| `SD_spi_limit_test.spin2` | Single SPI frequency probe (used by `run_spi_sweep.sh`) |
 
 ### 3.3 Framework File
 
@@ -964,13 +968,9 @@ Focused testing of error conditions and edge cases:
 - Handle slot reuse after close
 - Same file open for write AND read simultaneously
 
-#### SD_RT_card_info_tests.spin2
+#### SD_card_info_tests.spin2 *(diagnostic-tests/)*
 
 Certification test for struct-based register access — verifies that `sd.cid_t` and `sd.scr_t` struct fields match raw byte access at the same offsets. Tests both unmounted (`initCardOnly`) and mounted paths. Also tests OCR, card size, SPI frequency, MBR read, and ACMD13 SD Status decode (speed class, UHS grade, video class).
-
-#### SD_RT_card_display_test.spin2
-
-End-to-end test of the card info display path as used by the demo shell. Exercises fstr output formatting with real register data.
 
 ---
 
@@ -1217,8 +1217,11 @@ cd /path/to/P2-uSD-Study/tools
 
 # Supplementary tests
 ./run_test.sh ../regression-tests/SD_RT_error_handling_tests.spin2
-./run_test.sh ../regression-tests/SD_RT_card_info_tests.spin2
-./run_test.sh ../regression-tests/SD_RT_card_display_test.spin2
+
+# Diagnostic tests (in diagnostic-tests/)
+./run_test.sh ../diagnostic-tests/SD_card_info_tests.spin2
+./run_test.sh ../diagnostic-tests/SD_freq_sweep_tests.spin2
+./run_test.sh ../diagnostic-tests/SD_spi_limit_test.spin2
 ```
 
 **Requirements:**

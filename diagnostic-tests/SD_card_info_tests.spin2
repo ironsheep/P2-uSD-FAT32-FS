@@ -1,7 +1,7 @@
 {Spin2_v49}
 '' =================================================================================================
 ''
-''   File....... SD_RT_card_info_tests.spin2
+''   File....... SD_card_info_tests.spin2
 ''   Purpose.... Certify struct-based access to driver API methods (matches demo shell pattern)
 ''   Authors.... Claude + Stephen M Moraco
 ''   Started.... FEB 2026
@@ -20,7 +20,7 @@
 ''   All output via debug() only - no serial singleton.
 ''   Tests both unmounted (initCardOnly) and mounted paths.
 ''
-''   Usage: ./run_test.sh ../regression-tests/SD_RT_card_info_tests.spin2
+''   Usage: ./run_test.sh ../diagnostic-tests/SD_card_info_tests.spin2
 ''
 '' =================================================================================================
 
