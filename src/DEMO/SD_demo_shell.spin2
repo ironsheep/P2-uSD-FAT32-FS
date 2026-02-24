@@ -22,7 +22,7 @@
 
 CON { timing }
 
-  CLK_FREQ = 270_000_000                                        ' system freq as a constant
+  CLK_FREQ = 350_000_000                                        ' system freq as a constant
   MS_001   = CLK_FREQ / 1_000                                   ' ticks in 1ms
   US_001   = CLK_FREQ / 1_000_000                               ' ticks in 1us
 
@@ -38,12 +38,19 @@ CON { terminal }
   DEBUG_DISABLE = 1                                                ' suppress debug() in this file
 
 
-CON { SD card pins - P2 Edge Module }
+CON { SD card pins }
 
-  SD_CS    = 60  { O }                                          ' directly directly directly chip select
-  SD_SCK   = 61  { O }                                          ' serial clock
-  SD_MOSI  = 59  { O }                                          ' master out, slave in
-  SD_MISO  = 58  { I }                                          ' master in, slave out
+  ' P2 Edge module SD slot pins
+  'SD_CS    = 60  { O }                                          ' chip select
+  'SD_SCK   = 61  { O }                                          ' serial clock
+  'SD_MOSI  = 59  { O }                                          ' master out, slave in
+  'SD_MISO  = 58  { I }                                          ' master in, slave out
+
+  ' External SD header (base pin 16)
+  SD_CS   = 20
+  SD_MOSI = 19
+  SD_MISO = 18
+  SD_SCK  = 21
 
 
 CON { fixed io pins }
