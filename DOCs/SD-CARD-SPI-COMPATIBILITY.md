@@ -187,7 +187,7 @@ For Propeller 2 and other MCU-based SPI hosts:
 
 ## P2 SD Card Driver: Tested Cards
 
-### Verified Working (151+ regression tests passing)
+### Verified Working (263+ regression tests passing)
 
 | Card | Manufacturer | Capacity | Throughput | Max SPI |
 |------|-------------|----------|------------|---------|

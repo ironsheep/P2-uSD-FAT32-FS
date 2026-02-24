@@ -20,18 +20,20 @@ sd-card-driver/
 │   └── UTILS/                             Standalone utility programs
 │       ├── README.md                         Full utility documentation
 │       ├── SD_format_card.spin2              FAT32 card formatter
-│       ├── isp_format_utility.spin2         FAT32 format library
+│       ├── isp_format_utility.spin2          FAT32 format library
 │       ├── SD_card_characterize.spin2        Card register reader
 │       ├── SD_speed_characterize.spin2       SPI speed tester
 │       ├── SD_frequency_characterize.spin2   Sysclk frequency tester
 │       ├── SD_performance_benchmark.spin2    Throughput measurement
 │       ├── SD_FAT32_audit.spin2              Filesystem validator (read-only)
-│       └── SD_FAT32_fsck.spin2               Filesystem check & repair
+│       ├── SD_FAT32_fsck.spin2               Filesystem check & repair
+│       ├── isp_fsck_utility.spin2            Combined FSCK + Audit library (runs in temp cog)
+│       └── isp_string_fifo.spin2             Lock-free inter-cog string FIFO
 │
-├── regression-tests/                   Automated test suite (251 tests)
+├── regression-tests/                   Automated test suite (263+ tests)
 │   ├── README.md                          Test documentation
 │   ├── isp_rt_utilities.spin2             Shared test framework
-│   ├── SD_RT_*_tests.spin2                Test files (11 suites)
+│   ├── SD_RT_*_tests.spin2                Test files (11 core + 7 additional suites)
 │   └── TestCard/                          Test card setup
 │       ├── TEST-CARD-SPECIFICATION.md        Card requirements
 │       ├── SD_RT_testcard_validation.spin2   Card validation test

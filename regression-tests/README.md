@@ -4,20 +4,34 @@ Automated regression test suite for the P2 SD Card Driver. All tests execute on 
 
 ## Test Summary
 
+### Core Test Suites (verified 2026-02-24)
+
 | Test Suite | Description | Tests |
 |------------|-------------|-------|
 | **Mount Tests** | Card initialization, mounting, unmounting, pre-mount errors | 21 |
-| **File Operations** | Create, open, close, delete, rename files, type mismatch | 22 |
-| **Read/Write Tests** | Data integrity, buffer operations, boundary conditions | 29 |
-| **Directory Tests** | Directory listing, navigation, deep nesting, boundaries | 27 |
+| **File Operations** | Create, open, close, delete, rename (V3 handle API) | 22 |
+| **Read/Write Tests** | Data integrity, sector boundaries, multi-cluster, large files | 38 |
+| **Directory Tests** | Directory listing, navigation, deep nesting, boundaries | 28 |
 | **Seek Tests** | Random access, cross-sector seeks, seek boundaries | 37 |
-| **Format Tests** | FAT32 structure validation, cross-OS compatibility | 43 |
-| **Multiblock Tests** | Multi-sector streamer DMA transfers | 12 |
-| **Multicog Tests** | Singleton pattern, concurrent access, lock serialization | 18 |
-| **Multihandle Tests** | Multiple simultaneous file handles | 22 |
+| **Multicog Tests** | Singleton pattern, concurrent access, lock serialization | 14 |
+| **Multihandle Tests** | Multiple simultaneous file handles, error boundaries | 19 |
+| **Multiblock Tests** | Multi-sector streamer DMA transfers (CMD18/CMD25) | 6 |
 | **Raw Sector Tests** | Direct sector read/write, large LBA addressing | 14 |
+| **Format Tests** | FAT32 structure validation, cross-OS compatibility | 46 |
+| **Subdirectory Ops Tests** | Cross-buffer cache coherence, empty files, subdir operations | 18 |
+| **Core Total** | | **263** |
+
+### Additional Test Suites
+
+| Test Suite | Description | Tests |
+|------------|-------------|-------|
+| **Directory Handle Tests** | V3 directory handle enumeration, pool interaction, paths | 22 |
+| **Volume Tests** | Volume label, VBR access, syncAll, sync, setDate | 21 |
+| **Register Tests** | CSD register access, timeout values, capacity cross-check | 10 |
+| **Speed Tests** | SPI frequency, CMD6, high-speed mode, speed boundaries | 14 |
+| **CRC Diagnostic Tests** | CRC counters, validation toggle, CMD13 diagnostics | 14 |
 | **Error Handling Tests** | Error conditions, invalid handles, state errors | 6 |
-| **Total** | | **251** |
+| **FIFO Tests** | String FIFO (isp_string_fifo) inter-cog communication | 21 |
 
 ## Prerequisites
 
@@ -27,62 +41,43 @@ Automated regression test suite for the P2 SD Card Driver. All tests execute on 
 
 ## Compiling and Running Tests
 
-From this `regression-tests/` directory:
+All tests are run from the `tools/` directory using the test runner script:
 
 ```bash
-# Compile a test suite
-pnut-ts -d -I ../src SD_RT_mount_tests.spin2
-
-# Download and run on P2
-pnut-term-ts -r SD_RT_mount_tests.bin
+cd tools/
+./run_test.sh ../regression-tests/SD_RT_mount_tests.spin2
 ```
 
-The `-I ../src` flag tells the compiler to find `micro_sd_fat32_fs.spin2` in the `src/` directory.
+The test runner compiles with `pnut-ts`, downloads to P2 hardware, captures debug output in headless mode, and saves logs to `tools/logs/`.
 
-### Running All Test Suites
-
-Compile and run each test suite one at a time:
+### Running All Core Test Suites
 
 ```bash
+cd tools/
+
 # Core functionality tests
-pnut-ts -d -I ../src SD_RT_mount_tests.spin2
-pnut-term-ts -r SD_RT_mount_tests.bin
+./run_test.sh ../regression-tests/SD_RT_mount_tests.spin2
+./run_test.sh ../regression-tests/SD_RT_file_ops_tests.spin2
+./run_test.sh ../regression-tests/SD_RT_read_write_tests.spin2
+./run_test.sh ../regression-tests/SD_RT_directory_tests.spin2
+./run_test.sh ../regression-tests/SD_RT_seek_tests.spin2
 
-pnut-ts -d -I ../src SD_RT_file_ops_tests.spin2
-pnut-term-ts -r SD_RT_file_ops_tests.bin
+# Multi-cog and multi-handle tests
+./run_test.sh ../regression-tests/SD_RT_multicog_tests.spin2 -t 120
+./run_test.sh ../regression-tests/SD_RT_multihandle_tests.spin2
 
-pnut-ts -d -I ../src SD_RT_read_write_tests.spin2
-pnut-term-ts -r SD_RT_read_write_tests.bin
+# Low-level transfer tests
+./run_test.sh ../regression-tests/SD_RT_multiblock_tests.spin2
+./run_test.sh ../regression-tests/SD_RT_raw_sector_tests.spin2
 
-pnut-ts -d -I ../src SD_RT_directory_tests.spin2
-pnut-term-ts -r SD_RT_directory_tests.bin
-
-pnut-ts -d -I ../src SD_RT_seek_tests.spin2
-pnut-term-ts -r SD_RT_seek_tests.bin
-
-# Error handling tests
-pnut-ts -d -I ../src SD_RT_error_handling_tests.spin2
-pnut-term-ts -r SD_RT_error_handling_tests.bin
-
-# Advanced feature tests
-pnut-ts -d -I ../src SD_RT_multihandle_tests.spin2
-pnut-term-ts -r SD_RT_multihandle_tests.bin
-
-pnut-ts -d -I ../src SD_RT_multiblock_tests.spin2
-pnut-term-ts -r SD_RT_multiblock_tests.bin
-
-pnut-ts -d -I ../src SD_RT_raw_sector_tests.spin2
-pnut-term-ts -r SD_RT_raw_sector_tests.bin
-
-pnut-ts -d -I ../src SD_RT_multicog_tests.spin2
-pnut-term-ts -r SD_RT_multicog_tests.bin
+# Subdirectory and cache coherence tests
+./run_test.sh ../regression-tests/SD_RT_subdir_ops_tests.spin2
 
 # Format test (WARNING: erases card!)
-pnut-ts -d -I ../src SD_RT_format_tests.spin2
-pnut-term-ts -r SD_RT_format_tests.bin
+./run_test.sh ../regression-tests/SD_RT_format_tests.spin2 -t 300
 ```
 
-**Note:** Format tests will **erase all data** on the card.
+**Note:** Format tests will **erase all data** on the card. The `-t` flag sets timeout in seconds (default 60).
 
 ---
 

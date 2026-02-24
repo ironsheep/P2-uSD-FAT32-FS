@@ -25,11 +25,13 @@ The shell also uses `micro_sd_fat32_fs.spin2` from the parent directory (include
 From this `DEMO/` directory:
 
 ```bash
-pnut-ts -d -I .. SD_demo_shell.spin2
+pnut-ts -I .. SD_demo_shell.spin2
 pnut-term-ts -r SD_demo_shell.bin
 ```
 
 The `-I ..` flag tells the compiler to find `micro_sd_fat32_fs.spin2` in the parent directory.
+
+**Important:** Do NOT use the `-d` (debug) flag when compiling the demo shell. The debug runtime emits cog-start frames on pin 62 that corrupt the serial output when the SD worker cog starts mid-session (e.g., during `mount`). The demo shell uses `isp_serial_singleton.spin2` for all terminal I/O, not the debug system.
 
 ## Terminal Setup
 

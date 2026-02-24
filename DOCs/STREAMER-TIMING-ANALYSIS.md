@@ -468,7 +468,7 @@ Early development saw multi-block failures at 270 MHz:
 
 ### 5.2 270 MHz Validation (Resolved)
 
-**Fully validated at 270 MHz.** After fixing test framework bugs, all regression tests pass at both 320 MHz and 270 MHz (151+ tests at each frequency). The driver's streamer timing is robust across the tested frequency range.
+**Fully validated at 270 MHz.** After fixing test framework bugs, all regression tests pass at both 320 MHz and 270 MHz (263+ tests at each frequency). The driver's streamer timing is robust across the tested frequency range.
 
 ---
 

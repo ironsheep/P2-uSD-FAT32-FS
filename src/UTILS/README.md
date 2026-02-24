@@ -29,7 +29,16 @@ Standalone utility programs for card formatting, characterization, performance t
 
 ### Compile and Run
 
-From this `UTILS/` directory:
+All utilities are run from the `tools/` directory using the test runner:
+
+```bash
+cd tools/
+./run_test.sh ../src/UTILS/<utility>.spin2 [-t timeout]
+```
+
+The test runner compiles with `pnut-ts`, downloads to P2 hardware, captures debug output in headless mode, and saves logs to `tools/logs/`.
+
+Alternatively, from this `UTILS/` directory:
 
 ```bash
 # Compile a utility
@@ -490,7 +499,9 @@ UTILS/
 ├── SD_performance_benchmark.spin2  # Throughput measurement
 ├── SD_FAT32_audit.spin2            # Filesystem validator
 ├── SD_FAT32_fsck.spin2             # Filesystem check & repair
-└── isp_format_utility.spin2        # FAT32 format library (used by SD_format_card)
+├── isp_format_utility.spin2        # FAT32 format library (used by SD_format_card)
+├── isp_fsck_utility.spin2          # Combined FSCK + Audit library (runs in temp cog)
+└── isp_string_fifo.spin2           # Lock-free inter-cog string FIFO
 ```
 
 ---
@@ -499,50 +510,43 @@ UTILS/
 
 ### New Card Setup
 
-From this `UTILS/` directory, compile each utility then download to P2:
+From the `tools/` directory:
 
 1. **Characterize** - Read card registers to identify the card
    ```bash
-   pnut-ts -d -I .. SD_card_characterize.spin2
-   pnut-term-ts -r SD_card_characterize.bin
+   ./run_test.sh ../src/UTILS/SD_card_characterize.spin2 -t 60
    ```
 
 2. **Speed Test** - Find maximum reliable SPI speed
    ```bash
-   pnut-ts -d -I .. SD_speed_characterize.spin2
-   pnut-term-ts -r SD_speed_characterize.bin
+   ./run_test.sh ../src/UTILS/SD_speed_characterize.spin2 -t 300
    ```
 
 3. **Format** - Create clean FAT32 filesystem
    ```bash
-   pnut-ts -d -I .. SD_format_card.spin2
-   pnut-term-ts -r SD_format_card.bin
+   ./run_test.sh ../src/UTILS/SD_format_card.spin2 -t 120
    ```
 
 4. **Audit** - Verify filesystem structure
    ```bash
-   pnut-ts -d -I .. SD_FAT32_audit.spin2
-   pnut-term-ts -r SD_FAT32_audit.bin
+   ./run_test.sh ../src/UTILS/SD_FAT32_audit.spin2 -t 60
    ```
 
 5. **Benchmark** - Measure performance baseline
    ```bash
-   pnut-ts -d -I .. SD_performance_benchmark.spin2
-   pnut-term-ts -r SD_performance_benchmark.bin
+   ./run_test.sh ../src/UTILS/SD_performance_benchmark.spin2 -t 180
    ```
 
 ### After Testing
 
 Run the audit tool to verify filesystem integrity:
 ```bash
-pnut-ts -d -I .. SD_FAT32_audit.spin2
-pnut-term-ts -r SD_FAT32_audit.bin
+./run_test.sh ../src/UTILS/SD_FAT32_audit.spin2 -t 60
 ```
 
 If the audit reports failures, run FSCK to auto-repair:
 ```bash
-pnut-ts -d -I .. SD_FAT32_fsck.spin2
-pnut-term-ts -r SD_FAT32_fsck.bin
+./run_test.sh ../src/UTILS/SD_FAT32_fsck.spin2 -t 300
 ```
 
 ---

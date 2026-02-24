@@ -6,7 +6,9 @@
 
 ## 1. Executive Summary
 
-The regression test suite validates the `micro_sd_fat32_fs.spin2` — a Propeller 2 SD card driver that uses smart pins for SPI communication, the P2 streamer for bulk data transfer, and a dedicated worker cog for all card I/O. The suite currently contains **15 core test files** producing an estimated **325 test assertions**. The original 10 files (236 tests) are joined by 5 new files covering directory handles, volume operations, register access, speed/CMD6, and CRC diagnostics, plus 9 additional tests added to the existing read/write file for large-file multi-cluster verification. Three additional test files (error handling, card info, card display) provide supplementary coverage outside the core count.
+The regression test suite validates the `micro_sd_fat32_fs.spin2` — a Propeller 2 SD card driver that uses smart pins for SPI communication, the P2 streamer for bulk data transfer, and a dedicated worker cog for all card I/O. The suite currently contains **16 core test files** producing an estimated **343 test assertions**. The original 10 files are joined by 6 additional files covering directory handles, volume operations, register access, speed/CMD6, CRC diagnostics, and subdirectory operations with cross-buffer cache coherence testing. Three additional test files (error handling, card info, card display) and infrastructure tests (FIFO, fstr) provide supplementary coverage outside the core count.
+
+**Verified on hardware (2026-02-24):** 11 core suites totaling **263 tests** — all passing (mount 21, file_ops 22, read_write 38, directory 28, seek 37, multicog 14, multihandle 19, multiblock 6, raw_sector 14, format 46, subdir_ops 18).
 
 The tests exercise the driver from low-level raw sector I/O through the full FAT32 filesystem stack, including multi-cog concurrent access, multi-handle file operations, and card formatting validation. Every test runs on real hardware (P2 Edge + physical SD card) via the `run_test.sh` headless test runner.
 
@@ -81,7 +83,7 @@ Each test is identified by:
 |---|-----------|:-----:|------------|---------------------|
 | 1 | `SD_RT_mount_tests.spin2` | 21 | Mount/unmount lifecycle, card detection, error states | Lifecycle |
 | 2 | `SD_RT_file_ops_tests.spin2` | 22 | File create, open, close, delete, rename, move | File Operations |
-| 3 | `SD_RT_read_write_tests.spin2` | ~38 | Read/write data integrity, patterns, boundaries, large multi-cluster | Data I/O |
+| 3 | `SD_RT_read_write_tests.spin2` | 38 | Read/write data integrity, patterns, boundaries, large multi-cluster | Data I/O |
 | 4 | `SD_RT_directory_tests.spin2` | 28 | Directory create, navigate, enumerate, nesting | Directory Operations |
 | 5 | `SD_RT_seek_tests.spin2` | 37 | Seek, tell, position tracking, cross-sector seeks | File Positioning |
 | 6 | `SD_RT_multicog_tests.spin2` | 14 | Multi-cog singleton, concurrent access, stress test | Multi-Cog Safety |
@@ -94,7 +96,8 @@ Each test is identified by:
 | 13 | `SD_RT_register_tests.spin2` | ~10 | CSD register, timeout values, capacity cross-check | Register Access |
 | 14 | `SD_RT_speed_tests.spin2` | ~14 | SPI frequency, CMD6, high-speed mode, speed boundaries | Speed/CMD6 API |
 | 15 | `SD_RT_crc_diag_tests.spin2` | ~14 | CRC counters, validation toggle, CMD13 diagnostics | CRC Diagnostic |
-| | **Total** | **~325** | | |
+| 16 | `SD_RT_subdir_ops_tests.spin2` | 18 | Cross-buffer cache coherence, empty files, subdir operations | Subdirectory Ops |
+| | **Total** | **~343** | | |
 
 ### 3.2 Supplementary Test Files (not in 236 count)
 
@@ -103,6 +106,7 @@ Each test is identified by:
 | `SD_RT_error_handling_tests.spin2` | Error conditions: invalid handles, EOF behavior, directory errors, handle reuse |
 | `SD_RT_card_info_tests.spin2` | Struct-based register access certification (CID, SCR, OCR, SD Status) |
 | `SD_RT_card_display_test.spin2` | Card info display via fstr output (demo shell pattern certification) |
+| `SD_RT_fifo_tests.spin2` | String FIFO (isp_string_fifo) inter-cog communication regression tests |
 | `SD_RT_fstr_tests.spin2` | Serial fstr mechanism test (not SD driver — serial library) |
 | `SD_RT_fstr_args_tests.spin2` | Serial fstr argument handling test (not SD driver — serial library) |
 
@@ -210,7 +214,7 @@ Verifies that repeated `start()` calls return the same cog ID, not allocate new 
 
 ---
 
-### 4.3 SD_RT_read_write_tests.spin2 (29 tests)
+### 4.3 SD_RT_read_write_tests.spin2 (38 tests)
 
 **Purpose:** Validate data integrity for read and write operations across various sizes, patterns, and boundary conditions.
 
@@ -888,7 +892,67 @@ Creates a test directory structure:
 
 ---
 
-### 4.17 Supplementary Tests (not in core count)
+### 4.17 SD_RT_subdir_ops_tests.spin2 (18 tests)
+
+**Purpose:** Validate file operations within subdirectories with emphasis on cross-buffer cache coherence, empty file handling, rename operations, and directory navigation round-trips.
+
+**Why we test this:** The driver uses three independent sector caches (BUF_DIR, BUF_FAT, BUF_DATA) that can hold the same physical sector. When `createFileNew()` writes a directory entry via BUF_DIR, the BUF_DATA cache may still hold stale data for that same sector. If `readDirectoryHandle()` subsequently reads via BUF_DATA, it gets a cache hit on stale data and misses the newly created file. This test suite specifically targets this cross-buffer cache coherence scenario, which was the root cause of the "dir shows empty after touch" bug fixed in commit 2062590.
+
+Additionally, earlier regression tests operated primarily in the root directory. Subdirectory operations exercise different code paths (directory entry search in non-root clusters, `.`/`..` navigation, cross-cluster directory enumeration) that root-only tests miss.
+
+#### Test Groups
+
+**Group 1: Empty File Operations (Root)** (4 tests)
+
+| Test | API Under Test | What We Verify | Why |
+|------|---------------|----------------|-----|
+| createFileNew() empty file | `createFileNew()` + immediate `closeFileHandle()` | Handle >= 0 | 0-byte file creation works |
+| Empty file has size 0 | `openFileRead()` + `fileSizeHandle()` | Size == 0 | Empty file metadata correct |
+| deleteFile() empty file | `deleteFile()` | Returns true | Deleting 0-byte file succeeds |
+| openFileRead() after delete | `openFileRead()` | Returns E_FILE_NOT_FOUND | Deletion is effective |
+
+**Group 2: Dir After Create (Cache Coherence)** (2 tests)
+
+| Test | API Under Test | What We Verify | Why |
+|------|---------------|----------------|-----|
+| Dir sees file immediately | `createFileNew()` then `openDirectory()` + enumerate | Count >= 1 | BUF_DATA not stale after BUF_DIR write |
+| Second create visible without re-mount | Create two files, enumerate between | Count >= 2 | Repeated cache invalidation works |
+
+**Group 3: Subdirectory File Operations** (5 tests)
+
+| Test | API Under Test | What We Verify | Why |
+|------|---------------|----------------|-----|
+| mkdir and cd into subdirectory | `newDirectory()` + `changeDirectory()` | Both succeed | Subdir creation and navigation |
+| createFileNew() in subdirectory | `createFileNew()` in non-root dir | Handle >= 0 | File creation in subdir clusters |
+| Dir sees file in subdirectory | `openDirectory(@".")` + enumerate | Count >= 3 (., .., file) | Cross-buffer coherence in subdir |
+| Second file visible in subdir | Create + enumerate | Count >= 4 | Multi-file subdir enumeration |
+| Dir-Create-Dir cache invalidation | Dir, create, dir again | New count > old count | The specific BUF_DATA stale-cache scenario |
+
+**Group 4: Delete in Subdirectory** (4 tests)
+
+| Test | API Under Test | What We Verify | Why |
+|------|---------------|----------------|-----|
+| Delete empty file in subdir | `deleteFile()` | Returns true | Delete works in non-root dir |
+| Deleted file not found | `openFileRead()` | Returns E_FILE_NOT_FOUND | Deletion visible in subdir |
+| Delete file with data | `deleteFile()` on file with content | Returns true | Data file deletion in subdir |
+| Dir after delete correct count | Enumerate after deletes | Count == 3 (., .., remaining) | Deletion reflected in dir listing |
+
+**Group 5: Rename in Subdirectory** (2 tests)
+
+| Test | API Under Test | What We Verify | Why |
+|------|---------------|----------------|-----|
+| Create then rename in subdir | `createFileNew()` + `rename()` | Both succeed | Rename works in non-root dir |
+| Renamed file accessible | Old name E_FILE_NOT_FOUND, new name opens | Both conditions | Rename atomicity in subdir |
+
+**Group 6: Cross-Directory Operations** (1 test)
+
+| Test | API Under Test | What We Verify | Why |
+|------|---------------|----------------|-----|
+| cd .. then cd back preserves contents | `changeDirectory(@"..")` + `changeDirectory(@testdir)` + enumerate | Count >= 3 | Directory context survives navigation round-trip |
+
+---
+
+### 4.18 Supplementary Tests (not in core count)
 
 #### SD_RT_error_handling_tests.spin2
 
@@ -916,59 +980,59 @@ This matrix maps every public driver API method to the test file(s) that exercis
 
 ### 5.1 Lifecycle & Mount
 
-| API Method | mount | file_ops | rw | dir | seek | mcog | mhand | mblk | raw | fmt | Notes |
-|------------|:-----:|:--------:|:--:|:---:|:----:|:----:|:-----:|:----:|:---:|:---:|-------|
-| `start()` | **Y** | | | | | **Y** | | | | | Singleton verified in mount+mcog |
-| `mount()` | **Y** | **Y** | **Y** | **Y** | **Y** | **Y** | **Y** | | | **Y** | Every filesystem test |
-| `unmount()` | **Y** | | | | | | | | | | Only mount_tests |
-| `initCardOnly()` | | | | | | | | | **Y** | **Y** | Raw-mode tests |
-| `error()` | **Y** | | | | | **Y** | | | | | Pre-mount + per-cog |
+| API Method | mount | file_ops | rw | dir | seek | mcog | mhand | mblk | raw | fmt | subdir | Notes |
+|------------|:-----:|:--------:|:--:|:---:|:----:|:----:|:-----:|:----:|:---:|:---:|:------:|-------|
+| `start()` | **Y** | | | | | **Y** | | | | | | Singleton verified in mount+mcog |
+| `mount()` | **Y** | **Y** | **Y** | **Y** | **Y** | **Y** | **Y** | | | **Y** | **Y** | Every filesystem test |
+| `unmount()` | **Y** | | | | | | | | | | | Only mount_tests |
+| `initCardOnly()` | | | | | | | | | **Y** | **Y** | | Raw-mode tests |
+| `error()` | **Y** | | | | | **Y** | | | | | | Pre-mount + per-cog |
 
 ### 5.2 Legacy File Operations
 
-| API Method | mount | file_ops | rw | dir | seek | mcog | mhand | Notes |
-|------------|:-----:|:--------:|:--:|:---:|:----:|:----:|:-----:|-------|
-| `openFile()` | **Y** | **Y** | **Y** | | **Y** | **Y** | | Multiple test files |
-| `newFile()` | **Y** | **Y** | **Y** | **Y** | **Y** | | | File creation path |
-| `closeFile()` | | **Y** | **Y** | | **Y** | **Y** | | Close + flush |
-| `read()` | | **Y** | **Y** | | **Y** | **Y** | | Core read path |
-| `write()` | | **Y** | **Y** | | **Y** | | | Core write path |
-| `readByte()` | | | | | **Y** | | | Direct position read |
-| `writeByte()` | | | **Y** | | | | | Single byte write |
-| `writeString()` | | | **Y** | | | | | String write |
-| `seek()` | | | | | **Y** | | | Core seek path |
-| `fileSize()` | | **Y** | **Y** | | **Y** | | | Size verification |
-| `deleteFile()` | | **Y** | | **Y** | | | | File removal |
-| `rename()` | | **Y** | | | | | | Name change |
-| `moveFile()` | | **Y** | | | | | | Cross-directory move |
+| API Method | mount | file_ops | rw | dir | seek | mcog | mhand | subdir | Notes |
+|------------|:-----:|:--------:|:--:|:---:|:----:|:----:|:-----:|:------:|-------|
+| `openFile()` | **Y** | **Y** | **Y** | | **Y** | **Y** | | | Multiple test files |
+| `newFile()` | **Y** | **Y** | **Y** | **Y** | **Y** | | | | File creation path |
+| `closeFile()` | | **Y** | **Y** | | **Y** | **Y** | | | Close + flush |
+| `read()` | | **Y** | **Y** | | **Y** | **Y** | | | Core read path |
+| `write()` | | **Y** | **Y** | | **Y** | | | | Core write path |
+| `readByte()` | | | | | **Y** | | | | Direct position read |
+| `writeByte()` | | | **Y** | | | | | | Single byte write |
+| `writeString()` | | | **Y** | | | | | | String write |
+| `seek()` | | | | | **Y** | | | | Core seek path |
+| `fileSize()` | | **Y** | **Y** | | **Y** | | | | Size verification |
+| `deleteFile()` | | **Y** | | **Y** | | | | **Y** | File removal (incl. subdir) |
+| `rename()` | | **Y** | | | | | | **Y** | Name change (incl. subdir) |
+| `moveFile()` | | **Y** | | | | | | | Cross-directory move |
 
 ### 5.3 V3 Handle-Based Operations
 
-| API Method | file_ops | rw | mhand | err | vol | Notes |
-|------------|:--------:|:--:|:-----:|:---:|:---:|-------|
-| `openFileRead()` | | **Y** | **Y** | **Y** | | Multiple readers |
-| `openFileWrite()` | | | **Y** | **Y** | | Single-writer policy |
-| `createFileNew()` | **Y** | **Y** | **Y** | **Y** | **Y** | V3 creation |
-| `closeFileHandle()` | **Y** | **Y** | **Y** | **Y** | **Y** | Handle close + flush |
-| `readHandle()` | | **Y** | **Y** | **Y** | | Handle-based read |
-| `writeHandle()` | **Y** | **Y** | **Y** | **Y** | **Y** | Handle-based write |
-| `seekHandle()` | | **Y** | **Y** | | | Handle-based seek |
-| `tellHandle()` | | | **Y** | | | Position query |
-| `eofHandle()` | | | **Y** | | | EOF detection |
-| `fileSizeHandle()` | | **Y** | **Y** | | | Size via handle |
-| `syncHandle()` | | | **Y** | | | Flush without close |
-| `syncAllHandles()` | | | | | **Y** | Bulk flush all write handles |
+| API Method | file_ops | rw | mhand | err | vol | subdir | Notes |
+|------------|:--------:|:--:|:-----:|:---:|:---:|:------:|-------|
+| `openFileRead()` | | **Y** | **Y** | **Y** | | **Y** | Multiple readers, subdir verify |
+| `openFileWrite()` | | | **Y** | **Y** | | | Single-writer policy |
+| `createFileNew()` | **Y** | **Y** | **Y** | **Y** | **Y** | **Y** | V3 creation (incl. subdir) |
+| `closeFileHandle()` | **Y** | **Y** | **Y** | **Y** | **Y** | **Y** | Handle close + flush |
+| `readHandle()` | | **Y** | **Y** | **Y** | | | Handle-based read |
+| `writeHandle()` | **Y** | **Y** | **Y** | **Y** | **Y** | | Handle-based write |
+| `seekHandle()` | | **Y** | **Y** | | | | Handle-based seek |
+| `tellHandle()` | | | **Y** | | | | Position query |
+| `eofHandle()` | | | **Y** | | | | EOF detection |
+| `fileSizeHandle()` | | **Y** | **Y** | | | **Y** | Size via handle (incl. subdir) |
+| `syncHandle()` | | | **Y** | | | | Flush without close |
+| `syncAllHandles()` | | | | | **Y** | | Bulk flush all write handles |
 
 ### 5.4 Directory Operations
 
-| API Method | dir | mhand | err | dirh | vol | Notes |
-|------------|:---:|:-----:|:---:|:----:|:---:|-------|
-| `newDirectory()` | **Y** | | **Y** | | **Y** | Directory creation |
-| `changeDirectory()` | **Y** | | **Y** | **Y** | | Navigation |
-| `readDirectory()` | **Y** | | | | **Y** | Legacy enumeration |
-| `openDirectory()` | | | | **Y** | | V3 directory handle enumeration |
-| `readDirectoryHandle()` | | | | **Y** | | V3 entry iteration |
-| `closeDirectoryHandle()` | | | | **Y** | | V3 handle release |
+| API Method | dir | mhand | err | dirh | vol | subdir | Notes |
+|------------|:---:|:-----:|:---:|:----:|:---:|:------:|-------|
+| `newDirectory()` | **Y** | | **Y** | | **Y** | **Y** | Directory creation (incl. subdir) |
+| `changeDirectory()` | **Y** | | **Y** | **Y** | | **Y** | Navigation (incl. subdir round-trip) |
+| `readDirectory()` | **Y** | | | | **Y** | | Legacy enumeration |
+| `openDirectory()` | | | | **Y** | | **Y** | V3 handle enum (incl. subdir cache) |
+| `readDirectoryHandle()` | | | | **Y** | | **Y** | V3 entry iteration (incl. subdir) |
+| `closeDirectoryHandle()` | | | | **Y** | | **Y** | V3 handle release |
 
 ### 5.5 Card Info
 

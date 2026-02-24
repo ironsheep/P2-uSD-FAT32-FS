@@ -159,7 +159,7 @@ All cog-to-worker communication flows through shared hub RAM variables:
 
 ### Unified Handle Pool
 
-File handles and directory handles share a single pool of `MAX_OPEN_FILES` slots (default 4, user-configurable). Each slot can hold either a file or a directory enumeration handle.
+File handles and directory handles share a single pool of `MAX_OPEN_FILES` slots (default 6, user-configurable). Each slot can hold either a file or a directory enumeration handle.
 
 ### Handle Flags
 
@@ -281,7 +281,7 @@ Per-handle buffers eliminate thrashing when alternating between multiple open fi
 
 ### Choosing the Handle Count
 
-The default `MAX_OPEN_FILES = 4` was established before directory handles shared the file handle pool. With the unified pool now serving both file and directory operations, the right count depends on how many cogs will perform file I/O concurrently and what each cog does.
+The default `MAX_OPEN_FILES = 6` was established after directory handles were unified into the file handle pool. With the unified pool now serving both file and directory operations, the right count depends on how many cogs will perform file I/O concurrently and what each cog does.
 
 **Per-cog handle demand.** A cog consumes one handle for each file or directory it has open at the same time. Handles represent reserved state (position, buffer, cluster chain) — the worker cog still serializes actual I/O, so handles don't create parallelism, they create *concurrency of open resources*.
 

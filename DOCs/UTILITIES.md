@@ -467,13 +467,15 @@ END_SESSION
 ```
 src/UTILS/
 ├── SD_format_card.spin2            # FAT32 card formatter
-├── isp_format_utility.spin2        # FAT32 format library (used by SD_format_card)
 ├── SD_card_characterize.spin2      # Card register reader
 ├── SD_speed_characterize.spin2     # SPI speed tester
 ├── SD_frequency_characterize.spin2 # Sysclk frequency tester
 ├── SD_performance_benchmark.spin2  # Throughput measurement
 ├── SD_FAT32_audit.spin2            # Filesystem validator
 ├── SD_FAT32_fsck.spin2             # Filesystem check & repair
+├── isp_format_utility.spin2        # FAT32 format library (used by SD_format_card)
+├── isp_fsck_utility.spin2          # Combined FSCK + Audit library (runs in temp cog)
+├── isp_string_fifo.spin2           # Lock-free inter-cog string FIFO
 └── logs/                           # Utility output logs
 ```
 

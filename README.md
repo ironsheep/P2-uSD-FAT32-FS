@@ -14,7 +14,7 @@ This project provides a robust, high-performance SD card driver for the P2 micro
 
 - **FAT32 Filesystem Support**: Full read/write access to FAT32-formatted SD cards
 - **High-Performance SPI**: Smart pin hardware acceleration with streamer DMA
-- **Multi-File Handles**: Up to 4 simultaneous file and directory handles (configurable)
+- **Multi-File Handles**: Up to 6 simultaneous file and directory handles (configurable)
 - **Cross-OS Compatibility**: Works with cards formatted on Windows, macOS, and Linux
 - **SDHC/SDXC Support**: Block-addressed cards tested up to 128GB (reformatted as FAT32)
 - **CRC Validation**: Hardware-accelerated CRC-16 on all data transfers
@@ -22,7 +22,7 @@ This project provides a robust, high-performance SD card driver for the P2 micro
 - **File Operations**: Create, open, read, write, seek, rename, delete
 - **Multi-Cog Safe**: Dedicated worker cog with hardware lock serialization
 - **Per-Cog Working Directory**: Each cog maintains its own CWD for safe concurrent navigation
-- **Regression Tested**: 151+ automated tests across 6 test suites verify mount, file operations, directory navigation, read/write, seek, and multi-cog scenarios
+- **Regression Tested**: 263+ automated tests across 11 core test suites verify mount, file operations, directory navigation, read/write, seek, multi-cog, multi-handle, multi-block, raw sector, format, and subdirectory cache coherence scenarios
 
 ## Hardware Requirements
 
@@ -152,7 +152,10 @@ P2-uSD-Study/
 │   │   ├── SD_speed_characterize.spin2 # Maximum SPI speed tester
 │   │   ├── SD_FAT32_audit.spin2        # Filesystem validator (read-only)
 │   │   ├── SD_FAT32_fsck.spin2         # Filesystem check & repair
-│   │   └── SD_performance_benchmark.spin2  # Read/write throughput bench
+│   │   ├── SD_performance_benchmark.spin2  # Read/write throughput bench
+│   │   ├── isp_format_utility.spin2    # FAT32 format library
+│   │   ├── isp_fsck_utility.spin2      # Combined FSCK + Audit library
+│   │   └── isp_string_fifo.spin2       # Inter-cog string FIFO
 │   └── DEMO/                       # Interactive demo application
 │       └── SD_demo_shell.spin2         # Terminal shell (dir, cd, type, etc.)
 │
@@ -280,16 +283,23 @@ See [`src/DEMO/README.md`](src/DEMO/README.md) for full build and usage document
 
 ## Testing
 
-The driver is validated by **151+ automated regression tests** across 6 test suites, all running on real P2 hardware with actual SD cards:
+The driver is validated by **263+ automated regression tests** across 11 core test suites, all running on real P2 hardware with actual SD cards:
 
 | Test Suite | Tests | Coverage |
 |------------|-------|----------|
 | Mount | 21 | Card init, mount/unmount, pre-mount error handling |
-| File Operations | 22 | Create, open, read, write, rename, delete |
+| File Operations | 22 | Create, open, close, delete, rename (V3 handle API) |
+| Read/Write | 38 | Data integrity, sector boundaries, multi-cluster, large files |
 | Directory | 28 | Navigation, nesting (5 levels), handle enumeration |
-| Read/Write | 29 | Sector boundaries, multi-sector, large files |
 | Seek | 37 | Random access, boundary conditions, cluster chain traversal |
-| Multi-Cog | 14 | Concurrent access, per-cog CWD isolation, handle sharing |
+| Multi-Cog | 14 | Singleton pattern, concurrent access, per-cog CWD isolation |
+| Multi-Handle | 19 | Multiple simultaneous file handles, error boundaries |
+| Multi-Block | 6 | CMD18/CMD25 multi-sector DMA read/write round-trips |
+| Raw Sector | 14 | Direct sector read/write, patterns, large LBA addressing |
+| Format | 46 | FAT32 structure validation, cross-OS compatibility |
+| Subdirectory Ops | 18 | Cross-buffer cache coherence, empty files, rename in subdirs |
+
+Additional test suites cover directory handles, volume operations, CRC diagnostics, speed/CMD6 APIs, register access, error handling, and FIFO infrastructure.
 
 Tests compile with `pnut-ts`, download to P2, and capture debug output automatically. Run from the `tools/` directory:
 
@@ -300,7 +310,12 @@ cd tools/
 ./run_test.sh ../regression-tests/SD_RT_read_write_tests.spin2
 ./run_test.sh ../regression-tests/SD_RT_directory_tests.spin2
 ./run_test.sh ../regression-tests/SD_RT_seek_tests.spin2
-./run_test.sh ../regression-tests/SD_RT_multicog_tests.spin2
+./run_test.sh ../regression-tests/SD_RT_multicog_tests.spin2 -t 120
+./run_test.sh ../regression-tests/SD_RT_multihandle_tests.spin2
+./run_test.sh ../regression-tests/SD_RT_multiblock_tests.spin2
+./run_test.sh ../regression-tests/SD_RT_raw_sector_tests.spin2
+./run_test.sh ../regression-tests/SD_RT_subdir_ops_tests.spin2
+./run_test.sh ../regression-tests/SD_RT_format_tests.spin2 -t 300
 ```
 
 See [REGRESSION-TESTING.md](regression-tests/README.md) for complete test documentation.

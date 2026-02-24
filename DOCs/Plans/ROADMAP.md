@@ -106,22 +106,27 @@ This driver includes all features from the original development phases:
 ### Phase 10: Bug Fixes & Error Handling (2026-02-07)
 - [x] Pre-mount operations now return `E_NOT_MOUNTED` (was returning stale 0)
 - [x] `changeDirectory()` correctly rejects files (returns `E_NOT_A_DIR`)
-- [x] Regression test coverage: 151+ tests across 6 test suites
+- [x] Regression test coverage: 263+ tests across 11 core test suites
 
 ---
 
 ## Current Status
 
-### Driver Certification: PASS (151+ tests at 270 MHz)
+### Driver Certification: PASS (263+ tests, verified 2026-02-24)
 
 | Test Suite | Pass | Total |
 |------------|------|-------|
 | Mount | 21 | 21 |
-| Directory | 28 | 28 |
 | File Ops | 22 | 22 |
-| Read/Write | 29 | 29 |
+| Read/Write | 38 | 38 |
+| Directory | 28 | 28 |
 | Seek | 37 | 37 |
 | Multicog | 14 | 14 |
+| Multihandle | 19 | 19 |
+| Multiblock | 6 | 6 |
+| Raw Sector | 14 | 14 |
+| Format | 46 | 46 |
+| Subdirectory Ops | 18 | 18 |
 
 ---
 
