@@ -22,16 +22,16 @@ CON
      _CLKFREQ        = 270_000_000
 
      ' P2 Edge module SD slot pins
-     'SD_CS   = 60
-     'SD_MOSI = 59
-     'SD_MISO = 58
-     'SD_SCK  = 61
+     SD_CS   = 60
+     SD_MOSI = 59
+     SD_MISO = 58
+     SD_SCK  = 61
 
      ' External SD header (base pin 16)
-     SD_CS   = 20
-     SD_MOSI = 19
-     SD_MISO = 18
-     SD_SCK  = 21
+     'SD_CS   = 20
+     'SD_MOSI = 19
+     'SD_MISO = 18
+     'SD_SCK  = 21
 
      ' Error codes
      E_FILE_NOT_FOUND    = -40
@@ -41,6 +41,12 @@ CON
      E_TOO_MANY_FILES    = -90
      E_INVALID_HANDLE    = -91
      E_FILE_ALREADY_OPEN = -92
+
+     MBR_SIGNATURE       = $AA55
+     SECTOR_SIZE         = 512
+
+'' Enable raw sector access for MBR integrity check
+#PRAGMA EXPORTDEF SD_INCLUDE_RAW
 
 OBJ
     sd    : "micro_sd_fat32_fs"
@@ -56,7 +62,11 @@ testfile4       BYTE    "ERTEST4.TXT", 0
 testfile5       BYTE    "ERTEST5.TXT", 0
 testdir1        BYTE    "ERTDIR1", 0
 testdir2        BYTE    "NONEXIST", 0
+badPath1        BYTE    "NOEXIST/CHILD", 0    ' parent doesn't exist
 testContent     BYTE    "0123456789", 0       ' Exactly 10 bytes
+
+' Buffer for MBR integrity check
+mbr_buf         BYTE    0[SECTOR_SIZE]
 
 readBuffer      BYTE    0[64]
 readBuffer_guard BYTE   0[16]
@@ -228,6 +238,35 @@ PUB go() | result, handle, h1, h2, h3, h4, h5, bytesRead, bytesWritten
 
     if h1 >= 0
         sd.closeFileHandle(h1)
+
+    ' ----------------------------------
+    ' TEST GROUP: Path Safety (MBR corruption guard)
+    ' ----------------------------------
+    utils.startTestGroup(@"Path Safety")
+
+    ' Test: newDirectory() with non-existent parent must not corrupt MBR
+    ' BUG: when searchDirectory("NOEXIST/CHILD") fails because "NOEXIST"
+    '       doesn't exist, entry_address stays 0. do_newdir then writes
+    '       a directory entry to sector 0 (MBR), corrupting the partition table.
+    utils.startTest(@"newDirectory() with bad parent path preserves MBR")
+
+    ' Read MBR before the test — save signature as ground truth
+    sd.readSectorRaw(0, @mbr_buf)
+    utils.evaluateSubValue(WORD[@mbr_buf + $1FE], @"MBR sig before", MBR_SIGNATURE)
+
+    ' Attempt to create directory with non-existent parent
+    result := sd.newDirectory(@badPath1)
+    debug("  newDirectory(NOEXIST/CHILD) returned ", sdec_(result))
+    utils.evaluateSubBool(result, @"newDirectory(bad path)", false)
+
+    ' Re-read MBR — signature MUST still be intact
+    sd.readSectorRaw(0, @mbr_buf)
+    utils.evaluateSubValue(WORD[@mbr_buf + $1FE], @"MBR sig after", MBR_SIGNATURE)
+
+    ' Also verify first bytes of MBR are not a directory entry
+    ' (directory entries start with a filename, not MBR boot code)
+    utils.evaluateSubBool(BYTE[@mbr_buf] <> $E5 and BYTE[@mbr_buf + 11] <> $10, ...
+        @"sector 0 not dir entry", true)
 
     ' ----------------------------------
     ' Cleanup: Delete test files and directories

@@ -26,16 +26,16 @@ CON
   _clkfreq  = 270_000_000                                       ' 270 MHz system clock
 
   ' P2 Edge module SD slot pins
-  'CS_PIN    = 60
-  'MOSI_PIN  = 59
-  'MISO_PIN  = 58
-  'SCK_PIN   = 61
+  CS_PIN    = 60
+  MOSI_PIN  = 59
+  MISO_PIN  = 58
+  SCK_PIN   = 61
 
   ' External SD header (base pin 16)
-  CS_PIN    = 20
-  MOSI_PIN  = 19
-  MISO_PIN  = 18
-  SCK_PIN   = 21
+  'CS_PIN    = 20
+  'MOSI_PIN  = 19
+  'MISO_PIN  = 18
+  'SCK_PIN   = 21
 
   ' Test Configuration
   TEST_SECTOR_BASE   = 1_000_000                                ' Safe area away from FAT

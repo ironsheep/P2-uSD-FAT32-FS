@@ -26,16 +26,16 @@ CON
     _CLKFREQ        = 350_000_000
 
     ' P2 Edge module SD slot pins
-    'SD_CS   = 60
-    'SD_MOSI = 59
-    'SD_MISO = 58
-    'SD_SCK  = 61
+    SD_CS   = 60
+    SD_MOSI = 59
+    SD_MISO = 58
+    SD_SCK  = 61
 
     ' External SD header (base pin 16)
-    SD_CS   = 20
-    SD_MOSI = 19
-    SD_MISO = 18
-    SD_SCK  = 21
+    'SD_CS   = 20
+    'SD_MOSI = 19
+    'SD_MISO = 18
+    'SD_SCK  = 21
 
     ' Test sector numbers (in free space area, safe for 64GB+ cards)
     TEST_SECTOR_BASE = 200_000

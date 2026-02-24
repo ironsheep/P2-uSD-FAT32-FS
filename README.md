@@ -40,6 +40,19 @@ This project provides a robust, high-performance SD card driver for the P2 micro
 | MISO (DAT0) | P58 | Master In, Slave Out |
 | SCK (CLK) | P61 | Serial Clock |
 
+The microSD add-on board plugs into any P2 8-pin header group. To use a different group, change `SD_BASE`:
+
+```spin2
+CON
+    SD_BASE = 16                      ' External header on P16-P23
+    SD_SCK  = SD_BASE + 5             ' P21
+    SD_CS   = SD_BASE + 4             ' P20
+    SD_MOSI = SD_BASE + 3             ' P19
+    SD_MISO = SD_BASE + 2             ' P18
+```
+
+See the [Driver Tutorial](DOCs/SD-CARD-DRIVER-TUTORIAL.md#using-a-different-8-pin-header-group) for a complete header group reference table.
+
 ## Quick Start
 
 ### Basic File Operations

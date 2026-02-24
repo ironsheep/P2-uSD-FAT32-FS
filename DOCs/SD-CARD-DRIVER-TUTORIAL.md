@@ -207,6 +207,37 @@ PUB setup()
     debug("Mount failed, error: ", sdec(sd.error()))
 ```
 
+### Using a Different 8-Pin Header Group
+
+The microSD add-on board works on any P2 8-pin header group — not just the default P2 Edge Module pins. Simply change `SD_BASE` to match your wiring:
+
+| Header Group | SD_BASE | CS | MOSI | MISO | SCK |
+|---|---|---|---|---|---|
+| P0–P7 | 0 | P4 | P3 | P2 | P5 |
+| P8–P15 | 8 | P12 | P11 | P10 | P13 |
+| P16–P23 | 16 | P20 | P19 | P18 | P21 |
+| P24–P31 | 24 | P28 | P27 | P26 | P29 |
+| P32–P39 | 32 | P36 | P35 | P34 | P37 |
+| P40–P47 | 40 | P44 | P43 | P42 | P45 |
+| P48–P55 | 48 | P52 | P51 | P50 | P53 |
+| P56–P63 (default) | 56 | P60 | P59 | P58 | P61 |
+
+**Example — External Header on P16–P23:**
+
+```spin2
+CON
+  SD_BASE = 16                        ' External header (P16-P23 group)
+  SD_SCK  = SD_BASE + 5              ' P21
+  SD_CS   = SD_BASE + 4              ' P20
+  SD_MOSI = SD_BASE + 3              ' P19
+  SD_MISO = SD_BASE + 2              ' P18
+```
+
+> **Note:** The P2 Edge Module's built-in SD slot is hard-wired to the P56–P63 group.
+> External headers use longer PCB traces, which may limit maximum reliable SPI speed
+> compared to the on-board slot. The driver defaults to 25 MHz SPI which works on all
+> tested configurations.
+
 ### Unmounting
 
 Always unmount cleanly to ensure data integrity:
