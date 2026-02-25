@@ -359,4 +359,4 @@ The object exposes these constants for use with PST-compatible terminals:
 | P2-RPi-ioT-Gateway | 3 | ~12 | Email body, hex colors, temperature display |
 | P2-OctoSerial | 4 | ~8 | Serial port test message construction |
 | P2-Click-eInk | 1 | 1 | eInk display dimension text |
-| P2-uSD-Study | 0 | 0 | Present in project but no active callers |
+| P2-uSD-FAT32-FS | 0 | 0 | Present in project but no active callers |

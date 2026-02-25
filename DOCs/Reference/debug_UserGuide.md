@@ -160,7 +160,7 @@ debug("FIFO FATAL: freeHead=", udec(freeHead), " CORRUPTED! Resetting pool.", 13
 ### Visual Section Separators
 
 ```spin2
-' Equal-sign bars (P2-Magnetic-Imaging-Tile, P2-uSD-Study)
+' Equal-sign bars (P2-Magnetic-Imaging-Tile, P2-uSD-FAT32-FS)
 debug("=== PSRAM DRIVER TEST ===", 13, 10)
 debug("========================================")
 
@@ -168,7 +168,7 @@ debug("========================================")
 debug("* -------------")
 debug("---------------")
 
-' Hash bars (P2-uSD-Study)
+' Hash bars (P2-uSD-FAT32-FS)
 debug("##############################################")
 
 ' Asterisk box (P2-Magnetic-Imaging-Tile)
@@ -193,7 +193,7 @@ debug("--> read_tca() = ", uhex(tmpC))
 debug("--> write_scratchpad() SPAD = ", uhex_word_(wrdValue))
 ```
 
-### Bracketed Method Name Convention (P2-uSD-Study)
+### Bracketed Method Name Convention (P2-uSD-FAT32-FS)
 
 A distinctive pattern unique to the SD card driver: 2-space or 4-space indentation plus `[methodName]` identifies the calling function, with severity keywords.
 
@@ -213,7 +213,7 @@ The indentation depth reflects call depth -- `"  "` for top-level public methods
 
 Trace multi-step initialization processes.
 
-**From P2-uSD-Study** (`micro_sd_fat32_fs.spin2`):
+**From P2-uSD-FAT32-FS** (`micro_sd_fat32_fs.spin2`):
 ```spin2
 debug("    [initCard] Step 1: Power-on delay (100ms)...")
 debug("    [initCard] Step 2: SPI config, bit_delay=", udec(bit_delay), " (~50kHz)")
@@ -231,7 +231,7 @@ debug("    Init step 19: Display ON", 13, 10)
 
 ### Command Direction Arrows
 
-**From P2-uSD-Study** (`micro_sd_fat32_fs.spin2`):
+**From P2-uSD-FAT32-FS** (`micro_sd_fat32_fs.spin2`):
 ```spin2
 debug("cmd->", udec_(op_cmd))       ' command sent
 debug("cmd<-")                       ' response received
@@ -254,7 +254,7 @@ debug("TEST state [", zstr_(pFrom), "] -> [", zstr_(pTo), "]")
 
 ### Structured Test Framework Output
 
-**From P2-uSD-Study** (`isp_rt_utilities.spin2`):
+**From P2-uSD-FAT32-FS** (`isp_rt_utilities.spin2`):
 ```spin2
 debug("* Test Group: ", zstr_(pDescription))
 debug("* Test #", udec_(numberTests), ": ", zstr_(pDescription))
@@ -331,20 +331,20 @@ Set `DEBUG_DISABLE` to 0 or 1 in a CON block to control debug compilation **per-
 
 **Note:** Never use bare `DEBUG_DISABLE` (without a value). Always use the valued form.
 
-**Disabling debug** (P2-uSD-Study, `micro_sd_fat32_fs.spin2`):
+**Disabling debug** (P2-uSD-FAT32-FS, `micro_sd_fat32_fs.spin2`):
 ```spin2
 CON
     ' V3 driver exceeds 255 debug record limit when debug is fully enabled
     DEBUG_DISABLE = 1
 ```
 
-**Enabling debug** (P2-uSD-Study, `isp_format_utility.spin2`):
+**Enabling debug** (P2-uSD-FAT32-FS, `isp_format_utility.spin2`):
 ```spin2
 CON
     DEBUG_DISABLE = 0   ' Enable debug output
 ```
 
-**Used in:** P2-uSD-Study (`micro_sd_fat32_fs.spin2`, `isp_format_utility.spin2`)
+**Used in:** P2-uSD-FAT32-FS (`micro_sd_fat32_fs.spin2`, `isp_format_utility.spin2`)
 
 ### Compile-Time: `DEBUG_MASK` with Channels (v46+)
 
@@ -393,9 +393,9 @@ CON
 
 ### Compile-Time: Preprocessor Conditionals (`#IFDEF`)
 
-Conditionally compile entire debug methods and constants. Only used in P2-uSD-Study.
+Conditionally compile entire debug methods and constants. Only used in P2-uSD-FAT32-FS.
 
-**From P2-uSD-Study** (`micro_sd_fat32_fs.spin2`):
+**From P2-uSD-FAT32-FS** (`micro_sd_fat32_fs.spin2`):
 ```spin2
 '' Enable in your top-level file:
 ''   #PRAGMA EXPORTDEF SD_INCLUDE_DEBUG
@@ -560,7 +560,7 @@ PUB getDebugData() : nGroups, pGroupTitles, pGroupNames, pGroupVarCts, pGroupVar
 
 Limit debug output volume in tight loops with a counter.
 
-**From P2-uSD-Study** (`micro_sd_fat32_fs.spin2`):
+**From P2-uSD-FAT32-FS** (`micro_sd_fat32_fs.spin2`):
 ```spin2
 DAT
     sp_debug_ctr    LONG    0
@@ -663,7 +663,7 @@ debug(`s `sdec_long_array_(@drive_u, 3) `sdec_long_array_(@sense_u, 4))
 - Runtime control: `bShowDebug` in touch and I2C objects
 - Conventions: Method entry tracing with parameters, `"  -- "` for detail lines
 
-### P2-uSD-Study
+### P2-uSD-FAT32-FS
 - **Unique convention:** `"  [methodName] "` bracketed function name with indentation depth
 - Severity keywords inline: `FAIL:`, `SUCCESS`, `WARNING:`, `TIMEOUT`
 - Compile-time control: `DEBUG_DISABLE = 0|1` (per-file), `#IFDEF SD_INCLUDE_DEBUG`
@@ -770,13 +770,13 @@ u/s     dec/hex/bin     _byte/_word/_long     _array     _
 
 | Mechanism | Type | Projects Using It |
 |-----------|------|-------------------|
-| `DEBUG_DISABLE = 0\|1` | Compile-time (per-file) | P2-uSD-Study |
+| `DEBUG_DISABLE = 0\|1` | Compile-time (per-file) | P2-uSD-FAT32-FS |
 | `DEBUG_BAUD` / `DEBUG_PIN_TX/RX` | Compile-time | P2-BLDC-MotorControl (commented), P2-Magnetic-Imaging-Tile |
-| `#IFDEF SD_INCLUDE_DEBUG` | Compile-time preprocessor | P2-uSD-Study |
+| `#IFDEF SD_INCLUDE_DEBUG` | Compile-time preprocessor | P2-uSD-FAT32-FS |
 | `DEBUG_MASK` + `debug[N]()` | Compile-time channels (v46+) | (Available but not yet used) |
 | `bDbgShoMem` + `showDebug()` | Runtime flag | P2-OctoSerial, P2-BLDC-MotorControl, P2-RPi-ioT-Gateway |
 | `bShowDebug` + `enableDebug()` | Runtime flag | P2-Multi-servo, P2-Click-eInk |
 | `saveDebug()` / `restoreDebug()` | Runtime push/pop | P2-Multi-servo |
 | `showHDMIDebug` / `useDebug` | Runtime flag (HDMI) | P2-BLDC-MotorControl |
 | Comment toggle (`'debug(...)`) | Manual | All projects |
-| Debug throttle counter | Runtime limiter | P2-uSD-Study |
+| Debug throttle counter | Runtime limiter | P2-uSD-FAT32-FS |

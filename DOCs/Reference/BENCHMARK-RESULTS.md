@@ -293,5 +293,5 @@ The raw SPI layer is reasonably efficient (~78% average). File-level write throu
 
 ---
 
-*Document maintained as part of P2-uSD-Study project*
+*Document maintained as part of P2 microSD FAT32 Filesystem project*
 *Last updated: 2026-02-25*

@@ -666,4 +666,4 @@ Based on these baseline measurements, the Smart Pin SPI implementation targets:
 
 ---
 
-*Document maintained as part of P2-uSD-Study project*
+*Document maintained as part of P2 microSD FAT32 Filesystem project*

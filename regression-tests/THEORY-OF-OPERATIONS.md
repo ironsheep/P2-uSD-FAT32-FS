@@ -1,6 +1,6 @@
 # Regression Test Suite — Theory of Operations
 
-*Technical reference for the P2-uSD-Study SD card driver regression test suite.*
+*Technical reference for the P2-uSD-FAT32-FS SD card driver regression test suite.*
 
 ---
 
@@ -1194,7 +1194,7 @@ All critical gaps identified in the original analysis have been addressed:
 All tests run from the `tools/` directory:
 
 ```bash
-cd /path/to/P2-uSD-Study/tools
+cd /path/to/P2-uSD-FAT32-FS/tools
 
 # Original core tests
 ./run_test.sh ../regression-tests/SD_RT_mount_tests.spin2

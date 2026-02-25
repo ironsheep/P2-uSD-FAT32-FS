@@ -126,4 +126,4 @@ pnut-term-ts -r SD_card_characterize.bin
 
 ---
 
-*Part of the [P2-uSD-Study](../README.md) project — Iron Sheep Productions*
+*Part of the [P2 microSD FAT32 Filesystem](../README.md) project — Iron Sheep Productions*

@@ -250,4 +250,4 @@ All fixes are backward compatible - cards formatted by previous driver versions 
 
 ---
 
-*Document prepared for P2-uSD-Study project*
+*Document prepared for P2 microSD FAT32 Filesystem project*

@@ -338,4 +338,4 @@ The SD card driver correctly:
 
 ---
 
-*SPI Bus State Analysis for P2-uSD-Study project*
+*SPI Bus State Analysis for P2 microSD FAT32 Filesystem project*

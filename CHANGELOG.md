@@ -92,8 +92,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Initial testing release** — driver, utilities, demo shell, and 263+ regression tests.
 
-[Unreleased]: https://github.com/ironsheep/P2-uSD-FileSystem/compare/v1.0.0...HEAD
-[1.0.0]: https://github.com/ironsheep/P2-uSD-FileSystem/compare/v0.9.3...v1.0.0
-[0.9.3]: https://github.com/ironsheep/P2-uSD-FileSystem/compare/v0.9.2...v0.9.3
-[0.9.2]: https://github.com/ironsheep/P2-uSD-FileSystem/compare/v0.9.1...v0.9.2
-[0.9.1]: https://github.com/ironsheep/P2-uSD-FileSystem/releases/tag/v0.9.1
+[Unreleased]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v0.9.3...v1.0.0
+[0.9.3]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v0.9.2...v0.9.3
+[0.9.2]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v0.9.1...v0.9.2
+[0.9.1]: https://github.com/ironsheep/P2-uSD-FAT32-FS/releases/tag/v0.9.1

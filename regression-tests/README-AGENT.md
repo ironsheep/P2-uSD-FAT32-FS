@@ -30,7 +30,7 @@ The regression test suite consists of **11 specialized test files** covering dif
 ### Directory Structure
 
 ```
-P2-uSD-Study/
+P2-uSD-FAT32-FS/
 ├── regression-tests/               # Test source files
 │   ├── isp_rt_utilities.spin2          # Test framework (shared)
 │   ├── SD_RT_mount_tests.spin2

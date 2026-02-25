@@ -384,4 +384,4 @@ On failure, the output includes `FAIL` and the COG halts for analysis.
 | P2-Magnetic-Imaging-Tile (src/) | 3 files | 3 COG stacks (OLED, HDMI, Sensor) | Display and sensor driver overflow protection |
 | P2-Magnetic-Imaging-Tile (REF/) | 3 files | 4 COG stacks (clock, display, watchdog, serial Rx) | Multi-COG overflow detection + unit test reporting |
 | P2-OctoSerial | 1 file (commented out) | 1 COG stack (string queue offloader) | Background task overflow detection |
-| P2-uSD-Study | 0 files | -- | Present but currently unused |
+| P2-uSD-FAT32-FS | 0 files | -- | Present but currently unused |

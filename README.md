@@ -1,4 +1,4 @@
-# P2 microSD Filesystem
+# P2 microSD FAT32 Filesystem
 
 A high-performance FAT32-compliant microSD card filesystem driver for the Parallax Propeller 2 (P2) microcontroller.
 
@@ -110,7 +110,7 @@ Raw SPI efficiency reaches 80% of theoretical maximum (2,427 / 3,052 KB/s). Mult
 ## Project Structure
 
 ```
-P2-uSD-FileSystem/
+P2-uSD-FAT32-FS/
 ├── src/                        # Driver and application source
 │   ├── micro_sd_fat32_fs.spin2     # The SD card driver
 │   ├── UTILS/                      # Standalone utility programs

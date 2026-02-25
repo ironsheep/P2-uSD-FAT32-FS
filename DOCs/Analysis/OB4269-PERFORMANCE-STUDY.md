@@ -551,5 +551,5 @@ The OB4269 driver is well-implemented for a bit-banged approach. Smart Pin SPI o
 
 ---
 
-*Performance study prepared for P2-uSD-Study project*
+*Performance study prepared for P2 microSD FAT32 Filesystem project*
 *Updated 2026-01-16: Added PASM2 conversion analysis*
