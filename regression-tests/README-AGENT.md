@@ -30,7 +30,7 @@ The regression test suite consists of **11 specialized test files** covering dif
 ### Directory Structure
 
 ```
-P2-SD-Card-Driver/
+P2-uSD-Study/
 ├── regression-tests/               # Test source files
 │   ├── isp_rt_utilities.spin2          # Test framework (shared)
 │   ├── SD_RT_mount_tests.spin2
@@ -44,7 +44,13 @@ P2-SD-Card-Driver/
 │   ├── SD_RT_multihandle_tests.spin2
 │   ├── SD_RT_raw_sector_tests.spin2
 │   ├── SD_RT_error_handling_tests.spin2
-│   ├── logs/                           # Per-test logs (pnut-term-ts)
+│   ├── SD_RT_register_tests.spin2
+│   ├── SD_RT_speed_tests.spin2
+│   ├── SD_RT_dirhandle_tests.spin2
+│   ├── SD_RT_subdir_ops_tests.spin2
+│   ├── SD_RT_volume_tests.spin2
+│   ├── SD_RT_crc_diag_tests.spin2
+│   ├── SD_RT_fifo_tests.spin2
 │   └── TestCard/                       # Test card validation
 │       ├── TEST-CARD-SPECIFICATION.md      # Test card requirements
 │       ├── SD_RT_testcard_validation.spin2 # Card validation test
@@ -52,16 +58,26 @@ P2-SD-Card-Driver/
 │
 ├── tools/                          # Test execution tools
 │   ├── run_test.sh                     # Automated test runner
-│   └── logs/                           # Archived test logs
+│   └── logs/                           # Test output logs
 │
 └── src/                            # Driver under test
     ├── micro_sd_fat32_fs.spin2         # The SD card driver
+    ├── DEMO/                           # Interactive demo application
+    │   ├── SD_demo_shell.spin2             # Terminal shell
+    │   ├── isp_serial_singleton.spin2      # Serial terminal driver
+    │   ├── isp_mem_strings.spin2           # String formatting utilities
+    │   └── isp_stack_check.spin2           # Stack usage diagnostic
     └── UTILS/                          # Utility programs
-        ├── SD_format_card.spin2              # FAT32 card formatter
+        ├── SD_format_card.spin2            # FAT32 card formatter
         ├── SD_card_characterize.spin2      # Card register reader
         ├── SD_speed_characterize.spin2     # SPI speed testing
+        ├── SD_frequency_characterize.spin2 # Sysclk frequency tester
         ├── SD_performance_benchmark.spin2  # Throughput measurement
-        └── SD_FAT32_audit.spin2            # Filesystem validator
+        ├── SD_FAT32_audit.spin2            # Filesystem validator
+        ├── SD_FAT32_fsck.spin2             # Filesystem check & repair
+        ├── isp_format_utility.spin2        # FAT32 format library
+        ├── isp_fsck_utility.spin2          # Combined FSCK + Audit library
+        └── isp_string_fifo.spin2           # Inter-cog string FIFO
 ```
 
 ### Test Runner (`run_test.sh`)

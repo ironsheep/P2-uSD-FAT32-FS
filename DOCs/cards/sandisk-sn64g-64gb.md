@@ -233,4 +233,4 @@ SCR: $02 $45 $84 $87 $00 $00 $00 $00
 - **A2** confirmed by ACMD13 SD Status register (previously known from label only)
 - **CMD_SUPPORT $00** — no CMD20 or CMD23 support
 - **COPY flag = 1** — may indicate factory content was pre-loaded
-- **Full benchmark data** — 350+250 MHz, see tables above and BENCHMARK-RESULTS.md
+- **Full benchmark data** — 350+250 MHz, see tables above and ../Reference/BENCHMARK-RESULTS.md

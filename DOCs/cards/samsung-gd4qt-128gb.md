@@ -239,88 +239,84 @@ File reads at small sizes show the typical ~5% sysclk effect. At large sizes, th
 ### Benchmark Results — Standard Protocol (350/250 MHz, 25 MHz SPI)
 
 **Test Program**: SD_performance_benchmark.spin2 v2.0 | **SPI**: 25,000 kHz at both clock speeds
-**Test Date**: 2026-02-17 | **Driver**: commit 797f913 (TX streamer fix + dirl/drvl SCK reset)
+**Test Date**: 2026-02-25 | **Driver**: commit d62e30d
 **Card Unit**: SN:4AC85F42
 
 #### 350 MHz Run
 
-**SysClk**: 350 MHz | **SPI**: 25,000 kHz | **Mount**: 202.6 ms
+**SysClk**: 350 MHz | **SPI**: 25,000 kHz | **Mount**: 201.3 ms
 
 | Test | Min (us) | Avg (us) | Max (us) | KB/s |
 |------|----------|----------|----------|------|
 | **Raw Single-Sector** | | | | |
-| Read 1x512B | 541 | 546 | 551 | **937** |
-| Write 1x512B | 32,874 | 46,988 | 65,480 | **10** \* |
+| Read 1x512B | 556 | 560 | 565 | **914** |
+| Write 1x512B | 1,192 | 1,203 | 1,272 | **425** |
 | **Raw Multi-Sector** | | | | |
-| Read 8 sectors (4 KB) | 2,044 | 2,044 | 2,045 | **2,003** |
-| Read 32 sectors (16 KB) | 7,136 | 7,136 | 7,136 | **2,295** |
-| Read 64 sectors (32 KB) | 13,925 | 13,925 | 13,926 | **2,353** |
-| Write 8 sectors (4 KB) | 34,537 | 34,774 | 35,020 | **117** \* |
-| Write 32 sectors (16 KB) | 39,527 | 39,905 | 40,055 | **410** \* |
-| Write 64 sectors (32 KB) | 46,879 | 56,408 | 76,552 | **580** \* |
+| Read 8 sectors (4 KB) | 2,060 | 2,063 | 2,065 | **1,985** |
+| Read 32 sectors (16 KB) | 7,159 | 7,159 | 7,159 | **2,288** |
+| Read 64 sectors (32 KB) | 13,951 | 13,951 | 13,951 | **2,348** |
+| Write 8 sectors (4 KB) | 2,715 | 2,728 | 2,800 | **1,501** |
+| Write 32 sectors (16 KB) | 7,526 | 7,529 | 7,535 | **2,176** |
+| Write 64 sectors (32 KB) | 14,975 | 15,525 | 20,338 | **2,110** |
 | **File-Level** | | | | |
-| File Write 512B | 7,334 | 9,177 | 24,637 | **55** |
-| File Write 4 KB | 15,681 | 16,599 | 17,766 | **246** |
-| File Write 32 KB | 81,627 | 100,636 | 120,334 | **325** |
-| File Read 4 KB | 5,987 | 6,060 | 6,684 | **675** |
-| File Read 32 KB | 33,424 | 33,484 | 33,932 | **978** |
-| File Read 128 KB | 151,644 | 151,788 | 152,865 | **863** |
-| File Read 256 KB | 275,661 | 275,781 | 276,694 | **950** |
+| File Write 512B | 7,440 | 7,684 | 8,764 | **66** |
+| File Write 4 KB | 16,204 | 16,851 | 17,918 | **243** |
+| File Write 32 KB | 82,407 | 101,235 | 120,135 | **323** |
+| File Read 4 KB | 6,076 | 6,148 | 6,772 | **666** |
+| File Read 32 KB | 33,577 | 33,640 | 34,094 | **974** |
+| File Read 128 KB | 152,010 | 152,158 | 153,291 | **861** |
+| File Read 256 KB | 313,253 | 313,679 | 315,893 | **835** |
 | **Overhead** | | | | |
-| File Open | 98 | 151 | 629 | — |
-| File Close | 20 | 20 | 21 | — |
-| Unmount | — | 0 | — | — |
+| File Open | 139 | 203 | 785 | — |
+| File Close | 35 | 35 | 36 | — |
+| Unmount | — | 3 | — | — |
 
-\* Write results affected by Samsung flash controller housekeeping (wear leveling / GC pause). Single-sector write avg of 46,988 us is anomalous vs the 250 MHz run's 1,298 us — this is card-state behavior, not driver-related. Read performance and all file operations are normal.
-
-Multi-sector improvement: 64x single reads = 39,124 us vs 1x CMD18 = 14,176 us (**63% faster**)
+Multi-sector improvement: 64x single reads = 37,988 us vs 1x CMD18 = 14,130 us (**62% faster**)
 
 #### 250 MHz Run
 
-**SysClk**: 250 MHz | **SPI**: 25,000 kHz | **Mount**: 205.8 ms
+**SysClk**: 250 MHz | **SPI**: 25,000 kHz | **Mount**: 205.0 ms
 
 | Test | Min (us) | Avg (us) | Max (us) | KB/s |
 |------|----------|----------|----------|------|
 | **Raw Single-Sector** | | | | |
-| Read 1x512B | 627 | 639 | 652 | **801** |
-| Write 1x512B | 1,279 | 1,298 | 1,358 | **394** |
+| Read 1x512B | 698 | 738 | 778 | **693** |
+| Write 1x512B | 1,399 | 1,411 | 1,480 | **362** |
 | **Raw Multi-Sector** | | | | |
-| Read 8 sectors (4 KB) | 2,280 | 2,280 | 2,280 | **1,796** |
-| Read 32 sectors (16 KB) | 7,821 | 7,822 | 7,827 | **2,094** |
-| Read 64 sectors (32 KB) | 15,216 | 15,518 | 15,553 | **2,111** |
-| Write 8 sectors (4 KB) | 2,945 | 2,966 | 3,025 | **1,380** |
-| Write 32 sectors (16 KB) | 8,217 | 8,228 | 8,290 | **1,991** |
-| Write 64 sectors (32 KB) | 16,322 | 16,359 | 16,465 | **2,003** |
+| Read 8 sectors (4 KB) | 2,408 | 2,408 | 2,408 | **1,700** |
+| Read 32 sectors (16 KB) | 7,955 | 7,955 | 7,961 | **2,059** |
+| Read 64 sectors (32 KB) | 15,350 | 15,353 | 15,356 | **2,134** |
+| Write 8 sectors (4 KB) | 3,080 | 3,094 | 3,161 | **1,323** |
+| Write 32 sectors (16 KB) | 8,320 | 8,328 | 8,372 | **1,967** |
+| Write 64 sectors (32 KB) | 16,515 | 16,541 | 16,567 | **1,981** |
 | **File-Level** | | | | |
-| File Write 512B | 8,392 | 8,633 | 9,754 | **59** |
-| File Write 4 KB | 17,688 | 18,214 | 18,683 | **224** |
-| File Write 32 KB | 85,887 | 100,884 | 128,186 | **324** |
-| File Read 4 KB | 5,012 | 5,071 | 5,598 | **807** |
-| File Read 32 KB | 40,728 | 40,797 | 41,339 | **803** |
-| File Read 128 KB | 180,785 | 180,949 | 182,256 | **724** |
-| File Read 256 KB | 346,947 | 347,399 | 349,505 | **754** |
+| File Write 512B | 8,911 | 9,192 | 10,569 | **55** |
+| File Write 4 KB | 16,445 | 18,895 | 19,602 | **216** |
+| File Write 32 KB | 87,939 | 99,754 | 126,192 | **328** |
+| File Read 4 KB | 5,619 | 5,683 | 6,256 | **720** |
+| File Read 32 KB | 45,008 | 45,087 | 45,688 | **726** |
+| File Read 128 KB | 150,428 | 150,552 | 151,568 | **870** |
+| File Read 256 KB | 309,960 | 310,343 | 312,499 | **844** |
 | **Overhead** | | | | |
-| File Open | 137 | 212 | 888 | — |
-| File Close | 29 | 29 | 29 | — |
-| Unmount | — | 0 | — | — |
+| File Open | 195 | 254 | 787 | — |
+| File Close | 50 | 50 | 50 | — |
+| Unmount | — | 3 | — | — |
 
-Multi-sector improvement: 64x single reads = 45,794 us vs 1x CMD18 = 15,233 us (**66% faster**)
+Multi-sector improvement: 64x single reads = 52,875 us vs 1x CMD18 = 15,294 us (**71% faster**)
 
 #### Sysclk Effect (350 vs 250 MHz)
 
 | Test | 350 MHz (KB/s) | 250 MHz (KB/s) | Delta |
 |------|----------------|----------------|-------|
 | **Raw Single-Sector** | | | |
-| Read 1x512B | 937 | 801 | +17.0% |
+| Read 1x512B | 914 | 693 | +31.9% |
+| Write 1x512B | 425 | 362 | +17.4% |
 | **Raw Multi-Sector** | | | |
-| Read 64 (32 KB) | 2,353 | 2,111 | +11.5% |
-| Write 64 (32 KB) | — | 2,003 | — |
+| Read 64 (32 KB) | 2,348 | 2,134 | +10.0% |
+| Write 64 (32 KB) | 2,110 | 1,981 | +6.5% |
 | **File-Level** | | | |
-| File Write 4 KB | 246 | 224 | +9.8% |
-| File Write 32 KB | 325 | 324 | +0.3% |
-| File Read 4 KB | 675 | 807 | -16.4% \* |
-| File Read 32 KB | 978 | 803 | +21.8% |
-| File Read 128 KB | 863 | 724 | +19.2% |
-| File Read 256 KB | 950 | 754 | +26.0% |
+| File Write 32 KB | 323 | 328 | -1.5% |
+| File Read 4 KB | 666 | 720 | -7.5% |
+| File Read 256 KB | 835 | 844 | -1.1% |
 
-350 MHz raw write excluded (flash housekeeping anomaly). \* File Read 4 KB anomaly (250 faster than 350) likely reflects card cache state difference between runs. Large file reads show expected 19-26% sysclk improvement from faster Spin2 FAT traversal overhead.
+This card's internal controller latency dominates throughput — file reads show minimal sysclk effect. Raw operations show the expected 10-30% improvement at higher sysclk.

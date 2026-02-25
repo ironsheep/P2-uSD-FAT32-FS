@@ -68,7 +68,6 @@ Interactive terminal shell for exploring the SD card filesystem. Supports both D
 | `SD_demo_shell.spin2` | Main shell application |
 | `isp_serial_singleton.spin2` | Serial terminal driver (singleton, shared across cogs) |
 | `isp_mem_strings.spin2` | In-memory string formatting utilities |
-| `isp_stack_check.spin2` | Stack usage diagnostic (development only) |
 
 See [DEMO/README.md](DEMO/README.md) for build instructions, command reference, and usage examples.
 
@@ -82,8 +81,6 @@ Standalone utility programs for preparing SD cards for embedded use, diagnosing 
 | **SD_FAT32_audit.spin2** | Filesystem validator (read-only) | No |
 | **SD_FAT32_fsck.spin2** | Filesystem check and repair | Yes |
 | **SD_card_characterize.spin2** | Card register reader (CID/CSD/SCR/OCR) | No |
-| **SD_speed_characterize.spin2** | Maximum SPI speed tester | No |
-| **SD_frequency_characterize.spin2** | Sysclk frequency tester | No |
 | **SD_performance_benchmark.spin2** | Read/write throughput measurement | Yes* |
 
 *Creates temporary test files that are deleted after testing.
@@ -100,17 +97,9 @@ See [UTILS/README.md](UTILS/README.md) for build instructions and detailed docum
 
 ## Building
 
-See the [project README](../README.md) for toolchain and hardware requirements.
+See [Prerequisites](../README.md#prerequisites) for toolchain and hardware requirements.
 
-### Running from tools/ (recommended)
-
-```bash
-cd tools/
-./run_test.sh ../src/DEMO/SD_demo_shell.spin2
-./run_test.sh ../src/UTILS/SD_card_characterize.spin2
-```
-
-### Compile and Run directly
+### Compile and Run
 
 Programs in DEMO/ and UTILS/ use `-I ..` to find the driver in this directory:
 
@@ -126,4 +115,4 @@ pnut-term-ts -r SD_card_characterize.bin
 
 ---
 
-*Part of the [P2-uSD-Study](../README.md) project — Iron Sheep Productions*
+*Part of the [P2 SD Card Driver](../README.md) package — Iron Sheep Productions*

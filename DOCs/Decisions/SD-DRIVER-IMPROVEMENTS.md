@@ -380,7 +380,7 @@ writeSectors(start, count, p_buffer)  ' CMD25 multi-block write
 |------|-------|--------|-------|
 | 2026-01-21 | Issue #6 Smart Pin SPI | 🔄 | Planned for Phase 1 implementation |
 | 2026-01-21 | Issue #7 Multi-Block | 🔄 | Added to Phase 1 scope |
-| 2026-01-21 | Baseline benchmarks | ✅ | Documented in BENCHMARK-RESULTS.md |
+| 2026-01-21 | Baseline benchmarks | ✅ | Documented in Reference/BENCHMARK-RESULTS.md |
 
 ---
 
@@ -389,5 +389,5 @@ writeSectors(start, count, p_buffer)  ' CMD25 multi-block write
 - Microsoft FAT32 File System Specification v1.03
 - SD Physical Layer Simplified Specification v9.10
 - OB4269-FAT32-COMPLIANCE-ANALYSIS.md (detailed spec analysis)
-- DOCs/Plans/PHASE1-SMARTPIN-SPI.md (implementation plan)
-- DOCs/BENCHMARK-RESULTS.md (baseline performance data)
+- DOCs/Plans/Archive/PHASE1-SMARTPIN-SPI.md (implementation plan)
+- DOCs/Reference/BENCHMARK-RESULTS.md (baseline performance data)

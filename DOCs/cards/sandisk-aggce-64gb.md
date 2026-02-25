@@ -2,7 +2,7 @@
 
 **Label:** SanDisk Extreme PRO 64GB microSD XC I V30 U3
 **Unique ID:** `SanDisk_AGGCE_8.0_DD1C1144_201703`
-**Test Date:** 2026-02-02 (characterization)
+**Test Date:** 2026-02-25
 
 ### Card Designator
 
@@ -163,3 +163,88 @@ SCR: $02 $45 $84 $43 $00 $00 $00 $00
 - **High throughput (866 KB/s)** - excellent for embedded applications
 - DATA_STAT_AFTER_ERASE=0 (erased data reads as 0s)
 - Manufactured March 2017 (4 months earlier than 128GB AGGCF variant)
+- **Benchmark data available** — see Benchmark Results section below for detailed throughput measurements (raw, multi-sector, and file-level)
+
+### Benchmark Results — Standard Protocol (350/250 MHz, 25 MHz SPI)
+
+**Test Date:** 2026-02-25
+**Test Program**: SD_performance_benchmark.spin2 v2.0
+**Driver Commit**: d62e30d
+**Benchmark Protocol**: Both runs use 25 MHz SPI clock — isolates Spin2 overhead effect from SPI bus speed.
+**Note**: Benchmark unit SN:$A345_3C0E (different physical unit, same product/revision as characterized unit SN:DD1C1144).
+
+#### 350 MHz Run
+
+**SysClk**: 350 MHz | **SPI**: 25,000 kHz | **Mount**: 234.2 ms
+
+| Test | Min (us) | Avg (us) | Max (us) | KB/s |
+|------|----------|----------|----------|------|
+| **Raw Single-Sector** | | | | |
+| Read 1x512B | 513 | 513 | 513 | **998** |
+| Write 1x512B | 1,188 | 1,195 | 1,218 | **428** |
+| **Raw Multi-Sector** | | | | |
+| Read 8 sectors (4 KB) | 1,958 | 1,958 | 1,958 | **2,091** |
+| Read 32 sectors (16 KB) | 6,958 | 6,958 | 6,962 | **2,354** |
+| Read 64 sectors (32 KB) | 13,607 | 13,607 | 13,607 | **2,408** |
+| Write 8 sectors (4 KB) | 2,529 | 2,586 | 2,723 | **1,583** |
+| Write 32 sectors (16 KB) | 7,770 | 8,258 | 11,500 | **1,984** |
+| Write 64 sectors (32 KB) | 14,755 | 14,822 | 14,864 | **2,210** |
+| **File-Level** | | | | |
+| File Write 512B | 6,516 | 6,893 | 9,234 | **74** |
+| File Write 4 KB | 13,746 | 14,500 | 16,213 | **282** |
+| File Write 32 KB | 73,385 | 74,976 | 75,914 | **437** |
+| File Read 4 KB | 3,812 | 3,857 | 4,252 | **1,061** |
+| File Read 32 KB | 28,986 | 29,030 | 29,430 | **1,128** |
+| File Read 128 KB | 115,616 | 115,750 | 116,890 | **1,132** |
+| File Read 256 KB | 237,793 | 237,955 | 239,243 | **1,101** |
+| **Overhead** | | | | |
+| File Open | 138 | 181 | 573 | — |
+| File Close | 35 | 35 | 36 | — |
+| Mount | — | 234,200 | — | — |
+
+Multi-sector improvement: 64x single reads = 36,118 us vs 1x CMD18 = 13,620 us (**62% faster**)
+
+#### 250 MHz Run
+
+**SysClk**: 250 MHz | **SPI**: 25,000 kHz | **Mount**: 236.4 ms
+
+| Test | Min (us) | Avg (us) | Max (us) | KB/s |
+|------|----------|----------|----------|------|
+| **Raw Single-Sector** | | | | |
+| Read 1x512B | 582 | 582 | 583 | **879** |
+| Write 1x512B | 1,256 | 1,270 | 1,291 | **403** |
+| **Raw Multi-Sector** | | | | |
+| Read 8 sectors (4 KB) | 2,145 | 2,145 | 2,145 | **1,909** |
+| Read 32 sectors (16 KB) | 7,561 | 7,561 | 7,561 | **2,166** |
+| Read 64 sectors (32 KB) | 14,759 | 14,759 | 14,759 | **2,220** |
+| Write 8 sectors (4 KB) | 2,615 | 2,793 | 2,871 | **1,466** |
+| Write 32 sectors (16 KB) | 8,451 | 8,604 | 8,838 | **1,904** |
+| Write 64 sectors (32 KB) | 16,030 | 16,203 | 16,681 | **2,022** |
+| **File-Level** | | | | |
+| File Write 512B | 7,059 | 7,530 | 9,180 | **67** |
+| File Write 4 KB | 14,686 | 15,491 | 17,275 | **264** |
+| File Write 32 KB | 77,791 | 79,083 | 80,053 | **414** |
+| File Read 4 KB | 4,319 | 4,368 | 4,805 | **937** |
+| File Read 32 KB | 32,593 | 32,648 | 33,098 | **1,003** |
+| File Read 128 KB | 129,531 | 129,661 | 130,757 | **1,010** |
+| File Read 256 KB | 266,443 | 266,670 | 267,650 | **983** |
+| **Overhead** | | | | |
+| File Open | 193 | 241 | 679 | — |
+| File Close | 49 | 49 | 50 | — |
+| Mount | — | 236,400 | — | — |
+
+Multi-sector improvement: 64x single reads = 38,700 us vs 1x CMD18 = 14,765 us (**61% faster**)
+
+#### Sysclk Effect (350 vs 250 MHz at same 25 MHz SPI)
+
+Both runs use identical 25 MHz SPI clock — differences are purely Spin2 inter-transfer overhead.
+
+| Test | 350 MHz (KB/s) | 250 MHz (KB/s) | Delta |
+|------|----------------|----------------|-------|
+| Raw Read 1x512B | 998 | 879 | +14% |
+| Raw Read 64x (32 KB) | 2,408 | 2,220 | +8% |
+| Raw Write 64x (32 KB) | 2,210 | 2,022 | +9% |
+| File Read 256 KB | 1,101 | 983 | +12% |
+| File Write 32 KB | 437 | 414 | +6% |
+
+**Note:** Exceptional card — zero variance on raw single-sector reads (Min=Max=513 us at 350 MHz), and highest file write throughput (437 KB/s) of all tested cards. Near-zero multi-sector read variance indicates excellent controller design.

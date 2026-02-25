@@ -22,7 +22,7 @@ This project provides a robust, high-performance SD card driver for the P2 micro
 - **File Operations**: Create, open, read, write, seek, rename, delete
 - **Multi-Cog Safe**: Dedicated worker cog with hardware lock serialization
 - **Per-Cog Working Directory**: Each cog maintains its own CWD for safe concurrent navigation
-- **Regression Tested**: 263+ automated tests across 11 core test suites verify mount, file operations, directory navigation, read/write, seek, multi-cog, multi-handle, multi-block, raw sector, format, and subdirectory cache coherence scenarios
+- **Regression Tested**: 345+ automated tests across 19 test suites verify mount, file operations, directory navigation, read/write, seek, multi-cog, multi-handle, multi-block, raw sector, format, subdirectory operations, volume management, register access, speed control, CRC diagnostics, and more
 
 ## Hardware Requirements
 
@@ -149,7 +149,7 @@ Use `readDirectory()` for simple CWD listing. Use `openDirectory()`/`readDirecto
 - **[Driver Theory of Operations](DOCs/SD-CARD-DRIVER-THEORY.md)** - Architecture, handle system, SPI, and internals
 - **[Driver Tutorial](DOCs/SD-CARD-DRIVER-TUTORIAL.md)** - Complete guide with practical examples
 - **[Regression Testing](regression-tests/README.md)** - Test infrastructure and validation
-- **[Card Catalog](DOCs/CARD-CATALOG.md)** - Tested SD cards with performance data
+- **[Card Catalog](DOCs/cards/CARD-CATALOG.md)** - Tested SD cards with performance data
 - **[Utilities Guide](DOCs/UTILITIES.md)** - Standalone utility programs
 - **[Utility Internals](DOCs/Utils/)** - Theory of operations for each utility
 
@@ -161,26 +161,50 @@ P2-uSD-Study/
 │   ├── micro_sd_fat32_fs.spin2     # The SD card driver
 │   ├── UTILS/                      # Standalone utility programs
 │   │   ├── SD_format_card.spin2           # FAT32 card formatter
-│   │   ├── SD_card_characterize.spin2  # Card register reader (CID/CSD/SCR)
-│   │   ├── SD_speed_characterize.spin2 # Maximum SPI speed tester
-│   │   ├── SD_FAT32_audit.spin2        # Filesystem validator (read-only)
-│   │   ├── SD_FAT32_fsck.spin2         # Filesystem check & repair
-│   │   ├── SD_performance_benchmark.spin2  # Read/write throughput bench
-│   │   ├── isp_format_utility.spin2    # FAT32 format library
-│   │   ├── isp_fsck_utility.spin2      # Combined FSCK + Audit library
-│   │   └── isp_string_fifo.spin2       # Inter-cog string FIFO
+│   │   ├── SD_card_characterize.spin2     # Card register reader (CID/CSD/SCR)
+│   │   ├── SD_speed_characterize.spin2    # Maximum SPI speed tester
+│   │   ├── SD_frequency_characterize.spin2 # Sysclk frequency tester
+│   │   ├── SD_FAT32_audit.spin2           # Filesystem validator (read-only)
+│   │   ├── SD_FAT32_fsck.spin2            # Filesystem check & repair
+│   │   ├── SD_performance_benchmark.spin2 # Read/write throughput bench
+│   │   ├── isp_format_utility.spin2       # FAT32 format library
+│   │   ├── isp_fsck_utility.spin2         # Combined FSCK + Audit library
+│   │   └── isp_string_fifo.spin2          # Inter-cog string FIFO
 │   └── DEMO/                       # Interactive demo application
-│       └── SD_demo_shell.spin2         # Terminal shell (dir, cd, type, etc.)
+│       ├── SD_demo_shell.spin2         # Terminal shell (dir, cd, type, etc.)
+│       ├── isp_serial_singleton.spin2  # Serial terminal driver
+│       ├── isp_mem_strings.spin2       # String formatting utilities
+│       └── isp_stack_check.spin2       # Stack usage diagnostic
 │
-├── regression-tests/           # Regression test suite
-│   ├── SD_RT_*.spin2               # Test files (mount, file ops, seek, etc.)
-│   └── isp_rt_utilities.spin2      # Shared test framework
+├── regression-tests/           # Regression test suite (345+ tests)
+│   ├── SD_RT_*_tests.spin2        # 19 test files (mount, file ops, seek, etc.)
+│   ├── isp_rt_utilities.spin2     # Shared test framework
+│   └── TestCard/                  # Test card setup and validation
+│
+├── diagnostic-tests/           # Characterization & diagnostic tests
+│   ├── SD_card_info_tests.spin2       # Struct-based register access
+│   ├── SD_freq_sweep_tests.spin2      # SPI frequency sweep (15-25 MHz)
+│   └── SD_spi_limit_test.spin2        # Single SPI frequency probe
 │
 ├── tools/                      # Build and test scripts
 │   ├── run_test.sh                 # Test runner (compile + download + capture)
 │   └── logs/                       # Test output logs
 │
-├── DOCs/                       # Documentation, tutorials, analysis
+├── DOCs/                       # Documentation
+│   ├── SD-CARD-DRIVER-TUTORIAL.md   # Complete guide with examples
+│   ├── SD-CARD-DRIVER-THEORY.md     # Architecture and driver internals
+│   ├── SD-CARD-PERFORMANCE.md       # Card selection and performance rankings
+│   ├── FAT32-API-CONCEPTS-REFERENCE.md  # FAT32 API background
+│   ├── UTILITIES.md                 # Utility program documentation
+│   ├── Analysis/                    # Design explorations and studies
+│   ├── Archive/                     # Superseded documents
+│   ├── cards/                       # Per-card data sheets and catalog
+│   ├── Decisions/                   # Architecture decision records
+│   ├── Plans/                       # Active plans and punch list
+│   ├── Reference/                   # Technical references and guides
+│   ├── Research/                    # Hardware research and investigations
+│   └── Utils/                       # Utility theory of operations
+│
 └── REF/                        # Reference material and external code
 ```
 
@@ -212,7 +236,7 @@ Single-sector read throughput (internal card controller speed) varies widely:
 | SanDisk Industrial 16GB | 792 KB/s | -- |
 | PNY 16GB | 734 KB/s | -- |
 
-Performance varies significantly by card controller, not just speed class rating. 20 cards tested across 9 manufacturers. See [Card Catalog](DOCs/CARD-CATALOG.md) for detailed characterization and [Benchmark Results](DOCs/BENCHMARK-RESULTS.md) for full cross-card comparisons at 350 and 250 MHz.
+Performance varies significantly by card controller, not just speed class rating. 20 cards tested across 9 manufacturers. See [Card Catalog](DOCs/cards/CARD-CATALOG.md) for detailed characterization and [Benchmark Results](DOCs/Reference/BENCHMARK-RESULTS.md) for full cross-card comparisons at 350 and 250 MHz.
 
 ## API Overview
 
@@ -296,7 +320,7 @@ See [`src/DEMO/README.md`](src/DEMO/README.md) for full build and usage document
 
 ## Testing
 
-The driver is validated by **263+ automated regression tests** across 11 core test suites, all running on real P2 hardware with actual SD cards:
+The driver is validated by **345+ automated regression tests** across 19 test suites, all running on real P2 hardware with actual SD cards:
 
 | Test Suite | Tests | Coverage |
 |------------|-------|----------|

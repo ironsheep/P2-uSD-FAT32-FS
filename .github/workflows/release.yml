@@ -49,63 +49,52 @@ jobs:
         run: |
           DEST="${{ steps.version.outputs.FOLDER_NAME }}"
 
-          # Root documentation
+          # Root files
           mkdir -p "${DEST}"
-          cp src/README.md "${DEST}/README.md"
+          cp .release/README.md "${DEST}/README.md"
           cp LICENSE "${DEST}/"
           cp CHANGELOG.md "${DEST}/"
-          cp DOCs/BENCHMARK-RESULTS.md "${DEST}/"
-          cp DOCs/CARD-CATALOG.md "${DEST}/"
-          cp -r DOCs/cards "${DEST}/cards"
-          cp DOCs/FAT32-API-CONCEPTS-REFERENCE.md "${DEST}/"
-          cp DOCs/SD-CARD-DRIVER-THEORY.md "${DEST}/"
           cp DOCs/SD-CARD-DRIVER-TUTORIAL.md "${DEST}/"
-          cp DOCs/SD-CARD-SPI-COMPATIBILITY.md "${DEST}/"
+
+          # DOCs/ - reference documentation
+          mkdir -p "${DEST}/DOCs"
+          cp DOCs/FAT32-API-CONCEPTS-REFERENCE.md "${DEST}/DOCs/"
+          cp DOCs/SD-CARD-DRIVER-THEORY.md "${DEST}/DOCs/"
+          cp DOCs/SD-CARD-PERFORMANCE.md "${DEST}/DOCs/"
+
+          # DOCs/images/ - card photos for purchase recommendations
+          mkdir -p "${DEST}/DOCs/images"
+          cp DOCs/images/amazon-basics-2x-64gb.jpg "${DEST}/DOCs/images/"
+          cp DOCs/images/favorite-holder.jpg "${DEST}/DOCs/images/"
+          cp DOCs/images/lexar-blue-128gb.jpg "${DEST}/DOCs/images/"
+          cp DOCs/images/lexar-red-2x-64gb.jpg "${DEST}/DOCs/images/"
+          cp DOCs/images/lexar-red-5x-32gb.jpg "${DEST}/DOCs/images/"
+          cp DOCs/images/samsug-pro-128gb.jpg "${DEST}/DOCs/images/"
+          cp DOCs/images/wd-purple-64gb.jpg "${DEST}/DOCs/images/"
 
           # src/ - driver
           mkdir -p "${DEST}/src"
+          cp .release/src/README.md "${DEST}/src/README.md"
           cp src/micro_sd_fat32_fs.spin2 "${DEST}/src/"
 
           # src/DEMO/ - demo shell and support files
           mkdir -p "${DEST}/src/DEMO"
-          cp src/DEMO/README.md "${DEST}/src/DEMO/"
+          cp .release/src/DEMO/README.md "${DEST}/src/DEMO/README.md"
           cp src/DEMO/SD_demo_shell.spin2 "${DEST}/src/DEMO/"
           cp src/DEMO/isp_serial_singleton.spin2 "${DEST}/src/DEMO/"
           cp src/DEMO/isp_mem_strings.spin2 "${DEST}/src/DEMO/"
 
-          # src/UTILS/ - utility programs
+          # src/UTILS/ - utility programs and support libraries
           mkdir -p "${DEST}/src/UTILS"
-          cp src/UTILS/README.md "${DEST}/src/UTILS/"
-          cp src/UTILS/isp_format_utility.spin2 "${DEST}/src/UTILS/"
+          cp .release/src/UTILS/README.md "${DEST}/src/UTILS/README.md"
           cp src/UTILS/SD_format_card.spin2 "${DEST}/src/UTILS/"
+          cp src/UTILS/isp_format_utility.spin2 "${DEST}/src/UTILS/"
           cp src/UTILS/SD_card_characterize.spin2 "${DEST}/src/UTILS/"
-          cp src/UTILS/SD_speed_characterize.spin2 "${DEST}/src/UTILS/"
-          cp src/UTILS/SD_frequency_characterize.spin2 "${DEST}/src/UTILS/"
           cp src/UTILS/SD_performance_benchmark.spin2 "${DEST}/src/UTILS/"
           cp src/UTILS/SD_FAT32_audit.spin2 "${DEST}/src/UTILS/"
           cp src/UTILS/SD_FAT32_fsck.spin2 "${DEST}/src/UTILS/"
-
-          # regression-tests/ - test framework and test files
-          mkdir -p "${DEST}/regression-tests"
-          cp regression-tests/README.md "${DEST}/regression-tests/"
-          cp regression-tests/isp_rt_utilities.spin2 "${DEST}/regression-tests/"
-          cp regression-tests/SD_RT_mount_tests.spin2 "${DEST}/regression-tests/"
-          cp regression-tests/SD_RT_file_ops_tests.spin2 "${DEST}/regression-tests/"
-          cp regression-tests/SD_RT_read_write_tests.spin2 "${DEST}/regression-tests/"
-          cp regression-tests/SD_RT_directory_tests.spin2 "${DEST}/regression-tests/"
-          cp regression-tests/SD_RT_seek_tests.spin2 "${DEST}/regression-tests/"
-          cp regression-tests/SD_RT_format_tests.spin2 "${DEST}/regression-tests/"
-          cp regression-tests/SD_RT_multiblock_tests.spin2 "${DEST}/regression-tests/"
-          cp regression-tests/SD_RT_multicog_tests.spin2 "${DEST}/regression-tests/"
-          cp regression-tests/SD_RT_multihandle_tests.spin2 "${DEST}/regression-tests/"
-          cp regression-tests/SD_RT_raw_sector_tests.spin2 "${DEST}/regression-tests/"
-          cp regression-tests/SD_RT_error_handling_tests.spin2 "${DEST}/regression-tests/"
-
-          # regression-tests/TestCard/ - test card validation and data files
-          mkdir -p "${DEST}/regression-tests/TestCard"
-          cp regression-tests/TestCard/SD_RT_testcard_validation.spin2 "${DEST}/regression-tests/TestCard/"
-          cp regression-tests/TestCard/TEST-CARD-SPECIFICATION.md "${DEST}/regression-tests/TestCard/"
-          cp -r regression-tests/TestCard/TESTROOT "${DEST}/regression-tests/TestCard/TESTROOT"
+          cp src/UTILS/isp_fsck_utility.spin2 "${DEST}/src/UTILS/"
+          cp src/UTILS/isp_string_fifo.spin2 "${DEST}/src/UTILS/"
 
           # Remove any macOS artifacts
           find "${DEST}" -name '.DS_Store' -delete

@@ -180,8 +180,11 @@ mkdir -p "./logs"
 BEFORE_TIME=$(date +%s)
 
 # Run pnut-term-ts in headless mode
+RUN_START=$(date +%s)
 pnut-term-ts --headless -r "$BIN_FILE" -b 2000000 --end-marker --timeout "$TIMEOUT_SECS"
 PNUT_EXIT_CODE=$?
+RUN_END=$(date +%s)
+RUN_ELAPSED=$((RUN_END - RUN_START))
 
 echo ""
 
@@ -210,13 +213,13 @@ fi
 
 case $PNUT_EXIT_CODE in
     0)
-        echo -e "${GREEN}=== TEST PASSED (END_SESSION detected) ===${NC}"
+        echo -e "${GREEN}=== TEST PASSED (END_SESSION detected) [${RUN_ELAPSED}s elapsed] ===${NC}"
         ;;
     124)
-        echo -e "${RED}=== TEST FAILED (Timeout after ${TIMEOUT_SECS}s) ===${NC}"
+        echo -e "${RED}=== TEST FAILED (Timeout after ${TIMEOUT_SECS}s) [${RUN_ELAPSED}s elapsed] ===${NC}"
         ;;
     *)
-        echo -e "${RED}=== TEST FAILED (Exit code: $PNUT_EXIT_CODE) ===${NC}"
+        echo -e "${RED}=== TEST FAILED (Exit code: $PNUT_EXIT_CODE) [${RUN_ELAPSED}s elapsed] ===${NC}"
         ;;
 esac
 

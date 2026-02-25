@@ -2,7 +2,7 @@
 
 **Label:** Gigastone 10x High Endurance 16GB MLC microSD HC I U3 V30 4K
 **Unique ID:** `BudgetOEM_SD16G_2.0_000003FB_202502`
-**Test Date:** 2026-02-02 (characterization)
+**Test Date:** 2026-02-25 (characterization + benchmark)
 
 ### Card Designator
 
@@ -182,80 +182,85 @@ SCR: $02 $B5 $80 $43 $00 $00 $00 $00
 - MLC flash may prioritize endurance over raw speed
 - **Benchmark data available** — see Benchmark Results section below; slowest card tested (file write 32 KB at 105 KB/s, raw single-sector write latency 3.6 ms)
 
-### Benchmark Results (Smart Pin SPI + Multi-Sector)
+### Benchmark Results — Standard Protocol (350/250 MHz, 25 MHz SPI)
 
-**Test Program**: SD_performance_benchmark.spin2 v2.0 | **SPI**: ~22.8 kHz @ 320 MHz, ~22.5 kHz @ 270 MHz
+**Test Date:** 2026-02-25
+**Test Program**: SD_performance_benchmark.spin2 v2.0
+**Driver Commit**: d62e30d
+**Benchmark Protocol**: Both runs use 25 MHz SPI clock — isolates Spin2 overhead effect from SPI bus speed.
 
-#### 320 MHz Run
+#### 350 MHz Run
 
-**SysClk**: 320 MHz | **SPI**: 22,857 kHz | **Mount**: 203.0 ms
-
-| Test | Min (us) | Avg (us) | Max (us) | KB/s |
-|------|----------|----------|----------|------|
-| **Raw Single-Sector** | | | | |
-| Read 1x512B | 887 | 906 | 1,072 | **565** |
-| Write 1x512B | 3,456 | 3,601 | 4,171 | **142** |
-| **Raw Multi-Sector** | | | | |
-| Read 8 sectors (4 KB) | 2,687 | 2,708 | 2,872 | **1,512** |
-| Read 32 sectors (16 KB) | 8,859 | 8,878 | 9,044 | **1,845** |
-| Read 64 sectors (32 KB) | 17,088 | 17,110 | 17,273 | **1,915** |
-| Write 8 sectors (4 KB) | 5,173 | 5,390 | 6,028 | **759** |
-| Write 32 sectors (16 KB) | 11,211 | 11,294 | 11,930 | **1,450** |
-| Write 64 sectors (32 KB) | 18,924 | 19,621 | 25,085 | **1,670** |
-| **File-Level** | | | | |
-| File Write 512B | 20,607 | 22,072 | 28,404 | **23** |
-| File Write 4 KB | 46,168 | 46,545 | 47,058 | **88** |
-| File Write 32 KB | 296,680 | 310,332 | 380,277 | **105** |
-| File Read 4 KB | 6,129 | 6,221 | 7,047 | **658** |
-| File Read 32 KB | 54,665 | 54,835 | 56,337 | **597** |
-| File Read 128 KB | 208,092 | 208,292 | 209,816 | **629** |
-| File Read 256 KB | 414,901 | 415,200 | 417,118 | **631** |
-| **Overhead** | | | | |
-| File Open | 95 | 186 | 1,013 | — |
-| File Close | 22 | 22 | 22 | — |
-| Mount | — | 203,000 | — | — |
-
-Multi-sector improvement: 64x single reads = 57,030 us vs 1x CMD18 = 17,088 us (**70% faster**)
-
-#### 270 MHz Run
-
-**SysClk**: 270 MHz | **SPI**: 22,500 kHz | **Mount**: 204.3 ms
+**SysClk**: 350 MHz | **SPI**: 25,000 kHz | **Mount**: 202.0 ms
 
 | Test | Min (us) | Avg (us) | Max (us) | KB/s |
 |------|----------|----------|----------|------|
 | **Raw Single-Sector** | | | | |
-| Read 1x512B | 923 | 941 | 1,104 | **544** |
-| Write 1x512B | 3,488 | 3,634 | 4,205 | **140** |
+| Read 1x512B | 870 | 888 | 1,054 | **576** |
+| Write 1x512B | 3,405 | 3,565 | 4,142 | **143** |
 | **Raw Multi-Sector** | | | | |
-| Read 8 sectors (4 KB) | 2,839 | 2,857 | 3,020 | **1,433** |
-| Read 32 sectors (16 KB) | 9,407 | 9,425 | 9,589 | **1,738** |
-| Read 64 sectors (32 KB) | 18,165 | 18,183 | 18,347 | **1,802** |
-| Write 8 sectors (4 KB) | 5,311 | 5,459 | 6,049 | **750** |
-| Write 32 sectors (16 KB) | 11,561 | 11,705 | 12,277 | **1,399** |
-| Write 64 sectors (32 KB) | 19,731 | 19,917 | 20,452 | **1,645** |
+| Read 8 sectors (4 KB) | 2,512 | 2,531 | 2,696 | **1,618** |
+| Read 32 sectors (16 KB) | 8,144 | 8,162 | 8,328 | **2,007** |
+| Read 64 sectors (32 KB) | 15,653 | 15,671 | 15,837 | **2,090** |
+| Write 8 sectors (4 KB) | 4,979 | 5,210 | 5,725 | **786** |
+| Write 32 sectors (16 KB) | 10,377 | 10,459 | 11,119 | **1,566** |
+| Write 64 sectors (32 KB) | 17,449 | 17,536 | 18,165 | **1,868** |
 | **File-Level** | | | | |
-| File Write 512B | 20,644 | 21,574 | 22,150 | **23** |
-| File Write 4 KB | 46,641 | 56,020 | 128,008 | **73** |
-| File Write 32 KB | 299,025 | 312,727 | 384,028 | **104** |
-| File Read 4 KB | 6,374 | 6,468 | 7,318 | **633** |
-| File Read 32 KB | 55,549 | 55,718 | 57,240 | **588** |
-| File Read 128 KB | 213,018 | 213,187 | 214,709 | **614** |
-| File Read 256 KB | 425,880 | 426,049 | 427,570 | **615** |
+| File Write 512B | 21,107 | 22,492 | 28,046 | **22** |
+| File Write 4 KB | 45,946 | 47,101 | 54,986 | **86** |
+| File Write 32 KB | 292,665 | 298,016 | 301,634 | **109** |
+| File Read 4 KB | 6,885 | 6,974 | 7,776 | **587** |
+| File Read 32 KB | 53,186 | 53,345 | 54,780 | **614** |
+| File Read 128 KB | 199,600 | 199,806 | 201,255 | **655** |
+| File Read 256 KB | 397,126 | 397,433 | 398,929 | **659** |
 | **Overhead** | | | | |
-| File Open | 113 | 206 | 1,051 | — |
-| File Close | 26 | 26 | 27 | — |
-| Mount | — | 204,300 | — | — |
+| File Open | 138 | 227 | 1,028 | — |
+| File Close | 35 | 35 | 36 | — |
+| Mount | — | 202,000 | — | — |
 
-Multi-sector improvement: 64x single reads = 59,351 us vs 1x CMD18 = 18,165 us (**69% faster**)
+Multi-sector improvement: 64x single reads = 56,069 us vs 1x CMD18 = 15,653 us (**72% faster**)
 
-#### Sysclk Effect (320 vs 270 MHz)
+#### 250 MHz Run
 
-| Test | 320 MHz (KB/s) | 270 MHz (KB/s) | Delta |
+**SysClk**: 250 MHz | **SPI**: 25,000 kHz | **Mount**: 204.1 ms
+
+| Test | Min (us) | Avg (us) | Max (us) | KB/s |
+|------|----------|----------|----------|------|
+| **Raw Single-Sector** | | | | |
+| Read 1x512B | 938 | 956 | 1,123 | **535** |
+| Write 1x512B | 3,475 | 3,628 | 4,189 | **141** |
+| **Raw Multi-Sector** | | | | |
+| Read 8 sectors (4 KB) | 2,771 | 2,790 | 2,956 | **1,468** |
+| Read 32 sectors (16 KB) | 9,056 | 9,075 | 9,242 | **1,805** |
+| Read 64 sectors (32 KB) | 17,437 | 17,455 | 17,622 | **1,877** |
+| Write 8 sectors (4 KB) | 5,375 | 5,487 | 5,934 | **746** |
+| Write 32 sectors (16 KB) | 11,176 | 11,307 | 11,891 | **1,449** |
+| Write 64 sectors (32 KB) | 18,989 | 19,134 | 19,703 | **1,712** |
+| **File-Level** | | | | |
+| File Write 512B | 20,664 | 21,630 | 21,979 | **23** |
+| File Write 4 KB | 46,525 | 47,222 | 48,218 | **86** |
+| File Write 32 KB | 294,892 | 301,778 | 308,079 | **108** |
+| File Read 4 KB | 7,381 | 7,475 | 8,315 | **547** |
+| File Read 32 KB | 56,560 | 56,728 | 58,245 | **577** |
+| File Read 128 KB | 211,369 | 211,538 | 213,054 | **619** |
+| File Read 256 KB | 424,131 | 424,609 | 426,177 | **617** |
+| **Overhead** | | | | |
+| File Open | 193 | 286 | 1,126 | — |
+| File Close | 50 | 50 | 50 | — |
+| Mount | — | 204,100 | — | — |
+
+Multi-sector improvement: 64x single reads = 60,329 us vs 1x CMD18 = 17,437 us (**71% faster**)
+
+#### Sysclk Effect (350 vs 250 MHz at same 25 MHz SPI)
+
+Both runs use identical 25 MHz SPI clock — differences are purely Spin2 inter-transfer overhead.
+
+| Test | 350 MHz (KB/s) | 250 MHz (KB/s) | Delta |
 |------|----------------|----------------|-------|
-| Raw Read 1x512B | 565 | 544 | -3.7% |
-| Raw Read 64x (32 KB) | 1,915 | 1,802 | -5.9% |
-| Raw Write 64x (32 KB) | 1,670 | 1,645 | -1.5% |
-| File Read 256 KB | 631 | 615 | -2.5% |
-| File Write 32 KB | 105 | 104 | -1.0% |
+| Raw Read 1x512B | 576 | 535 | +8% |
+| Raw Read 64x (32 KB) | 2,090 | 1,877 | +11% |
+| Raw Write 64x (32 KB) | 1,868 | 1,712 | +9% |
+| File Read 256 KB | 659 | 617 | +7% |
+| File Write 32 KB | 109 | 108 | +1% |
 
-Slowest card tested. File write 32 KB at 105 KB/s is 3.5x slower than the Gigastone Camera Plus (367 KB/s) and 4.8x slower than the Lexar (501 KB/s). Raw single-sector write latency (3,601 us) is 2.8x higher than the Gigastone Camera Plus (1,274 us), indicating a very slow internal flash controller. The 70% multi-sector improvement is the highest observed, because single-sector command overhead is proportionally larger on this slow card. Sysclk effect is muted (1-6%) since the card controller latency dominates.
+**Note:** Slowest card tested. File write 32 KB at 109 KB/s — budget OEM flash controller dominates latency. The 72% multi-sector improvement is the highest observed, because single-sector command overhead is proportionally larger on this slow card. Sysclk effect is muted for file writes (1%) since card controller latency dominates.

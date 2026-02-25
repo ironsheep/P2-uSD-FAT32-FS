@@ -242,4 +242,4 @@ SCR: $02 $05 $84 $87 $00 $00 $00 $00
   - Best raw write 64x: 2,319 KB/s (beats Lexar Blue's 2,275 KB/s)
   - Near-best file read: 1,419 KB/s (close to Lexar Blue's 1,444 KB/s)
 - **Low multi-sector gain (46%)** — because single-sector performance is already fast (fast internal controller), batching provides less relative improvement
-- **Full benchmark data** — 350+250 MHz, see tables above and BENCHMARK-RESULTS.md
+- **Full benchmark data** — 350+250 MHz, see tables above and ../Reference/BENCHMARK-RESULTS.md

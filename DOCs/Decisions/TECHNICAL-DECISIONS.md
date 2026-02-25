@@ -340,7 +340,7 @@ SETSE2  #%001 << 6 + miso_pin       ' SE2 = IN rises on miso_pin
 
 **What Changed**:
 
-After establishing baseline benchmarks (see `DOCs/BENCHMARK-RESULTS.md`), we found:
+After establishing baseline benchmarks (see `DOCs/Reference/BENCHMARK-RESULTS.md`), we found:
 - Current implementation achieves only 60% efficiency (1.5 MB/s vs 2.5 MB/s theoretical)
 - Sysclk independence is valuable for users running different clock frequencies
 - Card characterization completed - we have test coverage for implementation changes

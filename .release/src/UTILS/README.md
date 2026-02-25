@@ -1,35 +1,46 @@
 # SD Card Driver Utilities
 
-This document describes the standalone utility programs included with the P2 SD Card Driver. These utilities help with card formatting, characterization, performance testing, and filesystem validation.
+Standalone utility programs for preparing SD cards for embedded use, diagnosing filesystem problems, and characterizing untested cards.
 
 ## Overview
 
-The utilities are located in `src/UTILS/` and can be run independently using the test runner from the `tools/` directory.
+The primary utilities are for **card preparation and recovery**: formatting a card for use, validating the filesystem after normal operation, and repairing corruption after unexpected events like power loss during a write.
+
+The characterization and benchmark utilities are for **evaluating untested cards** — identifying a card's registers and measuring its throughput when you're working with a card model that hasn't been used with the driver before.
 
 ### Utility Summary
 
 | Utility | Purpose | Destructive? |
 |---------|---------|:------------:|
-| **SD_format_card.spin2** | FAT32 card formatter (standalone) | Yes |
-| **SD_card_characterize.spin2** | Card register reader | No |
-| **SD_speed_characterize.spin2** | SPI speed tester | No |
-| **SD_frequency_characterize.spin2** | Sysclk frequency tester | No |
-| **SD_performance_benchmark.spin2** | Throughput measurement | Yes* |
-| **SD_FAT32_audit.spin2** | Filesystem validator | No |
+| **SD_format_card.spin2** | FAT32 card formatter | Yes |
+| **SD_FAT32_audit.spin2** | Filesystem validator (read-only) | No |
 | **SD_FAT32_fsck.spin2** | Filesystem check & repair | Yes |
+| **SD_card_characterize.spin2** | Card register reader | No |
+| **SD_performance_benchmark.spin2** | Throughput measurement | Yes* |
 
 *Creates temporary test files that are deleted after testing.
 
 ---
 
-## Running Utilities
+## Building and Running Utilities
 
-All utilities are run from the `tools/` directory using the test runner:
+See [Prerequisites](../../README.md#prerequisites) for toolchain and hardware requirements.
+
+### Compile and Run
+
+From this `UTILS/` directory:
 
 ```bash
-cd tools/
-./run_test.sh ../src/UTILS/<utility>.spin2 [-t timeout]
+# Simple utilities (only need driver path)
+pnut-ts -d -I .. <utility>.spin2
+pnut-term-ts -r <utility>.bin
+
+# Utilities that use format or fsck libraries (also need DEMO/ for isp_mem_strings)
+pnut-ts -d -I .. -I ../DEMO <utility>.spin2
+pnut-term-ts -r <utility>.bin
 ```
+
+The `-I ..` flag tells the compiler to find the SD card driver in the parent directory. The `-I ../DEMO` flag is needed by utilities that use `isp_format_utility` or `isp_fsck_utility` (which depend on `isp_mem_strings` in the DEMO/ directory).
 
 ---
 
@@ -41,9 +52,10 @@ cd tools/
 
 Uses `isp_format_utility.spin2` (library) which provides the formatting logic.
 
-**Usage:**
+**Compile and Run:**
 ```bash
-./run_test.sh ../src/UTILS/SD_format_card.spin2 -t 120
+pnut-ts -d -I .. -I ../DEMO SD_format_card.spin2
+pnut-term-ts -r SD_format_card.bin
 ```
 
 **WARNING:** This will **ERASE ALL DATA** on the SD card!
@@ -84,9 +96,10 @@ END_SESSION
 
 **Purpose:** Extract and display all card register information.
 
-**Usage:**
+**Compile and Run:**
 ```bash
-./run_test.sh ../src/UTILS/SD_card_characterize.spin2 -t 60
+pnut-ts -d -I .. SD_card_characterize.spin2
+pnut-term-ts -r SD_card_characterize.bin
 ```
 
 **Reads and Displays:**
@@ -136,105 +149,14 @@ END_SESSION
 
 ---
 
-### 3. SD_speed_characterize.spin2
-
-**Purpose:** Find maximum reliable SPI clock speed for a specific card.
-
-**Usage:**
-```bash
-./run_test.sh ../src/UTILS/SD_speed_characterize.spin2 -t 300
-```
-
-**Test Strategy:**
-
-| Phase | Test | Purpose |
-|-------|------|---------|
-| **Phase 1** | 1,000 single-sector reads | Quick reliability check |
-| **Phase 2** | 10,000 single-sector reads | Statistical confidence |
-| **Phase 3** | 100 × 8-sector reads | Sustained transfer test |
-
-Testing proceeds from lowest to highest speed. If any phase fails, testing stops for that speed and higher speeds are skipped.
-
-**Speed Levels Tested:**
-- 18 MHz, 20 MHz, 22 MHz, 25 MHz, 28 MHz
-- 30 MHz, 33 MHz, 37 MHz, 40 MHz, 45 MHz, 50 MHz
-
-**Output Includes:**
-- Target frequency vs actual achievable frequency
-- Delta percentage from ideal (due to P2 clock division)
-- Pass/fail status for each phase
-- CRC error counts and timeout counts
-- Maximum reliable speed recommendation
-
-**Sample Output:**
-```
-SD Card SPI Speed Characterization
-==================================
-Card: SanDisk Extreme 64GB
-
-Speed Tests:
-  18 MHz: Phase 1 PASS, Phase 2 PASS, Phase 3 PASS
-  20 MHz: Phase 1 PASS, Phase 2 PASS, Phase 3 PASS
-  25 MHz: Phase 1 PASS, Phase 2 PASS, Phase 3 PASS
-  30 MHz: Phase 1 PASS, Phase 2 PASS, Phase 3 PASS
-  33 MHz: Phase 1 PASS, Phase 2 FAIL (3 CRC errors)
-
-Recommended Maximum Speed: 30 MHz
-```
-
-**Use Cases:**
-- Determine safe operating speed for production
-- Compare cards for speed capability
-- Identify marginal cards with reliability issues
-- Optimize driver configuration per card type
-
----
-
-### 4. SD_frequency_characterize.spin2
-
-**Purpose:** Find sysclk frequency boundaries for reliable streamer timing.
-
-**Usage:**
-```bash
-./run_test.sh ../src/UTILS/SD_frequency_characterize.spin2 -t 300
-```
-
-**Test Method:**
-This utility dynamically changes the P2 sysclk frequency using `clkset()` to identify exactly where multi-block operations fail. It helps find timing-sensitive frequency ranges and quantization boundaries.
-
-**Test Frequencies:**
-- 320 MHz (baseline)
-- 310 MHz, 305 MHz, 300 MHz
-- 295 MHz, 290 MHz, 280 MHz, 270 MHz
-- 260 MHz, 255 MHz, 250 MHz, 240 MHz
-- 220 MHz, 200 MHz
-
-At each frequency, the test performs:
-1. `writeSectorsRaw(8)` - Write 8 sectors (4KB)
-2. `readSectorsRaw(8)` - Read 8 sectors back
-3. Data integrity verification
-
-**Output Includes:**
-- Half-period value at each frequency
-- Pass/fail status for multi-block operations
-- Data integrity verification results
-- Identification of working vs failing frequencies
-
-**Use Cases:**
-- Determine safe sysclk frequencies for production
-- Identify timing boundaries for streamer operations
-- Debug frequency-related failures
-- Validate driver timing across frequency ranges
-
----
-
-### 5. SD_performance_benchmark.spin2
+### 3. SD_performance_benchmark.spin2
 
 **Purpose:** Measure read/write throughput for real-world performance data.
 
-**Usage:**
+**Compile and Run:**
 ```bash
-./run_test.sh ../src/UTILS/SD_performance_benchmark.spin2 -t 180
+pnut-ts -d -I .. SD_performance_benchmark.spin2
+pnut-term-ts -r SD_performance_benchmark.bin
 ```
 
 **Measurements:**
@@ -291,13 +213,14 @@ Filesystem Performance:
 
 ---
 
-### 6. SD_FAT32_audit.spin2
+### 4. SD_FAT32_audit.spin2
 
 **Purpose:** Verify FAT32 filesystem integrity without modifying the card.
 
-**Usage:**
+**Compile and Run:**
 ```bash
-./run_test.sh ../src/UTILS/SD_FAT32_audit.spin2 -t 60
+pnut-ts -d -I .. -I ../DEMO SD_FAT32_audit.spin2
+pnut-term-ts -r SD_FAT32_audit.bin
 ```
 
 **Read-Only:** This tool does NOT modify any data on the card.
@@ -356,13 +279,14 @@ END_SESSION
 
 ---
 
-### 7. SD_FAT32_fsck.spin2
+### 5. SD_FAT32_fsck.spin2
 
 **Purpose:** Check and repair FAT32 filesystem corruption.
 
-**Usage:**
+**Compile and Run:**
 ```bash
-./run_test.sh ../src/UTILS/SD_FAT32_fsck.spin2 -t 300
+pnut-ts -d -I .. -I ../DEMO SD_FAT32_fsck.spin2
+pnut-term-ts -r SD_FAT32_fsck.bin
 ```
 
 **WARNING:** This tool **modifies the card** to repair detected problems. Run the audit tool first if you want a read-only check.
@@ -465,11 +389,9 @@ END_SESSION
 ## Directory Structure
 
 ```
-src/UTILS/
+UTILS/
 ├── SD_format_card.spin2            # FAT32 card formatter
 ├── SD_card_characterize.spin2      # Card register reader
-├── SD_speed_characterize.spin2     # SPI speed tester
-├── SD_frequency_characterize.spin2 # Sysclk frequency tester
 ├── SD_performance_benchmark.spin2  # Throughput measurement
 ├── SD_FAT32_audit.spin2            # Filesystem validator
 ├── SD_FAT32_fsck.spin2             # Filesystem check & repair
@@ -480,62 +402,81 @@ src/UTILS/
 
 ---
 
-## Recommended Workflow
+## Typical Workflows
 
-### New Card Setup
+### Preparing a Card for Use
 
-1. **Characterize** - Read card registers to identify the card
+Format the card, then verify the filesystem is clean. From this `UTILS/` directory:
+
+1. **Format** - Create a clean FAT32 filesystem
    ```bash
-   ./run_test.sh ../src/UTILS/SD_card_characterize.spin2 -t 60
+   pnut-ts -d -I .. -I ../DEMO SD_format_card.spin2
+   pnut-term-ts -r SD_format_card.bin
    ```
 
-2. **Speed Test** - Find maximum reliable SPI speed
+2. **Audit** - Verify the filesystem structure
    ```bash
-   ./run_test.sh ../src/UTILS/SD_speed_characterize.spin2 -t 300
+   pnut-ts -d -I .. -I ../DEMO SD_FAT32_audit.spin2
+   pnut-term-ts -r SD_FAT32_audit.bin
    ```
 
-3. **Format** - Create clean FAT32 filesystem
-   ```bash
-   ./run_test.sh ../src/UTILS/SD_format_card.spin2 -t 120
-   ```
+### Diagnosing and Repairing Problems
 
-4. **Audit** - Verify filesystem structure
-   ```bash
-   ./run_test.sh ../src/UTILS/SD_FAT32_audit.spin2 -t 60
-   ```
+If your embedded system lost power during a write, or the card is behaving unexpectedly, run audit first to see what's wrong, then FSCK to repair:
 
-5. **Benchmark** - Measure performance baseline
-   ```bash
-   ./run_test.sh ../src/UTILS/SD_performance_benchmark.spin2 -t 180
-   ```
-
-### After Testing
-
-Run the audit tool to verify filesystem integrity:
 ```bash
-./run_test.sh ../src/UTILS/SD_FAT32_audit.spin2 -t 60
+pnut-ts -d -I .. -I ../DEMO SD_FAT32_audit.spin2
+pnut-term-ts -r SD_FAT32_audit.bin
 ```
 
 If the audit reports failures, run FSCK to auto-repair:
 ```bash
-./run_test.sh ../src/UTILS/SD_FAT32_fsck.spin2 -t 300
+pnut-ts -d -I .. -I ../DEMO SD_FAT32_fsck.spin2
+pnut-term-ts -r SD_FAT32_fsck.bin
 ```
+
+### Characterizing an Untested Card
+
+If you're working with a card model that hasn't been used with this driver before, run the characterization and benchmark utilities to identify the card and establish a performance baseline:
+
+1. **Characterize** - Read card registers (manufacturer, capacity, speed class)
+   ```bash
+   pnut-ts -d -I .. SD_card_characterize.spin2
+   pnut-term-ts -r SD_card_characterize.bin
+   ```
+
+2. **Benchmark** - Measure read/write throughput
+   ```bash
+   pnut-ts -d -I .. SD_performance_benchmark.spin2
+   pnut-term-ts -r SD_performance_benchmark.bin
+   ```
 
 ---
 
 ## Hardware Configuration
 
-All utilities use the P2 Edge default pin configuration:
+The microSD add-on board connects to any 8-pin header group on the P2. Pins are defined as offsets from the base pin of the group:
+
+| Offset | Signal | Description |
+|--------|--------|-------------|
+| +5 | CLK (SCK) | Serial Clock |
+| +4 | CS (DAT3) | Chip Select |
+| +3 | MOSI (CMD) | Master Out, Slave In |
+| +2 | MISO (DAT0) | Master In, Slave Out |
+| +1 | Insert Detect | Active low when card inserted (not used by driver) |
+
+The default configuration uses base pin 56 (P2 Edge Module):
 
 ```spin2
 CON
-    SD_CS   = 60    ' Chip Select
-    SD_MOSI = 59    ' Master Out Slave In
-    SD_MISO = 58    ' Master In Slave Out
-    SD_SCK  = 61    ' Serial Clock
+    SD_BASE = 56
+    SD_SCK  = SD_BASE + 5    ' P61 - Serial Clock
+    SD_CS   = SD_BASE + 4    ' P60 - Chip Select
+    SD_MOSI = SD_BASE + 3    ' P59 - Master Out Slave In
+    SD_MISO = SD_BASE + 2    ' P58 - Master In Slave Out
 ```
 
-Modify the `CON` section in each utility if using different pins.
+To use a different 8-pin group, change `SD_BASE` in the `CON` section of each utility.
 
 ---
 

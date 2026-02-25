@@ -17,16 +17,12 @@ OBEX/
 
 # Reference files (local only)
 REF/
-DOCs/Reference/
 
 # Logic analyzer captures (local only)
 LA/
 
 # Hardware audit tools (local only)
 src/HARDWARE_AUDIT/
-
-# Archived plans (local only)
-DOCs/Plans/Archive/
 
 # Release staging (local only)
 RELEASE-CHECK/

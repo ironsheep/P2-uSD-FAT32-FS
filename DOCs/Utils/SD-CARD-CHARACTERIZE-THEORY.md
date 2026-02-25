@@ -116,7 +116,7 @@ Format: Manufacturer_ProductName_Revision_SerialNumber_ManufacturingDate
 Example: SanDisk_SD64G_8.0_12345678_202306
 ```
 
-This ID can be used to track individual cards in a database (see CARD-CATALOG.md).
+This ID can be used to track individual cards in a database (see ../cards/CARD-CATALOG.md).
 
 ## Output Structure
 

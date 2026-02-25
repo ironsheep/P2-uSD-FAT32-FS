@@ -556,6 +556,6 @@ wrpin/wxpin/pinh    ' Re-enable smart pin AFTER
 
 - P2KB: io_pin_timing.yaml - Instruction-to-pin timing (3-cycle output, 2-cycle flag reset)
 - P2KB: Smart pin modes - Investigate compatibility with streamer
-- DOCs/SYSCLK-TIMING-ANALYSIS.md - Timing calculations and hypotheses
+- DOCs/Analysis/Archive/SYSCLK-TIMING-ANALYSIS.md - Timing calculations and hypotheses
 - Current driver: src/micro_sd_fat32_fs.spin2
 

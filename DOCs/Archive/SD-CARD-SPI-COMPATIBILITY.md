@@ -200,7 +200,7 @@ For Propeller 2 and other MCU-based SPI hosts:
 | SanDisk Industrial 16GB | SanDisk | 16 GB | 824 KB/s | 25 MHz |
 | PNY 16GB | PNY (Phison) | 16 GB | 31 KB/s | 25 MHz |
 
-8 additional cards are catalogued but not yet characterized. See [Card Catalog](CARD-CATALOG.md) for full details.
+8 additional cards are catalogued but not yet characterized. See [Card Catalog](../cards/CARD-CATALOG.md) for full details.
 
 ### Notes
 

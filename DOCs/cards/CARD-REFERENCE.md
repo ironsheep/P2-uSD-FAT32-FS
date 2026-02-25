@@ -1,6 +1,6 @@
 # SD Card Quick Reference — Canonical 2-Line Designators
 
-Every SD card in the project has a canonical 2-line designator derived from register data and the physical label. This file is the single source of truth — the designator block for each card must be character-for-character identical everywhere it appears (card files, CARD-CATALOG.md, BENCHMARK-RESULTS.md).
+Every SD card in the project has a canonical 2-line designator derived from register data and the physical label. This file is the single source of truth — the designator block for each card must be character-for-character identical everywhere it appears (card files, CARD-CATALOG.md, Reference/BENCHMARK-RESULTS.md).
 
 **Line 1** — Identity & Filesystem (from CID, CSD, OCR, SCR, MBR registers):
 ```
@@ -130,6 +130,15 @@ SanDisk SA16G SDHC 14GB [FAT32] SD 5.x rev8.0 SN:93E9C0A1 2025/11
 Class 10, U1, V10, SPI 25 MHz
 ```
 
+### wd-wx64g-64gb
+
+**Label:** Western Digital WD Purple QD101 microSD XC I U1 (10) 64GB
+
+```
+SanDisk WX64G SDXC 59GB [FAT32] SD 6.x rev8.0 SN:$EEBA_D6C0 2024/03
+Class 10, U1, A2, V10, SPI 25 MHz  [P2FMTER]
+```
+
 ### siliconpower-spcc-64gb
 
 **Label:** SP Elite microSD XC UHS-I U1 (10)
@@ -234,18 +243,19 @@ Cards that need to be re-run through the updated `SD_card_characterize.spin2` to
 | lexar-mssd0-64gb | **verified** | ACMD13 (Class 10, U3, A2, V30) — label says A1; different unit SN:33549024 | 350+250 |
 | lexar-mssd0-128gb | **verified** | ACMD13 (Class 10, U3, A2, V30) | 350+250 |
 | samsung-gd4qt-128gb | **verified** | ACMD13 (Class 10, U3, V0) — different unit SN:4AC85F42 | 350+250 |
-| sandisk-aggcf-128gb | **verified** | ACMD13 (Class 10, U3, V30) | — |
-| sandisk-aggce-64gb | **verified** | ACMD13 (Class 10, U3, V30) | — |
-| gigastone-astc-64gb | **verified** | ACMD13 (Class 10, U3, V30) | — |
+| sandisk-aggcf-128gb | **verified** | ACMD13 (Class 10, U3, V30) | 350+250 |
+| sandisk-aggce-64gb | **verified** | ACMD13 (Class 10, U3, V30) | 350+250 |
+| gigastone-astc-64gb | **verified** | ACMD13 (Class 10, U3, V30) | 350+250 |
 | sandisk-sa16g-16gb | **verified** | ACMD13 (Class 10, U1, V10) — V10 not on label | 350+250 |
 | gigastone-00000-32gb | **verified** | ACMD13 (Class 10, U1, V10) — V10 not on label | — |
 | gigastone-00000-8gb | **verified** | ACMD13 (Class 10, U1, V10) — Class 10, V10 not on label | — |
-| gigastone-sd16g-16gb | **verified** | ACMD13 (Class 10, U1, V10) — label claims U3/V30! | — |
+| gigastone-sd16g-16gb | **verified** | ACMD13 (Class 10, U1, V10) — label claims U3/V30! | 350+250 |
 | kingston-sd8gb-8gb | **verified** | ACMD13 (Class 10, U1, V0) — U1 not on label | — |
 | sandisk-su08g-8gb | **verified** | ACMD13 (Class 4, U0, V0) | — |
 | samsung-00000-8gb | **verified** | ACMD13 (Class 6, U0, V0) — FAT16, format failed | — |
 | sandisk-ss08g-8gb | **verified** | ACMD13 (Class 4, U0, V0) | — |
 | pny-sd16g-16gb | **verified** | ACMD13 (Class 4, U0, V0) | 350+250 |
+| wd-wx64g-64gb | **verified** | ACMD13 (Class 10, U1, A2, V10) | 350+250 |
 | siliconpower-spcc-64gb | **verified** | ACMD13 (Class 10, U3, A1, V30) — label says U1 | **BLOCKED** |
 | samsung-jd1y7-128gb | **verified** | ACMD13 (Class 10, U3, A2, V30) | 350+250 |
 | amazon-basics-usd00-64gb | **verified** | ACMD13 (Class 10, U3, A2, V30) | 350+250 |
@@ -254,4 +264,4 @@ Cards that need to be re-run through the updated `SD_card_characterize.spin2` to
 ---
 
 *Created: 2026-02-15*
-*Cards: 21*
+*Cards: 22*

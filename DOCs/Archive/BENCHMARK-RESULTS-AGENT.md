@@ -72,7 +72,7 @@ These measurements represent the driver performance **before** Smart Pin optimiz
 | Write 32KB (×10) | 216 KB/s | |
 | Read 256KB (×10) | 850 KB/s | ~36% slower than Gigastone |
 
-**Notes**: The PNY card shows significantly slower file operations. The 43× slower file open time suggests the card's internal controller has higher latency for metadata operations. This card required a writeSector() fix for busy-wait compatibility (see CARD-CATALOG.md).
+**Notes**: The PNY card shows significantly slower file operations. The 43× slower file open time suggests the card's internal controller has higher latency for metadata operations. This card required a writeSector() fix for busy-wait compatibility (see ../cards/CARD-CATALOG.md).
 
 ---
 
