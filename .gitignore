@@ -24,8 +24,9 @@ LA/
 # Hardware audit tools (local only)
 src/HARDWARE_AUDIT/
 
-# Archived plans (local only)
+# Archived development documents (local only)
 DOCs/Plans/Archive/
+DOCs/Analysis/Archive/
 
 # Release staging (local only)
 RELEASE-CHECK/
