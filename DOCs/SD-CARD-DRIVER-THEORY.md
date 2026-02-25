@@ -62,6 +62,48 @@ The driver operates in three modes:
 
 Filesystem commands are rejected with `E_NOT_MOUNTED` when not in `MODE_FILESYSTEM`.
 
+## Conditional Compilation
+
+The driver uses `#IFDEF` / `#ENDIF` blocks to exclude optional features from minimal builds. The core driver compiles to ~24 KB with no flags defined.
+
+### Feature Flags
+
+| Flag | Features Included |
+|------|-------------------|
+| `SD_INCLUDE_RAW` | Raw sector read/write, `initCardOnly()`, multi-block (CMD18/CMD25) |
+| `SD_INCLUDE_REGISTERS` | CID, CSD, SCR, SD Status register access, OCR, VBR read |
+| `SD_INCLUDE_SPEED` | CMD6 high-speed mode query and switch (50 MHz) |
+| `SD_INCLUDE_DEBUG` | Debug getters, CRC diagnostic methods, display utilities |
+| `SD_INCLUDE_ALL` | Enables all four flags above |
+
+### Enabling Flags
+
+Flags are exported from the top-level file using `#PRAGMA EXPORTDEF` before the `OBJ` declaration:
+
+```spin2
+#PRAGMA EXPORTDEF SD_INCLUDE_RAW
+#PRAGMA EXPORTDEF SD_INCLUDE_REGISTERS
+
+OBJ
+  sd : "micro_sd_fat32_fs"
+```
+
+Or enable everything:
+
+```spin2
+#PRAGMA EXPORTDEF SD_INCLUDE_ALL
+
+OBJ
+  sd : "micro_sd_fat32_fs"
+```
+
+### Build Sizes (approximate, with DEBUG enabled)
+
+| Configuration | Size |
+|---------------|------|
+| Core only (no flags) | ~24 KB |
+| `SD_INCLUDE_ALL` | ~49 KB |
+
 ## Worker Cog and Command Protocol
 
 ### Mailbox Registers
@@ -104,6 +146,7 @@ All cog-to-worker communication flows through shared hub RAM variables:
 | `CMD_RENAME` | 11 | param0=old, param1=new | status |
 | `CMD_CHDIR` | 12 | param0=path | status |
 | `CMD_READDIR` | 13 | param0=entry index | data0=entry ptr |
+| `CMD_FILESIZE` | 14 | -- | data0=file size |
 | `CMD_FREESPACE` | 15 | -- | data0=free sectors |
 | `CMD_SYNC` | 16 | -- | status |
 | `CMD_MOVEFILE` | 17 | param0=name, param1=dest | status |
@@ -154,6 +197,7 @@ All cog-to-worker communication flows through shared hub RAM variables:
 | `CMD_DEBUG_CLEAR_ROOT` | 26 | `SD_INCLUDE_DEBUG` | Clear root directory |
 | `CMD_READ_CID` | 27 | `SD_INCLUDE_REGISTERS` | Read CID register |
 | `CMD_READ_CSD` | 28 | `SD_INCLUDE_REGISTERS` | Read CSD register |
+| `CMD_READ_SD_STATUS` | 29 | `SD_INCLUDE_REGISTERS` | Read SD Status (ACMD13) |
 
 ## Handle System
 
@@ -329,44 +373,6 @@ OBJ
   sd : "micro_sd_fat32_fs"
 ```
 
-## Exported STRUCT Types
-
-The driver defines and exports packed struct types (requires `{Spin2_v45}`) for named access to SD card registers and FAT32 on-disk structures. Consumer objects access them via the `sd.` prefix (e.g., `sd.cid_t`, `sd.dir_entry_t`).
-
-### SD Card Register Structs
-
-| Struct | Size | Purpose |
-|--------|------|---------|
-| `cid_t` | 16 bytes | CID register: manufacturer ID, product name, serial number, manufacturing date |
-| `csd_t` | 16 bytes | CSD register: card capacity, speed class, timing parameters |
-| `scr_t` | 8 bytes | SCR register: SD spec version, bus widths, security features |
-
-### FAT32 On-Disk Structure Structs
-
-| Struct | Size | Purpose |
-|--------|------|---------|
-| `dir_entry_t` | 32 bytes | Directory entry: name, ext, attributes, timestamps, cluster, file size |
-| `mbr_partition_t` | 16 bytes | MBR partition table entry: boot flag, type, LBA start/size |
-| `vbr_t` | 512 bytes | Volume Boot Record (BPB): bytes/sector, clusters, FAT layout, volume label |
-| `fsinfo_t` | 512 bytes | FSInfo sector: free cluster count, next free hint, signatures |
-
-### Usage Pattern
-
-Structs are overlaid onto buffers via typed pointers:
-
-```spin2
-OBJ
-  sd : "micro_sd_fat32_fs"
-
-PRI parseCID(p_buf)
-  ' Overlay struct onto raw buffer
-  sd.cid_t pCid := @p_buf
-  debug("Manufacturer: ", uhex_byte_(pCid.mid))
-  debug("Product: ", lstr_(@pCid.pnm, 5))
-```
-
-All structs are packed (Spin2 default) with offsets matching their respective hardware or on-disk layouts exactly. SD card register structs are big-endian (as received from card); FAT32 structs are little-endian (native P2 byte order).
-
 ## SPI Implementation
 
 ### Smart Pin Configuration
@@ -460,47 +466,43 @@ PRI calcDataCRC(pData, len) : crc | raw
 
 Match/mismatch counters and the `setCRCValidation()` toggle are available via `SD_INCLUDE_DEBUG` (see Conditional Compilation).
 
-## Conditional Compilation
+## Exported STRUCT Types
 
-The driver uses `#IFDEF` / `#ENDIF` blocks to exclude optional features from minimal builds. The core driver compiles to ~24 KB with no flags defined.
+The driver defines and exports packed struct types (requires `{Spin2_v45}`) for named access to SD card registers and FAT32 on-disk structures. Consumer objects access them via the `sd.` prefix (e.g., `sd.cid_t`, `sd.dir_entry_t`).
 
-### Feature Flags
+### SD Card Register Structs
 
-| Flag | Features Included |
-|------|-------------------|
-| `SD_INCLUDE_RAW` | Raw sector read/write, `initCardOnly()`, multi-block (CMD18/CMD25) |
-| `SD_INCLUDE_REGISTERS` | CID, CSD, SCR register access, OCR, VBR read |
-| `SD_INCLUDE_SPEED` | CMD6 high-speed mode query and switch (50 MHz) |
-| `SD_INCLUDE_DEBUG` | Debug getters, CRC diagnostic methods, display utilities |
-| `SD_INCLUDE_ALL` | Enables all four flags above |
+| Struct | Size | Purpose |
+|--------|------|---------|
+| `cid_t` | 16 bytes | CID register: manufacturer ID, product name, serial number, manufacturing date |
+| `csd_t` | 16 bytes | CSD register: card capacity, speed class, timing parameters |
+| `scr_t` | 8 bytes | SCR register: SD spec version, bus widths, security features |
 
-### Enabling Flags
+### FAT32 On-Disk Structure Structs
 
-Flags are exported from the top-level file using `#PRAGMA EXPORTDEF` before the `OBJ` declaration:
+| Struct | Size | Purpose |
+|--------|------|---------|
+| `dir_entry_t` | 32 bytes | Directory entry: name, ext, attributes, timestamps, cluster, file size |
+| `mbr_partition_t` | 16 bytes | MBR partition table entry: boot flag, type, LBA start/size |
+| `vbr_t` | 512 bytes | Volume Boot Record (BPB): bytes/sector, clusters, FAT layout, volume label |
+| `fsinfo_t` | 512 bytes | FSInfo sector: free cluster count, next free hint, signatures |
 
-```spin2
-#PRAGMA EXPORTDEF SD_INCLUDE_RAW
-#PRAGMA EXPORTDEF SD_INCLUDE_REGISTERS
+### Usage Pattern
 
-OBJ
-  sd : "micro_sd_fat32_fs"
-```
-
-Or enable everything:
+Structs are overlaid onto buffers via typed pointers:
 
 ```spin2
-#PRAGMA EXPORTDEF SD_INCLUDE_ALL
-
 OBJ
   sd : "micro_sd_fat32_fs"
+
+PRI parseCID(p_buf)
+  ' Overlay struct onto raw buffer
+  sd.cid_t pCid := @p_buf
+  debug("Manufacturer: ", uhex_byte_(pCid.mid))
+  debug("Product: ", lstr_(@pCid.pnm, 5))
 ```
 
-### Build Sizes (approximate, with DEBUG enabled)
-
-| Configuration | Size |
-|---------------|------|
-| Core only (no flags) | ~24 KB |
-| `SD_INCLUDE_ALL` | ~49 KB |
+All structs are packed (Spin2 default) with offsets matching their respective hardware or on-disk layouts exactly. SD card register structs are big-endian (as received from card); FAT32 structs are little-endian (native P2 byte order).
 
 ## Error Codes
 
@@ -542,6 +544,7 @@ OBJ
 | `unmount()` | Flush all handles, update FSInfo, unmount |
 | `stop()` | Stop worker cog and release hardware lock |
 | `error()` | Last error code for calling cog |
+| `checkStackGuard() : bIntact` | Verify worker cog stack guard is intact |
 
 **Handle-Based File Operations:**
 
@@ -638,6 +641,7 @@ OBJ
 | `readCIDRaw(pBuf) : result` | Read 16-byte CID register |
 | `readCSDRaw(pBuf) : result` | Read 16-byte CSD register |
 | `readSCRRaw(pBuf) : result` | Read 8-byte SCR register |
+| `readSDStatusRaw(pBuf) : result` | Read 64-byte SD Status register (ACMD13) |
 | `getOCR() : ocr` | Get cached OCR value |
 | `readVBRRaw(pBuf) : result` | Read 512-byte Volume Boot Record |
 
@@ -660,7 +664,9 @@ OBJ
 | `getLastSentCRC() : crc` | CRC-16 sent with last write |
 | `getCRCMatchCount() : count` | CRC match count |
 | `getCRCMismatchCount() : count` | CRC mismatch count |
+| `getCRCRetryCount() : count` | CRC retry count |
 | `setCRCValidation(enabled)` | Enable/disable CRC checking |
+| `getWriteDiag() : result_code, r1_resp, data_resp, sector_num` | Last write diagnostic data |
 | `debugGetRootSec() : sector` | Root directory sector |
 | `debugGetDirSec() : sector` | Calling cog's directory sector |
 | `debugGetVbrSec() : sector` | VBR sector |
@@ -677,4 +683,4 @@ OBJ
 
 ---
 
-*Part of the [P2-SD-Card-Driver](../../README.md) project - Iron Sheep Productions*
+*Part of the [P2 microSD Filesystem](../README.md) project - Iron Sheep Productions*

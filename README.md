@@ -32,8 +32,8 @@ This project provides a robust, high-performance SD card driver for the P2 micro
 | **[Driver Theory of Operations](DOCs/SD-CARD-DRIVER-THEORY.md)** | Architecture, handle system, SPI engine, and internals |
 | **[Card Performance](DOCs/SD-CARD-PERFORMANCE.md)** | SD card selection guide and ranked performance comparisons |
 | **[Card Catalog](DOCs/cards/CARD-CATALOG.md)** | All tested cards with register data and throughput |
-| **[FAT32 API Concepts](DOCs/FAT32-API-CONCEPTS-REFERENCE.md)** | FAT32 background for embedded developers |
-| **[Utilities Guide](DOCs/UTILITIES.md)** | Standalone utility programs (format, audit, fsck, benchmark) |
+| **[FAT32 API Concepts](DOCs/Reference/FAT32-API-CONCEPTS-REFERENCE.md)** | FAT32 background for embedded developers |
+| **[Utilities Guide](DOCs/SD-CARD-UTILITIES.md)** | Standalone utility programs (format, audit, fsck, benchmark) |
 | **[Utility Internals](DOCs/Utils/)** | Theory of operations for each utility |
 | **[Regression Testing](regression-tests/README.md)** | Test infrastructure, 345+ tests across 19 suites |
 | **[Demo Shell](src/DEMO/README.md)** | Interactive terminal interface (dir, cd, type, copy, fsck) |
@@ -148,8 +148,7 @@ P2-uSD-FileSystem/
 │   ├── SD-CARD-DRIVER-TUTORIAL.md   # Complete guide with examples
 │   ├── SD-CARD-DRIVER-THEORY.md     # Architecture and driver internals
 │   ├── SD-CARD-PERFORMANCE.md       # Card selection and performance rankings
-│   ├── FAT32-API-CONCEPTS-REFERENCE.md  # FAT32 API background
-│   ├── UTILITIES.md                 # Utility program documentation
+│   ├── SD-CARD-UTILITIES.md            # Utility program documentation
 │   ├── Analysis/                    # Design explorations and studies
 │   ├── Archive/                     # Superseded documents
 │   ├── cards/                       # Per-card data sheets and catalog

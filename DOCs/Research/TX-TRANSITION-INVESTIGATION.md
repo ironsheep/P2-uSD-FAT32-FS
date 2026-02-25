@@ -252,7 +252,7 @@ Now the first data bit and first clock edge arrive at the same time. No phantom 
 **Approach 11 was the fix.** `align_delay := spi_period - 2` with `init_phase := #0`.
 
 Remaining items:
-1. ~~Designer questions tonight~~ — see DESIGNER-QUESTIONS-20260216.md (still useful for understanding TT bits)
+1. ~~Designer questions tonight~~ — see Archive/DESIGNER-QUESTIONS-20260216.md (still useful for understanding TT bits)
 2. ~~Test Approach 8~~ — not needed, Approach 11 works
 3. **Test on additional cards** — verify fix on Gigastone, Lexar, Samsung, etc.
 4. **CRC retry recovery** — add 8 NCS clocks between retries (plan Step 2)

@@ -58,7 +58,6 @@ jobs:
 
           # DOCs/ - reference documentation
           mkdir -p "${DEST}/DOCs"
-          cp DOCs/FAT32-API-CONCEPTS-REFERENCE.md "${DEST}/DOCs/"
           cp DOCs/SD-CARD-DRIVER-THEORY.md "${DEST}/DOCs/"
           cp DOCs/SD-CARD-PERFORMANCE.md "${DEST}/DOCs/"
 

@@ -12,7 +12,6 @@ sd-card-driver/
 ├── SD-CARD-DRIVER-TUTORIAL.md          Complete guide with examples
 │
 ├── DOCs/                               Reference documentation
-│   ├── FAT32-API-CONCEPTS-REFERENCE.md    FAT32 API background reference
 │   ├── SD-CARD-DRIVER-THEORY.md           Architecture and driver internals
 │   ├── SD-CARD-PERFORMANCE.md             Card selection and performance rankings
 │   └── images/                            Card photos for purchase recommendations
@@ -117,7 +116,6 @@ The default configuration uses base pin 56 (P2 Edge Module), giving pins P58-P61
 | Document | Description |
 |----------|-------------|
 | [Tutorial](SD-CARD-DRIVER-TUTORIAL.md) | Complete guide with practical examples |
-| [FAT32 API Reference](DOCs/FAT32-API-CONCEPTS-REFERENCE.md) | FAT32 internals and standard API concepts |
 | [Theory of Operations](DOCs/SD-CARD-DRIVER-THEORY.md) | Architecture, handle system, SPI internals |
 | [Card Performance](DOCs/SD-CARD-PERFORMANCE.md) | Card selection, identification, and performance rankings |
 

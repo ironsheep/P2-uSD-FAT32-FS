@@ -4,7 +4,7 @@
 
 This tutorial shows how to perform common filesystem operations using the SD card driver. If you're familiar with standard FAT32 APIs (FatFs, POSIX file I/O), this guide maps those concepts to our driver's interface.
 
-> **Reference:** For background on FAT32 internals and standard API concepts, see [FAT32-API-CONCEPTS-REFERENCE.md](FAT32-API-CONCEPTS-REFERENCE.md)
+> **Reference:** For background on FAT32 internals and standard API concepts, see [FAT32-API-CONCEPTS-REFERENCE.md](Reference/FAT32-API-CONCEPTS-REFERENCE.md)
 
 ---
 
