@@ -272,7 +272,7 @@ PUB show_help()
     return
 
   serial.tx(serial.CLS)
-  serial.fstr0(@"  SD Shell v0.9.5\r\n\r\n")
+  serial.fstr0(@"  SD Shell v1.0.0\r\n\r\n")
   serial.fstr0(@"  Navigation                          File Operations\r\n")
   serial.fstr0(@"  mount       Mount SD card           type <f>    Show text (cat)\r\n")
   serial.fstr0(@"  unmount     Unmount (eject)         hexdump <f> Hex dump (hd)\r\n")

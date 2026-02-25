@@ -28,6 +28,9 @@ src/HARDWARE_AUDIT/
 DOCs/Plans/Archive/
 DOCs/Analysis/Archive/
 
+# Process documentation (local only)
+DOCs/process/
+
 # Release staging (local only)
 RELEASE-CHECK/
 
