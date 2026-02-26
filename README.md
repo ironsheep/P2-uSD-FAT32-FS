@@ -174,7 +174,7 @@ P2-uSD-FAT32-FS/
 ## Known Limitations
 
 - **8.3 filenames only** — no long filename (LFN) support
-- **FAT32 only** — no FAT12, FAT16, or exFAT; cards >32 GB ship as exFAT and must be reformatted (use the included format utility)
+- **SDXC cards need reformatting** — cards >32 GB ship as exFAT; use the included format utility (no PC needed)
 - **SPI mode only** — no SD native 4-bit bus mode
 - **25 MHz SPI maximum** — CMD6 High Speed mode switch fails on all tested cards
 
