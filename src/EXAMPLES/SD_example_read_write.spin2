@@ -1,0 +1,114 @@
+{Spin2_v45}
+'' =================================================================================================
+''   File....... SD_example_read_write.spin2
+''   Purpose.... Basic file read/write example for the P2 SD card driver
+''   Author..... Stephen M Moraco
+''               -- Copyright (c) 2026 Iron Sheep Productions, LLC
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... 25 Feb 2026
+''   Updated.... 25 Feb 2026
+'' =================================================================================================
+''
+''  This example demonstrates the most common file operations:
+''    1. Mount the SD card
+''    2. Create a new file and write text to it
+''    3. Close and re-open the file for reading
+''    4. Read the data back and display it
+''    5. Unmount cleanly
+''
+
+CON
+
+    _CLKFREQ = 350_000_000
+
+    ' SD card pins - P2 Edge Module default (8-pin header at P56-P63)
+    SD_BASE = 56
+    SD_SCK  = SD_BASE + 5              ' P61 - Serial Clock
+    SD_CS   = SD_BASE + 4              ' P60 - Chip Select
+    SD_MOSI = SD_BASE + 3              ' P59 - Master Out, Slave In
+    SD_MISO = SD_BASE + 2              ' P58 - Master In, Slave Out
+
+    DEBUG_DISABLE = 0
+
+OBJ
+
+    sd : "micro_sd_fat32_fs"
+
+VAR
+
+    byte  buffer[512]
+
+PUB go() | handle, bytes_read, bytes_written
+
+    debug("=== SD Read/Write Example ===")
+
+    ' --- Step 1: Mount the card ---
+    if not sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+        debug("Mount FAILED, error: ", sdec(sd.error()))
+        return
+
+    debug("Card mounted, volume: ", zstr(sd.volumeLabel()))
+
+    ' --- Step 2: Create a file and write to it ---
+    '   createFileNew() fails if the file already exists.
+    '   Delete it first to make this example re-runnable.
+    sd.deleteFile(@"EXAMPLE.TXT")
+
+    handle := sd.createFileNew(@"EXAMPLE.TXT")
+    if handle < 0
+        debug("Create FAILED, error: ", sdec(handle))
+        sd.unmount()
+        return
+
+    bytes_written := sd.writeHandle(handle, @"Hello from the Propeller 2!", 27)
+    debug("Wrote ", udec(bytes_written), " bytes")
+    sd.closeFileHandle(handle)
+
+    ' --- Step 3: Re-open the file for reading ---
+    handle := sd.openFileRead(@"EXAMPLE.TXT")
+    if handle < 0
+        debug("Open FAILED, error: ", sdec(handle))
+        sd.unmount()
+        return
+
+    debug("File size: ", udec(sd.fileSizeHandle(handle)), " bytes")
+
+    ' --- Step 4: Read the data back ---
+    bytes_read := sd.readHandle(handle, @buffer, 512)
+    buffer[bytes_read] := 0                             ' Null-terminate for display
+    debug("Read ", udec(bytes_read), " bytes: ", zstr(@buffer))
+    sd.closeFileHandle(handle)
+
+    ' --- Step 5: Unmount cleanly ---
+    sd.unmount()
+
+    debug("=== Done ===")
+
+CON { license }
+{{
+
+ -------------------------------------------------------------------------------------------------
+  MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+ =================================================================================================
+}}

@@ -1,0 +1,176 @@
+{Spin2_v45}
+'' =================================================================================================
+''   File....... SD_example_directory_walk.spin2
+''   Purpose.... Directory enumeration, file management, and tree walk example
+''   Author..... Stephen M Moraco
+''               -- Copyright (c) 2026 Iron Sheep Productions, LLC
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... 25 Feb 2026
+''   Updated.... 25 Feb 2026
+'' =================================================================================================
+''
+''  This example demonstrates directory operations:
+''    1. List files in the root directory with sizes and attributes
+''    2. Create a subdirectory and files within it
+''    3. List a subdirectory using handle-based enumeration (without changing CWD)
+''    4. Delete a file and rename another
+''    5. Show volume information
+''
+
+CON
+
+    _CLKFREQ = 350_000_000
+
+    SD_BASE = 56
+    SD_SCK  = SD_BASE + 5
+    SD_CS   = SD_BASE + 4
+    SD_MOSI = SD_BASE + 3
+    SD_MISO = SD_BASE + 2
+
+    DEBUG_DISABLE = 0
+
+OBJ
+
+    sd : "micro_sd_fat32_fs"
+
+VAR
+
+    byte  name_copy[13]
+
+PUB go() | handle
+
+    debug("=== SD Directory Walk Example ===")
+
+    if not sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+        debug("Mount FAILED")
+        return
+
+    ' --- Show volume info ---
+    debug("Volume: ", zstr(sd.volumeLabel()))
+    debug("Free:   ", udec(sd.freeSpace() >> 11), " MB")
+
+    ' --- List root directory ---
+    debug("")
+    debug("--- Root Directory ---")
+    listCurrentDirectory()
+
+    ' --- Create a test subdirectory with files ---
+    debug("")
+    debug("--- Creating EXDIR with files ---")
+    sd.newDirectory(@"EXDIR")
+    sd.changeDirectory(@"EXDIR")
+
+    handle := sd.createFileNew(@"FILE_A.TXT")
+    if handle >= 0
+        sd.writeHandle(handle, @"Contents of file A", 18)
+        sd.closeFileHandle(handle)
+
+    handle := sd.createFileNew(@"FILE_B.TXT")
+    if handle >= 0
+        sd.writeHandle(handle, @"Contents of file B", 18)
+        sd.closeFileHandle(handle)
+
+    handle := sd.createFileNew(@"TEMP.TXT")
+    if handle >= 0
+        sd.writeHandle(handle, @"Temporary file", 14)
+        sd.closeFileHandle(handle)
+
+    sd.changeDirectory(@"/")
+
+    ' --- List subdirectory using handle-based enumeration ---
+    '     This does NOT change our CWD (we stay in root)
+    debug("")
+    debug("--- EXDIR contents (via directory handle) ---")
+    listDirectoryByHandle(@"EXDIR")
+
+    ' --- File management: delete and rename ---
+    debug("")
+    debug("--- File management ---")
+    sd.changeDirectory(@"EXDIR")
+
+    sd.deleteFile(@"TEMP.TXT")
+    debug("Deleted TEMP.TXT")
+
+    sd.rename(@"FILE_B.TXT", @"RENAMED.TXT")
+    debug("Renamed FILE_B.TXT -> RENAMED.TXT")
+
+    ' Show the result
+    debug("")
+    debug("--- EXDIR after changes ---")
+    listCurrentDirectory()
+
+    sd.changeDirectory(@"/")
+    sd.unmount()
+
+    debug("")
+    debug("=== Done ===")
+
+PRI listCurrentDirectory() | entry_num, p_entry, attr
+'' List all entries in the current working directory using index-based enumeration.
+    entry_num := 0
+    repeat
+        p_entry := sd.readDirectory(entry_num)
+        if p_entry == 0
+            quit
+
+        attr := sd.attributes()
+        ' Copy name before next call invalidates it
+        bytemove(@name_copy, sd.fileName(), 13)
+
+        if attr & $10
+            debug("  [DIR]  ", zstr(@name_copy))
+        else
+            debug("  [FILE] ", zstr(@name_copy), "  ", udec(sd.fileSize()), " bytes")
+
+        entry_num++
+
+PRI listDirectoryByHandle(p_path) | dh, p_entry, attr
+'' List entries in a specific directory without changing CWD.
+    dh := sd.openDirectory(p_path)
+    if dh < 0
+        debug("  Cannot open directory, error: ", sdec(dh))
+        return
+
+    repeat
+        p_entry := sd.readDirectoryHandle(dh)
+        if p_entry == 0
+            quit
+
+        attr := sd.attributes()
+        bytemove(@name_copy, sd.fileName(), 13)
+
+        if attr & $10
+            debug("  [DIR]  ", zstr(@name_copy))
+        else
+            debug("  [FILE] ", zstr(@name_copy), "  ", udec(sd.fileSize()), " bytes")
+
+    sd.closeDirectoryHandle(dh)
+
+CON { license }
+{{
+
+ -------------------------------------------------------------------------------------------------
+  MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+ =================================================================================================
+}}

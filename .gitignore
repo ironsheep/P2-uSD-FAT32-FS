@@ -209,6 +209,7 @@ __marimo__/
 src/backups/
 src/*.backup-*
 CLAUDE.md
+README-AGENT.md
 STUDY/
 .history/
 .vscode/

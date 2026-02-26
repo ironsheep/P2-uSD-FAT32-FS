@@ -21,11 +21,14 @@ This tutorial shows how to perform common filesystem operations using the SD car
 7. [Writing Files](#writing-files)
 8. [Seeking and Random Access](#seeking-and-random-access)
 9. [File Information](#file-information)
-10. [Error Handling](#error-handling)
-11. [Complete Examples](#complete-examples)
-12. [Architecture Notes](#architecture-notes)
-13. [API Quick Reference](#api-quick-reference)
-14. [Conditional API Modules](#conditional-api-modules)
+10. [File Management](#file-management)
+11. [Multi-Cog Access](#multi-cog-access)
+12. [Error Handling](#error-handling)
+13. [Complete Examples](#complete-examples)
+14. [Example Programs](#example-programs)
+15. [Architecture Notes](#architecture-notes)
+16. [API Quick Reference](#api-quick-reference)
+17. [Conditional API Modules](#conditional-api-modules)
 
 ---
 
@@ -71,11 +74,15 @@ The driver uses a handle-based file API that supports **multiple files and direc
 
 ### Key Concepts
 
-**File Handles:** Each open file returns a handle (0-3). Use this handle for all subsequent operations on that file.
+**File Handles:** Each open file returns a handle (0-5, with the default 6 handles). Use this handle for all subsequent operations on that file.
 
 **Single-Writer Policy:** Only ONE file can be open for writing at a time. This prevents data corruption from concurrent writes.
 
 **Singleton Architecture:** The driver uses a singleton pattern - all OBJ instances share the same worker cog. Calling `stop()` from any instance affects all instances.
+
+### Filename Format
+
+The driver uses **8.3 short filenames** (up to 8 characters, a dot, and a 3-character extension). Names are case-insensitive — `"DATA.TXT"`, `"data.txt"`, and `"Data.Txt"` all refer to the same file. Long filenames (LFN) are not supported.
 
 ### Opening Files
 
@@ -85,7 +92,7 @@ handle := sd.openFileRead(string("DATA.TXT"))
 if handle < 0
   debug("Open failed, error: ", sdec(handle))
 
-' Open for writing (existing file, truncates to zero length)
+' Open for writing (existing file, appends — positions at end of file)
 handle := sd.openFileWrite(string("OUTPUT.TXT"))
 
 ' Create new file for writing (fails if file already exists)
@@ -164,9 +171,10 @@ PUB copyFile(src_name, dest_name) | src_h, dest_h, buf[128], bytes
 
 | Code | Constant | Description |
 |------|----------|-------------|
-| -90 | `E_TOO_MANY_FILES` | All 4 file handles in use |
+| -90 | `E_TOO_MANY_FILES` | All file handles in use |
 | -91 | `E_INVALID_HANDLE` | Handle not valid or not open |
 | -92 | `E_FILE_ALREADY_OPEN` | File already open (same path) |
+| -93 | `E_NOT_A_DIR_HANDLE` | Expected directory handle, got file handle |
 
 ---
 
@@ -310,6 +318,8 @@ After `readDirectory()` returns successfully, use these methods:
 | `fileName()` | string pointer | 8.3 formatted filename |
 | `fileSize()` | long | Size in bytes (0 for directories) |
 | `attributes()` | byte | Attribute flags (see below) |
+
+> **Important:** The pointers returned by `fileName()` and the data from `attributes()` / `fileSize()` are only valid until the next call to `readDirectory()` or `readDirectoryHandle()`. If you need to keep a filename, copy it with `bytemove()` before reading the next entry.
 
 **Attribute Flags:**
 | Value | Meaning |
@@ -611,7 +621,7 @@ PUB seekHandle(handle, pos) : result
 | `handle` | File handle |
 | `pos` | Byte offset from start of file |
 
-**Returns:** `true` on success, `false` if position is beyond end of file
+**Returns:** `SUCCESS` (0) on success, or a negative error code if position is beyond end of file
 
 ### Seeking Examples
 
@@ -676,8 +686,8 @@ if sd.eofHandle(handle)
 debug("Volume: ", zstr(sd.volumeLabel()))
 
 ' Get free space (returns sectors, not bytes)
-free_bytes := sd.freeSpace() * 512
-debug("Free space: ", udec(free_bytes), " bytes")
+free_sectors := sd.freeSpace()
+debug("Free space: ", udec(free_sectors >> 11), " MB")  ' sectors / 2048 = MB
 ```
 
 ### Setting Timestamps
@@ -694,6 +704,93 @@ sd.setDate(2026, 2, 3, 14, 30, 0)
 handle := sd.createFileNew(string("TIMESTAMPED.TXT"))
 sd.closeFileHandle(handle)
 ```
+
+---
+
+## File Management
+
+### Deleting Files
+
+```spin2
+PUB deleteFile(name_ptr) : result
+```
+
+Deletes the named file from the current directory. Returns `SUCCESS` (0) on success, or a negative error code. The file must not be open.
+
+```spin2
+if sd.deleteFile(@"OLD_DATA.TXT") == sd.SUCCESS
+    debug("File deleted")
+else
+    debug("Delete failed, error: ", sdec(sd.error()))
+```
+
+### Renaming Files and Directories
+
+```spin2
+PUB rename(old_name, new_name) : result
+```
+
+Renames a file or directory within the current directory. Both names are simple filenames (not paths). Returns `SUCCESS` on success.
+
+```spin2
+sd.rename(@"DRAFT.TXT", @"FINAL.TXT")
+```
+
+### Moving Files Between Directories
+
+```spin2
+PUB moveFile(name_ptr, dest_folder) : result
+```
+
+Moves a file from the current directory into a different directory. The destination must be an existing directory name or path.
+
+```spin2
+' Move LOG.TXT from current directory into the ARCHIVE directory
+sd.moveFile(@"LOG.TXT", @"ARCHIVE")
+```
+
+---
+
+## Multi-Cog Access
+
+### Concept
+
+The P2 has 8 cogs, and the SD driver is designed for safe concurrent access from any of them. The driver runs a dedicated worker cog that serializes all SPI operations through a hardware lock — your application cogs never touch the SPI bus directly.
+
+### What Each Cog Gets
+
+- **Its own current working directory (CWD)** — cog A can navigate to `/LOGS` while cog B works in `/DATA`
+- **Its own error slot** — `error()` returns the last error for the calling cog only
+- **Shared file handles** — handles are allocated from a common pool and can be used from any cog
+
+### Singleton Pattern
+
+All OBJ instances of the driver share the same worker cog. This means you don't need to pass a driver reference between cogs — just declare the OBJ in each cog's top-level object:
+
+```spin2
+OBJ
+    sd : "micro_sd_fat32_fs"
+
+PUB readerTask() | handle, buf[128], bytes_read
+    ' This cog can use sd.* immediately — it shares the already-mounted driver
+    handle := sd.openFileRead(@"SENSOR.DAT")
+    if handle >= 0
+        repeat
+            bytes_read := sd.readHandle(handle, @buf, 512)
+            if bytes_read == 0
+                quit
+            processData(@buf, bytes_read)
+        sd.closeFileHandle(handle)
+```
+
+### Rules for Multi-Cog Access
+
+1. **Mount from one cog only.** Call `mount()` before starting other cogs that use the driver.
+2. **One writer at a time.** Only one file can be open for writing across all cogs. Multiple files can be open for reading simultaneously.
+3. **Close handles when done.** Handles are a shared resource (default 6 total).
+4. **Don't call `stop()` or `unmount()` while other cogs are using the driver.**
+
+> **See also:** [SD_example_multicog.spin2](../src/EXAMPLES/SD_example_multicog.spin2) for a complete working example.
 
 ---
 
@@ -730,9 +827,11 @@ Returns the error code from the most recent operation. Thread-safe (each cog has
 | -46 | `E_END_OF_FILE` | Read past end of file |
 | -60 | `E_DISK_FULL` | No free clusters |
 | -64 | `E_NO_LOCK` | Couldn't allocate hardware lock |
-| -90 | `E_TOO_MANY_FILES` | All 4 file handles in use |
+| -7 | `E_IO_ERROR` | I/O error during read or write |
+| -90 | `E_TOO_MANY_FILES` | All file handles in use |
 | -91 | `E_INVALID_HANDLE` | Handle not valid or not open |
 | -92 | `E_FILE_ALREADY_OPEN` | File already open (same path) |
+| -93 | `E_NOT_A_DIR_HANDLE` | Expected directory handle, got file handle |
 
 ### Error Handling Pattern
 
@@ -916,16 +1015,13 @@ PUB appendRecord(filename, p_src) : success | handle
   if not sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
     return false
 
-  ' Try to open existing, or create new
+  ' Try to open existing (appends), or create new
   handle := sd.openFileWrite(filename)
   if handle < 0
     handle := sd.createFileNew(filename)
     if handle < 0
       sd.unmount()
       return false
-  else
-    ' Seek to end for append
-    sd.seekHandle(handle, sd.fileSizeHandle(handle))
 
   sd.writeHandle(handle, p_src, RECORD_SIZE)
 
@@ -933,6 +1029,21 @@ PUB appendRecord(filename, p_src) : success | handle
   sd.unmount()
   return true
 ```
+
+---
+
+## Example Programs
+
+The `src/EXAMPLES/` directory contains compilable, self-contained programs you can run directly on P2 hardware. Each demonstrates a common usage pattern:
+
+| Program | What It Teaches |
+|---------|-----------------|
+| [SD_example_read_write.spin2](../src/EXAMPLES/SD_example_read_write.spin2) | Complete file lifecycle: create, write, close, re-open, read back |
+| [SD_example_data_logger.spin2](../src/EXAMPLES/SD_example_data_logger.spin2) | Append-mode logging with `syncHandle()` for power-fail safety |
+| [SD_example_directory_walk.spin2](../src/EXAMPLES/SD_example_directory_walk.spin2) | Directory listing (both APIs), file delete, rename, subdirectory creation |
+| [SD_example_multicog.spin2](../src/EXAMPLES/SD_example_multicog.spin2) | Two cogs accessing different files concurrently |
+
+See the [Examples README](../src/EXAMPLES/README.md) for build instructions and detailed descriptions.
 
 ---
 
@@ -994,7 +1105,7 @@ These methods are always available in the core driver (no feature flags required
 | `closeFileHandle(handle)` | Close file handle, flush writes |
 | `readHandle(handle, buffer, count)` | Read bytes, returns count read |
 | `writeHandle(handle, buffer, count)` | Write bytes, returns count written |
-| `seekHandle(handle, pos)` | Set file position |
+| `seekHandle(handle, pos)` | Set file position, returns SUCCESS (0) or error |
 | `tellHandle(handle)` | Get current position |
 | `eofHandle(handle)` | Check if at end of file |
 | `fileSizeHandle(handle)` | Get file size by handle |
@@ -1107,6 +1218,7 @@ For card characterization and identification. Provides raw access to CID, CSD, S
 | `readCSDRaw(buffer)` | Read 16-byte CSD register (capacity, speed, features) |
 | `readSCRRaw(buffer)` | Read 8-byte SCR register (SD spec version, bus widths) |
 | `getOCR()` | Get cached OCR value (voltage range, capacity status) |
+| `readSDStatusRaw(buffer)` | Read 64-byte SD Status register (ACMD13) |
 | `readVBRRaw(buffer)` | Read 512-byte Volume Boot Record |
 
 ### SD_INCLUDE_SPEED - High-Speed Mode Control
@@ -1132,6 +1244,7 @@ For driver development, debugging, and regression testing. Includes CRC diagnost
 | `getLastSentCRC()` | CRC-16 sent with last write |
 | `getCRCMatchCount()` | Count of reads where CRC matched |
 | `getCRCMismatchCount()` | Count of reads where CRC did not match |
+| `getCRCRetryCount()` | Count of CRC retries on reads |
 | `setCRCValidation(enabled)` | Enable/disable CRC checking |
 | `debugGetRootSec()` | Root directory sector number |
 | `debugGetDirSec()` | Current directory sector for calling cog |
@@ -1141,6 +1254,7 @@ For driver development, debugging, and regression testing. Includes CRC diagnost
 | `debugDumpRootDir()` | Print root directory entries to debug |
 | `debugClearRootDir()` | Zero root directory sector (destructive!) |
 | `debugReadSectorSlow(sector, buffer)` | Byte-by-byte read without streamer |
+| `getWriteDiag(...)` | Last writeSector diagnostic (4 return values) |
 | `debugGetReadSectorDiag(...)` | Last readSector diagnostic data (8 params) |
 | `debugGetReadSectorDiagExt(...)` | Extended diagnostic data (5 params) |
 | `displaySector()` | Hex dump of sector buffer |

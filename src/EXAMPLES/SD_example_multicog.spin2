@@ -1,0 +1,164 @@
+{Spin2_v45}
+'' =================================================================================================
+''   File....... SD_example_multicog.spin2
+''   Purpose.... Multi-cog file access example — two cogs reading/writing different files
+''   Author..... Stephen M Moraco
+''               -- Copyright (c) 2026 Iron Sheep Productions, LLC
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... 25 Feb 2026
+''   Updated.... 25 Feb 2026
+'' =================================================================================================
+''
+''  This example demonstrates multi-cog SD card access:
+''    1. Main cog mounts the card and creates test files
+''    2. A second cog is started that reads from one file
+''    3. Main cog writes to a different file concurrently
+''    4. Both cogs use the same driver instance (singleton pattern)
+''
+''  Key concepts shown:
+''    - The driver serializes SPI access via a hardware lock — safe from any cog
+''    - Each cog has its own current working directory (CWD)
+''    - Each cog has its own error slot
+''    - File handles are shared resources — allocate from one cog, use from any
+''    - Only one file can be open for writing at a time (single-writer policy)
+''
+
+CON
+
+    _CLKFREQ = 350_000_000
+
+    SD_BASE = 56
+    SD_SCK  = SD_BASE + 5
+    SD_CS   = SD_BASE + 4
+    SD_MOSI = SD_BASE + 3
+    SD_MISO = SD_BASE + 2
+
+    READER_STACK_SIZE = 256
+
+    DEBUG_DISABLE = 0
+
+OBJ
+
+    sd : "micro_sd_fat32_fs"
+
+VAR
+
+    long  reader_stack[READER_STACK_SIZE]
+    long  reader_cog
+    long  reader_done                                   ' Flag: reader cog sets to 1 when finished
+    long  setup_done                                    ' Flag: main cog sets to 1 when files ready
+
+PUB go() | handle, i, buf[32]
+
+    debug("=== SD Multi-Cog Example ===")
+
+    reader_done := 0
+    setup_done := 0
+
+    if not sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+        debug("Mount FAILED")
+        return
+
+    ' --- Create test data files ---
+    debug("[Main] Creating test files...")
+
+    sd.deleteFile(@"READER.TXT")
+    handle := sd.createFileNew(@"READER.TXT")
+    if handle >= 0
+        repeat i from 1 to 10
+            sd.writeHandle(handle, @"Line of test data for reader cog.", 33)
+            sd.writeHandle(handle, @CRLF, 2)
+        sd.closeFileHandle(handle)
+
+    sd.deleteFile(@"WRITER.TXT")
+
+    debug("[Main] Test files ready")
+
+    ' --- Start reader cog ---
+    setup_done := 1
+    reader_cog := cogspin(NEWCOG, readerTask(), @reader_stack)
+    if reader_cog < 0
+        debug("[Main] Failed to start reader cog!")
+        sd.unmount()
+        return
+
+    debug("[Main] Reader cog started (cog ", udec(reader_cog), ")")
+
+    ' --- Main cog writes to a different file ---
+    debug("[Main] Writing WRITER.TXT...")
+    handle := sd.createFileNew(@"WRITER.TXT")
+    if handle >= 0
+        repeat i from 1 to 20
+            sd.writeHandle(handle, @"Written by main cog.", 20)
+            sd.writeHandle(handle, @CRLF, 2)
+        sd.closeFileHandle(handle)
+    debug("[Main] Write complete: ", udec(20), " lines")
+
+    ' --- Wait for reader to finish ---
+    repeat until reader_done
+
+    ' --- Clean up ---
+    sd.unmount()
+    debug("")
+    debug("=== Done — both cogs completed successfully ===")
+
+PRI readerTask() | handle, buf[128], total_bytes, bytes_read
+'' Runs in a separate cog. Reads READER.TXT and reports the total bytes read.
+'' The SD driver's hardware lock ensures SPI access is serialized with the main cog.
+
+    ' Wait for setup
+    repeat until setup_done
+
+    debug("[Reader] Opening READER.TXT...")
+    handle := sd.openFileRead(@"READER.TXT")
+    if handle < 0
+        debug("[Reader] Open FAILED, error: ", sdec(handle))
+        reader_done := 1
+        return
+
+    debug("[Reader] File size: ", udec(sd.fileSizeHandle(handle)), " bytes")
+
+    total_bytes := 0
+    repeat
+        bytes_read := sd.readHandle(handle, @buf, 512)
+        if bytes_read == 0
+            quit
+        total_bytes += bytes_read
+
+    sd.closeFileHandle(handle)
+    debug("[Reader] Read complete: ", udec(total_bytes), " bytes total")
+
+    reader_done := 1
+
+DAT
+
+CRLF    byte    13, 10
+
+CON { license }
+{{
+
+ -------------------------------------------------------------------------------------------------
+  MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+ =================================================================================================
+}}

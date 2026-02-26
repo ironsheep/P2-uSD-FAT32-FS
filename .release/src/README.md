@@ -59,6 +59,19 @@ The driver builds in **minimal mode** by default (core file operations only). En
 #PRAGMA EXPORTDEF SD_INCLUDE_ALL
 ```
 
+## EXAMPLES/
+
+Compilable, self-contained example programs demonstrating common SD card driver patterns.
+
+| File | Description |
+|------|-------------|
+| `SD_example_read_write.spin2` | Basic file create, write, read-back — start here |
+| `SD_example_data_logger.spin2` | Append-mode logging with periodic sync for power-fail safety |
+| `SD_example_directory_walk.spin2` | Directory listing, file delete, rename, subdirectory creation |
+| `SD_example_multicog.spin2` | Two cogs accessing different files concurrently |
+
+See [EXAMPLES/README.md](EXAMPLES/README.md) for build instructions.
+
 ## DEMO/
 
 Interactive terminal shell for exploring the SD card filesystem. Supports both DOS-style (`dir`, `type`, `del`) and Unix-style (`ls`, `cat`, `rm`) commands.

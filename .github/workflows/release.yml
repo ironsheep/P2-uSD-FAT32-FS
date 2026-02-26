@@ -83,6 +83,14 @@ jobs:
           cp src/DEMO/isp_serial_singleton.spin2 "${DEST}/src/DEMO/"
           cp src/DEMO/isp_mem_strings.spin2 "${DEST}/src/DEMO/"
 
+          # src/EXAMPLES/ - compilable example programs
+          mkdir -p "${DEST}/src/EXAMPLES"
+          cp .release/src/EXAMPLES/README.md "${DEST}/src/EXAMPLES/README.md"
+          cp src/EXAMPLES/SD_example_read_write.spin2 "${DEST}/src/EXAMPLES/"
+          cp src/EXAMPLES/SD_example_data_logger.spin2 "${DEST}/src/EXAMPLES/"
+          cp src/EXAMPLES/SD_example_directory_walk.spin2 "${DEST}/src/EXAMPLES/"
+          cp src/EXAMPLES/SD_example_multicog.spin2 "${DEST}/src/EXAMPLES/"
+
           # src/UTILS/ - utility programs and support libraries
           mkdir -p "${DEST}/src/UTILS"
           cp .release/src/UTILS/README.md "${DEST}/src/UTILS/README.md"

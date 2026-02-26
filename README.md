@@ -20,6 +20,8 @@ This project provides a robust, high-performance SD card driver for the P2 micro
 - **CRC Validation**: Hardware-accelerated CRC-16 on all data transfers
 - **Directory Operations**: Create, navigate, and enumerate directories (index-based and handle-based)
 - **File Operations**: Create, open, read, write, seek, rename, delete
+- **Built-in Card Formatter**: Format any SD card as FAT32 directly from the P2 — no PC required
+- **Filesystem Repair**: Integrated read-only audit (41 checks) and 4-pass fsck with auto-repair
 - **Multi-Cog Safe**: Dedicated worker cog with hardware lock serialization
 - **Per-Cog Working Directory**: Each cog maintains its own CWD for safe concurrent navigation
 - **Regression Tested**: 345+ automated tests across 19 test suites
@@ -36,7 +38,8 @@ This project provides a robust, high-performance SD card driver for the P2 micro
 | **[Utilities Guide](DOCs/SD-CARD-UTILITIES.md)** | Standalone utility programs (format, audit, fsck, benchmark) |
 | **[Utility Internals](DOCs/Utils/)** | Theory of operations for each utility |
 | **[Regression Testing](regression-tests/README.md)** | Test infrastructure, 345+ tests across 19 suites |
-| **[Demo Shell](src/DEMO/README.md)** | Interactive terminal interface (dir, cd, type, copy, fsck) |
+| **[Example Programs](src/EXAMPLES/README.md)** | Compilable examples: read/write, data logger, directory walk, multi-cog |
+| **[Demo Shell](src/DEMO/README.md)** | Full-featured terminal shell with card formatting, filesystem repair, file management, and benchmarking |
 
 ## Hardware Requirements
 
@@ -107,6 +110,8 @@ Measured at 350 MHz sysclk with 25 MHz SPI, smart pin hardware acceleration, str
 
 Raw SPI efficiency reaches 80% of theoretical maximum (2,427 / 3,052 KB/s). Multi-sector commands provide 46-69% improvement over single-sector operations. 20 cards tested across 9 manufacturers — see [Card Performance](DOCs/SD-CARD-PERFORMANCE.md) for ranked comparisons and card selection guidance.
 
+> **Sysclk and performance:** Both 350 MHz and 250 MHz sysclk produce the same 25 MHz SPI clock, but higher sysclk reduces Spin2 inter-transfer overhead between SPI bursts, yielding 10-20% better file throughput. For best performance, use `_CLKFREQ = 350_000_000`. See the [Performance Guide](DOCs/SD-CARD-PERFORMANCE.md) for detailed analysis.
+
 ## Project Structure
 
 ```
@@ -124,6 +129,11 @@ P2-uSD-FAT32-FS/
 │   │   ├── isp_format_utility.spin2       # FAT32 format library
 │   │   ├── isp_fsck_utility.spin2         # Combined FSCK + Audit library
 │   │   └── isp_string_fifo.spin2          # Inter-cog string FIFO
+│   ├── EXAMPLES/                    # Compilable example programs
+│   │   ├── SD_example_read_write.spin2    # Basic file read/write
+│   │   ├── SD_example_data_logger.spin2   # Append-mode logging with sync
+│   │   ├── SD_example_directory_walk.spin2 # Directory operations
+│   │   └── SD_example_multicog.spin2      # Multi-cog concurrent access
 │   └── DEMO/                       # Interactive demo application
 │       ├── SD_demo_shell.spin2         # Terminal shell (dir, cd, type, etc.)
 │       ├── isp_serial_singleton.spin2  # Serial terminal driver

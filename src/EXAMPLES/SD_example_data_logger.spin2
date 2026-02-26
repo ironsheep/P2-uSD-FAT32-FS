@@ -1,0 +1,160 @@
+{Spin2_v45}
+'' =================================================================================================
+''   File....... SD_example_data_logger.spin2
+''   Purpose.... Data logging example with append and sync for power-fail safety
+''   Author..... Stephen M Moraco
+''               -- Copyright (c) 2026 Iron Sheep Productions, LLC
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... 25 Feb 2026
+''   Updated.... 25 Feb 2026
+'' =================================================================================================
+''
+''  This example demonstrates a data logging pattern:
+''    1. Mount the card and create a LOGS directory
+''    2. Open an existing log file for append (or create a new one)
+''    3. Write log entries with periodic sync for power-fail safety
+''    4. Close and unmount cleanly
+''
+''  Key concepts shown:
+''    - openFileWrite() positions at end of file (append mode)
+''    - syncHandle() flushes data to card without closing the file
+''    - Directory creation with existence check
+''
+
+CON
+
+    _CLKFREQ = 350_000_000
+
+    SD_BASE = 56
+    SD_SCK  = SD_BASE + 5
+    SD_CS   = SD_BASE + 4
+    SD_MOSI = SD_BASE + 3
+    SD_MISO = SD_BASE + 2
+
+    MAX_ENTRIES = 20                    ' Number of log entries to write
+    SYNC_INTERVAL = 5                   ' Sync every N entries
+
+    DEBUG_DISABLE = 0
+
+OBJ
+
+    sd : "micro_sd_fat32_fs"
+
+VAR
+
+    byte  msg[80]
+
+PUB go() | handle, i
+
+    debug("=== SD Data Logger Example ===")
+
+    if not sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+        debug("Mount FAILED")
+        return
+
+    ' Set timestamp for file creation
+    sd.setDate(2026, 2, 25, 12, 0, 0)
+
+    ' Create LOGS directory (ignore error if it already exists)
+    if not sd.changeDirectory(@"LOGS")
+        sd.newDirectory(@"LOGS")
+        sd.changeDirectory(@"LOGS")
+
+    ' Open existing log for append, or create new
+    handle := sd.openFileWrite(@"DATALOG.CSV")
+    if handle < 0
+        ' File doesn't exist yet — create it with a header
+        handle := sd.createFileNew(@"DATALOG.CSV")
+        if handle < 0
+            debug("Cannot create log file, error: ", sdec(handle))
+            sd.unmount()
+            return
+        sd.writeHandle(handle, @"Entry,Value", 11)
+        sd.writeHandle(handle, @CRLF, 2)
+
+    debug("Log file open, writing ", udec(MAX_ENTRIES), " entries...")
+
+    ' Write log entries
+    repeat i from 1 to MAX_ENTRIES
+        ' Format a simple CSV line: "N,reading"
+        writeLogEntry(handle, i, getReading())
+
+        ' Periodic sync — ensures data survives power loss
+        if i // SYNC_INTERVAL == 0
+            sd.syncHandle(handle)
+            debug("  Synced at entry ", udec(i))
+
+    sd.closeFileHandle(handle)
+    debug("Log file closed")
+
+    ' Return to root before unmount
+    sd.changeDirectory(@"/")
+    sd.unmount()
+
+    debug("=== Done — ", udec(MAX_ENTRIES), " entries logged ===")
+
+PRI writeLogEntry(handle, entry_num, value) | len
+    ' Format: "entry_num,value\r\n"
+    len := 0
+    len += formatDec(@msg + len, entry_num)
+    msg[len++] := ","
+    len += formatDec(@msg + len, value)
+    msg[len++] := 13                                    ' CR
+    msg[len++] := 10                                    ' LF
+    sd.writeHandle(handle, @msg, len)
+
+PRI getReading() : value
+    ' Simulate a sensor reading (replace with actual sensor code)
+    value := getrnd() & $3FF                            ' Random 0-1023
+
+PRI formatDec(p_buf, val) : len | digit, started, divisor
+    ' Format integer into buffer, return number of characters written
+    if val < 0
+        byte[p_buf] := "-"
+        p_buf++
+        len++
+        val := -val
+    started := false
+    divisor := 1_000_000_000
+    repeat 10
+        digit := val / divisor
+        val //= divisor
+        divisor /= 10
+        if digit > 0 or started or divisor == 0
+            byte[p_buf] := "0" + digit
+            p_buf++
+            len++
+            started := true
+
+DAT
+
+CRLF    byte    13, 10
+
+CON { license }
+{{
+
+ -------------------------------------------------------------------------------------------------
+  MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+ =================================================================================================
+}}

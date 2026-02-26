@@ -1,6 +1,6 @@
 {Spin2_v45}
 {{┌──────────────────────────────────────────┐
-  │ SD card driver V3 (Multi-File Handles)   │  Verified with Panasonic 512MB SD
+  │ SD card driver V3 — Release v1.0.0       │  Verified with Panasonic 512MB SD
   │ Original: Chris Gadd, V3: S.M. Moraco    │                PNY 8GB SDHC
   │ Copyright (c) 2023 Chris Gadd            │                SanDisk Extreme 32GB SDHC                                       3V3
   │ See end of file for terms of use.        │                GSKILL 32GB Micro SDHC                                              ┌─────┐
