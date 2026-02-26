@@ -100,7 +100,7 @@ PUB go() | handle, i, buf[32]
 
     ' --- Clean up ---
     sd.unmount()
-    debug("")
+    debug(" ")
     debug("=== Done — both cogs completed successfully ===")
 
 PRI readerTask() | handle, buf[128], total_bytes, bytes_read

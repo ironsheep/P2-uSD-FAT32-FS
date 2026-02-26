@@ -51,12 +51,12 @@ PUB go() | handle
     debug("Free:   ", udec(sd.freeSpace() >> 11), " MB")
 
     ' --- List root directory ---
-    debug("")
+    debug(" ")
     debug("--- Root Directory ---")
     listCurrentDirectory()
 
     ' --- Create a test subdirectory with files ---
-    debug("")
+    debug(" ")
     debug("--- Creating EXDIR with files ---")
     sd.newDirectory(@"EXDIR")
     sd.changeDirectory(@"EXDIR")
@@ -80,12 +80,12 @@ PUB go() | handle
 
     ' --- List subdirectory using handle-based enumeration ---
     '     This does NOT change our CWD (we stay in root)
-    debug("")
+    debug(" ")
     debug("--- EXDIR contents (via directory handle) ---")
     listDirectoryByHandle(@"EXDIR")
 
     ' --- File management: delete and rename ---
-    debug("")
+    debug(" ")
     debug("--- File management ---")
     sd.changeDirectory(@"EXDIR")
 
@@ -96,14 +96,14 @@ PUB go() | handle
     debug("Renamed FILE_B.TXT -> RENAMED.TXT")
 
     ' Show the result
-    debug("")
+    debug(" ")
     debug("--- EXDIR after changes ---")
     listCurrentDirectory()
 
     sd.changeDirectory(@"/")
     sd.unmount()
 
-    debug("")
+    debug(" ")
     debug("=== Done ===")
 
 PRI listCurrentDirectory() | entry_num, p_entry, attr
