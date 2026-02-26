@@ -1,4 +1,4 @@
-# SD Card Driver Utilities
+# SD Card Utilities
 
 This document describes the standalone utility programs included with the P2 SD Card Driver. These utilities help with card formatting, characterization, performance testing, and filesystem validation.
 

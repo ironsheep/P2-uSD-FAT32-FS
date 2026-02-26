@@ -1,4 +1,6 @@
-# SD_speed_characterize.spin2 - Theory of Operations
+# SPI Speed Characterize — Theory of Operations
+
+*SD_speed_characterize.spin2*
 
 ## Overview
 

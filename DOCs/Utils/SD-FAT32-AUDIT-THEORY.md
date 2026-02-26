@@ -1,4 +1,6 @@
-# SD_FAT32_audit.spin2 - Theory of Operations
+# FAT32 Audit — Theory of Operations
+
+*SD_FAT32_audit.spin2*
 
 ## Overview
 

@@ -1,4 +1,6 @@
-# micro_sd_fat32_fs.spin2 - Theory of Operations
+# SD Card Driver — Theory of Operations
+
+*micro_sd_fat32_fs.spin2*
 
 ## Overview
 

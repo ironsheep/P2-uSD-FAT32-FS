@@ -870,9 +870,44 @@ Symptoms: `$A3→$D1`, `$D0→$E8`, `DEADBEEF→EF56DF77`, `$55AA→$2AD5`.
 
 ---
 
-## TD-008: (Reserved for next decision)
+## TD-008: FAT High 4 Bits Not Preserved on Delete
+
+**Date**: 2026-02-25
+**Status**: DECIDED - Won't fix
+
+### Background
+
+The FAT32 spec states that the high 4 bits of each 32-bit FAT entry are reserved and should be preserved on writes. Our `allocateCluster()` correctly preserves them:
+
+```spin2
+high_bits := result & $F000_0000
+long[@fat_buf + buf_idx] := high_bits | $0FFF_FFFF
+```
+
+However, `do_delete()` writes a full 32-bit zero when freeing clusters:
+
+```spin2
+long[@fat_buf + ((p_cluster << 2) & 511)] := 0
+```
+
+This clears the reserved high 4 bits along with the low 28.
+
+### Analysis
+
+- When a FAT entry is **free** (low 28 bits = 0), no OS reads the high 4 bits. Windows, macOS, and Linux all treat any entry with low 28 bits zero as a free cluster regardless of the high bits.
+- Microsoft's own `chkdsk` and Apple's `fsck_msdos` both write full 32-bit zeros when freeing clusters.
+- No real-world interchange issue has been documented in 25+ years of FAT32.
+- The only risk would be a future spec revision assigning meaning to those bits on free entries, which has not happened.
+
+### Decision
+
+**Not addressing.** The spec-compliant fix is trivial (`long[addr] := long[addr] & $F000_0000`) but provides no practical benefit. Allocate-path preservation is the one that matters for data integrity, and that is already correct.
+
+---
+
+## TD-009: (Reserved for next decision)
 
 ---
 
 *Document created: 2026-01-17*
-*Last updated: 2026-02-16*
+*Last updated: 2026-02-25*

@@ -1,4 +1,6 @@
-# SD_card_characterize.spin2 - Theory of Operations
+# Card Characterize — Theory of Operations
+
+*SD_card_characterize.spin2*
 
 ## Overview
 

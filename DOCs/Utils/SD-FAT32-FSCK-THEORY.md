@@ -1,4 +1,6 @@
-# SD_FAT32_fsck.spin2 - Theory of Operations
+# FAT32 Fsck — Theory of Operations
+
+*SD_FAT32_fsck.spin2 · isp_fsck_utility.spin2*
 
 ## Overview
 
