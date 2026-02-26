@@ -36,7 +36,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Card Compatibility
 
-- 22 cards cataloged across 9 manufacturers, 13 benchmarked at 350 and 250 MHz
+- SDHC and SDXC cards supported; tested with cards up to 128 GB across 9 manufacturers
+- 22 cards cataloged, 13 benchmarked at both 350 MHz and 250 MHz sysclk
+- Driver goal is 2 TB (FAT32/SDXC maximum); >1 TB requires sector addressing fix (see punch list)
+
+### Known Limits
+
+- FSCK full cluster-chain validation covers cards up to ~64 GB (P2 hub RAM constraint); larger cards receive structural checks only (VBR, FSInfo, FAT sync)
+- Audit (read-only) has no card size constraint — all checks are structural
 
 ### Testing
 
