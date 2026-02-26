@@ -1,4 +1,4 @@
-# SD Card Driver Utilities
+# SD Card Utilities
 
 Standalone utility programs for preparing SD cards for embedded use, diagnosing filesystem problems, and characterizing untested cards.
 
