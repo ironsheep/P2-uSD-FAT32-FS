@@ -18,6 +18,12 @@ sd-card-driver/
 │
 └── src/                                Driver and application source
     ├── micro_sd_fat32_fs.spin2            The SD card driver
+    ├── EXAMPLES/                          Compilable example programs
+    │   ├── README.md                         Build instructions
+    │   ├── SD_example_read_write.spin2       Basic file read/write
+    │   ├── SD_example_data_logger.spin2      Append-mode logging with sync
+    │   ├── SD_example_directory_walk.spin2   Directory operations
+    │   └── SD_example_multicog.spin2         Multi-cog concurrent access
     ├── DEMO/                              Interactive terminal shell
     │   ├── README.md                         Build and usage guide
     │   ├── SD_demo_shell.spin2               Shell application
