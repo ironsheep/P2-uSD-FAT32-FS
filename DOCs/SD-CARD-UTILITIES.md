@@ -391,7 +391,9 @@ END_SESSION
 
 **Memory Requirements:**
 
-The cluster bitmap uses 256KB (LONG[65536]) covering up to 2,097,152 clusters. This is sufficient for cards up to approximately 64GB. Cards with more clusters receive structural checks only (passes 1 and 4); passes 2 and 3 are skipped.
+The cluster bitmap uses 256 KB of P2 hub RAM (LONG[65536]), covering up to 2,097,152 clusters — sufficient for cards up to approximately 64 GB. Cards with more clusters receive structural integrity checks only (passes 1 and 4); chain validation and lost cluster recovery (passes 2 and 3) are skipped.
+
+This is a current constraint of the P2's 512 KB hub memory, not a fundamental design limitation. Research into windowed or overlay-based bitmap approaches that could extend full validation to larger cards is on the [Punch List](Plans/PUNCH-LIST.md).
 
 **Sample Output:**
 ```

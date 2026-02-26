@@ -104,6 +104,25 @@ Based on 15 cards benchmarked at both 350 MHz and 250 MHz:
 - **Mid tier (score 74–81):** Seven cards cluster between 74 and 81 — five SanDisk models, WD Purple, and Gigastone Camera Plus. File reads 990–1,103 KB/s, file writes 293–445 KB/s. Adequate for most embedded workloads.
 - **Bottom tier (score 52–70):** Four cards score below 74 — Samsung EVO Select, SanDisk Industrial, Gigastone High Endurance, and PNY. File writes below 323 KB/s; PNY single-sector writes are 17x slower than the best card.
 
+### Right-Sizing Your Card
+
+For embedded systems, bigger is not better. Larger cards carry hidden costs:
+
+- **Longer mount times** — The driver reads the FAT and FSInfo structures at mount. Larger cards have larger FATs, and some cards with large flash arrays exhibit higher internal access latency.
+- **Longer FSCK scans** — Pass 4 (FAT sync) reads every FAT sector sequentially. A 16 GB card with 15K sectors/FAT takes ~37 seconds; a 128 GB card takes proportionally longer. Full chain validation (passes 2–3) is limited to cards under ~64 GB by the P2's hub RAM.
+- **Wasted capacity** — Most embedded data logging, configuration storage, and sensor recording applications use megabytes, not gigabytes. A 128 GB card sitting 99.9% empty is paying the overhead of a large FAT for no benefit.
+
+**Recommendation:** Choose the smallest card that comfortably exceeds your storage needs. For typical embedded workloads:
+
+| Application | Suggested Card Size |
+|-------------|-------------------|
+| Configuration files, small logs | 4–8 GB |
+| Data logging, sensor recording | 8–16 GB |
+| Image storage, large datasets | 16–32 GB |
+| Audio/video buffering | 32–64 GB |
+
+Cards in the 8–32 GB range offer the best balance of capacity, mount performance, and full FSCK coverage. Cards above 64 GB work well for read/write operations but receive only structural FSCK checks (no chain validation or lost cluster recovery).
+
 ### Using Card Markings as a Guide
 
 If you can't test a card, register-derived markings provide a rough guide (see [correlation table](#7-key-observations) in Section 7):

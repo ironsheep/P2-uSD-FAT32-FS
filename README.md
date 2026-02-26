@@ -46,7 +46,7 @@ This project provides a robust, high-performance SD card driver for the P2 micro
 - Parallax Propeller 2 (P2) microcontroller
 - P2 Edge Module ([P2-EC](https://www.parallax.com/product/p2-edge-module/) or [P2-EC32MB](https://www.parallax.com/product/p2-edge-module-32mb/))
 - microSD Add-on Board ([#64009](https://www.parallax.com/product/micro-sd-card-add-on-board/)) - provides the microSD card slot
-- FAT32-formatted SD card
+- microSD card (SDHC or SDXC — format with the included [format utility](src/UTILS/SD_format_card.spin2) or any OS formatter)
 
 ### Default Pin Configuration (P2 Edge)
 
@@ -173,10 +173,18 @@ P2-uSD-FAT32-FS/
 
 ## Known Limitations
 
-- **8.3 filenames only** - no long filename (LFN) support
-- **FAT32 only** - no FAT12, FAT16, or exFAT; cards >32GB ship as exFAT and must be reformatted (use the included format utility)
-- **SPI mode only** - no SD native 4-bit bus mode
-- **25 MHz SPI maximum** - CMD6 High Speed mode switch fails on all tested cards
+- **8.3 filenames only** — no long filename (LFN) support
+- **FAT32 only** — no FAT12, FAT16, or exFAT; cards >32 GB ship as exFAT and must be reformatted (use the included format utility)
+- **SPI mode only** — no SD native 4-bit bus mode
+- **25 MHz SPI maximum** — CMD6 High Speed mode switch fails on all tested cards
+
+### Card Size Support
+
+The driver's goal is full support for cards up to **2 TB** (the FAT32 and SDXC maximum defined by the Microsoft FAT32 specification and SD Physical Layer Specification). Tested with cards up to **128 GB** across 9 manufacturers.
+
+The FSCK utility provides full cluster-chain validation for cards up to approximately **64 GB** (limited by the P2's 512 KB hub RAM — the cluster bitmap requires 256 KB). Cards larger than 64 GB receive structural integrity checks (VBR, FSInfo, FAT table sync) but skip detailed chain validation and lost cluster recovery. Expanding FSCK coverage to larger cards is an active research item — see the [Punch List](DOCs/Plans/PUNCH-LIST.md).
+
+> **Right-size your card.** Larger cards mean larger FAT tables, longer mount times, and longer FSCK scans. Choose the smallest card that comfortably meets your storage needs. For most embedded applications, 8–32 GB provides ample capacity with the best overall performance. See the [Card Performance Guide](DOCs/SD-CARD-PERFORMANCE.md#right-sizing-your-card) for details.
 
 ## Credits
 
