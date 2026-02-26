@@ -39,18 +39,18 @@
 '' ═══════════════════════════════════════════════════════════════════════════════
 
 #IFDEF SD_INCLUDE_ALL
-  #IFNDEF SD_INCLUDE_RAW
-    #DEFINE SD_INCLUDE_RAW
-  #ENDIF
-  #IFNDEF SD_INCLUDE_REGISTERS
-    #DEFINE SD_INCLUDE_REGISTERS
-  #ENDIF
-  #IFNDEF SD_INCLUDE_SPEED
-    #DEFINE SD_INCLUDE_SPEED
-  #ENDIF
-  #IFNDEF SD_INCLUDE_DEBUG
-    #DEFINE SD_INCLUDE_DEBUG
-  #ENDIF
+#IFNDEF SD_INCLUDE_RAW
+#DEFINE SD_INCLUDE_RAW
+#ENDIF
+#IFNDEF SD_INCLUDE_REGISTERS
+#DEFINE SD_INCLUDE_REGISTERS
+#ENDIF
+#IFNDEF SD_INCLUDE_SPEED
+#DEFINE SD_INCLUDE_SPEED
+#ENDIF
+#IFNDEF SD_INCLUDE_DEBUG
+#DEFINE SD_INCLUDE_DEBUG
+#ENDIF
 #ENDIF
 
 CON  '' flags
@@ -424,7 +424,7 @@ DAT '' singleton control - SHARED across all object instances
   dir_buf       BYTE    0[512]          ' Directory sector buffer
   fat_buf       BYTE    0[512]          ' FAT sector buffer
   buf           BYTE    0[512]          ' Data sector buffer
-  entry_buffer  BYTE    0[32]           ' Directory entry buffer
+  entry_buffer  dir_entry_t             ' Directory entry buffer
   vol_label     BYTE    0[12]           ' Volume label (11 chars + null)
 
   ' ═══════════════════════════════════════════════════════════════════════════
@@ -1097,7 +1097,7 @@ CON '' ════════════════════════�
     '' INTERNAL WORKER OPERATIONS (called by fs_worker, not directly by API)
     '' ═══════════════════════════════════════════════════════════════════════════
 
-PRI do_mount() : result | reserved, pPart, pVBR, pFSI
+PRI do_mount() : result | reserved, pPart, pVBR, pFSI, i, p_entry
 ' Internal mount operation - initializes card and reads filesystem structures.
 '
 ' @returns result - SUCCESS on success, error code on failure
@@ -1161,7 +1161,23 @@ PRI do_mount() : result | reserved, pPart, pVBR, pFSI
   cluster_offset := root_sec // sec_per_clus
   bytemove(@vol_label, vbrVolLabelAddr(pVBR), 11)
   vol_label[11] := 0
-  debug("  [do_mount] Volume label: ", zstr(@vol_label))
+  debug("  [do_mount] VBR volume label: ", zstr(@vol_label))
+
+  ' Check root directory for authoritative volume label entry (ATTR_VOLUME_ID)
+  ' The root directory entry is the primary source per the FAT32 spec;
+  ' the VBR copy is a fallback (Windows format may write "NO NAME" to VBR).
+  if readSector(root_sec, BUF_DIR) >= 0
+    repeat i from 0 to 15                                                              ' 16 entries per 512-byte sector
+      p_entry := @dir_buf + (i * 32)
+      if byte[p_entry] == $00                                                          '  end of directory
+        quit
+      if byte[p_entry] <> $E5 and dirEntAttr(p_entry) == $08                           '  volume label entry
+        bytemove(@vol_label, p_entry, 11)                                              '   use root dir label
+        vol_label[11] := 0
+        debug("  [do_mount] Root dir volume label: ", zstr(@vol_label))
+        quit
+  else
+    debug("  [do_mount] Root dir read failed, using VBR label")
 
   ' Read FSInfo sector for free cluster count and next-free hint
   if fsinfo_sec > 0 and fsinfo_sec < reserved
@@ -4239,17 +4255,17 @@ PRI searchDirectory(name_ptr) : result | p_temp, p_entry, i, search_sec, j
       name_ptr++                                                                '   advance ptr to byte following "/"
 
     repeat i from 0 to 11                                                       '  convert name to uppercase
-      case entry_buffer[i]
-        "a".."z" : entry_buffer[i] -= $20
+      case BYTE[@entry_buffer][i]
+        "a".."z" : BYTE[@entry_buffer][i] -= $20
 
     i := 0                                                                      '  convert 8.3 filename into short filename
     if strcomp(@entry_buffer,string("..")) == 0                                 '  exception if changing directory to ".."
       repeat strsize(@entry_buffer) <# 9                                        '  search name for extension
-        if entry_buffer[i++] == "."                                             '  if extension found
+        if BYTE[@entry_buffer][i++] == "."                                       '  if extension found
           bytemove(@entry_buffer + 8,@entry_buffer + i,3)                       '   move extension to byte 8
           bytefill(@entry_buffer + i-1," ",9-i)                                 '   fill space between name and extension
     bytefill(@entry_buffer + strsize(@entry_buffer)," ",12-strsize(@entry_buffer)) ' fill remaining space (in case extension < 3 characters)
-    entry_buffer[11] := $00                                                     '  append null
+    BYTE[@entry_buffer][11] := $00                                              '  append null
 
     i := 0
     debug("  [searchDir] Starting search at n_sec=", udec_(n_sec), " for [", lstr_(@entry_buffer, 11), "]")
@@ -6002,7 +6018,7 @@ PUB displayEntry() | address, char, ascii_ptr, i
   ascii_ptr := string("0123456789ABCDEF")
   repeat address from 0 to 31 step 16
     repeat i from 0 to 15
-      case char := (entry_buffer[address + i])
+      case char := (BYTE[@entry_buffer][address + i])
         $20..$7E: byte[ascii_ptr + i] := char
         other:
           if char == 0

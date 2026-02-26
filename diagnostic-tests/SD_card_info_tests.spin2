@@ -43,7 +43,14 @@ CON
     MBR_SIGNATURE = $AA55
 
 '' Enable full driver features for register reads
+#IFDEF __SPINTOOLS__
+#DEFINE SD_INCLUDE_ALL
+#ELSEIFDEF __FLEXSPIN__
+#define SD_INCLUDE_ALL
+#pragma exportdef SD_INCLUDE_ALL
+#ELSE
 #PRAGMA EXPORTDEF SD_INCLUDE_ALL
+#ENDIF
 
 OBJ
     sd    : "micro_sd_fat32_fs"

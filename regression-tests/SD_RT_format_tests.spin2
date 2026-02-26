@@ -48,7 +48,14 @@ CON
     PARTITION_START     = 8192       ' 4MB alignment
 
 '' Enable full driver features for format testing
+#IFDEF __SPINTOOLS__
+#DEFINE SD_INCLUDE_ALL
+#ELSEIFDEF __FLEXSPIN__
+#define SD_INCLUDE_ALL
+#pragma exportdef SD_INCLUDE_ALL
+#ELSE
 #PRAGMA EXPORTDEF SD_INCLUDE_ALL
+#ENDIF
 
 OBJ
 

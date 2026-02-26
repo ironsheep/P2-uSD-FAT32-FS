@@ -46,7 +46,14 @@ CON
      SECTOR_SIZE         = 512
 
 '' Enable raw sector access for MBR integrity check
+#IFDEF __SPINTOOLS__
+#DEFINE SD_INCLUDE_RAW
+#ELSEIFDEF __FLEXSPIN__
+#define SD_INCLUDE_RAW
+#pragma exportdef SD_INCLUDE_RAW
+#ELSE
 #PRAGMA EXPORTDEF SD_INCLUDE_RAW
+#ENDIF
 
 OBJ
     sd    : "micro_sd_fat32_fs"

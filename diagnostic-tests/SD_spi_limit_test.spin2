@@ -36,8 +36,18 @@ CON
      MULTI_COUNT      = 8                        ' 8 sectors per round-trip
      NUM_ITERS        = 10                       ' Write-read-verify iterations
 
+#IFDEF __SPINTOOLS__
+#DEFINE SD_INCLUDE_RAW
+#DEFINE SD_INCLUDE_DEBUG
+#ELSEIFDEF __FLEXSPIN__
+#define SD_INCLUDE_RAW
+#pragma exportdef SD_INCLUDE_RAW
+#define SD_INCLUDE_DEBUG
+#pragma exportdef SD_INCLUDE_DEBUG
+#ELSE
 #PRAGMA EXPORTDEF SD_INCLUDE_RAW
 #PRAGMA EXPORTDEF SD_INCLUDE_DEBUG
+#ENDIF
 
 OBJ
     sd    : "micro_sd_fat32_fs"

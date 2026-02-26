@@ -29,10 +29,19 @@ CON
      ' Error codes for pre-mount validation
      E_NOT_MOUNTED   = -20
 
-'' Enable raw sector access for diagnostic tests
+'' Enable raw sector access and debug diagnostics
+#IFDEF __SPINTOOLS__
+#DEFINE SD_INCLUDE_RAW
+#DEFINE SD_INCLUDE_DEBUG
+#ELSEIFDEF __FLEXSPIN__
+#define SD_INCLUDE_RAW
+#pragma exportdef SD_INCLUDE_RAW
+#define SD_INCLUDE_DEBUG
+#pragma exportdef SD_INCLUDE_DEBUG
+#ELSE
 #PRAGMA EXPORTDEF SD_INCLUDE_RAW
-'' Enable debug diagnostics (CMD13, CRC counters)
 #PRAGMA EXPORTDEF SD_INCLUDE_DEBUG
+#ENDIF
 
 OBJ
     sd    : "micro_sd_fat32_fs"

@@ -53,7 +53,14 @@ CON
     NUM_TEST_SECTORS = 5
 
 '' Enable full driver features for raw sector testing
+#IFDEF __SPINTOOLS__
+#DEFINE SD_INCLUDE_ALL
+#ELSEIFDEF __FLEXSPIN__
+#define SD_INCLUDE_ALL
+#pragma exportdef SD_INCLUDE_ALL
+#ELSE
 #PRAGMA EXPORTDEF SD_INCLUDE_ALL
+#ENDIF
 
 OBJ
     sd    : "micro_sd_fat32_fs"

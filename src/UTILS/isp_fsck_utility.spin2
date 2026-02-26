@@ -74,7 +74,14 @@ CON { FAT32 structure constants }
   STACK_GUARD_BYTE  = $CC
 
 '' Enable full driver features
+#IFDEF __SPINTOOLS__
+#DEFINE SD_INCLUDE_ALL
+#ELSEIFDEF __FLEXSPIN__
+#define SD_INCLUDE_ALL
+#pragma exportdef SD_INCLUDE_ALL
+#ELSE
 #PRAGMA EXPORTDEF SD_INCLUDE_ALL
+#ENDIF
 
 OBJ
 

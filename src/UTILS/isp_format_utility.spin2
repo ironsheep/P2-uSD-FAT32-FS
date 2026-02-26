@@ -52,7 +52,14 @@ CON
     DEFAULT_LABEL_2     = $00_20_20_20  ' "   " + null (spaces to pad to 11)
 
 '' Enable full driver features for this utility
+#IFDEF __SPINTOOLS__
+#DEFINE SD_INCLUDE_ALL
+#ELSEIFDEF __FLEXSPIN__
+#define SD_INCLUDE_ALL
+#pragma exportdef SD_INCLUDE_ALL
+#ELSE
 #PRAGMA EXPORTDEF SD_INCLUDE_ALL
+#ENDIF
 
     ' Cog stack for async format
     FMT_STACK_LONGS   = 256

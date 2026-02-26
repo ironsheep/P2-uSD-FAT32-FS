@@ -38,8 +38,18 @@ CON
      MBR_SIGNATURE = $AA55
 
 '' Enable register access and raw sector access for VBR verification
+#IFDEF __SPINTOOLS__
+#DEFINE SD_INCLUDE_REGISTERS
+#DEFINE SD_INCLUDE_RAW
+#ELSEIFDEF __FLEXSPIN__
+#define SD_INCLUDE_REGISTERS
+#pragma exportdef SD_INCLUDE_REGISTERS
+#define SD_INCLUDE_RAW
+#pragma exportdef SD_INCLUDE_RAW
+#ELSE
 #PRAGMA EXPORTDEF SD_INCLUDE_REGISTERS
 #PRAGMA EXPORTDEF SD_INCLUDE_RAW
+#ENDIF
 
 OBJ
     sd    : "micro_sd_fat32_fs"
