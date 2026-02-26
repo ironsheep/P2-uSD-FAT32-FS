@@ -56,21 +56,26 @@ PUB go() | handle
     listCurrentDirectory()
 
     ' --- Create a test subdirectory with files ---
+    '   newDirectory() fails if the directory already exists — that's OK.
+    '   deleteFile() before createFileNew() makes this re-runnable.
     debug(" ")
     debug("--- Creating EXDIR with files ---")
     sd.newDirectory(@"EXDIR")
     sd.changeDirectory(@"EXDIR")
 
+    sd.deleteFile(@"FILE_A.TXT")
     handle := sd.createFileNew(@"FILE_A.TXT")
     if handle >= 0
         sd.writeHandle(handle, @"Contents of file A", 18)
         sd.closeFileHandle(handle)
 
+    sd.deleteFile(@"FILE_B.TXT")
     handle := sd.createFileNew(@"FILE_B.TXT")
     if handle >= 0
         sd.writeHandle(handle, @"Contents of file B", 18)
         sd.closeFileHandle(handle)
 
+    sd.deleteFile(@"TEMP.TXT")
     handle := sd.createFileNew(@"TEMP.TXT")
     if handle >= 0
         sd.writeHandle(handle, @"Temporary file", 14)
