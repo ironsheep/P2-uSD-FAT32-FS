@@ -1487,7 +1487,7 @@ PRI do_open_write(p_path) : handle | start_cluster, current_cluster, fat_addr, f
     repeat cluster_count
       fat_addr := readFat(current_cluster)
       current_cluster := long[fat_addr]
-      if current_cluster >= $0FFF_FFF8                                          ' End of chain - shouldn't happen
+      if current_cluster +>= $0FFF_FFF8                                         ' End of chain - shouldn't happen
         quit
     h_cluster[handle] := current_cluster
     h_sector[handle] := clus2sec(current_cluster) + ((file_size - 1) >> 9) & (sec_per_clus - 1)
@@ -1668,7 +1668,7 @@ PRI do_read_h(handle, p_buffer, count) : bytes_read | p_hbuf, available, offset,
         return 0
       fat_addr := @fat_buf + ((cluster << 2) & 511)
       next_cluster := long[fat_addr]
-      if next_cluster >= $0FFF_FFF8
+      if next_cluster +>= $0FFF_FFF8
         debug("  [do_read_h] End of chain at boundary advance")
         return 0
       h_cluster[handle] := next_cluster
@@ -1710,7 +1710,7 @@ PRI do_read_h(handle, p_buffer, count) : bytes_read | p_hbuf, available, offset,
           return bytes_read                                                            ' Return partial read count
         fat_addr := @fat_buf + ((cluster << 2) & 511)
         next_cluster := long[fat_addr]
-        if next_cluster >= $0FFF_FFF8
+        if next_cluster +>= $0FFF_FFF8
           ' End of chain - shouldn't happen if h_size is correct
           debug("  [do_read_h] Unexpected end of FAT chain")
           quit
@@ -1890,7 +1890,7 @@ PRI do_seek_h(handle, position) : result | target_cluster_idx, cluster, i, fat_a
         return E_IO_ERROR
       fat_addr := @fat_buf + ((cluster << 2) & 511)
       cluster := long[fat_addr]
-      if cluster >= $0FFF_FFF8
+      if cluster +>= $0FFF_FFF8
         ' End of chain reached before target - shouldn't happen
         debug("  [do_seek_h] Unexpected end of FAT chain at index ", udec_(i))
         return E_END_OF_FILE
@@ -2047,7 +2047,7 @@ PRI do_read_dir_h(handle) : result | p_hbuf, offset, char, attrib, cluster, fat_
           return E_IO_ERROR
         fat_addr := @fat_buf + ((cluster << 2) & 511)
         next_cluster := long[fat_addr]
-        if next_cluster >= $0FFF_FFF8
+        if next_cluster +>= $0FFF_FFF8
           return E_FILE_NOT_FOUND                                               ' End of directory chain
         h_cluster[handle] := next_cluster
         h_sector[handle] := clus2sec(next_cluster)
@@ -2425,7 +2425,7 @@ PRI do_delete(name_ptr) : result | cluster, p_cluster, fat_sector, loop_count
       loop_count++
       if loop_count > 100000                                                    ' Safety limit - prevent infinite loop
         return E_IO_ERROR
-    until cluster >= $0FFF_FFF8
+    until cluster +>= $0FFF_FFF8
   return SUCCESS
 
 PRI do_chdir(name_ptr) : result
@@ -4586,7 +4586,7 @@ PRI readNextSector(buf_type) | cluster, address, contents, p_buf
       return
     address := @fat_buf + ((cluster << 2) & 511)                                '   find long within FAT buffer for current cluster
     contents := long[address]                                                   '   read contents to determine next cluster number
-    if contents >= $0FFF_FFF8                                                   '   end-of-chain marker detected
+    if contents +>= $0FFF_FFF8                                                  '   end-of-chain marker detected
       ' Fill appropriate buffer with zeros based on buf_type
       case buf_type
         BUF_DIR:
@@ -4616,7 +4616,7 @@ PRI followFatChain() | cluster, address, contents
     return
   address := @fat_buf + ((cluster << 2) & 511)                                  '  find long within FAT buffer for current cluster
   contents := long[address]                                                     '  read contents to determine next cluster number
-  if contents < $0FFF_FFF8                                                      '  if not end-of-chain marker
+  if contents +< $0FFF_FFF8                                                     '  if not end-of-chain marker
     n_sec := clus2sec(contents)                                                 '   convert next cluster number into sector number
   ' else: end-of-chain - n_sec stays invalid (caller should check file_idx against fileSize)
 
