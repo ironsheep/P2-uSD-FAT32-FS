@@ -1,0 +1,392 @@
+'' =================================================================================================
+''
+''   File....... SD_diag_fsck_window_test.spin2
+''   Purpose.... Verify FSCK windowed bitmap detects defects in window 2 (clusters > 2M)
+''   Authors.... Claude + Stephen M Moraco
+''   Started.... 26 FEB 2026
+''   Updated.... 26 FEB 2026
+''
+'' =================================================================================================
+''
+''   *** REQUIRES A 128 GB (or larger) microSD CARD ***
+''
+''   This test exercises the windowed bitmap feature of isp_fsck_utility.
+''   A 128 GB card has ~4M clusters, which spans 2 bitmap windows (each covering
+''   2M clusters). The test:
+''
+''     Phase 1: Format the card (clean baseline)
+''     Phase 2: Run FSCK to verify clean card (STATUS: CLEAN, 0 repairs)
+''     Phase 3: Inject multiple defects in window-2 cluster range (>= 2,097,152)
+''              - Lost cluster: FAT entry allocated but unreferenced by any dir entry
+''              - Lost chain: 3 consecutive FAT entries forming a chain, unreferenced
+''              - Isolated bad ref: single FAT entry with invalid next-cluster pointer
+''     Phase 4: Run FSCK and verify it finds and repairs all defects
+''     Phase 5: Run FSCK again to verify card is now clean
+''
+''   The defects are injected via raw sector writes directly into FAT1.
+''   All injected clusters are chosen far from the data area to avoid
+''   colliding with actual filesystem content.
+''
+''   Usage: ./run_test.sh ../diagnostic-tests/SD_diag_fsck_window_test.spin2 -t 600
+''
+'' =================================================================================================
+
+CON
+
+    _CLKFREQ        = 350_000_000
+
+    ' P2 Edge module SD slot pins
+    SD_CS   = 60
+    SD_MOSI = 59
+    SD_MISO = 58
+    SD_SCK  = 61
+
+    ' External SD header (base pin 16)
+    'SD_CS   = 20
+    'SD_MOSI = 19
+    'SD_MISO = 18
+    'SD_SCK  = 21
+
+    ' Minimum card size in sectors for this test (~96 GB threshold)
+    ' 128 GB card reports ~250M sectors; 64 GB reports ~125M
+    MIN_CARD_SECTORS = 192_000_000
+
+    ' Bitmap window boundary (2M clusters)
+    WINDOW_BOUNDARY = 2_097_152
+
+    ' Defect injection targets (well into window 2, far from root)
+    ' These cluster numbers are chosen to be safely above the window boundary
+    ' and below the typical 128 GB cluster count (~3.9M clusters)
+    LOST_SINGLE_CLUS    = 2_500_000     ' single lost cluster
+    LOST_CHAIN_START    = 2_600_000     ' start of 3-cluster lost chain
+    LOST_CHAIN_MID      = 2_600_001     ' middle of lost chain
+    LOST_CHAIN_END      = 2_600_002     ' end of lost chain
+    BAD_REF_CLUS        = 2_700_000     ' cluster with bad next-pointer
+
+    ' Expected repair counts
+    EXPECTED_LOST       = 5             ' 1 single + 3 chain + 1 bad-ref cluster freed
+    EXPECTED_REPAIRS_P2 = 6             ' 5 lost clusters freed + 1 chain truncation repair
+
+    ' FAT constants
+    FAT_EOC             = $0FFFFFFF
+    FAT_FREE            = $00000000
+    FAT_MASK            = $0FFFFFFF
+
+'' Enable full driver features
+#IFDEF __SPINTOOLS__
+#DEFINE SD_INCLUDE_ALL
+#ELSEIFDEF __FLEXSPIN__
+#define SD_INCLUDE_ALL
+#pragma exportdef SD_INCLUDE_ALL
+#ELSE
+#PRAGMA EXPORTDEF SD_INCLUDE_ALL
+#ENDIF
+
+OBJ
+    sd    : "micro_sd_fat32_fs"
+    fsck  : "isp_fsck_utility"
+    fmt   : "isp_format_utility"
+    utils : "isp_rt_utilities"
+
+VAR
+
+    LONG    v_repairs
+    LONG    v_errors
+    LONG    v_warnings
+    LONG    v_dirs
+    LONG    v_files
+    LONG    v_pass
+    LONG    v_fail
+
+    ' Geometry read from VBR
+    LONG    partStart
+    LONG    secPerFat
+    LONG    secPerClus
+    LONG    totClusters
+    LONG    fat1Sec
+    LONG    dataSec
+    LONG    resrvdSec
+
+    BYTE    buf[512]
+
+PUB go() | result, pStr, cardSectors
+'' Main entry point - windowed FSCK diagnostic test
+
+    debug("==============================================")
+    debug("  SD_diag_fsck_window_test")
+    debug("  REQUIRES 128 GB (or larger) microSD card")
+    debug("==============================================")
+    debug(" ")
+
+    utils.startTestGroup(@"Windowed FSCK on Large Card")
+
+    ' -------------------------------------------------------
+    ' Preflight: Verify card is large enough
+    ' -------------------------------------------------------
+    debug("--- Preflight: Card size check ---")
+
+    result := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    if result == false
+        debug("FATAL: Cannot initialize card!")
+        debug("END_SESSION")
+        return
+
+    cardSectors := sd.cardSizeSectors()
+    debug("  Card size: ", udec_(cardSectors), " sectors (", udec_(cardSectors / 2048), " MB)")
+    sd.stop()
+
+    if cardSectors < MIN_CARD_SECTORS
+        debug(" ")
+        debug("ABORT: Card too small for this test.")
+        debug("  Need >= 128 GB card (>=", udec_(MIN_CARD_SECTORS), " sectors)")
+        debug("  Got: ", udec_(cardSectors), " sectors")
+        debug("END_SESSION")
+        return
+
+    debug("  Card size OK for windowed bitmap test")
+    debug(" ")
+
+    ' -------------------------------------------------------
+    ' Phase 1: Format the card
+    ' -------------------------------------------------------
+    debug("=== Phase 1: Format card ===")
+
+    utils.startTest(@"Format card")
+    result := fmt.format(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    utils.evaluateBool(result, @"format() returns true", true)
+    fmt.stop()
+
+    if not result
+        debug("FATAL: Format failed, cannot proceed")
+        utils.ShowTestEndCounts()
+        debug("END_SESSION")
+        return
+
+    debug(" ")
+
+    ' -------------------------------------------------------
+    ' Read geometry for defect injection
+    ' -------------------------------------------------------
+    debug("=== Reading card geometry ===")
+    readCardGeometry()
+
+    debug("  Partition start: ", udec_(partStart))
+    debug("  Sectors/cluster: ", udec_(secPerClus))
+    debug("  Sectors/FAT:     ", udec_(secPerFat))
+    debug("  Total clusters:  ", udec_(totClusters))
+    debug("  FAT1 start:      ", udec_(fat1Sec))
+    debug("  Data start:      ", udec_(dataSec))
+
+    ' Verify card has enough clusters for window 2
+    utils.startTest(@"Card has >2M clusters (needs 2 windows)")
+    utils.evaluateBool(totClusters > WINDOW_BOUNDARY, @">2M clusters", true)
+
+    ' Verify our injection targets are within valid cluster range
+    utils.startTest(@"Injection targets within cluster range")
+    utils.evaluateBool(BAD_REF_CLUS < totClusters, @"targets < totalClusters", true)
+
+    debug(" ")
+
+    ' -------------------------------------------------------
+    ' Phase 2: FSCK on clean card (baseline)
+    ' -------------------------------------------------------
+    debug("=== Phase 2: FSCK on clean card (baseline) ===")
+
+    runFsckAndCapture()
+
+    utils.startTest(@"Clean card: 0 errors")
+    utils.evaluateSingleValue(v_errors, @"errors", 0)
+
+    utils.startTest(@"Clean card: 0 repairs")
+    utils.evaluateSingleValue(v_repairs, @"repairs", 0)
+
+    debug(" ")
+
+    ' -------------------------------------------------------
+    ' Phase 3: Inject defects in window-2 cluster range
+    ' -------------------------------------------------------
+    debug("=== Phase 3: Inject defects in window 2 ===")
+
+    result := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    if result == false
+        debug("FATAL: Cannot init card for injection")
+        utils.ShowTestEndCounts()
+        debug("END_SESSION")
+        return
+
+    ' Defect A: Single lost cluster (allocated but unreferenced)
+    debug("  Injecting: single lost cluster at ", udec_(LOST_SINGLE_CLUS))
+    writeFATEntry(LOST_SINGLE_CLUS, FAT_EOC)
+
+    ' Defect B: Lost chain of 3 clusters (allocated, linked, but unreferenced)
+    debug("  Injecting: 3-cluster lost chain at ", udec_(LOST_CHAIN_START), "-", udec_(LOST_CHAIN_END))
+    writeFATEntry(LOST_CHAIN_START, LOST_CHAIN_MID)
+    writeFATEntry(LOST_CHAIN_MID, LOST_CHAIN_END)
+    writeFATEntry(LOST_CHAIN_END, FAT_EOC)
+
+    ' Defect C: Cluster with bad next-pointer (points to invalid cluster 0)
+    ' FSCK should truncate this chain and free the cluster
+    debug("  Injecting: bad-ref cluster at ", udec_(BAD_REF_CLUS))
+    writeFATEntry(BAD_REF_CLUS, 1)
+
+    ' Flush: re-read and write back FAT1 to FAT2 for the affected sectors
+    ' (FSCK pass 4 syncs FAT1->FAT2, but we also write FAT2 to be safe)
+    syncFAT2Entry(LOST_SINGLE_CLUS)
+    syncFAT2Entry(LOST_CHAIN_START)
+    syncFAT2Entry(BAD_REF_CLUS)
+
+    sd.stop()
+
+    debug("  5 defective clusters injected in window 2")
+    debug(" ")
+
+    ' -------------------------------------------------------
+    ' Phase 4: FSCK should find and repair all defects
+    ' -------------------------------------------------------
+    debug("=== Phase 4: FSCK with injected defects ===")
+
+    runFsckAndCapture()
+
+    utils.startTest(@"Defect FSCK: repairs > 0")
+    utils.evaluateBool(v_repairs > 0, @"repairs detected", true)
+
+    ' We expect: 5 lost clusters freed + 1 bad-ref truncation + FAT sync repairs
+    ' The exact count depends on pass 4 FAT sync, so check minimum
+    utils.startTest(@"Defect FSCK: >= 6 repairs (5 lost + 1 truncation)")
+    utils.evaluateBool(v_repairs >= EXPECTED_REPAIRS_P2, @"repair count >= 6", true)
+    debug("  Actual repairs: ", udec_(v_repairs))
+
+    debug(" ")
+
+    ' -------------------------------------------------------
+    ' Phase 5: FSCK again to verify card is now clean
+    ' -------------------------------------------------------
+    debug("=== Phase 5: FSCK verify clean after repair ===")
+
+    runFsckAndCapture()
+
+    utils.startTest(@"Post-repair: 0 errors")
+    utils.evaluateSingleValue(v_errors, @"errors", 0)
+
+    utils.startTest(@"Post-repair: 0 repairs")
+    utils.evaluateSingleValue(v_repairs, @"repairs", 0)
+
+    ' -------------------------------------------------------
+    ' Done
+    ' -------------------------------------------------------
+    debug(" ")
+    utils.ShowTestEndCounts()
+    debug("END_SESSION")
+
+
+PRI runFsckAndCapture() | pStr
+' Run FSCK in a temporary cog and capture all output via debug.
+' Populates v_repairs, v_errors, etc. from getResults().
+
+    if not fsck.startFsck(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+        debug("FATAL: Could not start FSCK cog")
+        return
+
+    ' Pump FIFO output to debug
+    repeat
+        pStr := fsck.getOutput()
+        if pStr
+            debug(zstr_(pStr))
+        elseif fsck.isDone()
+            ' Drain remaining output
+            repeat while (pStr := fsck.getOutput())
+                debug(zstr_(pStr))
+            quit
+
+    ' Capture result counters
+    fsck.getResults(@v_pass, @v_fail, @v_repairs, @v_errors, @v_warnings, @v_dirs, @v_files)
+    fsck.stop()
+
+    debug("  -- Results: repairs=", udec_(v_repairs), " errors=", udec_(v_errors), " warnings=", udec_(v_warnings))
+
+
+PRI readCardGeometry() | result, numFats
+' Read MBR + VBR to populate geometry variables for defect injection.
+' Uses sd.initCardOnly() for raw sector access.
+
+    result := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    if result == false
+        debug("FATAL: Cannot init card to read geometry")
+        return
+
+    ' Read MBR
+    sd.readSectorRaw(0, @buf)
+    partStart := LONG[@buf + $1C6]
+
+    ' Read VBR
+    sd.readSectorRaw(partStart, @buf)
+    secPerClus := buf[$0D]
+    resrvdSec := WORD[@buf + $0E]
+    numFats := buf[$10]
+    secPerFat := LONG[@buf + $24]
+    totClusters := LONG[@buf + $20]    ' totalSectors field
+
+    ' Compute derived values
+    fat1Sec := partStart + resrvdSec
+    dataSec := fat1Sec + (numFats * secPerFat)
+    totClusters := (totClusters - resrvdSec - (numFats * secPerFat)) / secPerClus
+
+    sd.stop()
+
+
+PRI writeFATEntry(cluster, value) | sector, offset, existing
+' Write a single FAT entry via raw sector access.
+' Preserves upper 4 reserved bits.
+'
+' @param cluster - Cluster number
+' @param value - New FAT entry value (lower 28 bits)
+
+    sector := fat1Sec + (cluster >> 7)
+    offset := (cluster & $7F) * 4
+
+    sd.readSectorRaw(sector, @buf)
+    existing := LONG[@buf + offset]
+    LONG[@buf + offset] := (value & FAT_MASK) | (existing & $F0000000)
+    sd.writeSectorRaw(sector, @buf)
+
+
+PRI syncFAT2Entry(cluster) | fat1Sector, fat2Sector
+' Copy the FAT1 sector containing 'cluster' to the corresponding FAT2 sector.
+'
+' @param cluster - Any cluster in the FAT sector to sync
+
+    fat1Sector := fat1Sec + (cluster >> 7)
+    fat2Sector := fat1Sector + secPerFat
+
+    sd.readSectorRaw(fat1Sector, @buf)
+    sd.writeSectorRaw(fat2Sector, @buf)
+
+
+CON { license }
+
+{{
+  =================================================================================================
+
+  Terms of Use: MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this
+  software and associated documentation files (the "Software"), to deal in the Software
+  without restriction, including without limitation the rights to use, copy, modify,
+  merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies
+  or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+  INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+  HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+  CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+  OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+  =================================================================================================
+}}

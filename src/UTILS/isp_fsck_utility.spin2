@@ -7,7 +7,7 @@
 ''               -- see below for terms of use
 ''   E-mail..... stephen@ironsheep.biz
 ''   Started.... 21 FEB 2026
-''   Updated.... 21 FEB 2026
+''   Updated.... 26 FEB 2026
 ''
 '' =================================================================================================
 ''
@@ -121,7 +121,11 @@ VAR
   LONG    v_dirCount
   LONG    v_fileCount
   LONG    scanDepth
-  LONG    bitmapCapable         ' TRUE if card fits in bitmap
+  LONG    v_lostCount           ' running count of lost clusters freed
+  LONG    windowStart           ' first cluster in current bitmap window
+  LONG    windowEnd             ' last cluster+1 in current window (exclusive)
+  LONG    currentWindow         ' current window index (0-based)
+  LONG    windowCount           ' total windows needed
 
   ' Cluster bitmap (256KB)
   LONG    bitmapData[BITMAP_LONGS]
@@ -344,6 +348,7 @@ PRI runFsck(cardSectors)
     v_warningCount := 0
     v_dirCount := 0
     v_fileCount := 0
+    v_lostCount := 0
     scanDepth := 0
     fatBufSector := -1
     fatBufDirty := false
@@ -357,25 +362,13 @@ PRI runFsck(cardSectors)
         fifo.put(@"FATAL: Cannot read filesystem geometry")
         return
 
-    ' Determine if bitmap can cover the whole card
-    bitmapCapable := (totalClusters <= MAX_BITMAP_CLUSTERS)
-    if not bitmapCapable
-        fifo.putFmt2(@"NOTE: Card has %d clusters (bitmap max: %d)", totalClusters, MAX_BITMAP_CLUSTERS)
-        fifo.put(@"  Deep scan (passes 2-3) skipped.")
-        v_warningCount++
-
     fifo.put(@" ")
 
     ' Pass 1: Structural integrity
     fsckPass1()
 
-    ' Pass 2: Directory walk + chain validation (requires bitmap)
-    if bitmapCapable
-        fsckPass2()
-
-    ' Pass 3: Lost cluster recovery (requires bitmap)
-    if bitmapCapable
-        fsckPass3()
+    ' Pass 2: Directory walk + chain validation (windowed bitmap)
+    fsckPass2()
 
     ' Pass 4: FAT sync + free count
     fsckPass4()
@@ -385,8 +378,7 @@ PRI runFsck(cardSectors)
     fifo.put(@"=== FSCK COMPLETE ===")
     fifo.putFmt2(@"Errors: %d  Repairs: %d", v_errorCount, v_repairCount)
     fifo.putFmt1(@"Warnings: %d", v_warningCount)
-    if bitmapCapable
-        fifo.putFmt2(@"Directories: %d  Files: %d", v_dirCount, v_fileCount)
+    fifo.putFmt2(@"Directories: %d  Files: %d", v_dirCount, v_fileCount)
     if v_errorCount == 0
         if v_repairCount == 0
             fifo.put(@"STATUS: CLEAN")
@@ -815,46 +807,73 @@ PRI fsckPass1() | idx, mismatch, fsinfoDirty, startRepairs
 '' =========================================================================
 
 PRI fsckPass2() | startRepairs
-' Walk directory tree and validate all cluster chains.
-' Builds a bitmap of referenced clusters to detect cross-links.
+' Walk directory tree and validate all cluster chains using windowed bitmap.
+' For cards >64GB, processes cluster space in 2M-cluster windows,
+' re-walking the directory tree for each window.
+' After each window, runs pass 3 (lost cluster recovery) for that window.
 
     fifo.put(@"--- Pass 2: Directory & Chain Validation ---")
     startRepairs := v_repairCount
 
-    ' Clear cluster bitmap
-    longfill(@bitmapData, 0, BITMAP_LONGS)
+    ' Compute number of windows needed
+    windowCount := (totalClusters + 2 + MAX_BITMAP_CLUSTERS - 1) / MAX_BITMAP_CLUSTERS
+    if windowCount > 1
+        fifo.putFmt2(@"  Using %d bitmap windows for %d clusters", windowCount, totalClusters + 2)
 
-    ' Mark clusters 0 and 1 as used (they don't exist as data clusters)
-    setBit(0)
-    setBit(1)
+    repeat currentWindow from 0 to windowCount - 1
+        ' Set up window boundaries
+        windowStart := currentWindow * MAX_BITMAP_CLUSTERS
+        windowEnd := (windowStart + MAX_BITMAP_CLUSTERS) <# (totalClusters + 2)
 
-    ' CRITICAL: Validate root chain BEFORE scanning directories
-    ' This prevents pass 3 from freeing root directory clusters
-    fsckValidateChain(rootCluster, 0, true)
+        ' Clear cluster bitmap for this window
+        longfill(@bitmapData, 0, BITMAP_LONGS)
 
-    ' Scan directory tree
-    v_dirCount := 0
-    v_fileCount := 0
-    scanDepth := 0
-    fsckScanDir(rootCluster)
+        ' Mark clusters 0 and 1 as used (they don't exist as data clusters)
+        if windowStart == 0
+            setBit(0)
+            setBit(1)
+
+        ' Reset counters only on first window
+        if currentWindow == 0
+            v_dirCount := 0
+            v_fileCount := 0
+
+        ' CRITICAL: Validate root chain BEFORE scanning directories
+        ' This prevents pass 3 from freeing root directory clusters
+        fsckValidateChain(rootCluster, 0, true)
+
+        ' Scan directory tree
+        scanDepth := 0
+        fsckScanDir(rootCluster)
+
+        ' Run pass 3 (lost cluster recovery) for this window immediately
+        fsckPass3Window()
 
     fifo.putFmt2(@"  Dirs: %d  Files: %d", v_dirCount, v_fileCount)
-    fifo.putFmt1(@"  Pass 2: %d repairs", v_repairCount - startRepairs)
+    if v_lostCount > 0
+        fifo.putFmt1(@"  REPAIR: Freed %d lost clusters", v_lostCount)
+        v_repairCount += v_lostCount
+    else
+        fifo.put(@"  [OK] No lost clusters")
+    fifo.putFmt1(@"  Pass 2/3: %d repairs", v_repairCount - startRepairs)
     fifo.put(@" ")
 
 
 PRI fsckScanDir(dirCluster) | sector, entSector, entIdx, pEntry, attr, startClus, fSize, name0, nextClus
 ' Recursively scan directory, validating all entries and chains.
 ' Re-reads parent sector after returning from subdirectory recursion.
+' On windows >0, suppresses counting and error messages (bitmap marking only).
 '
 ' @param dirCluster - First cluster of the directory to scan
 
-    v_dirCount++
+    if currentWindow == 0
+        v_dirCount++
     scanDepth++
 
     if scanDepth > MAX_DIR_DEPTH
-        fifo.put(@"  WARNING: Max dir depth exceeded")
-        v_warningCount++
+        if currentWindow == 0
+            fifo.put(@"  WARNING: Max dir depth exceeded")
+            v_warningCount++
         scanDepth--
         return
 
@@ -908,34 +927,39 @@ PRI fsckScanDir(dirCluster) | sector, entSector, entIdx, pEntry, attr, startClus
                             fsckScanDir(startClus)
                             ' Re-read our sector after recursion
                             sd.readSectorRaw(sector + entSector, @buf)
-                        else
+                        elseif currentWindow == 0
                             fifo.putFmt1(@"  ERROR: Bad dir start cluster %d", startClus)
                             v_errorCount++
                     elseif startClus <> 0
-                        fifo.putFmt1(@"  ERROR: Bad dir start cluster %d", startClus)
-                        v_errorCount++
+                        if currentWindow == 0
+                            fifo.putFmt1(@"  ERROR: Bad dir start cluster %d", startClus)
+                            v_errorCount++
                 else
                     ' --- Regular file ---
-                    v_fileCount++
+                    if currentWindow == 0
+                        v_fileCount++
                     if startClus >= 2
                         if startClus < (totalClusters + 2)
                             fsckValidateChain(startClus, fSize, false)
                     if startClus == 0
                         if fSize > 0
-                            fifo.putFmt1(@"  ERROR: File has size %d but no cluster", fSize)
-                            v_errorCount++
+                            if currentWindow == 0
+                                fifo.putFmt1(@"  ERROR: File has size %d but no cluster", fSize)
+                                v_errorCount++
 
         ' Advance to next cluster in directory chain
         nextClus := readFAT(dirCluster) & FAT_MASK
         if nextClus >= FAT_EOC_MIN
             quit
         if nextClus < 2
-            fifo.putFmt1(@"  ERROR: Bad cluster in dir chain: %d", nextClus)
-            v_errorCount++
+            if currentWindow == 0
+                fifo.putFmt1(@"  ERROR: Bad cluster in dir chain: %d", nextClus)
+                v_errorCount++
             quit
         if nextClus >= (totalClusters + 2)
-            fifo.putFmt1(@"  ERROR: Bad cluster in dir chain: %d", nextClus)
-            v_errorCount++
+            if currentWindow == 0
+                fifo.putFmt1(@"  ERROR: Bad cluster in dir chain: %d", nextClus)
+                v_errorCount++
             quit
         dirCluster := nextClus
 
@@ -945,7 +969,8 @@ PRI fsckScanDir(dirCluster) | sector, entSector, entIdx, pEntry, attr, startClus
 PRI fsckValidateChain(startClus, fSize, isDir) | clus, nextClus, chainLen, expectedLen
 ' Follow a cluster chain and validate integrity.
 ' Marks each visited cluster in the bitmap to detect cross-links.
-' Truncates chains at bad cluster references.
+' On window 0: repairs bad refs and reports errors.
+' On windows >0: bitmap marking only (chains already repaired).
 '
 ' @param startClus - First cluster of the chain
 ' @param fSize - Expected file size (0 for directories)
@@ -960,8 +985,9 @@ PRI fsckValidateChain(startClus, fSize, isDir) | clus, nextClus, chainLen, expec
 
         ' Check for cross-link (cluster already referenced by another chain)
         if testBit(clus)
-            fifo.putFmt1(@"  ERROR: Cross-linked cluster %d", clus)
-            v_errorCount++
+            if currentWindow == 0
+                fifo.putFmt1(@"  ERROR: Cross-linked cluster %d", clus)
+                v_errorCount++
             return
 
         ' Mark cluster as referenced
@@ -970,8 +996,9 @@ PRI fsckValidateChain(startClus, fSize, isDir) | clus, nextClus, chainLen, expec
 
         ' Safety: detect infinite loops
         if chainLen > MAX_CHAIN_LENGTH
-            fifo.putFmt1(@"  ERROR: Chain too long from cluster %d", startClus)
-            v_errorCount++
+            if currentWindow == 0
+                fifo.putFmt1(@"  ERROR: Chain too long from cluster %d", startClus)
+                v_errorCount++
             return
 
         ' Read next cluster in chain
@@ -983,18 +1010,20 @@ PRI fsckValidateChain(startClus, fSize, isDir) | clus, nextClus, chainLen, expec
 
         ' Bad cluster reference?
         if nextClus < 2
-            fifo.putFmt1(@"  ERROR: Bad ref %d in chain", nextClus)
-            writeFAT(clus, FAT_EOC)
-            fifo.putFmt1(@"  REPAIR: Truncated at cluster %d", clus)
-            v_repairCount++
-            quit
-
-        if nextClus >= (totalClusters + 2)
-            if nextClus <> FAT_BAD
+            if currentWindow == 0
                 fifo.putFmt1(@"  ERROR: Bad ref %d in chain", nextClus)
                 writeFAT(clus, FAT_EOC)
                 fifo.putFmt1(@"  REPAIR: Truncated at cluster %d", clus)
                 v_repairCount++
+            quit
+
+        if nextClus >= (totalClusters + 2)
+            if nextClus <> FAT_BAD
+                if currentWindow == 0
+                    fifo.putFmt1(@"  ERROR: Bad ref %d in chain", nextClus)
+                    writeFAT(clus, FAT_EOC)
+                    fifo.putFmt1(@"  REPAIR: Truncated at cluster %d", clus)
+                    v_repairCount++
                 quit
 
         ' Bad cluster marker - stop following
@@ -1004,29 +1033,27 @@ PRI fsckValidateChain(startClus, fSize, isDir) | clus, nextClus, chainLen, expec
         clus := nextClus
 
     ' For files, check chain length vs expected
-    if not isDir
-        if fSize > 0
-            expectedLen := (fSize + (sectorsPerCluster * 512) - 1) / (sectorsPerCluster * 512)
-            if chainLen <> expectedLen
-                fifo.putFmt2(@"  WARNING: Chain %d clusters, expected %d", chainLen, expectedLen)
-                v_warningCount++
+    if currentWindow == 0
+        if not isDir
+            if fSize > 0
+                expectedLen := (fSize + (sectorsPerCluster * 512) - 1) / (sectorsPerCluster * 512)
+                if chainLen <> expectedLen
+                    fifo.putFmt2(@"  WARNING: Chain %d clusters, expected %d", chainLen, expectedLen)
+                    v_warningCount++
 
 
 '' =========================================================================
 '' FSCK Pass 3: Lost cluster recovery
 '' =========================================================================
 
-PRI fsckPass3() | clus, fatVal, lostCount, startRepairs
-' Find and free lost clusters.
+PRI fsckPass3Window() | clus, fatVal, startClus
+' Find and free lost clusters within the current bitmap window.
 ' A "lost" cluster is allocated in the FAT but not referenced by any directory entry.
+' Called once per window from fsckPass2(). Running count kept in v_lostCount.
 
-    fifo.put(@"--- Pass 3: Lost Cluster Recovery ---")
-    startRepairs := v_repairCount
-    lostCount := 0
-
-    repeat clus from 2 to totalClusters + 1
-        ' Stay within bitmap range
-        if clus >= MAX_BITMAP_CLUSTERS
+    startClus := windowStart #> 2
+    repeat clus from startClus to windowEnd - 1
+        if clus >= (totalClusters + 2)
             quit
 
         ' If not in bitmap, it was not referenced by any file/dir
@@ -1036,19 +1063,10 @@ PRI fsckPass3() | clus, fatVal, lostCount, startRepairs
                 if fatVal <> FAT_BAD
                     ' Cluster is allocated but unreferenced - free it
                     writeFAT(clus, FAT_FREE)
-                    lostCount++
+                    v_lostCount++
 
-    ' Flush any pending FAT writes
+    ' Flush any pending FAT writes after this window
     flushFAT()
-
-    if lostCount > 0
-        fifo.putFmt1(@"  REPAIR: Freed %d lost clusters", lostCount)
-        v_repairCount += lostCount
-    else
-        fifo.put(@"  [OK] No lost clusters")
-
-    fifo.putFmt1(@"  Pass 3: %d repairs", v_repairCount - startRepairs)
-    fifo.put(@" ")
 
 
 '' =========================================================================
@@ -1184,21 +1202,29 @@ PRI clus2sec(cluster) : sector
     sector := dataStart + ((cluster - 2) * sectorsPerCluster)
 
 
-PRI setBit(cluster)
-' Set a bit in the cluster bitmap.
+PRI setBit(cluster) | idx
+' Set a bit in the cluster bitmap (window-relative).
+' Clusters outside the current window are silently ignored.
 '
 ' @param cluster - Cluster number to mark
 
-    bitmapData[cluster >> 5] |= (1 << (cluster & $1F))
+    if cluster < windowStart or cluster >= windowEnd
+        return
+    idx := cluster - windowStart
+    bitmapData[idx >> 5] |= (1 << (idx & $1F))
 
 
-PRI testBit(cluster) : result
-' Test whether a cluster is marked in the bitmap.
+PRI testBit(cluster) : result | idx
+' Test whether a cluster is marked in the bitmap (window-relative).
+' Returns FALSE for clusters outside the current window.
 '
 ' @param cluster - Cluster number to test
 ' @returns result - TRUE (non-zero) if marked
 
-    result := (bitmapData[cluster >> 5] >> (cluster & $1F)) & 1
+    if cluster < windowStart or cluster >= windowEnd
+        return false
+    idx := cluster - windowStart
+    result := (bitmapData[idx >> 5] >> (idx & $1F)) & 1
 
 
 PRI isDot(pEntry) : result

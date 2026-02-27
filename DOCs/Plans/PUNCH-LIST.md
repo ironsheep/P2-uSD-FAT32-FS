@@ -122,17 +122,13 @@ However, immediately re-reading the card shows the **original factory values are
 
 ---
 
-### Driver: Fix signed LONG sector addressing for 2 TB support
+### ~~Driver: Fix signed LONG sector addressing for 2 TB support~~ RESOLVED
 
-**Priority:** MEDIUM — required before cards >1 TB can be supported
+**Status:** DONE — changed 8 FAT chain end-of-chain comparisons from signed (`>=`, `<`) to unsigned (`+>=`, `+<`) operators in `micro_sd_fat32_fs.spin2`. These comparisons check against the FAT32 end-of-chain marker `$0FFF_FFF8`, which is negative when interpreted as a signed LONG. All mount and file_ops regression tests pass. Committed as `12e66ab`.
 
-**Problem:** The driver uses signed LONGs for sector numbers (`n_sec`, `h_sector`, etc.) throughout `micro_sd_fat32_fs.spin2`. A signed 32-bit LONG overflows at 2,147,483,647 sectors (~1 TB). The FAT32 specification (Microsoft fatgen103, page 7) explicitly states: "all data types are UNSIGNED. Do not do FAT computations with signed integer types." The SD Physical Layer Spec v9.10 defines SDXC CSD v2.0 C_SIZE as supporting up to 4,294,705,152 sectors (~2 TB).
+**Note:** This fixes the comparison operators only. A full audit of sector-number arithmetic (additions, shifts) in `isp_format_utility.spin2` and the driver is still recommended before testing with cards >1 TB.
 
-**Scope:** Audit all sector-number variables and FAT entry calculations for signed/unsigned correctness. Spin2 LONGs are signed by default — need to verify that all comparisons, shifts, and arithmetic behave correctly with sector numbers above $7FFF_FFFF.
-
-**Affected files:** `micro_sd_fat32_fs.spin2`, `isp_format_utility.spin2`
-
-*Noted: 2026-02-25*
+*Noted: 2026-02-25 | Resolved: 2026-02-26*
 
 ---
 
@@ -154,20 +150,29 @@ However, immediately re-reading the card shows the **original factory values are
 
 ---
 
-### FSCK: Research windowed bitmap for >64 GB full validation
+### FSCK: Windowed bitmap for >64 GB full validation
 
 **Priority:** MEDIUM — current FSCK provides structural checks only for cards >64 GB
 
 **Problem:** The FSCK cluster bitmap requires 1 bit per cluster, stored in P2 hub RAM. The current allocation (256 KB = LONG[65536]) covers 2,097,152 clusters — approximately 64 GB. Cards larger than this skip passes 2 (chain validation) and 3 (lost cluster recovery). A 2 TB card at 32 KB clusters would need ~8 MB of bitmap — far exceeding the P2's 512 KB hub.
 
-**Research directions:**
-1. **Windowed/sliding bitmap** — Process the FAT in segments, validating one range of clusters at a time. Requires multiple passes over the FAT but stays within hub memory. Trade-off: O(N²) time for O(1) memory.
-2. **External storage overlay** — Use the SD card itself (a reserved area or temp file) as overflow for the bitmap. Adds I/O overhead but could cover any card size.
-3. **Compressed bitmap** — If the FAT is mostly free or mostly allocated, run-length encoding or sparse representation could reduce memory. Unreliable for fragmented volumes.
-4. **Accept the limit** — Document ~64 GB as the maximum for full FSCK and provide structural checks only for larger cards. This may be acceptable for embedded use where cards are typically 8–32 GB.
+**Analysis (2026-02-26):** Evaluated four approaches:
 
-**Goal:** Determine whether full FSCK validation for 2 TB cards is achievable on the P2, and if so, at what performance cost.
+| Approach | Max Card Size | Speed | Safety | Complexity |
+|----------|--------------|-------|--------|------------|
+| Current hub bitmap | ~64 GB | Fast | Safe | Done |
+| Windowed scan (re-walk directory per window) | Unlimited | Moderate | Safest (read-only) | Low |
+| SD scratch file (bitmap in temp file) | Unlimited | Fast (with cache) | Some risk (writes to card under test) | Medium |
+| External sort (no bitmap, merge-based) | Unlimited | Slower | Some risk | Higher |
 
-*Noted: 2026-02-25*
+**Decision: Windowed scan.** Divide the cluster space into windows that fit in the existing 256 KB hub bitmap. For each window, re-walk the entire directory tree but only mark clusters within the current range. Then compare the window bitmap against the corresponding FAT entries. Key properties:
+
+- **Zero penalty for <= 64 GB cards**: `windows = ceil(total_clusters / 2M)`. A 32 GB card = 1 window = identical to current code.
+- **Graceful scaling**: 128 GB = 2 windows, 256 GB = 4, 2 TB = 32 windows.
+- **Read-only**: No writes to the card being checked — safest approach.
+- **Low complexity**: The directory tree is tiny vs the FAT. Re-reading ~50 directory sectors 32 times = ~1,600 sector reads — trivial.
+- **No new data structures**: Reuses existing bitmap allocation, just clears and re-fills per window.
+
+*Noted: 2026-02-25 | Analysis: 2026-02-26*
 
 ---
