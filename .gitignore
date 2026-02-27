@@ -11,6 +11,9 @@ logs/
 *.map
 *.obj
 
+# Generated documentation
+src/*.txt
+
 # macOS
 .DS_Store
 
