@@ -93,12 +93,13 @@ CON ' command codes for worker cog
   CMD_DEBUG_CLEAR_ROOT = 26 ' DEBUG: Clear root directory (fixes corruption)
 #ENDIF
 
+  CMD_READ_SECTOR_RAW  = 20 ' Raw single sector read: param0=sector, param1=buffer ptr (always available for readVBRRaw)
+
 #IFDEF SD_INCLUDE_RAW
   CMD_INIT_CARD_ONLY = 22   ' Initialize card without filesystem (raw mode)
   CMD_GET_CARD_SIZE  = 23   ' Get card size in sectors: returns in data0
   CMD_READ_SECTORS  = 18    ' Raw multi-block read: param0=start_sector, param1=count, param2=buffer ptr
   CMD_WRITE_SECTORS = 19    ' Raw multi-block write: param0=start_sector, param1=count, param2=buffer ptr
-  CMD_READ_SECTOR_RAW  = 20 ' Raw single sector read: param0=sector, param1=buffer ptr
   CMD_WRITE_SECTOR_RAW = 21 ' Raw single sector write: param0=sector, param1=buffer ptr
 #ENDIF
 
@@ -756,6 +757,14 @@ PRI fs_worker() | cur_cmd
           pb_status := E_IO_ERROR
 #ENDIF
 
+      CMD_READ_SECTOR_RAW:
+        sec_in_buf := -1                                                        ' Force re-read
+        if readSector(pb_param0, BUF_DATA) == 0                                 ' readSector returns 0 on success, -1 on error
+          bytemove(pb_param1, @buf, 512)
+          pb_status := SUCCESS
+        else
+          pb_status := E_IO_ERROR
+
 #IFDEF SD_INCLUDE_RAW
       CMD_READ_SECTORS:
         pb_data0 := readSectors(pb_param0, pb_param1, pb_param2)
@@ -764,14 +773,6 @@ PRI fs_worker() | cur_cmd
       CMD_WRITE_SECTORS:
         pb_data0 := writeSectors(pb_param0, pb_param1, pb_param2)
         pb_status := SUCCESS
-
-      CMD_READ_SECTOR_RAW:
-        sec_in_buf := -1                                                        ' Force re-read
-        if readSector(pb_param0, BUF_DATA) == 0                                 ' readSector returns 0 on success, -1 on error
-          bytemove(pb_param1, @buf, 512)
-          pb_status := SUCCESS
-        else
-          pb_status := E_IO_ERROR
 
       CMD_WRITE_SECTOR_RAW:
         bytemove(@buf, pb_param1, 512)
@@ -3145,7 +3146,7 @@ PUB readVBRRaw(p_buf) : result
   if not (flags & F_MOUNTED)
     debug("  [readVBRRaw] FAILED: Card not mounted")
     return false
-  result := readSectorRaw(vbr_sec, p_buf)
+  result := send_command(CMD_READ_SECTOR_RAW, vbr_sec, p_buf, 0, 0) == SUCCESS
 #ENDIF
 
 PRI readCSD(p_csd) : result | t, i
