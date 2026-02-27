@@ -64,8 +64,11 @@ CON
     BAD_REF_CLUS        = 2_700_000     ' cluster with bad next-pointer
 
     ' Expected repair counts
-    EXPECTED_LOST       = 5             ' 1 single + 3 chain + 1 bad-ref cluster freed
-    EXPECTED_REPAIRS_P2 = 6             ' 5 lost clusters freed + 1 chain truncation repair
+    ' All 5 injected clusters are orphans (unreferenced by any directory entry),
+    ' so FSCK pass 3 frees them all as lost clusters. The bad-ref cluster is also
+    ' an orphan — chain truncation only occurs for clusters reachable from the
+    ' directory tree.
+    EXPECTED_LOST       = 5             ' 1 single + 3 chain + 1 bad-ref = 5 lost clusters freed
 
     ' FAT constants
     FAT_EOC             = $0FFFFFFF
@@ -250,10 +253,9 @@ PUB go() | result, pStr, cardSectors
     utils.startTest(@"Defect FSCK: repairs > 0")
     utils.evaluateBool(v_repairs > 0, @"repairs detected", true)
 
-    ' We expect: 5 lost clusters freed + 1 bad-ref truncation + FAT sync repairs
-    ' The exact count depends on pass 4 FAT sync, so check minimum
-    utils.startTest(@"Defect FSCK: >= 6 repairs (5 lost + 1 truncation)")
-    utils.evaluateBool(v_repairs >= EXPECTED_REPAIRS_P2, @"repair count >= 6", true)
+    ' We expect: 5 lost clusters freed (all orphans detected by pass 3)
+    utils.startTest(@"Defect FSCK: 5 lost clusters freed")
+    utils.evaluateBool(v_repairs >= EXPECTED_LOST, @"repair count >= 5", true)
     debug("  Actual repairs: ", udec_(v_repairs))
 
     debug(" ")
