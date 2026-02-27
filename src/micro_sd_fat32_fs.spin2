@@ -1,6 +1,6 @@
 {Spin2_v45}
 {{┌──────────────────────────────────────────┐
-  │ SD card driver V3 — Release v1.0.0       │  Verified with Panasonic 512MB SD
+  │ SD card driver V3 — Release v1.1.0       │  Verified with Panasonic 512MB SD
   │ Original: Chris Gadd, V3: S.M. Moraco    │                PNY 8GB SDHC
   │ Copyright (c) 2023 Chris Gadd            │                SanDisk Extreme 32GB SDHC                                       3V3
   │ See end of file for terms of use.        │                GSKILL 32GB Micro SDHC                                              ┌─────┐
@@ -20,23 +20,23 @@
   debug(zstr(@buffer))
 }}
 
-'' ═══════════════════════════════════════════════════════════════════════════════
-'' CONDITIONAL COMPILATION - Optional Feature Modules
-'' ═══════════════════════════════════════════════════════════════════════════════
-'' Default: MINIMAL driver (core file operations only)
-'' To enable optional features, use #PRAGMA EXPORTDEF in your top-level file:
-''
-''   #PRAGMA EXPORTDEF SD_INCLUDE_RAW        ' Raw sector access
-''   #PRAGMA EXPORTDEF SD_INCLUDE_REGISTERS  ' Card register access (CID/CSD/SCR)
-''   #PRAGMA EXPORTDEF SD_INCLUDE_SPEED      ' High-speed mode control
-''   #PRAGMA EXPORTDEF SD_INCLUDE_DEBUG      ' Debug/diagnostic methods & CRC getters
-''
-''   OBJ
-''       sd : "micro_sd_fat32_fs"
-''
-'' Or define SD_INCLUDE_ALL to include everything:
-''   #PRAGMA EXPORTDEF SD_INCLUDE_ALL
-'' ═══════════════════════════════════════════════════════════════════════════════
+' ═══════════════════════════════════════════════════════════════════════════════
+' CONDITIONAL COMPILATION - Optional Feature Modules
+' ═══════════════════════════════════════════════════════════════════════════════
+' Default: MINIMAL driver (core file operations only)
+' To enable optional features, use #PRAGMA EXPORTDEF in your top-level file:
+'
+'   #PRAGMA EXPORTDEF SD_INCLUDE_RAW        ' Raw sector access
+'   #PRAGMA EXPORTDEF SD_INCLUDE_REGISTERS  ' Card register access (CID/CSD/SCR)
+'   #PRAGMA EXPORTDEF SD_INCLUDE_SPEED      ' High-speed mode control
+'   #PRAGMA EXPORTDEF SD_INCLUDE_DEBUG      ' Debug/diagnostic methods & CRC getters
+'
+'   OBJ
+'       sd : "micro_sd_fat32_fs"
+'
+' Or define SD_INCLUDE_ALL to include everything:
+'   #PRAGMA EXPORTDEF SD_INCLUDE_ALL
+' ═══════════════════════════════════════════════════════════════════════════════
 
 #IFDEF SD_INCLUDE_ALL
 #IFNDEF SD_INCLUDE_RAW
@@ -53,7 +53,7 @@
 #ENDIF
 #ENDIF
 
-CON  '' flags
+CON  ' flags
   ' NOTE: V3 driver exceeds 255 debug record limit when debug is fully enabled
   ' pnut-ts error: "DEBUG data is too long: too many records: max 255"
   ' Set to 1 to disable debug in driver and avoid compilation errors
@@ -64,12 +64,12 @@ CON  '' flags
   F_NEWDATA = decod 2
   F_MOUNTED = decod 3
 
-CON '' driver mode (enforces valid command sequences)
+CON ' driver mode (enforces valid command sequences)
   MODE_NONE       = 0       ' Not initialized - only mount() or initCardOnly() allowed
   MODE_RAW        = 1       ' Raw sector access only - initCardOnly() was called
   MODE_FILESYSTEM = 2       ' Full filesystem access - mount() was called
 
-CON '' command codes for worker cog
+CON ' command codes for worker cog
   CMD_NONE      = 0         ' Idle / command complete
   CMD_MOUNT     = 1         ' Mount filesystem
   CMD_UNMOUNT   = 2         ' Unmount filesystem
@@ -129,12 +129,12 @@ CON '' command codes for worker cog
   CMD_CLOSE_DIR_H = 45      ' Close directory handle: param0=handle
   CMD_SET_VOL_LABEL = 46    ' Set volume label: param0=new label string ptr
 
-CON '' buffer types for sector read/write (diagnostic: separate buffers to isolate conflicts)
+CON ' buffer types for sector read/write (diagnostic: separate buffers to isolate conflicts)
   BUF_DIR  = 0      ' Directory sector buffer
   BUF_FAT  = 1      ' FAT sector buffer
   BUF_DATA = 2      ' Data sector buffer
 
-CON '' error codes
+CON ' error codes
   SUCCESS           = 0
   E_TIMEOUT         = -1        ' Card didn't respond in time
   E_NO_RESPONSE     = -2        ' Card not responding
@@ -164,7 +164,7 @@ CON '' error codes
   E_FILE_ALREADY_OPEN = -92     ' File is already open for writing (single-writer policy)
   E_NOT_A_DIR_HANDLE  = -93     ' Handle is not a directory handle (or vice versa)
 
-CON '' V3 multi-file handle configuration
+CON ' V3 multi-file handle configuration
   ' ═══════════════════════════════════════════════════════════════════════════
   ' FILE HANDLE SYSTEM - V3 supports multiple simultaneously open files
   ' User can override MAX_OPEN_FILES in their top-level CON section before OBJ
@@ -180,12 +180,12 @@ CON '' V3 multi-file handle configuration
   HF_DIR    = 4                 ' Handle is a directory enumeration handle
   HF_DIRTY  = $80               ' Handle's buffer has pending writes (OR'd with mode)
 
-CON '' worker cog stack size
+CON ' worker cog stack size
   STACK_SIZE = 128              ' 128 longs = 512 bytes (original)
   STACK_GUARD_LONGS = 4         ' 4 longs = 16 bytes guard zone after stack
   STACK_GUARD_BYTE  = $CC       ' Sentinel value (matches isp_rt_utilities convention)
 
-CON '' streamer configuration (compile-time constants for bulk sector transfers)
+CON ' streamer configuration (compile-time constants for bulk sector transfers)
   ' Reference: flash_loader.spin2 pattern, P2 Silicon Doc streamer section
   ' Using explicit hex values from working flash_loader code:
   ' Mode word: [31:28]=mode [27:24]=options [23:17]=pin [16:0]=count
@@ -194,16 +194,16 @@ CON '' streamer configuration (compile-time constants for bulk sector transfers)
   STREAM_RX_BASE = $C081_0000   ' 1-pin input to hub, MSB-first (flash_loader wmode)
   STREAM_TX_BASE = $8081_0000   ' hub to 1-pin output, MSB-first (flash_loader rmode)
 
-CON '' CRC-16-CCITT configuration (using P2 GETCRC instruction)
+CON ' CRC-16-CCITT configuration (using P2 GETCRC instruction)
   ' Replaces 512-byte lookup table with hardware GETCRC + transformation
   ' Formula: crc := ((GETCRC(@data, CRC_POLY, 512) ^ CRC_BASE_512) REV 31) >> 16
   CRC_POLY_REFLECTED = $8408    ' CRC-16-CCITT in LSB-first (reflected) form
   CRC_BASE_512       = $2C68    ' GETCRC of 512 zero bytes with poly $8408
 
-CON '' CRC retry configuration
+CON ' CRC retry configuration
   MAX_READ_CRC_RETRIES = 3       ' Number of read retries on CRC mismatch (industry standard)
 
-CON '' SD card command codes and tokens for multi-block operations
+CON ' SD card command codes and tokens for multi-block operations
   ' ═══════════════════════════════════════════════════════════════════════════
   ' SD SPI Commands for multi-block operations (reference: SD Physical Layer Spec)
   ' ═══════════════════════════════════════════════════════════════════════════
@@ -240,12 +240,12 @@ CON '' SD card command codes and tokens for multi-block operations
   DATA_CRC_ERROR         = $0B ' Lower 5 bits = xxx01011 = CRC error
   DATA_WRITE_ERROR       = $0D ' Lower 5 bits = xxx01101 = write error
 
-CON '' struct types - SD card register and FAT32 on-disk data structures
-  '' ═══════════════════════════════════════════════════════════════════════════
-  '' Struct type definitions for card registers, filesystem structures, and
-  '' directory entries. Exported automatically to consumer objects via OBJ.
-  '' All structs are packed (Spin2 default) - offsets match hardware/on-disk layouts.
-  '' ═══════════════════════════════════════════════════════════════════════════
+CON ' struct types - SD card register and FAT32 on-disk data structures
+  ' ═══════════════════════════════════════════════════════════════════════════
+  ' Struct type definitions for card registers, filesystem structures, and
+  ' directory entries. Exported automatically to consumer objects via OBJ.
+  ' All structs are packed (Spin2 default) - offsets match hardware/on-disk layouts.
+  ' ═══════════════════════════════════════════════════════════════════════════
 
   ' --- SD Card Registers ---
 
@@ -424,7 +424,10 @@ DAT '' singleton control - SHARED across all object instances
   dir_buf       BYTE    0[512]          ' Directory sector buffer
   fat_buf       BYTE    0[512]          ' FAT sector buffer
   buf           BYTE    0[512]          ' Data sector buffer
-  entry_buffer  dir_entry_t             ' Directory entry buffer
+  entry_buffer  dir_entry_t
+                BYTE    0[14]           ' name[8], ext[3], attr, ntRes, crtTenth
+                WORD    0[7]            ' crtTime, crtDate, accDate, clusHI, wrtTime, wrtDate, clusLO
+                LONG    0              ' fileSize
   vol_label     BYTE    0[12]           ' Volume label (11 chars + null)
 
   ' ═══════════════════════════════════════════════════════════════════════════
@@ -452,9 +455,9 @@ DAT '' singleton control - SHARED across all object instances
 PUB null()
 '' This is not a top-level object - placeholder to indicate driver must be instantiated as OBJ.
 
-CON '' ═══════════════════════════════════════════════════════════════════════════
-    '' MULTI-COG LIFECYCLE METHODS
-    '' ═══════════════════════════════════════════════════════════════════════════
+CON ' ═══════════════════════════════════════════════════════════════════════════
+    ' MULTI-COG LIFECYCLE METHODS
+    ' ═══════════════════════════════════════════════════════════════════════════
 
 PUB start(_cs, _mosi, _miso, _sck) : result
 '' Start worker cog (singleton) - initialize SD card driver and launch dedicated worker cog.
@@ -935,9 +938,9 @@ PRI send_command(op_cmd, p0, p1, p2, p3) : status
 
   return status
 
-CON '' ═══════════════════════════════════════════════════════════════════════════
-    '' V3 FILE HANDLE MANAGEMENT HELPERS
-    '' ═══════════════════════════════════════════════════════════════════════════
+CON ' ═══════════════════════════════════════════════════════════════════════════
+    ' V3 FILE HANDLE MANAGEMENT HELPERS
+    ' ═══════════════════════════════════════════════════════════════════════════
 
 PRI allocateHandle() : handle
 ' Find and allocate a free handle slot by searching the handle table.
@@ -1014,88 +1017,208 @@ PRI initHandleTable() | i
   repeat i from 0 to MAX_OPEN_FILES - 1
     freeHandle(i)
 
-CON '' ═══════════════════════════════════════════════════════════════════════════
-    '' STRUCT ACCESSOR HELPERS (workaround: pnut-ts v51a ^structName not in locals)
-    '' ═══════════════════════════════════════════════════════════════════════════
+CON ' ═══════════════════════════════════════════════════════════════════════════
+    ' STRUCT ACCESSOR HELPERS (workaround: pnut-ts v51a ^structName not in locals)
+    ' ═══════════════════════════════════════════════════════════════════════════
 
 PRI partType(^mbr_partition_t pPart) : value
+' Get partition type code from MBR partition entry.
+'
+' @param pPart - Pointer to MBR partition entry
+' @returns value - Partition type code ($0B/$0C = FAT32)
+
   return pPart.partType
 
 PRI partLbaStart(^mbr_partition_t pPart) : value
+' Get LBA start sector from MBR partition entry.
+'
+' @param pPart - Pointer to MBR partition entry
+' @returns value - First sector of partition (LBA)
+
   return pPart.lbaStart
 
 PRI vbrBytesPerSec(^vbr_t pVBR) : value
+' Get bytes per sector from VBR.
+'
+' @param pVBR - Pointer to Volume Boot Record
+' @returns value - Bytes per sector (must be 512)
+
   return pVBR.bytesPerSec
 
 PRI vbrSecPerClus(^vbr_t pVBR) : value
+' Get sectors per cluster from VBR.
+'
+' @param pVBR - Pointer to Volume Boot Record
+' @returns value - Sectors per cluster (power of 2)
+
   return pVBR.secPerClus
 
 PRI vbrReservedSec(^vbr_t pVBR) : value
+' Get reserved sector count from VBR.
+'
+' @param pVBR - Pointer to Volume Boot Record
+' @returns value - Number of reserved sectors before FAT
+
   return pVBR.reservedSec
 
 PRI vbrNumFats(^vbr_t pVBR) : value
+' Get number of FATs from VBR.
+'
+' @param pVBR - Pointer to Volume Boot Record
+' @returns value - Number of FAT copies (typically 2)
+
   return pVBR.numFats
 
 PRI vbrSecPerFat32(^vbr_t pVBR) : value
+' Get sectors per FAT from VBR.
+'
+' @param pVBR - Pointer to Volume Boot Record
+' @returns value - Number of sectors per FAT
+
   return pVBR.secPerFat32
 
 PRI vbrFsInfoSec(^vbr_t pVBR) : value
+' Get FSInfo sector offset from VBR.
+'
+' @param pVBR - Pointer to Volume Boot Record
+' @returns value - FSInfo sector number (relative to VBR)
+
   return pVBR.fsInfoSec
 
 PRI vbrVolLabelAddr(^vbr_t pVBR) : addr
+' Get address of volume label field in VBR.
+'
+' @param pVBR - Pointer to Volume Boot Record
+' @returns addr - Hub address of 11-byte volume label field
+
   return @pVBR.volLabel
 
 PRI fsiLeadSig(^fsinfo_t pFSI) : value
+' Get FSInfo lead signature.
+'
+' @param pFSI - Pointer to FSInfo sector
+' @returns value - Lead signature (must be $41615252)
+
   return pFSI.leadSig
 
 PRI fsiStructSig(^fsinfo_t pFSI) : value
+' Get FSInfo struct signature.
+'
+' @param pFSI - Pointer to FSInfo sector
+' @returns value - Struct signature (must be $61417272)
+
   return pFSI.structSig
 
 PRI fsiFreeClusters(^fsinfo_t pFSI) : value
+' Get free cluster count from FSInfo.
+'
+' @param pFSI - Pointer to FSInfo sector
+' @returns value - Number of free clusters ($FFFFFFFF if unknown)
+
   return pFSI.freeClusters
 
 PRI fsiNextFreeHint(^fsinfo_t pFSI) : value
+' Get next free cluster hint from FSInfo.
+'
+' @param pFSI - Pointer to FSInfo sector
+' @returns value - Suggested starting cluster for free space search
+
   return pFSI.nextFreeHint
 
 PRI fsiSetFreeClusters(^fsinfo_t pFSI, value)
+' Set free cluster count in FSInfo.
+'
+' @param pFSI - Pointer to FSInfo sector
+' @param value - New free cluster count
+
   pFSI.freeClusters := value
 
 PRI fsiSetNextFreeHint(^fsinfo_t pFSI, value)
+' Set next free cluster hint in FSInfo.
+'
+' @param pFSI - Pointer to FSInfo sector
+' @param value - New next-free cluster hint
+
   pFSI.nextFreeHint := value
 
 PRI dirEntAttr(^dir_entry_t p) : value
+' Get attribute byte from directory entry.
+'
+' @param p - Pointer to directory entry
+' @returns value - FAT attribute byte ($10=dir, $20=archive, $08=volume label)
+
   return p.attr
 
 PRI dirEntStartClus(^dir_entry_t p) : value
+' Get start cluster from directory entry (combines high and low words).
+'
+' @param p - Pointer to directory entry
+' @returns value - 32-bit start cluster number
+
   return p.clusHI << 16 | p.clusLO
 
 PRI dirEntFileSize(^dir_entry_t p) : value
+' Get file size from directory entry.
+'
+' @param p - Pointer to directory entry
+' @returns value - File size in bytes
+
   return p.fileSize
 
 PRI dirEntSetAttr(^dir_entry_t p, value)
+' Set attribute byte in directory entry.
+'
+' @param p - Pointer to directory entry
+' @param value - Attribute byte to set
+
   p.attr := value
 
 PRI dirEntSetStartClus(^dir_entry_t p, value)
+' Set start cluster in directory entry (splits into high and low words).
+'
+' @param p - Pointer to directory entry
+' @param value - 32-bit cluster number to set
+
   p.clusHI := value >> 16
   p.clusLO := value & $FFFF
 
 PRI dirEntSetFileSize(^dir_entry_t p, value)
+' Set file size in directory entry.
+'
+' @param p - Pointer to directory entry
+' @param value - File size in bytes
+
   p.fileSize := value
 
 PRI dirEntAddFileSize(^dir_entry_t p, delta)
+' Add delta to file size in directory entry.
+'
+' @param p - Pointer to directory entry
+' @param delta - Byte count to add to current size
+
   p.fileSize += delta
 
 PRI dirEntSetCreateStamp(^dir_entry_t p, stamp)
+' Set creation timestamp in directory entry.
+'
+' @param p - Pointer to directory entry
+' @param stamp - Combined date/time stamp (date in upper 16, time in lower 16)
+
   p.crtTime := stamp & $FFFF
   p.crtDate := stamp >> 16
 
 PRI dirEntSetModifyStamp(^dir_entry_t p, stamp)
+' Set modification timestamp in directory entry.
+'
+' @param p - Pointer to directory entry
+' @param stamp - Combined date/time stamp (date in upper 16, time in lower 16)
+
   p.wrtTime := stamp & $FFFF
   p.wrtDate := stamp >> 16
 
-CON '' ═══════════════════════════════════════════════════════════════════════════
-    '' INTERNAL WORKER OPERATIONS (called by fs_worker, not directly by API)
-    '' ═══════════════════════════════════════════════════════════════════════════
+CON ' ═══════════════════════════════════════════════════════════════════════════
+    ' INTERNAL WORKER OPERATIONS (called by fs_worker, not directly by API)
+    ' ═══════════════════════════════════════════════════════════════════════════
 
 PRI do_mount() : result | reserved, pPart, pVBR, pFSI, i, p_entry, cluster, sector, sec_idx, next_cluster, found
 ' Internal mount operation - initializes card and reads filesystem structures.
@@ -2681,12 +2804,12 @@ PRI do_readdir(entry_num) : result | idx, char, attrib
       readNextSector(BUF_DIR)
   return E_FILE_NOT_FOUND
 
-CON '' ═══════════════════════════════════════════════════════════════════════════
-    '' PUBLIC API - Multi-cog safe via worker cog
-    '' All operations are serialized through send_command()
-    '' ═══════════════════════════════════════════════════════════════════════════
+CON ' ═══════════════════════════════════════════════════════════════════════════
+    ' PUBLIC API - Multi-cog safe via worker cog
+    ' All operations are serialized through send_command()
+    ' ═══════════════════════════════════════════════════════════════════════════
 
-CON     '' management methods
+CON     ' management methods
 PUB mount(_cs, _mosi, _miso, _sck) : result
 '' Mount SD card (multi-cog safe) - starts worker cog and mounts filesystem.
 '' Supports MODE_RAW -> MODE_FILESYSTEM upgrade (card already initialized).
@@ -2919,22 +3042,22 @@ PUB writeSectorsRaw(start_sector, count, p_buffer) : result
 #ENDIF
 
 #IFDEF SD_INCLUDE_REGISTERS
-CON '' ═══════════════════════════════════════════════════════════════════════════
-    '' CARD IDENTIFICATION METHODS (for diagnostic tools)
-    '' These methods provide raw register access for card characterization.
-    '' Call initCardOnly() or mount() before using these methods.
-    ''
-    '' SD card registers are big-endian (MSB-first). Single-byte fields can be
-    '' read directly, but multi-byte fields need endian conversion on the P2
-    '' (little-endian). Currently done with manual shift/OR patterns.
-    ''
-    '' TODO: With {Spin2_v52} compiler, use ENDIANL() and ENDIANW() for
-    ''   multi-byte big-endian fields:
-    ''     psn := ENDIANL(LONG[@cid_buf + 9])   ' CID serial number
-    ''     mdt := ENDIANW(WORD[@cid_buf + 13])   ' CID manufacturing date
-    ''   Also consider STRUCT (available at v45+) to define cid_t, csd_t, scr_t
-    ''   types here and export them for consumer objects.
-    '' ═══════════════════════════════════════════════════════════════════════════
+CON ' ═══════════════════════════════════════════════════════════════════════════
+    ' CARD IDENTIFICATION METHODS (for diagnostic tools)
+    ' These methods provide raw register access for card characterization.
+    ' Call initCardOnly() or mount() before using these methods.
+    '
+    ' SD card registers are big-endian (MSB-first). Single-byte fields can be
+    ' read directly, but multi-byte fields need endian conversion on the P2
+    ' (little-endian). Currently done with manual shift/OR patterns.
+    '
+    ' TODO: With {Spin2_v52} compiler, use ENDIANL() and ENDIANW() for
+    '   multi-byte big-endian fields:
+    '     psn := ENDIANL(LONG[@cid_buf + 9])   ' CID serial number
+    '     mdt := ENDIANW(WORD[@cid_buf + 13])   ' CID manufacturing date
+    '   Also consider STRUCT (available at v45+) to define cid_t, csd_t, scr_t
+    '   types here and export them for consumer objects.
+    ' ═══════════════════════════════════════════════════════════════════════════
 
 PUB readCIDRaw(p_buf) : result | status
 '' Read CID register (16 bytes) into buffer.
@@ -3022,13 +3145,7 @@ PUB readVBRRaw(p_buf) : result
   if not (flags & F_MOUNTED)
     debug("  [readVBRRaw] FAILED: Card not mounted")
     return false
-  sec_in_buf := -1                                                              '  force re-read
-  if readSector(vbr_sec, BUF_DATA) < 0
-    debug("  [readVBRRaw] FAILED: VBR read error")
-    return false
-  bytemove(p_buf, @buf, 512)
-  debug("  [readVBRRaw] VBR read from sector ", udec(vbr_sec))
-  return true
+  result := readSectorRaw(vbr_sec, p_buf)
 #ENDIF
 
 PRI readCSD(p_csd) : result | t, i
@@ -3317,7 +3434,7 @@ PRI setOptimalSpeed()
     debug("  [setOptimalSpeed] Set to card's max speed (up to 25 MHz)")
 
 #IFDEF SD_INCLUDE_SPEED
-CON '' High-Speed Mode Support (50 MHz via CMD6)
+CON ' High-Speed Mode Support (50 MHz via CMD6)
 
 PRI sendCMD6(arg, p_status) : result | t, i
 ' Send CMD6 (SWITCH_FUNC) and receive 64-byte status structure.
@@ -4135,7 +4252,7 @@ PUB setDate(year, month, day, hour, minute, second)
 
   date_stamp := (year - 1980) << 25 | month << 21 | day << 16 | hour << 11 | minute << 5 | second >> 1
 
-CON     '' read/write methods
+CON     ' read/write methods
 PUB read(p_buffer, count) : result
 '' Read bytes from file (multi-cog safe) - reads up to count bytes.
 ''
@@ -4242,7 +4359,7 @@ PUB seek(pos) : result
     set_error(result)
     return false
 
-CON     '' directory methods
+CON     ' directory methods
 PRI searchDirectory(name_ptr) : result | p_temp, p_entry, i, search_sec, j
 ' Search directory for a file/directory by name.
 '
@@ -4519,7 +4636,7 @@ PUB fileSize() : result
 
   return dirEntFileSize(@entry_buffer)
 
-CON     '' FAT and sector methods
+CON     ' FAT and sector methods
 PRI readFat(cluster) : result | contents, p_contents
 ' Read a FAT location and return a pointer to the location of that entry.
 '
@@ -4637,7 +4754,7 @@ PRI followFatChain() | cluster, address, contents
     n_sec := clus2sec(contents)                                                 '   convert next cluster number into sector number
   ' else: end-of-chain - n_sec stays invalid (caller should check file_idx against fileSize)
 
-CON     '' helper methods
+CON     ' helper methods
 PRI byte2clus(byte_address) : result
 ' Convert byte address to cluster number.
 '
@@ -4670,7 +4787,7 @@ PRI clus2sec(cluster) : result
 
   return (cluster - 2) * sec_per_clus + root_sec
 
-CON     '' low-level SPI routines
+CON     ' low-level SPI routines
 
 PRI initSPIPins()
 ' Configure smart pins for SPI operation - initialize Smart Pins for high-speed SPI communication.
@@ -4823,6 +4940,7 @@ PRI calcDataCRC(pData, len) : crc | raw
 ' @param len - Number of bytes to process (must be 512 for sector data)
 ' @returns crc - 16-bit CRC-16-CCITT value matching SD card's calculation
 ' @local raw - Raw GETCRC result before transformation
+
   raw := GETCRC(pData, CRC_POLY_REFLECTED, len)
   crc := ((raw ^ CRC_BASE_512) REV 31) >> 16
 
@@ -6002,7 +6120,7 @@ PRI transfer(data,bits) : result | _cs, _mosi, _miso, _sck, delay
     result &= (1 << bits) - 1                                                   '  (skip for 32 bits - mask would wrap)
 
 #IFDEF SD_INCLUDE_DEBUG
-CON     '' debug methods
+CON     ' debug methods
   _CLKFREQ = 80_000_000
 PUB displaySector() | address, char, ascii_ptr, i
 '' Display sector in buffer - prints hex dump with ASCII representation.

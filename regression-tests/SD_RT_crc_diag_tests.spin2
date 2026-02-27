@@ -114,11 +114,13 @@ PUB go() | result, handle, bytesRead, bytesWritten, matchCount, mismatchCount, r
     debug("   CRC retry count: ", udec(retryCount))
     utils.evaluateSingleValue(retryCount, @"retry count", 0)
 
-    ' Test: lastReceivedCRC != 0 (mount performed reads)
-    utils.startTest(@"lastReceivedCRC != 0 after mount")
+    ' Test: lastReceivedCRC == lastCalculatedCRC (CRC pair consistent after mount)
+    ' Note: CRC may be $0000 if last sector read was all zeros (e.g., empty FAT sector)
+    utils.startTest(@"lastReceivedCRC == lastCalculatedCRC after mount")
     lastRecvCRC := sd.getLastReceivedCRC()
-    debug("   Last received CRC: $", uhex_(lastRecvCRC))
-    utils.evaluateNotZero(lastRecvCRC, @"lastReceivedCRC")
+    lastCalcCRC := sd.getLastCalculatedCRC()
+    debug("   Last received CRC: $", uhex_(lastRecvCRC), " calculated: $", uhex_(lastCalcCRC))
+    utils.evaluateSingleValue(lastRecvCRC, @"recv == calc CRC", lastCalcCRC)
 
     ' ======================================================================
     ' TEST GROUP: CRC Values After Operations

@@ -1,5 +1,5 @@
 {{┌──────────────────────────────────────────┐
-│ SD card driver V3 (Multi-File Handles)   │  Verified with Panasonic 512MB SD
+│ SD card driver V3 — Release v1.1.0       │  Verified with Panasonic 512MB SD
 │ Original: Chris Gadd, V3: S.M. Moraco    │                PNY 8GB SDHC
 │ Copyright (c) 2023 Chris Gadd            │                SanDisk Extreme 32GB SDHC                                       3V3
 │ See end of file for terms of use.        │                GSKILL 32GB Micro SDHC                                              ┌─────┐
@@ -17,25 +17,6 @@ sd.openFile(string("fileA.txt"))                      ' open file in current dir
 sd.openFile(string("/folder1/fileA.txt"))             ' open file from path (1st "/" resets directory to root)                 │ └─┳───────────────────┘
 sd.read(@buffer,sd.fileSize())                        ' read opened file into buffer                                              
 debug(zstr(@buffer))
- ═══════════════════════════════════════════════════════════════════════════════
- CONDITIONAL COMPILATION - Optional Feature Modules
- ═══════════════════════════════════════════════════════════════════════════════
- Default: MINIMAL driver (core file operations only)
- To enable optional features, use #PRAGMA EXPORTDEF in your top-level file:
-   #PRAGMA EXPORTDEF SD_INCLUDE_RAW        ' Raw sector access
-   #PRAGMA EXPORTDEF SD_INCLUDE_REGISTERS  ' Card register access (CID/CSD/SCR)
-   #PRAGMA EXPORTDEF SD_INCLUDE_SPEED      ' High-speed mode control
-   #PRAGMA EXPORTDEF SD_INCLUDE_DEBUG      ' Debug/diagnostic methods & CRC getters
-   OBJ
-       sd : "micro_sd_fat32_fs"
- Or define SD_INCLUDE_ALL to include everything:
-   #PRAGMA EXPORTDEF SD_INCLUDE_ALL
- ═══════════════════════════════════════════════════════════════════════════════
- ═══════════════════════════════════════════════════════════════════════════
- Struct type definitions for card registers, filesystem structures, and
- directory entries. Exported automatically to consumer objects via OBJ.
- All structs are packed (Spin2 default) - offsets match hardware/on-disk layouts.
- ═══════════════════════════════════════════════════════════════════════════
 
 Object "micro_sd_fat32_fs" Interface:
   (Requires Spin2 Language v45)
@@ -43,6 +24,7 @@ Object "micro_sd_fat32_fs" Interface:
 PUB null()
 PUB start(_cs, _mosi, _miso, _sck) : result
 PUB stop()
+PUB checkStackGuard() : bIntact
 PUB error() : status
 PUB getLastCMD13() : r2
 PUB getLastCMD13Error() : r2
@@ -51,7 +33,9 @@ PUB getLastCalculatedCRC() : crc
 PUB getLastSentCRC() : crc
 PUB getCRCMatchCount() : count
 PUB getCRCMismatchCount() : count
+PUB getCRCRetryCount() : count
 PUB setCRCValidation(enabled)
+PUB getWriteDiag() : result_code, r1_resp, data_resp, sector_num
 PUB mount(_cs, _mosi, _miso, _sck) : result
 PUB initCardOnly(_cs, _mosi, _miso, _sck) : result
 PUB cardSizeSectors() : result
@@ -63,6 +47,7 @@ PUB writeSectorsRaw(start_sector, count, p_buffer) : result
 PUB readCIDRaw(p_buf) : result
 PUB readCSDRaw(p_buf) : result
 PUB readSCRRaw(p_buf) : result
+PUB readSDStatusRaw(p_buf) : result
 PUB getOCR() : ocr
 PUB readVBRRaw(p_buf) : result
 PUB attemptHighSpeed() : hs_ok
@@ -133,8 +118,6 @@ __________
 PUB null()
 
  This is not a top-level object - placeholder to indicate driver must be instantiated as OBJ.
- MULTI-COG LIFECYCLE METHODS
- ═══════════════════════════════════════════════════════════════════════════
 
 ___________________________________________
 PUB start(_cs, _mosi, _miso, _sck) : result
@@ -152,6 +135,14 @@ PUB stop()
 
  Stop worker cog - cleanly shut down the worker cog and release resources.
  Safe to call even if not started.
+
+_______________________________
+PUB checkStackGuard() : bIntact
+
+ Verify worker cog stack guard is intact.
+ Returns TRUE if all guard bytes are $CC (no overflow detected).
+ Returns FALSE and reports via debug if any guard byte is corrupted.
+ @returns bIntact - TRUE if stack guard is intact, FALSE if overflow detected
 
 ____________________
 PUB error() : status
@@ -207,12 +198,31 @@ PUB getCRCMismatchCount() : count
  Non-zero indicates data corruption occurred during transfer.
  @returns count - Number of sector reads where CRC did not match
 
+______________________________
+PUB getCRCRetryCount() : count
+
+ Get count of CRC retry attempts - returns total number of read retries triggered by CRC mismatches.
+ Non-zero indicates transient bus errors were recovered.
+ @returns count - Total CRC retry attempts across all sector reads
+
 _____________________________
 PUB setCRCValidation(enabled)
 
  Enable/disable CRC validation for sector reads.
  When enabled, each sector read validates CRC and updates match/mismatch counts.
  @param enabled - TRUE (non-zero) enables CRC checking, FALSE (0) disables
+
+________________________________________________________________
+PUB getWriteDiag() : result_code, r1_resp, data_resp, sector_num
+
+ Get diagnostic info from last writeSector call.
+ Codes: 0=not called, 1=CMD24 fatal, 2=data-response timeout,
+        3=data CRC reject, 4=data write-err, 5=data unknown reject,
+        6=busy timeout, 7=success
+ @returns result_code - Outcome code
+ @returns r1_resp - CMD24 R1 response byte
+ @returns data_resp - Data response token
+ @returns sector_num - Sector number attempted
 
 ___________________________________________
 PUB mount(_cs, _mosi, _miso, _sck) : result
@@ -291,19 +301,6 @@ PUB writeSectorsRaw(start_sector, count, p_buffer) : result
  @param count - Number of sectors to write
  @param p_buffer - Pointer to buffer with data (must be count * 512 bytes)
  @returns result - Number of sectors successfully written
- CARD IDENTIFICATION METHODS (for diagnostic tools)
- These methods provide raw register access for card characterization.
- Call initCardOnly() or mount() before using these methods.
- SD card registers are big-endian (MSB-first). Single-byte fields can be
- read directly, but multi-byte fields need endian conversion on the P2
- (little-endian). Currently done with manual shift/OR patterns.
- TODO: With {Spin2_v52} compiler, use ENDIANL() and ENDIANW() for
-   multi-byte big-endian fields:
-     psn := ENDIANL(LONG[@cid_buf + 9])   ' CID serial number
-     mdt := ENDIANW(WORD[@cid_buf + 13])   ' CID manufacturing date
-   Also consider STRUCT (available at v45+) to define cid_t, csd_t, scr_t
-   types here and export them for consumer objects.
- ═══════════════════════════════════════════════════════════════════════════
 
 ______________________________
 PUB readCIDRaw(p_buf) : result
@@ -332,6 +329,15 @@ PUB readSCRRaw(p_buf) : result
  Contains SD spec version and bus widths.
  Routes through worker cog which owns the SPI pins.
  @param p_buf - Pointer to scr_t buffer to receive SCR data
+ @returns result - TRUE on success, FALSE on failure
+ @local status - Command status
+
+___________________________________
+PUB readSDStatusRaw(p_buf) : result
+
+ Read SD Status register (ACMD13) - returns 64 bytes of card status.
+ Contains Speed Class, UHS Speed Grade, Video Speed Class, and more.
+ @param p_buf - Pointer to 64-byte buffer to receive SD Status data
  @returns result - TRUE on success, FALSE on failure
  @local status - Command status
 

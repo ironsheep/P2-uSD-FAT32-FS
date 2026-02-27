@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-02-26
+
+### Driver
+
+- Volume label scan follows full root directory cluster chain (was limited to first 16 entries)
+- FAT chain end-of-chain comparisons use unsigned operators for 2 TB addressing
+
+### Utilities
+
+- FSCK full validation now works on cards of any size (windowed bitmap; cards >64 GB scanned in 2M-cluster passes)
+- Flexspin cross-compilation support added to format utility
+
+### Testing
+
+- Expanded to 345+ tests across 19 suites
+- FSCK windowed bitmap diagnostic test for 128 GB cards
+
 ## [1.0.0] - 2026-02-25
 
 **Initial release.**
@@ -99,7 +116,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Initial testing release** — driver, utilities, demo shell, and 263+ regression tests.
 
-[Unreleased]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v0.9.3...v1.0.0
 [0.9.3]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v0.9.1...v0.9.2

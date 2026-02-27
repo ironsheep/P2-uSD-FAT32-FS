@@ -15,7 +15,7 @@
 ''   - syncAllHandles()
 ''   - sync() (legacy)
 ''   - setDate() with timestamp verification
-''   - VBR access via readSectorRaw() (readVBRRaw is broken - calls SPI from wrong cog)
+''   - VBR access via readVBRRaw() and readSectorRaw()
 ''
 '' =================================================================================================
 
@@ -78,6 +78,8 @@ syncContent     BYTE    "Sync test data chunk one", 0
 ' Buffers
 vbrBuf          BYTE    0[512]
 vbrBuf_guard    BYTE    0[16]
+vbrBuf2         BYTE    0[512]
+vbrBuf2_guard   BYTE    0[16]
 readBuffer      BYTE    0[256]
 readBuffer_guard BYTE   0[16]
 
@@ -382,11 +384,9 @@ PUB go() | result, handle, h1, h2, h3, bytesWritten, bytesRead, pLabel, idx, pEn
     utils.evaluateSubValue(result, @"dir month field", 3)
 
     ' ======================================================================
-    ' TEST GROUP: VBR Access (via readSectorRaw)
-    '   NOTE: readVBRRaw() is broken - it calls readSector() from the calling
-    '   cog but SPI is on the worker cog. Use readSectorRaw() as workaround.
+    ' TEST GROUP: VBR Access
     ' ======================================================================
-    utils.startTestGroup(@"VBR Access via readSectorRaw")
+    utils.startTestGroup(@"VBR Access")
 
     ' Read MBR (sector 0) to find VBR sector
     utils.startTest(@"Read MBR to find VBR sector")
@@ -430,6 +430,18 @@ PUB go() | result, handle, h1, h2, h3, bytesWritten, bytesRead, pLabel, idx, pEn
             quit
     debug("   OEM: ", lstr_(@vbrBuf + $03, 8))
     utils.evaluateBool(result, @"OEM name printable", true)
+
+    ' Test: readVBRRaw() returns valid VBR
+    utils.startTest(@"readVBRRaw() succeeds")
+    bytefill(@vbrBuf2, 0, 512)
+    utils.initGuard(@vbrBuf2_guard)
+    result := sd.readVBRRaw(@vbrBuf2)
+    utils.checkGuard(@vbrBuf2_guard, @"vbrBuf2 guard")
+    utils.evaluateBool(result, @"readVBRRaw()", true)
+
+    ' Test: readVBRRaw() data matches readSectorRaw VBR
+    utils.startTest(@"readVBRRaw() matches readSectorRaw VBR")
+    utils.evaluateBufferMatch(@vbrBuf, @vbrBuf2, 512, @"VBR data matches")
 
     ' ======================================================================
     ' Cleanup and Summary

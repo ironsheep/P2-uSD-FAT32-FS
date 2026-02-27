@@ -147,3 +147,35 @@ However, immediately re-reading the card shows the **original factory values are
 *Noted: 2026-02-25 | Resolved: 2026-02-26*
 
 ---
+
+### Feature: SD 4-bit native mode backend (QSPI adapter support)
+
+**Priority:** LOW — future feature, requires external 4-bit SD adapter hardware
+
+**Goal:** Support a second SD card adapter that wires out D0-D3/CLK/CMD for 4-bit parallel transfers, selectable via compile define (e.g., `SD_BUS_4BIT`). Same FAT32 filesystem layer on top, different transport underneath. Theoretical 4x throughput gain at the same clock speed.
+
+**P2 streamer modes confirmed:**
+- **Read (card→hub):** `X_4P_4DAC1_WFBYTE` ($E081_0000) — 4 contiguous pins → WFBYTE
+- **Write (hub→card):** `X_RFBYTE_4P_4DAC1` ($A081_0000) — RFBYTE → 4 contiguous pins
+- MSB-first via `X_ALT_ON` — matches SD bus bit ordering
+
+**What stays identical** (top ~90% of driver):
+- Handle system, FAT32 parsing, directory traversal, file operations
+- Worker cog mailbox, lock arbitration, buffer cache
+- All public API methods, entire test suite
+
+**What switches per backend** (bottom ~10%):
+- Card init sequence (SPI mode → SD native mode)
+- Command send/receive framing (SPI R1 → native 48-bit with CRC)
+- `readSector()` / `writeSector()` streamer constants and clock counts
+- CRC handling (single CRC-16 → per-line CRC-16 on D0-D3)
+- Pin setup (D0-D3 must be 4 contiguous P2 pins)
+- Busy detection (polling byte → DAT0 line level)
+
+**Pin requirement:** D0-D3 on 4 contiguous P2 pins for streamer 4-pin modes. CLK and CMD on separate pins. Adapter hardware determines assignment.
+
+**Key consideration:** SD 4-bit mode uses the SD native protocol, not SPI. The command framing, response formats, CRC, and busy signaling are fundamentally different from SPI mode. This is not just "SPI with more data lines" — it requires implementing the SD native command layer.
+
+*Noted: 2026-02-26*
+
+---
