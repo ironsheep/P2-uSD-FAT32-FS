@@ -1097,7 +1097,7 @@ CON '' ════════════════════════�
     '' INTERNAL WORKER OPERATIONS (called by fs_worker, not directly by API)
     '' ═══════════════════════════════════════════════════════════════════════════
 
-PRI do_mount() : result | reserved, pPart, pVBR, pFSI, i, p_entry
+PRI do_mount() : result | reserved, pPart, pVBR, pFSI, i, p_entry, cluster, sector, sec_idx, next_cluster, found
 ' Internal mount operation - initializes card and reads filesystem structures.
 '
 ' @returns result - SUCCESS on success, error code on failure
@@ -1166,18 +1166,35 @@ PRI do_mount() : result | reserved, pPart, pVBR, pFSI, i, p_entry
   ' Check root directory for authoritative volume label entry (ATTR_VOLUME_ID)
   ' The root directory entry is the primary source per the FAT32 spec;
   ' the VBR copy is a fallback (Windows format may write "NO NAME" to VBR).
-  if readSector(root_sec, BUF_DIR) >= 0
-    repeat i from 0 to 15                                                              ' 16 entries per 512-byte sector
-      p_entry := @dir_buf + (i * 32)
-      if byte[p_entry] == $00                                                          '  end of directory
+  ' Follow the root cluster chain so we find the label even if it's not in the first sector.
+  cluster := 2
+  found := false
+  repeat while cluster >= 2 and cluster +< $0FFF_FFF8 and not found
+    sector := clus2sec(cluster)
+    repeat sec_idx from 0 to sec_per_clus - 1
+      if readSector(sector + sec_idx, BUF_DIR) < 0
+        debug("  [do_mount] Root dir read failed, using VBR label")
+        found := true
         quit
-      if byte[p_entry] <> $E5 and dirEntAttr(p_entry) == $08                           '  volume label entry
-        bytemove(@vol_label, p_entry, 11)                                              '   use root dir label
-        vol_label[11] := 0
-        debug("  [do_mount] Root dir volume label: ", zstr(@vol_label))
+      repeat i from 0 to 15
+        p_entry := @dir_buf + (i * 32)
+        if byte[p_entry] == $00                                                        '  end of directory
+          found := true
+          quit
+        if byte[p_entry] <> $E5 and dirEntAttr(p_entry) == $08                         '  volume label entry
+          bytemove(@vol_label, p_entry, 11)
+          vol_label[11] := 0
+          debug("  [do_mount] Root dir volume label: ", zstr(@vol_label))
+          found := true
+          quit
+      if found
         quit
-  else
-    debug("  [do_mount] Root dir read failed, using VBR label")
+    ' Follow FAT chain to next cluster
+    if not found
+      if readSector(cluster >> 7 + fat_sec, BUF_FAT) < 0
+        quit
+      next_cluster := LONG[@fat_buf + ((cluster << 2) & 511)]
+      cluster := next_cluster
 
   ' Read FSInfo sector for free cluster count and next-free hint
   if fsinfo_sec > 0 and fsinfo_sec < reserved

@@ -132,21 +132,11 @@ However, immediately re-reading the card shows the **original factory values are
 
 ---
 
-### Driver: Volume label scan only checks first 16 root directory entries
+### ~~Driver: Volume label scan only checks first 16 root directory entries~~ RESOLVED
 
-**Priority:** LOW — only affects cards where the volume label entry is not near the beginning of the root directory
+**Status:** DONE — `do_mount()` now follows the root directory cluster chain when scanning for the volume label entry (attr=$08). Walks all sectors of all clusters until `$00` end marker or EOC. Previously only checked the first 16 entries (one sector). Mount tests 21/21 pass on 128 GB card.
 
-**Problem:** `do_mount()` reads only the **first sector** of the root directory (16 entries) when searching for the volume label (attr=$08). If it encounters a $00 byte (end-of-directory marker) before finding the label, it stops immediately. On cards where files were created before the volume label was set, or where deleted entries and LFN chains push the label entry beyond position 15, the driver will miss it and fall back to the VBR label at offset $47.
-
-**Observed behavior:** On a Windows-formatted card with no volume label, the first root directory sector had 5 deleted entries followed by $00 (END OF DIR) at entry 5. Live file entries with LFN records were in sectors 2-3 (entries 32-43). The driver correctly returned "NO NAME" from the VBR — but if a volume label entry had been placed among those later entries, it would have been missed.
-
-**Code location:** `micro_sd_fat32_fs.spin2` lines 1169-1178 — the `repeat i from 0 to 15` loop with `if byte[p_entry] == $00` / `quit`.
-
-**Fix:** Follow the root directory cluster chain (like `do_read_dir_h()` does) instead of reading only the first sector. Scan all entries until a true end-of-directory is reached or the cluster chain ends.
-
-**Verified:** macOS-formatted card with label "P2XFER" has the attr=$08 entry at position 0 — works correctly. The bug only manifests when the label is deeper in the directory.
-
-*Noted: 2026-02-26*
+*Noted: 2026-02-26 | Resolved: 2026-02-26*
 
 ---
 
