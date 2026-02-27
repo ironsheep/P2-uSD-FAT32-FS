@@ -5,6 +5,8 @@ logs/
 
 # Build artifacts
 *.bin
+*.binary
+*.p2asm
 *.lst
 *.map
 *.obj

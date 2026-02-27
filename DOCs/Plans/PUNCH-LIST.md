@@ -150,29 +150,10 @@ However, immediately re-reading the card shows the **original factory values are
 
 ---
 
-### FSCK: Windowed bitmap for >64 GB full validation
+### ~~FSCK: Windowed bitmap for >64 GB full validation~~ RESOLVED
 
-**Priority:** MEDIUM — current FSCK provides structural checks only for cards >64 GB
+**Status:** DONE — implemented windowed scan in `isp_fsck_utility.spin2`. Cluster space is divided into 2M-cluster windows; directory tree is re-walked per window. `setBit()`/`testBit()` offset by `windowStart`; pass 3 runs per-window via `fsckPass3Window()`. Cards <=64 GB produce 1 window (identical to previous behavior). Verified on 128 GB Samsung EVO Select (3.9M clusters, 2 windows): FSCK detected and freed 5 injected lost clusters in window 2. Diagnostic test: `SD_diag_fsck_window_test.spin2` (requires 128 GB card). Committed as `dd33908`.
 
-**Problem:** The FSCK cluster bitmap requires 1 bit per cluster, stored in P2 hub RAM. The current allocation (256 KB = LONG[65536]) covers 2,097,152 clusters — approximately 64 GB. Cards larger than this skip passes 2 (chain validation) and 3 (lost cluster recovery). A 2 TB card at 32 KB clusters would need ~8 MB of bitmap — far exceeding the P2's 512 KB hub.
-
-**Analysis (2026-02-26):** Evaluated four approaches:
-
-| Approach | Max Card Size | Speed | Safety | Complexity |
-|----------|--------------|-------|--------|------------|
-| Current hub bitmap | ~64 GB | Fast | Safe | Done |
-| Windowed scan (re-walk directory per window) | Unlimited | Moderate | Safest (read-only) | Low |
-| SD scratch file (bitmap in temp file) | Unlimited | Fast (with cache) | Some risk (writes to card under test) | Medium |
-| External sort (no bitmap, merge-based) | Unlimited | Slower | Some risk | Higher |
-
-**Decision: Windowed scan.** Divide the cluster space into windows that fit in the existing 256 KB hub bitmap. For each window, re-walk the entire directory tree but only mark clusters within the current range. Then compare the window bitmap against the corresponding FAT entries. Key properties:
-
-- **Zero penalty for <= 64 GB cards**: `windows = ceil(total_clusters / 2M)`. A 32 GB card = 1 window = identical to current code.
-- **Graceful scaling**: 128 GB = 2 windows, 256 GB = 4, 2 TB = 32 windows.
-- **Read-only**: No writes to the card being checked — safest approach.
-- **Low complexity**: The directory tree is tiny vs the FAT. Re-reading ~50 directory sectors 32 times = ~1,600 sector reads — trivial.
-- **No new data structures**: Reuses existing bitmap allocation, just clears and re-fills per window.
-
-*Noted: 2026-02-25 | Analysis: 2026-02-26*
+*Noted: 2026-02-25 | Resolved: 2026-02-26*
 
 ---

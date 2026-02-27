@@ -430,6 +430,10 @@ PRI doFormat() : result | i
 
     ' Verify MBR read-back
     sd.readSectorRaw(0, @verifyBuf)
+#IFDEF __FLEXSPIN__
+    debug("  MBR readback: sig=$", uhex_word_(WORD[@verifyBuf + $1FE]), " type=$", uhex_byte_(verifyBuf[$1C2]), " start=", udec_(LONG[@verifyBuf + $1C6]))
+    debug("  MBR read[0..7]: $", uhex_byte_(verifyBuf[0]), " $", uhex_byte_(verifyBuf[1]), " $", uhex_byte_(verifyBuf[2]), " $", uhex_byte_(verifyBuf[3]), " $", uhex_byte_(verifyBuf[4]), " $", uhex_byte_(verifyBuf[5]), " $", uhex_byte_(verifyBuf[6]), " $", uhex_byte_(verifyBuf[7]))
+#ELSE
     debug("  MBR readback: sig=$", uhex_word_(WORD[@verifyBuf + $1FE]), ...
       " type=$", uhex_byte_(verifyBuf[$1C2]), ...
       " start=", udec_(LONG[@verifyBuf + $1C6]))
@@ -437,6 +441,7 @@ PRI doFormat() : result | i
       " $", uhex_byte_(verifyBuf[2]), " $", uhex_byte_(verifyBuf[3]), ...
       " $", uhex_byte_(verifyBuf[4]), " $", uhex_byte_(verifyBuf[5]), ...
       " $", uhex_byte_(verifyBuf[6]), " $", uhex_byte_(verifyBuf[7]))
+#ENDIF
     debug("  verify buf addr: $", uhex_long_(@verifyBuf))
     if WORD[@verifyBuf + $1FE] <> MBR_SIGNATURE
         debug("  *** MBR READBACK MISMATCH! Written data not on card ***")
@@ -450,11 +455,15 @@ PRI doFormat() : result | i
 
     ' Verify VBR read-back
     sd.readSectorRaw(partitionStart, @verifyBuf)
+#IFDEF __FLEXSPIN__
+    debug("  VBR readback: jump=$", uhex_byte_(verifyBuf[0]), " OEM=$", uhex_byte_(verifyBuf[3]), uhex_byte_(verifyBuf[4]), " bps=", udec_(WORD[@verifyBuf + $0B]), " spc=", udec_(verifyBuf[$0D]), " sig=$", uhex_word_(WORD[@verifyBuf + $1FE]))
+#ELSE
     debug("  VBR readback: jump=$", uhex_byte_(verifyBuf[0]), ...
       " OEM=$", uhex_byte_(verifyBuf[3]), uhex_byte_(verifyBuf[4]), ...
       " bps=", udec_(WORD[@verifyBuf + $0B]), ...
       " spc=", udec_(verifyBuf[$0D]), ...
       " sig=$", uhex_word_(WORD[@verifyBuf + $1FE]))
+#ENDIF
     if verifyBuf[0] <> $EB
         debug("  *** VBR READBACK MISMATCH! Expected $EB got $", uhex_byte_(verifyBuf[0]), " ***")
 
@@ -575,6 +584,10 @@ PRI writeMBR() : success | partitionSectors
     WORD[@buf + $1FE] := MBR_SIGNATURE
 
     ' Diagnostic: dump write buffer before writing
+#IFDEF __FLEXSPIN__
+    debug("  MBR write buf: sig=$", uhex_word_(WORD[@buf + $1FE]), " type=$", uhex_byte_(buf[$1C2]), " start=", udec_(LONG[@buf + $1C6]))
+    debug("  MBR buf[0..7]: $", uhex_byte_(buf[0]), " $", uhex_byte_(buf[1]), " $", uhex_byte_(buf[2]), " $", uhex_byte_(buf[3]), " $", uhex_byte_(buf[4]), " $", uhex_byte_(buf[5]), " $", uhex_byte_(buf[6]), " $", uhex_byte_(buf[7]))
+#ELSE
     debug("  MBR write buf: sig=$", uhex_word_(WORD[@buf + $1FE]), ...
       " type=$", uhex_byte_(buf[$1C2]), ...
       " start=", udec_(LONG[@buf + $1C6]))
@@ -582,6 +595,7 @@ PRI writeMBR() : success | partitionSectors
       " $", uhex_byte_(buf[2]), " $", uhex_byte_(buf[3]), ...
       " $", uhex_byte_(buf[4]), " $", uhex_byte_(buf[5]), ...
       " $", uhex_byte_(buf[6]), " $", uhex_byte_(buf[7]))
+#ENDIF
     debug("  MBR buf addr: $", uhex_long_(@buf))
 
     ' Write MBR to sector 0
