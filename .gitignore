@@ -203,8 +203,9 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
-/.claude/.history
-/tasks/archives
+# Claude Code (local only)
+.claude/
+tasks/
 .vscode/settings.json
 src/backups/
 src/*.backup-*
@@ -216,3 +217,4 @@ STUDY/
 pnut-term-settings.json
 tests/
 tools/bible_verse.spin2
+USER-REPORTs/
