@@ -52,7 +52,7 @@ CON
 
     NUM_TEST_SECTORS = 5
 
-'' Enable full driver features for raw sector testing
+' Enable full driver features for raw sector testing
 #IFDEF __SPINTOOLS__
 #DEFINE SD_INCLUDE_ALL
 #ELSEIFDEF __FLEXSPIN__
@@ -73,7 +73,7 @@ VAR
     LONG    pass_count
     LONG    fail_count
 
-PUB go() | result, i, sector
+PUB go() | result, idx, sector
 '' Main entry point for raw sector round-trip tests
 ''
 '' Tests readSectorRaw/writeSectorRaw operations with various patterns
@@ -107,8 +107,8 @@ PUB go() | result, i, sector
     ' Write Pattern A: Sequential bytes
     sector := TEST_SECTOR_A
     debug("* Test: Write Pattern A (sequential) to sector ", udec_(sector))
-    repeat i from 0 to 511
-        write_buf[i] := i & $FF
+    repeat idx from 0 to 511
+        write_buf[idx] := idx & $FF
     addBoundaryMarkers(sector, $A0)
     if writeAndVerify(sector, $A0)
         recordPass()
@@ -118,8 +118,8 @@ PUB go() | result, i, sector
     ' Write Pattern B: Alternating AA/55
     sector := TEST_SECTOR_B
     debug("* Test: Write Pattern B (AA/55) to sector ", udec_(sector))
-    repeat i from 0 to 511
-        write_buf[i] := (i & 1) ? $55 : $AA
+    repeat idx from 0 to 511
+        write_buf[idx] := (idx & 1) ? $55 : $AA
     addBoundaryMarkers(sector, $B0)
     if writeAndVerify(sector, $B0)
         recordPass()
@@ -149,8 +149,8 @@ PUB go() | result, i, sector
     ' Write Pattern E: Incrementing with sector offset
     sector := TEST_SECTOR_E
     debug("* Test: Write Pattern E (offset) to sector ", udec_(sector))
-    repeat i from 0 to 511
-        write_buf[i] := (i + $E0) & $FF          ' Offset by $E0 to distinguish from pattern A
+    repeat idx from 0 to 511
+        write_buf[idx] := (idx + $E0) & $FF          ' Offset by $E0 to distinguish from pattern A
     addBoundaryMarkers(sector, $E0)
     if writeAndVerify(sector, $E0)
         recordPass()
@@ -380,7 +380,7 @@ PRI verifyMarkers(sector, expectedPattern) : success | secLow
         debug("  ERROR: Tail sector ID mismatch!")
         success := false
 
-PRI verifyFullPattern(sector, patternId, baseOffset) : success | i, expected, actual
+PRI verifyFullPattern(sector, patternId, baseOffset) : success | idx, expected, actual
 ' Verify all 512 bytes of a sequential pattern sector
 '
 ' @param sector - sector number to verify
@@ -393,18 +393,18 @@ PRI verifyFullPattern(sector, patternId, baseOffset) : success | i, expected, ac
     utils.checkGuard(@read_buf_guard, @"read_buf guard")
     success := true
 
-    repeat i from 8 to 503
-        expected := (i + baseOffset) & $FF
-        actual := read_buf[i]
+    repeat idx from 8 to 503
+        expected := (idx + baseOffset) & $FF
+        actual := read_buf[idx]
         if actual <> expected
-            debug("  ERROR at byte ", udec_(i), ": expected $", uhex_byte_(expected), ", got $", uhex_byte_(actual))
+            debug("  ERROR at byte ", udec_(idx), ": expected $", uhex_byte_(expected), ", got $", uhex_byte_(actual))
             success := false
             quit  ' Report first error only
 
     if success
         debug("  -> pass (496 data bytes verified)")
 
-PRI verifyFullPatternAlt(sector, patternId) : success | i, expected, actual
+PRI verifyFullPatternAlt(sector, patternId) : success | idx, expected, actual
 ' Verify all bytes of alternating AA/55 pattern sector
 '
 ' @param sector - sector number to verify
@@ -416,11 +416,11 @@ PRI verifyFullPatternAlt(sector, patternId) : success | i, expected, actual
     utils.checkGuard(@read_buf_guard, @"read_buf guard")
     success := true
 
-    repeat i from 8 to 503
-        expected := (i & 1) ? $55 : $AA
-        actual := read_buf[i]
+    repeat idx from 8 to 503
+        expected := (idx & 1) ? $55 : $AA
+        actual := read_buf[idx]
         if actual <> expected
-            debug("  ERROR at byte ", udec_(i), ": expected $", uhex_byte_(expected), ", got $", uhex_byte_(actual))
+            debug("  ERROR at byte ", udec_(idx), ": expected $", uhex_byte_(expected), ", got $", uhex_byte_(actual))
             success := false
             quit  ' Report first error only
 

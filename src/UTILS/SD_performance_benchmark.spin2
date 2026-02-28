@@ -62,7 +62,7 @@ CON
     MULTI_64        = 64                ' 32KB
     TEST_SECTOR     = 200_000           ' Safe test sector (away from FAT/data area)
 
-'' Enable full driver features for this utility
+' Enable full driver features for this utility
 #IFDEF __SPINTOOLS__
 #DEFINE SD_INCLUDE_ALL
 #ELSEIFDEF __FLEXSPIN__
@@ -163,8 +163,8 @@ PUB go() | result, spi_hz
 ' ════════════════════════════════════════════════════════════════════════════════
 
 PRI identifyCard() : result | mid, pnm[2]
-'' Identify card by reading CID (call after mount).
-'' Displays MID, product name, and raw CID bytes.
+' Identify card by reading CID (call after mount).
+' Displays MID, product name, and raw CID bytes.
 
     result := sd.readCIDRaw(@cid_buf)
     if result == false
@@ -187,7 +187,7 @@ PRI identifyCard() : result | mid, pnm[2]
 ' ════════════════════════════════════════════════════════════════════════════════
 
 PRI runMountBenchmark() : result | start_ct, elapsed_ct, elapsed_us
-'' Mount card and display timing.
+' Mount card and display timing.
 
     debug("MOUNT:")
     start_ct := getct()
@@ -199,7 +199,7 @@ PRI runMountBenchmark() : result | start_ct, elapsed_ct, elapsed_us
 
 
 PRI runUnmountBenchmark() | start_ct, elapsed_ct, elapsed_ms
-'' Unmount card and display timing.
+' Unmount card and display timing.
 
     debug(" ")
     debug("Unmount:")
@@ -212,7 +212,7 @@ PRI runUnmountBenchmark() | start_ct, elapsed_ct, elapsed_ms
 
 
 PRI showVolumeInfo() | free_sectors, free_mb
-'' Display mounted volume info.
+' Display mounted volume info.
 
     debug("  Volume: ", zstr_(sd.volumeLabel()))
     free_sectors := sd.freeSpace()
@@ -226,8 +226,8 @@ PRI showVolumeInfo() | free_sectors, free_mb
 ' ════════════════════════════════════════════════════════════════════════════════
 
 PRI runSingleSectorBenchmarks()
-'' Measure raw single-sector read and write performance.
-'' Uses readSectorsRaw/writeSectorsRaw with count=1 to avoid debug print overhead.
+' Measure raw single-sector read and write performance.
+' Uses readSectorsRaw/writeSectorsRaw with count=1 to avoid debug print overhead.
 
     debug(" ")
     debug("Single-Sector Read (", udec_(ITERATIONS), " iterations):")
@@ -243,7 +243,7 @@ PRI runSingleSectorBenchmarks()
 ' ════════════════════════════════════════════════════════════════════════════════
 
 PRI runMultiSectorBenchmarks()
-'' Run all multi-sector read and write benchmarks at multiple sector counts.
+' Run all multi-sector read and write benchmarks at multiple sector counts.
 
     debug(" ")
     debug("Multi-Sector Read (CMD18):")
@@ -263,8 +263,10 @@ PRI runMultiSectorBenchmarks()
 
 
 PRI runRawReadTest(count) | iter, start_ct, elapsed_ct, min_us, max_us, total_us, avg_us, kbps, size, readCt
-'' Benchmark raw sector read at specified count.
-'' Works for both single-sector (count=1) and multi-sector operations.
+' Benchmark raw sector read at specified count.
+' Works for both single-sector (count=1) and multi-sector operations.
+'
+' @param count - Number of sectors to read per iteration
 
     size := count * SECTOR_SIZE
 
@@ -303,8 +305,10 @@ PRI runRawReadTest(count) | iter, start_ct, elapsed_ct, min_us, max_us, total_us
 
 
 PRI runRawWriteTest(count) | iter, start_ct, elapsed_ct, min_us, max_us, total_us, avg_us, kbps, size, written
-'' Benchmark raw sector write at specified count.
-'' Works for both single-sector (count=1) and multi-sector operations.
+' Benchmark raw sector write at specified count.
+' Works for both single-sector (count=1) and multi-sector operations.
+'
+' @param count - Number of sectors to write per iteration
 
     size := count * SECTOR_SIZE
     fillBuffer(size, $5A)
@@ -339,8 +343,10 @@ PRI runRawWriteTest(count) | iter, start_ct, elapsed_ct, min_us, max_us, total_u
     debug("  ", udec_(count), " sector(s) (", udec_(size), "B): Min=", udec_(min_us), " Avg=", udec_(avg_us), " Max=", udec_(max_us), " us => ", udec_(kbps), " KB/s")
 
 
-PRI runComparisonTest(count) | i, start_ct, elapsed_ct, single_us, multi_us, size, improvement, readCt
-'' Compare N individual single-sector reads vs one multi-sector read.
+PRI runComparisonTest(count) | idx, start_ct, elapsed_ct, single_us, multi_us, size, improvement, readCt
+' Compare N individual single-sector reads vs one multi-sector read.
+'
+' @param count - Number of sectors for comparison
 
     size := count * SECTOR_SIZE
 
@@ -350,8 +356,8 @@ PRI runComparisonTest(count) | i, start_ct, elapsed_ct, single_us, multi_us, siz
 
     ' Time N individual single-sector reads
     start_ct := getct()
-    repeat i from 0 to count - 1
-        readCt := sd.readSectorsRaw(TEST_SECTOR + i, 1, @testBuffer + (i * SECTOR_SIZE))
+    repeat idx from 0 to count - 1
+        readCt := sd.readSectorsRaw(TEST_SECTOR + idx, 1, @testBuffer + (idx * SECTOR_SIZE))
     elapsed_ct := getct() - start_ct
     single_us := elapsed_ct / (clkfreq / 1_000_000)
 
@@ -376,8 +382,8 @@ PRI runComparisonTest(count) | i, start_ct, elapsed_ct, single_us, multi_us, siz
 ' ════════════════════════════════════════════════════════════════════════════════
 
 PRI runFileLevelBenchmarks()
-'' Run all file-level benchmarks using handle-based API.
-'' Timing includes open + transfer + close (the full user-visible cost).
+' Run all file-level benchmarks using handle-based API.
+' Timing includes open + transfer + close (the full user-visible cost).
 
     ' Clean up any leftover test file
     sd.deleteFile(@testFile)
@@ -400,8 +406,11 @@ PRI runFileLevelBenchmarks()
 
 
 PRI runFileWriteTest(size, p_label) | iter, handle, start_ct, elapsed_ct, min_us, max_us, total_us, avg_us, kbps, written
-'' Benchmark file write: create + writeHandle + closeFileHandle.
-'' Measures the full cycle an application would perform.
+' Benchmark file write: create + writeHandle + closeFileHandle.
+' Measures the full cycle an application would perform.
+'
+' @param size - Number of bytes to write
+' @param p_label - Pointer to label string for display
 
     fillBuffer(size, $5A)
 
@@ -443,8 +452,11 @@ PRI runFileWriteTest(size, p_label) | iter, handle, start_ct, elapsed_ct, min_us
 
 
 PRI runFileReadTest(size, p_label) | iter, handle, start_ct, elapsed_ct, min_us, max_us, total_us, avg_us, kbps, bytesRead
-'' Benchmark file read: openFileRead + readHandle + closeFileHandle.
-'' Creates a file of the target size first, then times repeated reads.
+' Benchmark file read: openFileRead + readHandle + closeFileHandle.
+' Creates a file of the target size first, then times repeated reads.
+'
+' @param size - Number of bytes to read per iteration
+' @param p_label - Pointer to label string for display
 
     ' Create test file of required size
     sd.deleteFile(@testFile)
@@ -495,8 +507,8 @@ PRI runFileReadTest(size, p_label) | iter, handle, start_ct, elapsed_ct, min_us,
 ' ════════════════════════════════════════════════════════════════════════════════
 
 PRI runFileOpenCloseBenchmark() | iter, handle, start_ct, elapsed_ct, open_min, open_max, open_total, close_min, close_max, close_total, open_avg, close_avg
-'' Measure file open and close overhead independently.
-'' Uses a small existing file to isolate open/close latency.
+' Measure file open and close overhead independently.
+' Uses a small existing file to isolate open/close latency.
 
     ' Create a small test file
     sd.deleteFile(@testFile)
@@ -553,11 +565,15 @@ PRI runFileOpenCloseBenchmark() | iter, handle, start_ct, elapsed_ct, open_min, 
 ' ════════════════════════════════════════════════════════════════════════════════
 
 PRI fillBuffer(size, value)
-'' Fill the test buffer with a byte value.
+' Fill the test buffer with a byte value.
+'
+' @param size - Number of bytes to fill
+' @param value - Byte value to fill with
+
     bytefill(@testBuffer, value, size)
 
 
-con { license }
+CON { license }
 
 {{
   =================================================================================================

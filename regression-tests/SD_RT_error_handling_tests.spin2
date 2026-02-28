@@ -48,7 +48,7 @@ CON
      MBR_SIGNATURE       = $AA55
      SECTOR_SIZE         = 512
 
-'' Enable raw sector access for MBR integrity check and debug features
+' Enable raw sector access for MBR integrity check and debug features
 #IFDEF __SPINTOOLS__
 #DEFINE SD_INCLUDE_RAW
 #DEFINE SD_INCLUDE_DEBUG

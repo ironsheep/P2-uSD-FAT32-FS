@@ -50,7 +50,7 @@ CON
      ' Speed levels: 15 MHz to 25 MHz in 1 MHz steps
      NUM_SPEEDS       = 11
 
-'' Same pragmas as mount_tests (known to work on external header)
+' Same pragmas as mount_tests (known to work on external header)
 #IFDEF __SPINTOOLS__
 #DEFINE SD_INCLUDE_RAW
 #DEFINE SD_INCLUDE_DEBUG
@@ -202,17 +202,17 @@ PUB go() | result, speedIdx, testFreq, spiFreq, passCount, failCount, actualHz, 
     debug("END_SESSION")
 
 
-PRI runSingleReads(speedIdx) : passed | i, sector, readResult, recvCrc, calcCrc, crcErrors, readErrors
-'' Phase 1: Single-sector reads (CMD17) with CRC verification.
-''
-'' @param speedIdx - Speed index (for logging)
-'' @returns 1 if all reads OK, 0 if errors
+PRI runSingleReads(speedIdx) : passed | idx, sector, readResult, recvCrc, calcCrc, crcErrors, readErrors
+' Phase 1: Single-sector reads (CMD17) with CRC verification.
+'
+' @param speedIdx - Speed index (for logging)
+' @returns 1 if all reads OK, 0 if errors
 
     crcErrors := 0
     readErrors := 0
 
-    repeat i from 0 to READS_PER_SPEED - 1
-        sector := READ_SECTOR_BASE + (i // 50)
+    repeat idx from 0 to READS_PER_SPEED - 1
+        sector := READ_SECTOR_BASE + (idx // 50)
 
         utils.initGuard(@sectorBuffer_guard)
         readResult := sd.readSectorRaw(sector, @sectorBuffer)
@@ -237,16 +237,16 @@ PRI runSingleReads(speedIdx) : passed | i, sector, readResult, recvCrc, calcCrc,
     return 1
 
 
-PRI runMultiReads(speedIdx) : passed | i, sector, multiResult, readErrors
-'' Phase 2: Multi-sector reads (CMD18) - the known failure mode.
-''
-'' @param speedIdx - Speed index (for logging)
-'' @returns 1 if all reads OK, 0 if errors
+PRI runMultiReads(speedIdx) : passed | idx, sector, multiResult, readErrors
+' Phase 2: Multi-sector reads (CMD18) - the known failure mode.
+'
+' @param speedIdx - Speed index (for logging)
+' @returns 1 if all reads OK, 0 if errors
 
     readErrors := 0
 
-    repeat i from 0 to MULTI_READS - 1
-        sector := READ_SECTOR_BASE + (i * MULTI_COUNT)
+    repeat idx from 0 to MULTI_READS - 1
+        sector := READ_SECTOR_BASE + (idx * MULTI_COUNT)
 
         utils.initGuard(@multiBuffer_guard)
         multiResult := sd.readSectorsRaw(sector, MULTI_COUNT, @multiBuffer)
@@ -264,12 +264,12 @@ PRI runMultiReads(speedIdx) : passed | i, sector, multiResult, readErrors
     return 1
 
 
-PRI runWriteVerify(speedIdx) : passed | iter, i, j, sector, written, readCt, errors, bufOffset
-'' Phase 3: Write-read-verify round-trips (CMD25 write + CMD18 read + compare).
-'' This is the most demanding test - writes known patterns, reads back, verifies.
-''
-'' @param speedIdx - Speed index (for logging)
-'' @returns 1 if all verify OK, 0 if errors
+PRI runWriteVerify(speedIdx) : passed | iter, idx, jdx, sector, written, readCt, errors, bufOffset
+' Phase 3: Write-read-verify round-trips (CMD25 write + CMD18 read + compare).
+' This is the most demanding test - writes known patterns, reads back, verifies.
+'
+' @param speedIdx - Speed index (for logging)
+' @returns 1 if all verify OK, 0 if errors
 
     errors := 0
 
@@ -277,8 +277,8 @@ PRI runWriteVerify(speedIdx) : passed | iter, i, j, sector, written, readCt, err
         sector := WRITE_SECTOR_BASE + (iter * MULTI_COUNT)
 
         ' Fill write buffer with unique pattern per iteration
-        repeat i from 0 to (MULTI_COUNT * SECTOR_SIZE) - 1
-            writeBuffer[i] := ((i / SECTOR_SIZE) * 37 + (i // SECTOR_SIZE) + iter * 53) & $FF
+        repeat idx from 0 to (MULTI_COUNT * SECTOR_SIZE) - 1
+            writeBuffer[idx] := ((idx / SECTOR_SIZE) * 37 + (idx // SECTOR_SIZE) + iter * 53) & $FF
 
         ' Write 8 sectors
         written := sd.writeSectorsRaw(sector, MULTI_COUNT, @writeBuffer)
@@ -301,11 +301,11 @@ PRI runWriteVerify(speedIdx) : passed | iter, i, j, sector, written, readCt, err
             next
 
         ' Compare every byte
-        repeat i from 0 to (MULTI_COUNT * SECTOR_SIZE) - 1
-            if readBackBuffer[i] <> writeBuffer[i]
+        repeat idx from 0 to (MULTI_COUNT * SECTOR_SIZE) - 1
+            if readBackBuffer[idx] <> writeBuffer[idx]
                 errors++
                 if errors <= 3
-                    debug("    Verify err iter ", udec_(iter), " byte ", udec_(i), ": exp=$", uhex_byte_(writeBuffer[i]), " got=$", uhex_byte_(readBackBuffer[i]))
+                    debug("    Verify err iter ", udec_(iter), " byte ", udec_(idx), ": exp=$", uhex_byte_(writeBuffer[idx]), " got=$", uhex_byte_(readBackBuffer[idx]))
                 quit  ' Stop comparing this iteration on first error
 
     debug("  P3-WrVerify: ", udec_(WRITE_VERIFY_ITERS), " iters, ", udec_(errors), " errors")

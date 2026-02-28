@@ -23,7 +23,7 @@ CON
     'SD_MISO = 18
     'SD_SCK  = 21
 
-'' Enable full driver features (inherited through isp_format_utility)
+' Enable full driver features (inherited through isp_format_utility)
 #IFDEF __SPINTOOLS__
 #DEFINE SD_INCLUDE_ALL
 #ELSEIFDEF __FLEXSPIN__

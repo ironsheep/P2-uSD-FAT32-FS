@@ -39,6 +39,9 @@ VAR
     byte  name_copy[13]
 
 PUB go() | handle
+'' Main entry point — lists root directory, creates EXDIR with files, demonstrates handle-based
+'' directory enumeration, delete, and rename operations.
+'' @local handle - File handle for creating test files
 
     debug("=== SD Directory Walk Example ===")
 
@@ -112,7 +115,10 @@ PUB go() | handle
     debug("=== Done ===")
 
 PRI listCurrentDirectory() | entry_num, p_entry, attr
-'' List all entries in the current working directory using index-based enumeration.
+' List all entries in the current working directory using index-based enumeration.
+' @local entry_num - Current directory entry index
+' @local p_entry - Pointer to directory entry returned by readDirectory()
+' @local attr - File attribute byte from sd.attributes()
     entry_num := 0
     repeat
         p_entry := sd.readDirectory(entry_num)
@@ -131,7 +137,11 @@ PRI listCurrentDirectory() | entry_num, p_entry, attr
         entry_num++
 
 PRI listDirectoryByHandle(p_path) | dh, p_entry, attr
-'' List entries in a specific directory without changing CWD.
+' List entries in a specific directory without changing CWD.
+' @param p_path - Pointer to null-terminated directory path string
+' @local dh - Directory handle from openDirectory()
+' @local p_entry - Pointer to directory entry returned by readDirectoryHandle()
+' @local attr - File attribute byte from sd.attributes()
     dh := sd.openDirectory(p_path)
     if dh < 0
         debug("  Cannot open directory, error: ", sdec(dh))

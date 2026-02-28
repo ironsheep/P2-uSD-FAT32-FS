@@ -461,10 +461,12 @@ PUB go() | result, h1, h2, h3, h4, h5, h6, hDir, hDir2, pEntry, pName, attrs, en
     debug(" ")
     debug("END_SESSION")
 
-PRI createTestStructure() | h
+PRI createTestStructure() | handle
 ' Create test directory structure:
 '   /DHTDIR1/DH1.TXT, DH2.TXT, DH3.TXT, DHSUB1/DHSUB.TXT
 '   /DHTEMPTY/   (empty directory)
+'
+' @local handle - File handle from createFileNew()
 
     debug(" ")
     debug("* Creating test directory structure...")
@@ -474,28 +476,28 @@ PRI createTestStructure() | h
     sd.changeDirectory(@dhTestDir)
 
     ' Create files in test directory
-    h := sd.createFileNew(@dhFile1)
-    if h >= 0
-        sd.writeHandle(h, @dhContent, strsize(@dhContent))
-        sd.closeFileHandle(h)
+    handle := sd.createFileNew(@dhFile1)
+    if handle >= 0
+        sd.writeHandle(handle, @dhContent, strsize(@dhContent))
+        sd.closeFileHandle(handle)
 
-    h := sd.createFileNew(@dhFile2)
-    if h >= 0
-        sd.writeHandle(h, @dhContent, strsize(@dhContent))
-        sd.closeFileHandle(h)
+    handle := sd.createFileNew(@dhFile2)
+    if handle >= 0
+        sd.writeHandle(handle, @dhContent, strsize(@dhContent))
+        sd.closeFileHandle(handle)
 
-    h := sd.createFileNew(@dhFile3)
-    if h >= 0
-        sd.writeHandle(h, @dhContent, strsize(@dhContent))
-        sd.closeFileHandle(h)
+    handle := sd.createFileNew(@dhFile3)
+    if handle >= 0
+        sd.writeHandle(handle, @dhContent, strsize(@dhContent))
+        sd.closeFileHandle(handle)
 
     ' Create subdirectory with a file
     sd.newDirectory(@dhSubDir)
     sd.changeDirectory(@dhSubDir)
-    h := sd.createFileNew(@dhSubFile)
-    if h >= 0
-        sd.writeHandle(h, @dhContent, strsize(@dhContent))
-        sd.closeFileHandle(h)
+    handle := sd.createFileNew(@dhSubFile)
+    if handle >= 0
+        sd.writeHandle(handle, @dhContent, strsize(@dhContent))
+        sd.closeFileHandle(handle)
     sd.changeDirectory(@"..")
 
     sd.changeDirectory(@"/")

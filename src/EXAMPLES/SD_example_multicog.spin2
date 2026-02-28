@@ -49,7 +49,11 @@ VAR
     long  reader_done                                   ' Flag: reader cog sets to 1 when finished
     long  setup_done                                    ' Flag: main cog sets to 1 when files ready
 
-PUB go() | handle, i, buf[32]
+PUB go() | handle, idx, buf[32]
+'' Main entry point — creates test files, starts a reader cog, and writes concurrently from the main cog.
+'' @local handle - File handle for creating and writing test files
+'' @local idx - Loop index for writing lines
+'' @local buf - General-purpose buffer
 
     debug("=== SD Multi-Cog Example ===")
 
@@ -66,7 +70,7 @@ PUB go() | handle, i, buf[32]
     sd.deleteFile(@"READER.TXT")
     handle := sd.createFileNew(@"READER.TXT")
     if handle >= 0
-        repeat i from 1 to 10
+        repeat idx from 1 to 10
             sd.writeHandle(handle, @"Line of test data for reader cog.", 33)
             sd.writeHandle(handle, @CRLF, 2)
         sd.closeFileHandle(handle)
@@ -89,7 +93,7 @@ PUB go() | handle, i, buf[32]
     debug("[Main] Writing WRITER.TXT...")
     handle := sd.createFileNew(@"WRITER.TXT")
     if handle >= 0
-        repeat i from 1 to 20
+        repeat idx from 1 to 20
             sd.writeHandle(handle, @"Written by main cog.", 20)
             sd.writeHandle(handle, @CRLF, 2)
         sd.closeFileHandle(handle)
@@ -104,8 +108,12 @@ PUB go() | handle, i, buf[32]
     debug("=== Done — both cogs completed successfully ===")
 
 PRI readerTask() | handle, buf[128], total_bytes, bytes_read
-'' Runs in a separate cog. Reads READER.TXT and reports the total bytes read.
-'' The SD driver's hardware lock ensures SPI access is serialized with the main cog.
+' Run in a separate cog — reads READER.TXT and reports the total bytes read.
+' The SD driver's hardware lock ensures SPI access is serialized with the main cog.
+' @local handle - File handle for READER.TXT
+' @local buf - Read buffer (512 bytes as long array)
+' @local total_bytes - Running total of bytes read from the file
+' @local bytes_read - Bytes returned from each readHandle() call
 
     ' Wait for setup
     repeat until setup_done

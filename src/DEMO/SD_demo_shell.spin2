@@ -160,6 +160,10 @@ VAR { parser }
 
 
 PUB main() | len, eCmd
+'' Entry point for the interactive shell - initializes serial, waits for terminal, then runs command loop.
+''
+' @local len - Length of command entered
+' @local eCmd - Enum value of the parsed command
 
   serial.start(BR_TERM)                                           ' full pin init (debug disabled in this file)
   waitms(250)                                                       ' let terminal connect after download
@@ -192,25 +196,26 @@ PUB main() | len, eCmd
         run_command(eCmd)                                       ' run command code
 
 
-PUB get_command() : len | i
-
-'' Enter command from terminal window
+PUB get_command() : len | idx
+'' Read a command line from the terminal - waits for CR-terminated input.
+''
+'' @returns len - Number of characters entered
+' @local idx - Loop counter for tab conversion
 
   parserReset()                                                 ' prep for new entry
 
   cliIdx := serial.rxline(@cliBuf, CLI_BUF_SIZE)               ' tight receive until CR
 
   ' convert tabs to spaces
-  repeat i from 0 to cliIdx - 1
-    if (cliBuf[i] == 9)
-      cliBuf[i] := " "
+  repeat idx from 0 to cliIdx - 1
+    if (cliBuf[idx] == 9)
+      cliBuf[idx] := " "
 
   return cliIdx                                                 ' report length of input
 
 
 PUB show_prompt()
-
-'' Display command prompt with current directory
+'' Display command prompt with current directory path.
 
   if (mounted)
     serial.fstr1(@"SD:%s> \r", @cwd)
@@ -219,8 +224,9 @@ PUB show_prompt()
 
 
 PRI prompt_len() : len
-
-'' Return length of current prompt text (for cursor positioning)
+' Calculate prompt string length for cursor positioning.
+'
+' @returns len - Number of characters in the current prompt
 
   if (mounted)
     len := 5 + strsize(@cwd)                                    ' "SD:" + cwd + "> "
@@ -232,8 +238,9 @@ CON { command handlers }
 
 
 PUB run_command(eCmd)
-
-'' Run command identified by enum value eCmd
+'' Dispatch and execute the shell command identified by its enum value.
+''
+'' @param eCmd - Command enum (CMD_HELP, CMD_DIR, etc.)
 
   if (eCmd == CMD_UNKNOWN)
     serial.fstr1(@"'%s' is not recognized as a command\r\n", token(0))
@@ -271,8 +278,7 @@ PUB run_command(eCmd)
 
 
 PUB show_help()
-
-'' Show available commands
+'' Display the full help screen listing all available shell commands.
 
   if (ntokens <> 1)
     bad_syntax()
@@ -300,8 +306,7 @@ PUB show_help()
 
 
 PUB show_version()
-
-'' Show driver version info
+'' Display driver version and current SPI frequency.
 
   if (ntokens <> 1)
     bad_syntax()
@@ -312,8 +317,7 @@ PUB show_version()
 
 
 PUB do_cls()
-
-'' Clear terminal window
+'' Clear the terminal screen.
 
   if (ntokens <> 1)
     bad_syntax()
@@ -323,8 +327,9 @@ PUB do_cls()
 
 
 PUB do_mount() | result
-
-'' Mount SD card filesystem
+'' Mount the SD card filesystem and display a brief card summary.
+''
+' @local result - Mount return value (true/false)
 
   if (ntokens <> 1)
     bad_syntax()
@@ -349,8 +354,7 @@ PUB do_mount() | result
 
 
 PUB do_unmount()
-
-'' Unmount SD card filesystem
+'' Unmount the SD card filesystem and release the driver.
 
   if (ntokens <> 1)
     bad_syntax()
@@ -365,10 +369,13 @@ PUB do_unmount()
 
 
 PUB do_format() | p_label, pStr, ok
-
-'' Format SD card via format utility library (cog-based)
+'' Format SD card via the format utility library (cog-based).
 '' Usage: format          - format with default label
 ''        format LABEL    - format with specified label (max 11 chars)
+''
+' @local p_label - Pointer to optional volume label string
+' @local pStr - Pointer to FIFO output string from format cog
+' @local ok - Format success/failure result
 
   if (ntokens > 2)
     bad_syntax()
@@ -432,9 +439,13 @@ PUB do_format() | p_label, pStr, ok
 
 
 PUB do_stats() | total_sectors, total_mb, free_sectors, free_mb
-
-'' Display filesystem statistics (requires mount)
-'' For card hardware info, use 'card' command
+'' Display filesystem statistics including total/free space and volume label.
+'' For card hardware info, use the 'card' command instead.
+''
+' @local total_sectors - Total sectors on card
+' @local total_mb - Total capacity in megabytes
+' @local free_sectors - Free sectors available
+' @local free_mb - Free space in megabytes
 
   if (ntokens <> 1)
     bad_syntax()
@@ -454,8 +465,16 @@ PUB do_stats() | total_sectors, total_mb, free_sectors, free_mb
 
 
 PUB do_dir() | dh, result, count, total_size, attrib, size, p_name, p_path
-
-'' List directory contents using handle-based directory enumeration
+'' List directory contents with attributes, sizes, and summary using handle-based enumeration.
+''
+' @local dh - Directory handle
+' @local result - readDirectoryHandle result
+' @local count - Number of entries listed
+' @local total_size - Cumulative file size in bytes
+' @local attrib - FAT attribute byte for current entry
+' @local size - File size of current entry
+' @local p_name - Pointer to current entry name string
+' @local p_path - Pointer to path argument or "."
 
   if (ntokens > 2)
     bad_syntax()
@@ -520,8 +539,9 @@ PUB do_dir() | dh, result, count, total_size, attrib, size, p_name, p_path
 
 
 PUB do_cd() | p_path
-
-'' Change current directory
+'' Change the current working directory. Supports "/", "..", and named subdirectories.
+''
+' @local p_path - Pointer to the target path argument
 
   if (ntokens <> 2)
     bad_syntax()
@@ -552,8 +572,7 @@ PUB do_cd() | p_path
 
 
 PUB do_pwd()
-
-'' Print working directory
+'' Print the current working directory path.
 
   if (ntokens <> 1)
     bad_syntax()
@@ -566,10 +585,14 @@ PUB do_pwd()
 
 
 PUB do_mkdir() | p_name, p_leaf, has_path, result
-
-'' Create new directory. Supports paths like "work/logs":
+'' Create a new directory. Supports paths like "work/logs":
 ''   - Navigates to parent ("work"), creates leaf ("logs"), navigates back.
-''   - Parent must already exist.
+''   - Parent directory must already exist.
+''
+' @local p_name - Pointer to the full path argument
+' @local p_leaf - Pointer to leaf name within the path
+' @local has_path - True if path contained "/" separators
+' @local result - newDirectory success/failure
 
   if (ntokens <> 2)
     bad_syntax()
@@ -593,9 +616,17 @@ PUB do_mkdir() | p_name, p_leaf, has_path, result
     nav_back(p_name)
 
 
-PUB do_type() | p_name, p_leaf, has_path, handle, bytes_read, total, c, i
-
-'' Display contents of text file. Supports paths like "work/readme.txt".
+PUB do_type() | p_name, p_leaf, has_path, handle, bytes_read, total, ch, idx
+'' Display contents of a text file. Supports paths like "work/readme.txt".
+''
+' @local p_name - Pointer to the full path argument
+' @local p_leaf - Pointer to leaf filename within the path
+' @local has_path - True if path contained "/" separators
+' @local handle - File read handle
+' @local bytes_read - Bytes returned from readHandle
+' @local total - Cumulative bytes displayed
+' @local ch - Current character being displayed
+' @local idx - Loop index within the read buffer
 
   if (ntokens <> 2)
     bad_syntax()
@@ -627,12 +658,12 @@ PUB do_type() | p_name, p_leaf, has_path, handle, bytes_read, total, c, i
       quit
 
     ' Display as text
-    repeat i from 0 to bytes_read - 1
-      c := buffer[i]
-      if (c == 13) or (c == 10)                                  ' CR or LF
-        serial.tx(c)
-      elseif (c >= 32 and c < 127)                              ' printable
-        serial.tx(c)
+    repeat idx from 0 to bytes_read - 1
+      ch := buffer[idx]
+      if (ch == 13) or (ch == 10)                                ' CR or LF
+        serial.tx(ch)
+      elseif (ch >= 32 and ch < 127)                             ' printable
+        serial.tx(ch)
       else
         serial.tx(".")                                            ' non-printable
 
@@ -645,9 +676,18 @@ PUB do_type() | p_name, p_leaf, has_path, handle, bytes_read, total, c, i
     nav_back(p_name)
 
 
-PUB do_hexdump() | p_name, p_leaf, has_path, handle, bytes_read, offset, i, c, fileSize
-
-'' Display file contents in hex format. Supports paths like "work/data.bin".
+PUB do_hexdump() | p_name, p_leaf, has_path, handle, bytes_read, offset, idx, ch, fileSize
+'' Display file contents in hex+ASCII format. Supports paths like "work/data.bin".
+''
+' @local p_name - Pointer to the full path argument
+' @local p_leaf - Pointer to leaf filename within the path
+' @local has_path - True if path contained "/" separators
+' @local handle - File read handle
+' @local bytes_read - Bytes returned from readHandle
+' @local offset - Current byte offset within the file
+' @local idx - Loop index within the 16-byte line
+' @local ch - Current byte being displayed
+' @local fileSize - Total file size from handle
 
   if (ntokens <> 2)
     bad_syntax()
@@ -682,21 +722,21 @@ PUB do_hexdump() | p_name, p_leaf, has_path, handle, bytes_read, offset, i, c, f
     serial.fstr1(@"%.8x  ", offset)
 
     ' Print hex bytes
-    repeat i from 0 to 15
-      if (i < bytes_read)
-        serial.fstr1(@"%.2x ", buffer[i])
+    repeat idx from 0 to 15
+      if (idx < bytes_read)
+        serial.fstr1(@"%.2x ", buffer[idx])
       else
         serial.fstr0(@"   ")
-      if (i == 7)
+      if (idx == 7)
         serial.tx(" ")
 
     serial.fstr0(@" |")
 
     ' Print ASCII
-    repeat i from 0 to bytes_read - 1
-      c := buffer[i]
-      if (c >= 32 and c < 127)
-        serial.tx(c)
+    repeat idx from 0 to bytes_read - 1
+      ch := buffer[idx]
+      if (ch >= 32 and ch < 127)
+        serial.tx(ch)
       else
         serial.tx(".")
 
@@ -717,9 +757,15 @@ PUB do_hexdump() | p_name, p_leaf, has_path, handle, bytes_read, offset, i, c, f
 
 
 PUB do_rename() | p_old, p_new, p_old_leaf, p_new_leaf, has_path, result
-
-'' Rename file or directory. Supports paths like "work/old.txt new.txt".
-'' Both names must be in the same directory.
+'' Rename a file or directory in place. Supports paths like "work/old.txt new.txt".
+'' Both names must resolve to the same directory.
+''
+' @local p_old - Pointer to original name argument
+' @local p_new - Pointer to new name argument
+' @local p_old_leaf - Pointer to leaf of old name
+' @local p_new_leaf - Pointer to leaf of new name
+' @local has_path - True if old name contained "/" separators
+' @local result - Rename success/failure
 
   if (ntokens <> 3)
     bad_syntax()
@@ -751,9 +797,15 @@ PUB do_rename() | p_old, p_new, p_old_leaf, p_new_leaf, has_path, result
 
 
 PUB do_move() | p_src, p_dst, p_src_leaf, has_path, dh, result
-
-'' Move file to directory, or rename if dest is a plain name.
+'' Move a file to a directory, or rename if destination is a plain name.
 '' Examples: mv a.txt work, mv work/a.txt backup, mv a.txt b.txt
+''
+' @local p_src - Pointer to source path argument
+' @local p_dst - Pointer to destination path argument
+' @local p_src_leaf - Pointer to leaf of source name
+' @local has_path - True if source contained "/" separators
+' @local dh - Directory handle (tests if dest is a directory)
+' @local result - Move/rename success/failure
 
   if (ntokens <> 3)
     bad_syntax()
@@ -793,9 +845,21 @@ PUB do_move() | p_src, p_dst, p_src_leaf, has_path, dh, result
 
 
 PUB do_copy() | p_src, p_dst, p_src_leaf, p_dst_leaf, src_has_path, dst_has_path, dst_is_dir, dh, h_src, h_dst, bytes_read, total
-
-'' Copy file. Supports paths and "copy file dir" (keeps source name).
+'' Copy a file. Supports paths and "copy file dir" (keeps source name).
 '' Examples: copy a.txt b.txt, copy a.txt work, copy work/a.txt backup/b.txt
+''
+' @local p_src - Pointer to source path argument
+' @local p_dst - Pointer to destination path argument
+' @local p_src_leaf - Pointer to leaf of source filename
+' @local p_dst_leaf - Pointer to leaf of destination filename
+' @local src_has_path - True if source contained "/" separators
+' @local dst_has_path - True if destination contained "/" separators
+' @local dst_is_dir - True if destination is an existing directory
+' @local dh - Directory handle (tests if dest is a directory)
+' @local h_src - Source file read handle
+' @local h_dst - Destination file write handle
+' @local bytes_read - Bytes returned from readHandle per iteration
+' @local total - Cumulative bytes copied
 
   if (ntokens <> 3)
     bad_syntax()
@@ -880,8 +944,12 @@ PUB do_copy() | p_src, p_dst, p_src_leaf, p_dst_leaf, src_has_path, dst_has_path
 
 
 PUB do_delete() | p_name, p_leaf, has_path, result
-
-'' Delete file. Supports paths like "work/test.txt".
+'' Delete a file. Supports paths like "work/test.txt".
+''
+' @local p_name - Pointer to the full path argument
+' @local p_leaf - Pointer to leaf filename within the path
+' @local has_path - True if path contained "/" separators
+' @local result - Delete success/failure
 
   if (ntokens <> 2)
     bad_syntax()
@@ -907,8 +975,15 @@ PUB do_delete() | p_name, p_leaf, has_path, result
 
 
 PUB do_rmdir() | p_name, p_leaf, has_path, dh, result, p_entry, is_empty
-
-'' Remove directory (must be empty). Supports paths like "work/logs".
+'' Remove an empty directory. Supports paths like "work/logs".
+''
+' @local p_name - Pointer to the full path argument
+' @local p_leaf - Pointer to leaf directory name within the path
+' @local has_path - True if path contained "/" separators
+' @local dh - Directory handle to verify existence
+' @local result - readDirectoryHandle/deleteFile result
+' @local p_entry - Pointer to current entry name during emptiness check
+' @local is_empty - True if directory contains no real entries
 
   if (ntokens <> 2)
     bad_syntax()
@@ -962,9 +1037,11 @@ PUB do_rmdir() | p_name, p_leaf, has_path, dh, result, p_entry, is_empty
     nav_back(p_name)
 
 
-PUB do_demo() | handle, i
-
-'' Create demo files
+PUB do_demo() | handle, idx
+'' Create a set of demo files (HELLO.TXT, README.TXT, NUMBERS.TXT) in the current directory.
+''
+' @local handle - File write handle (reserved for future use)
+' @local idx - Loop index (reserved for future use)
 
   if (ntokens <> 1)
     bad_syntax()
@@ -986,13 +1063,27 @@ PUB do_demo() | handle, i
 PUB do_card_info() | wasMounted, ...
                      ocr, sizeMB, spiHz, psn, mdtYear, mdtMonth, ...
                      pnm[2], p_mfr, p_type, p_spec, p_fs, ...
-                     oemBuf[3], partStart, i, nLen
-
-'' Display compact two-line card identification summary
-'' Works mounted or unmounted
-''
+                     oemBuf[3], partStart, idx, nLen
+'' Display detailed card identification summary. Works mounted or unmounted.
 '' Line 1: Manufacturer Product Type SizeMB/GB [FS] SDver revN.M SN:hex Year/Mo
 '' Line 2: SPI freq MHz  [OEM name]
+''
+' @local wasMounted - True if card was already mounted on entry
+' @local ocr - OCR register value from card
+' @local sizeMB - Card capacity in megabytes
+' @local spiHz - Current SPI frequency in Hz
+' @local psn - Product serial number from CID
+' @local mdtYear - Manufacturing year from CID
+' @local mdtMonth - Manufacturing month from CID
+' @local pnm - Product name buffer (5 chars + null, 2 longs)
+' @local p_mfr - Pointer to manufacturer name string
+' @local p_type - Pointer to card type string (SDSC/SDHC/SDXC)
+' @local p_spec - Pointer to SD spec version string
+' @local p_fs - Pointer to filesystem type string
+' @local oemBuf - OEM name buffer (8 chars + null, 3 longs)
+' @local partStart - LBA start of first partition
+' @local idx - Loop index for OEM name trimming
+' @local nLen - Length of formatted string for concatenation
 
   if (ntokens <> 1)
     bad_syntax()
@@ -1042,12 +1133,12 @@ PUB do_card_info() | wasMounted, ...
       bytemove(@oemBuf, @buf2 + 3, 8)
       BYTE[@oemBuf + 8] := 0
       ' Trim trailing spaces
-      i := 7
-      repeat while i >= 0
-        if BYTE[@oemBuf + i] <> " "
+      idx := 7
+      repeat while idx >= 0
+        if BYTE[@oemBuf + idx] <> " "
           quit
-        BYTE[@oemBuf + i] := 0
-        i--
+        BYTE[@oemBuf + idx] := 0
+        idx--
     else
       bytemove(@oemBuf, @"n/a", 4)
   else
@@ -1071,9 +1162,10 @@ PUB do_card_info() | wasMounted, ...
 
 
 PUB do_audit() | pStr
-
-'' Audit FAT32 filesystem integrity via FSCK library (read-only)
-'' Unmounts if mounted, runs audit in utility cog, offers re-mount
+'' Audit FAT32 filesystem integrity via the FSCK library (read-only check).
+'' Unmounts if mounted, runs audit in a utility cog, then offers to re-mount.
+''
+' @local pStr - Pointer to FIFO output string from audit cog
 
   if (ntokens <> 1)
     bad_syntax()
@@ -1113,9 +1205,10 @@ PUB do_audit() | pStr
 
 
 PUB do_fsck() | pStr
-
-'' Check and repair FAT32 filesystem via FSCK library (cog-based)
-'' Requires unmount for write access to FAT sectors
+'' Check and repair FAT32 filesystem via the FSCK library (cog-based).
+'' Requires unmount for write access to FAT sectors.
+''
+' @local pStr - Pointer to FIFO output string from FSCK cog
 
   if (ntokens <> 1)
     bad_syntax()
@@ -1156,10 +1249,19 @@ PUB do_fsck() | pStr
     do_mount()
 
 
-PUB do_bench() | wasMounted, tStart, tElapsed, sector, i, rate, nSectors, readResult, msPerTick
-
-'' Read-only throughput benchmark using raw sector reads
-'' Works mounted or unmounted - no files created/deleted
+PUB do_bench() | wasMounted, tStart, tElapsed, sector, idx, rate, nSectors, readResult, msPerTick
+'' Run read-only throughput benchmark using raw sector reads at multiple batch sizes.
+'' Works mounted or unmounted - no files are created or deleted.
+''
+' @local wasMounted - True if card was already mounted on entry
+' @local tStart - System counter at start of timed section
+' @local tElapsed - Elapsed ticks for timed section
+' @local sector - Current sector number for reads
+' @local idx - Loop index (reserved for future use)
+' @local rate - Calculated throughput in KB/s
+' @local nSectors - Number of sectors per multi-read (reserved)
+' @local readResult - Return value from readSectorsRaw
+' @local msPerTick - Clock ticks per millisecond
 
   if (ntokens <> 1)
     bad_syntax()
@@ -1236,8 +1338,12 @@ PUB do_bench() | wasMounted, tStart, tElapsed, sector, i, rate, nSectors, readRe
 
 
 PUB do_touch() | p_name, p_leaf, has_path, handle
-
-'' Create empty file. Supports paths like "work/newfile.txt".
+'' Create an empty file. Supports paths like "work/newfile.txt".
+''
+' @local p_name - Pointer to the full path argument
+' @local p_leaf - Pointer to leaf filename within the path
+' @local has_path - True if path contained "/" separators
+' @local handle - File write handle (created then immediately closed)
 
   if (ntokens <> 2)
     bad_syntax()
@@ -1264,10 +1370,11 @@ PUB do_touch() | p_name, p_leaf, has_path, handle
 
 
 PUB do_label() | p_label
-
-'' Display or set volume label
+'' Display or set the volume label.
 '' Usage: label          - show current volume label
 ''        label NEWNAME  - set new volume label (max 11 chars)
+''
+' @local p_label - Pointer to new label string argument (if provided)
 
   if (ntokens > 2)
     bad_syntax()
@@ -1290,8 +1397,7 @@ PUB do_label() | p_label
 
 
 PUB do_alias()
-
-'' Show all command aliases
+'' Display all command aliases showing primary and alternate names.
 
   serial.fstr0(@"\r\n  Command aliases (either name works):\r\n\r\n")
   serial.fstr0(@"  Primary     Alias       Description\r\n")
@@ -1311,8 +1417,9 @@ PUB do_alias()
 
 
 PUB do_tree() | p_path
-
-'' Display directory tree. Usage: tree [path]
+'' Display a recursive directory tree. Usage: tree [path]
+''
+' @local p_path - Pointer to root path for tree (defaults to ".")
 
   if (ntokens > 2)
     bad_syntax()
@@ -1332,6 +1439,7 @@ PUB do_tree() | p_path
 
 
 PUB not_implemented()
+'' Display "not implemented" message for unrecognized or stub commands.
 
   serial.fstr1(@"%s is not implemented\r\n", token(0))
 
@@ -1340,8 +1448,12 @@ CON { helper methods }
 
 
 PRI write_demo_file(p_name, p_content) | handle, len
-
-'' Write demo content to file
+' Write a string to a new file on the SD card.
+'
+' @param p_name - Pointer to filename string
+' @param p_content - Pointer to content string to write
+' @local handle - File write handle
+' @local len - Length of content string in bytes
 
   len := strsize(p_content)
   serial.fstr2(@"  Writing %s (%d bytes)...\r\n", p_name, len)
@@ -1355,19 +1467,24 @@ PRI write_demo_file(p_name, p_content) | handle, len
   sd.closeFileHandle(handle)
 
 
-PRI navigate_to_parent(p_path) : p_leaf, has_path | slash_pos, i
-
-'' Split a path at the last "/" and cd to the parent directory.
-'' Returns leaf name pointer and whether navigation occurred.
-'' If parent cd fails, prints error, returns p_leaf=0.
-'' Caller must call nav_back(p_path) when done if has_path is true.
+PRI navigate_to_parent(p_path) : p_leaf, has_path | slash_pos, idx
+' Split a path at the last "/" and cd to the parent directory.
+' Returns leaf name pointer and whether navigation occurred.
+' If parent cd fails, prints error and returns p_leaf=0.
+' Caller must call nav_back(p_path) when done if has_path is true.
+'
+' @param p_path - Pointer to full path string (modified: "/" replaced with null)
+' @returns p_leaf - Pointer to leaf name portion of path (0 on error)
+' @returns has_path - True if navigation to parent directory occurred
+' @local slash_pos - Position of last "/" in path (-1 if none)
+' @local idx - Scan index through path characters
 
   slash_pos := -1
-  i := 0
-  repeat while byte[p_path + i] <> 0
-    if byte[p_path + i] == "/"
-      slash_pos := i
-    i++
+  idx := 0
+  repeat while byte[p_path + idx] <> 0
+    if byte[p_path + idx] == "/"
+      slash_pos := idx
+    idx++
 
   if slash_pos < 0
     ' No path separator — use as-is in CWD
@@ -1387,17 +1504,21 @@ PRI navigate_to_parent(p_path) : p_leaf, has_path | slash_pos, i
   has_path := true
 
 
-PRI path_leaf(p_path) : p_leaf | slash_pos, i
-
-'' Return pointer to the leaf portion of a path (after last "/").
-'' Does NOT modify the string or navigate.
+PRI path_leaf(p_path) : p_leaf | slash_pos, idx
+' Return pointer to the leaf portion of a path (after last "/").
+' Does NOT modify the string or navigate.
+'
+' @param p_path - Pointer to path string
+' @returns p_leaf - Pointer to leaf name (after last "/" or entire string)
+' @local slash_pos - Position of last "/" in path (-1 if none)
+' @local idx - Scan index through path characters
 
   slash_pos := -1
-  i := 0
-  repeat while byte[p_path + i] <> 0
-    if byte[p_path + i] == "/"
-      slash_pos := i
-    i++
+  idx := 0
+  repeat while byte[p_path + idx] <> 0
+    if byte[p_path + idx] == "/"
+      slash_pos := idx
+    idx++
 
   if slash_pos >= 0
     p_leaf := p_path + slash_pos + 1
@@ -1405,27 +1526,37 @@ PRI path_leaf(p_path) : p_leaf | slash_pos, i
     p_leaf := p_path
 
 
-PRI nav_back(p_parent) | depth, i
-
-'' Navigate back up after a temporary cd into a parent path.
-'' Counts "/" separators in p_parent to determine depth.
+PRI nav_back(p_parent) | depth, idx
+' Navigate back up after a temporary cd into a parent path.
+' Counts "/" separators in p_parent to determine how many levels to ascend.
+'
+' @param p_parent - Pointer to parent path string (used to count "/" depth)
+' @local depth - Number of cd("..") calls needed
+' @local idx - Scan index through path characters
 
   depth := 1
-  i := 0
-  repeat while byte[p_parent + i] <> 0
-    if byte[p_parent + i] == "/"
+  idx := 0
+  repeat while byte[p_parent + idx] <> 0
+    if byte[p_parent + idx] == "/"
       depth++
-    i++
+    idx++
   repeat depth
     sd.changeDirectory(@"..")
 
 
-PRI tree_walk(p_path, depth) | dh, result, p_name, attrib, i, name_buf[4]
-
-'' Recursively display directory tree.
-'' p_path is directory to enumerate (relative to CWD).
-'' depth is indentation level (0 = root of tree).
-'' Max depth 8 to protect stack.
+PRI tree_walk(p_path, depth) | dh, result, p_name, attrib, idx, name_buf[4]
+' Recursively display a directory tree.
+' Enumerates entries, prints files, and recurses into subdirectories.
+' Max depth 8 to protect stack.
+'
+' @param p_path - Pointer to directory path to enumerate (relative to CWD)
+' @param depth - Current indentation level (0 = root of tree)
+' @local dh - Directory handle for current level
+' @local result - readDirectoryHandle result
+' @local p_name - Pointer to current entry name string
+' @local attrib - FAT attribute byte for current entry
+' @local idx - Loop index (reserved for future use)
+' @local name_buf - 16-byte buffer to save directory name across reopen
 
   if depth > 8
     tree_indent(depth)
@@ -1485,18 +1616,24 @@ PRI tree_walk(p_path, depth) | dh, result, p_name, attrib, i, name_buf[4]
   sd.closeDirectoryHandle(dh)
 
 
-PRI tree_indent(depth) | i
-
-'' Print tree indentation
+PRI tree_indent(depth) | idx
+' Print tree indentation spaces for the given depth level.
+'
+' @param depth - Number of indentation levels to print
+' @local idx - Loop index (reserved for future use)
 
   repeat depth
     serial.fstr0(@"  ")
 
 
 PRI tree_skip_to(dh, p_past_name) | result, p_name
-
-'' Advance directory handle past the named entry (and all entries before it).
-'' Used after reopening a directory to resume where we left off.
+' Advance a directory handle past the named entry and all entries before it.
+' Used after reopening a directory to resume enumeration where we left off.
+'
+' @param dh - Open directory handle to advance
+' @param p_past_name - Pointer to name string to skip past
+' @local result - readDirectoryHandle result
+' @local p_name - Pointer to current entry name string
 
   repeat
     result := sd.readDirectoryHandle(dh)
@@ -1508,8 +1645,10 @@ PRI tree_skip_to(dh, p_past_name) | result, p_name
 
 
 PRI show_card_summary() | total_mb, size_gb
-
-'' Show brief card summary after mount (no free space - that scan takes ~14s on 16GB cards)
+' Display brief card summary after mount (skips free space scan which takes ~14s on 16GB cards).
+'
+' @local total_mb - Card capacity in megabytes
+' @local size_gb - Card capacity in marketed gigabytes
 
   total_mb := sd.cardSizeSectors() / 2048
   size_gb := (total_mb + 953) / 954                                 ' decimal GB (marketed card size)
@@ -1520,43 +1659,49 @@ PRI show_card_summary() | total_mb, size_gb
 
 
 PRI check_mount() : status
-
-'' Returns true if SD card is mounted
+' Check if the SD card is mounted and print an error message if not.
+'
+' @returns status - True if mounted, false otherwise
 
   status := mounted
   if (status == false)
     serial.fstr0(@"SD card not mounted. Use 'mount' command first.\r\n")
 
 
-PRI go_up_directory() | i, len
-
-'' Navigate up one directory level
+PRI go_up_directory() | idx, len
+' Navigate up one directory level by trimming the cwd string and calling cd("..").
+'
+' @local idx - Scan index for finding last "/" in cwd
+' @local len - Current length of cwd string
 
   len := strsize(@cwd)
   if (len <= 1)                                                 ' already at root
     return
 
   ' Find last slash
-  i := len - 1
-  if (cwd[i] == "/")
-    i--
+  idx := len - 1
+  if (cwd[idx] == "/")
+    idx--
 
-  repeat while i > 0
-    if (cwd[i] == "/")
+  repeat while idx > 0
+    if (cwd[idx] == "/")
       quit
-    i--
+    idx--
 
-  if (i == 0)
+  if (idx == 0)
     bytemove(@cwd, @"/", 2)                                     ' back to root
   else
-    cwd[i + 1] := 0                                             ' truncate path
+    cwd[idx + 1] := 0                                           ' truncate path
 
   sd.changeDirectory(@"..")
 
 
 PRI update_cwd(p_path) | len, cwd_len
-
-'' Update current working directory string
+' Append a directory name to the current working directory path string.
+'
+' @param p_path - Pointer to directory name to append
+' @local len - Length of the directory name being appended
+' @local cwd_len - Current length of the cwd string
 
   cwd_len := strsize(@cwd)
   len := strsize(p_path)
@@ -1573,6 +1718,7 @@ PRI update_cwd(p_path) | len, cwd_len
 
 
 PRI bad_syntax()
+' Display a syntax error message directing the user to the help command.
 
   serial.fstr0(@"Syntax error. Type 'help' for command list.\r\n")
 
@@ -1582,31 +1728,47 @@ CON { struct accessors (kept for do_card_info / detectFilesystem) }
 
 ' ── MBR partition entry accessors ──────────────────────────────────────────────
 
-PRI partType(^sd.mbr_partition_t p) : value
-  return p.partType
+PRI partType(^sd.mbr_partition_t pEntry) : value
+' Get the partition type byte from an MBR partition entry.
+'
+' @param pEntry - Typed pointer to MBR partition entry struct
+' @returns value - Partition type byte ($0C = FAT32 LBA, etc.)
+  return pEntry.partType
 
-PRI partLbaStart(^sd.mbr_partition_t p) : value
-  return p.lbaStart
+PRI partLbaStart(^sd.mbr_partition_t pEntry) : value
+' Get the LBA start sector from an MBR partition entry.
+'
+' @param pEntry - Typed pointer to MBR partition entry struct
+' @returns value - LBA sector number where partition begins
+  return pEntry.lbaStart
 
 ' ── VBR accessor (used by resolveType07) ─────────────────────────────────────
 
-PRI vbrOemNameByte(^sd.vbr_t p, idx) : value
-  return p.oemName[idx]
+PRI vbrOemNameByte(^sd.vbr_t pRec, byteIdx) : value
+' Get a single byte from the OEM name field in a VBR (Volume Boot Record).
+'
+' @param pRec - Typed pointer to VBR struct overlay
+' @param byteIdx - Byte index within the 8-byte OEM name field
+' @returns value - Character byte at the specified index
+  return pRec.oemName[byteIdx]
 
 
 CON { shared utility methods }
 
 
-PRI confirmYN(p_prompt) : confirmed | c
-
-'' Prompt user for y/n confirmation with 10-second timeout
-'' Default is NO (just pressing Enter returns false, timeout returns false)
+PRI confirmYN(p_prompt) : confirmed | ch
+' Prompt user for y/n confirmation with a 10-second timeout.
+' Default is NO (pressing Enter or timeout returns false).
+'
+' @param p_prompt - Pointer to prompt text string
+' @returns confirmed - True if user pressed 'y' or 'Y'
+' @local ch - Character received from terminal
 
   serial.fstr1(@"%s (y/N)? \r", p_prompt)
-  c := serial.rxtime(10_000)
+  ch := serial.rxtime(10_000)
   serial.tx(serial.CRSR_X)                                       ' position cursor past prompt
   serial.tx(strsize(p_prompt) + 8)                               ' "<prompt> (y/N)? "
-  if (c == "y" or c == "Y")
+  if (ch == "y" or ch == "Y")
     serial.fstr0(@"yes\r\n")
     confirmed := true
   else
@@ -1614,27 +1776,33 @@ PRI confirmYN(p_prompt) : confirmed | c
     confirmed := false
 
 
-PRI lookupMID(mid) : p_name | p, entryMID
+PRI lookupMID(mid) : p_name | pCursor, entryMID
+' Look up manufacturer name from MID byte in the midTable.
+' Returns pointer to name string, or "MID:$NN" formatted string for unknown IDs.
+'
+' @param mid - Manufacturer ID byte from CID register
+' @returns p_name - Pointer to manufacturer name string
+' @local pCursor - Scan pointer through midTable entries
+' @local entryMID - MID value from current table entry
 
-'' Look up manufacturer name from MID byte.
-'' Returns pointer to name string, or "MID:$NN" for unknown.
-
-  p := @midTable
+  pCursor := @midTable
   repeat
-    entryMID := WORD[p]
+    entryMID := WORD[pCursor]
     if entryMID == $00                                                ' end sentinel
       ' Unknown - format hex into dedicated DAT buffer (not shared buffer!)
       BYTE[@midFmtBuf + 5] := hexDigit(mid >> 4)
       BYTE[@midFmtBuf + 6] := hexDigit(mid & $0F)
       return @midFmtBuf
     if entryMID == mid
-      return @@WORD[p + 2]                                            ' convert DAT relative offset to absolute address
-    p += 4                                                            ' next entry: word MID + word ptr
+      return @@WORD[pCursor + 2]                                      ' convert DAT relative offset to absolute address
+    pCursor += 4                                                      ' next entry: word MID + word ptr
 
 
 PRI hexDigit(nibble) : ch
-
-'' Convert 0-15 to ASCII hex digit
+' Convert a 4-bit value (0-15) to its ASCII hex digit character.
+'
+' @param nibble - Value 0-15 to convert
+' @returns ch - ASCII character '0'-'9' or 'A'-'F'
 
   if nibble < 10
     return "0" + nibble
@@ -1642,9 +1810,12 @@ PRI hexDigit(nibble) : ch
 
 
 PRI getCardType(ocr, sizeMB) : p_type
-
-'' Determine card type from OCR CCS bit and capacity.
-'' CCS=0: SDSC, CCS=1 and <=32GB: SDHC, CCS=1 and >32GB: SDXC
+' Determine card type string from OCR CCS bit and card capacity.
+' CCS=0: SDSC, CCS=1 and <=32GB: SDHC, CCS=1 and >32GB: SDXC
+'
+' @param ocr - OCR register value from card
+' @param sizeMB - Card capacity in megabytes
+' @returns p_type - Pointer to card type string ("SDSC", "SDHC", or "SDXC")
 
   if (ocr & (1 << 30)) == 0
     return @ctSDSC
@@ -1654,10 +1825,15 @@ PRI getCardType(ocr, sizeMB) : p_type
 
 
 PRI getSDSpecVersion(^sd.scr_t p_scr) : p_version | sdSpec, spec3, spec4, specX
-
-'' Decode SD spec version from SCR register struct.
-'' Takes typed pointer to scr_t struct.
-'' Returns pointer to version string.
+' Decode SD specification version from the SCR register struct fields.
+' Returns a pointer to a version string like "SD 3.x".
+'
+' @param p_scr - Typed pointer to SCR register struct
+' @returns p_version - Pointer to SD spec version string
+' @local sdSpec - Base SD spec field (bits 0-3)
+' @local spec3 - SD spec 3.x indicator bit
+' @local spec4 - SD spec 4.x indicator bit
+' @local specX - Extended spec version field
 
   sdSpec := p_scr.sdSpec & $0F
   spec3 := (p_scr.sdSpec3Ext >> 7) & 1
@@ -1686,9 +1862,11 @@ PRI getSDSpecVersion(^sd.scr_t p_scr) : p_version | sdSpec, spec3, spec4, specX
 
 
 PRI decodeSpeedClass(classByte) : speed
-
-'' Decode SPEED_CLASS byte from SD Status.
-'' $00=0, $01=2, $02=4, $03=6, $04=10
+' Decode the SPEED_CLASS byte from SD Status register.
+' Maps: $00=Class 0, $01=Class 2, $02=Class 4, $03=Class 6, $04=Class 10
+'
+' @param classByte - Raw speed class byte from SD Status
+' @returns speed - Decoded speed class number (0, 2, 4, 6, or 10)
 
   case classByte
     $00 : return 0
@@ -1700,9 +1878,11 @@ PRI decodeSpeedClass(classByte) : speed
 
 
 PRI detectFilesystem() : p_fsName | pType
-
-'' Read MBR sector 0 to determine filesystem type from partition type byte.
-'' Uses buf2 for the read. Returns pointer to filesystem name string.
+' Read MBR sector 0 to determine the filesystem type from the partition type byte.
+' Uses buf2 for the sector read. Returns pointer to a filesystem name string.
+'
+' @returns p_fsName - Pointer to filesystem type string ("FAT32", "exFAT", etc.)
+' @local pType - Partition type byte from MBR entry
 
   sd.readSectorRaw(0, @buf2)
 
@@ -1725,9 +1905,10 @@ PRI detectFilesystem() : p_fsName | pType
 
 
 PRI resolveType07() : p_fsName | partStart
-
-'' Distinguish exFAT from NTFS for partition type $07.
-'' Reads VBR OEM name via struct overlay.
+' Distinguish exFAT from NTFS for partition type $07 by reading the VBR OEM name.
+'
+' @returns p_fsName - Pointer to "exFAT" or "NTFS" string
+' @local partStart - LBA start sector of the partition
 
   partStart := partLbaStart(pPart)                                 ' pPart set by detectFilesystem
   if partStart == 0
@@ -1744,16 +1925,19 @@ PRI resolveType07() : p_fsName | partStart
   return @fsNTFS
 
 
-PRI lcstr(p_str) : p_lcstr | c
-
-'' Converts p_str to lowercase
+PRI lcstr(p_str) : p_lcstr | ch
+' Convert a string to lowercase in place and return the original pointer.
+'
+' @param p_str - Pointer to null-terminated string (modified in place)
+' @returns p_lcstr - Same pointer as p_str (for use in expressions)
+' @local ch - Current character being examined
 
   p_lcstr := p_str
 
   repeat strsize(p_str)
-    c := byte[p_str]
-    if (c >= "A") && (c <= "Z")
-      byte[p_str] := c + 32
+    ch := byte[p_str]
+    if (ch >= "A") && (ch <= "Z")
+      byte[p_str] := ch + 32
     ++p_str
 
 
@@ -1761,8 +1945,7 @@ CON { inline parser }
 
 
 PRI parserReset()
-
-' Reset command input buffer and tokens
+' Reset the command input buffer, token pointers, and token count.
 
   bytefill(@cliBuf, 0, CLI_BUF_SIZE)
   cliIdx := 0
@@ -1770,10 +1953,11 @@ PRI parserReset()
   ntokens := 0
 
 
-PRI parse() : count | p
-
-' Parse input buffer into tokens separated by spaces/tabs
-' -- returns token count
+PRI parse() : count | pScan
+' Parse the input buffer into tokens separated by spaces and tabs.
+'
+' @returns count - Number of tokens found
+' @local pScan - Scan pointer through cliBuf
 
   longfill(@tkPtrs, 0, CLI_MAX_TKNS)
   ntokens := 0
@@ -1781,36 +1965,43 @@ PRI parse() : count | p
   if (cliIdx == 0)                                              ' nothing to parse
     return 0
 
-  p := @cliBuf
+  pScan := @cliBuf
 
   repeat while (ntokens < CLI_MAX_TKNS)
     ' skip separators (space, tab)
-    repeat while (byte[p] == " ") or (byte[p] == 9)
-      p++
-    if (byte[p] == 0)                                           ' end of string
+    repeat while (byte[pScan] == " ") or (byte[pScan] == 9)
+      pScan++
+    if (byte[pScan] == 0)                                       ' end of string
       quit
-    tkPtrs[ntokens++] := p                                      ' save token start
+    tkPtrs[ntokens++] := pScan                                  ' save token start
     ' walk to next separator or end
-    repeat while (byte[p] <> 0)
-      if (byte[p] == " ") or (byte[p] == 9)
-        byte[p++] := 0                                          ' terminate token
+    repeat while (byte[pScan] <> 0)
+      if (byte[pScan] == " ") or (byte[pScan] == 9)
+        byte[pScan++] := 0                                      ' terminate token
         quit
-      p++
+      pScan++
 
   return ntokens
 
 
 PRI token(idx) : p_str
-
-' Returns pointer to parsed token at index
+' Return pointer to the parsed token at the given index.
+'
+' @param idx - Token index (0-based, must be < CLI_MAX_TKNS)
+' @returns p_str - Pointer to token string, or 0 if index out of range
 
   if (idx >= 0) and (idx < CLI_MAX_TKNS)
     return tkPtrs[idx]
 
 
 PRI idCommand(pCmdStr) : eCmdId | nIdx, pEntry, pStr
-
-' Look up command string in command table, return enum value
+' Look up a command string in the command table and return its enum value.
+'
+' @param pCmdStr - Pointer to lowercase command string to look up
+' @returns eCmdId - Command enum value (CMD_UNKNOWN if not found)
+' @local nIdx - Loop index through command table entries
+' @local pEntry - Pointer to current command table entry
+' @local pStr - Pointer to command string within the entry
 
   eCmdId := CMD_UNKNOWN
 
@@ -1992,8 +2183,10 @@ DAT { card type strings }
 CON { init routines }
 
 PRI wait_for_terminal(clear, delay)
-
-'' Wait for terminal to be open and key pressed
+' Wait for the terminal to connect by blocking until a keypress is received.
+'
+' @param clear - If true, send CLS after keypress
+' @param delay - Milliseconds to wait after clearing (minimum 0)
 
   debug("SD Shell: wait for CR")
   serial.rxflush()

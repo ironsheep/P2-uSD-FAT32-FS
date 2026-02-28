@@ -42,7 +42,7 @@ CON
 
     MBR_SIGNATURE = $AA55
 
-'' Enable full driver features for register reads
+' Enable full driver features for register reads
 #IFDEF __SPINTOOLS__
 #DEFINE SD_INCLUDE_ALL
 #ELSEIFDEF __FLEXSPIN__
@@ -106,6 +106,8 @@ DAT
 
 
 PUB go() | result
+'' Run two-phase SD card info certification: Phase 1 unmounted (initCardOnly), Phase 2 mounted.
+'' Exercises struct-based CID/SCR access and generates a two-line card info display.
 
     debug(" ")
     debug("============================================================")
@@ -163,9 +165,9 @@ PUB go() | result
     debug("END_SESSION")
 
 
-PRI testStructAccess() | sd.cid_t cid, sd.scr_t scr, result, ocr, sectors, spiHz, i
-'' Test CID and SCR using struct locals - the EXACT pattern do_card_info() uses.
-'' Compares struct field access against raw byte access to detect offset errors.
+PRI testStructAccess() | sd.cid_t cid, sd.scr_t scr, result, ocr, sectors, spiHz
+' Test CID and SCR using struct locals - the EXACT pattern do_card_info() uses.
+' Compares struct field access against raw byte access to detect offset errors.
 
     ' === CID TEST: struct local ===
     debug("--- Test: readCIDRaw() into struct local ---")
@@ -313,10 +315,10 @@ PRI testStructAccess() | sd.cid_t cid, sd.scr_t scr, result, ocr, sectors, spiHz
 
 PRI generateTwoLineDisplay() | sd.cid_t cid, sd.scr_t scr, ...
                                 ocr, sizeMB, spiHz, psn, mdtYear, mdtMonth, ...
-                                pnm[2], p_mfr, p_type, p_spec, p_fs, i, ...
+                                pnm[2], p_mfr, p_type, p_spec, p_fs, ...
                                 sdstOk, speedClass, uhsGrade, videoClass
-'' Generate two-line display using struct locals - EXACTLY as do_card_info() does.
-'' This is the code path we're certifying.
+' Generate two-line display using struct locals - EXACTLY as do_card_info() does.
+' This is the code path we're certifying.
 
     debug(" ")
     debug("--- Two-Line Display (struct locals) ---")
@@ -391,7 +393,7 @@ PRI generateTwoLineDisplay() | sd.cid_t cid, sd.scr_t scr, ...
 
 
 PRI getSDSpecVersion(^sd.scr_t p_scr) : p_version | sdSpec, spec3, spec4, specX
-'' Decode SD spec version - uses ^sd.scr_t pointer (same as demo shell)
+' Decode SD spec version - uses ^sd.scr_t pointer (same as demo shell)
 
     sdSpec := p_scr.sdSpec & $0F
     spec3 := (p_scr.sdSpec3Ext >> 7) & 1
@@ -413,22 +415,33 @@ PRI getSDSpecVersion(^sd.scr_t p_scr) : p_version | sdSpec, spec3, spec4, specX
     return @"SD >6.x"
 
 
-PRI lookupMID(mid) : p_name | p, entryMID
+PRI lookupMID(mid) : p_name | pCursor, entryMID
+' Look up the manufacturer name string for a given CID Manufacturer ID (MID) byte.
+' Walks the midTable (MID byte, null-terminated name, ..., $FF sentinel) linearly.
+' @param mid - Manufacturer ID byte from CID register
+' @returns p_name - pointer to manufacturer name string (or "Unknown" if not found)
+' @local pCursor - current position scanning through midTable
+' @local entryMID - MID byte at the current table entry
 
-    p := @midTable
+    pCursor := @midTable
     repeat
-        entryMID := BYTE[p]
+        entryMID := BYTE[pCursor]
         if entryMID == $FF
             return @"Unknown"
         if entryMID == mid
-            return p + 1
-        p++
-        repeat while BYTE[p] <> 0
-            p++
-        p++
+            return pCursor + 1
+        pCursor++
+        repeat while BYTE[pCursor] <> 0
+            pCursor++
+        pCursor++
 
 
 PRI getCardType(ocr, sizeMB) : p_type
+' Classify the SD card as SDSC, SDHC, or SDXC based on OCR CCS bit and capacity.
+' SDSC if CCS=0, SDXC if capacity > 32GB, otherwise SDHC.
+' @param ocr - OCR register value (bit 30 = CCS: Card Capacity Status)
+' @param sizeMB - card capacity in megabytes
+' @returns p_type - pointer to card type string ("SDSC", "SDHC", or "SDXC")
 
     if (ocr & (1 << 30)) == 0
         return @ctSDSC
@@ -438,6 +451,10 @@ PRI getCardType(ocr, sizeMB) : p_type
 
 
 PRI detectFilesystem() : p_fsName | pType
+' Detect the filesystem type by reading MBR sector 0 and examining partition type byte.
+' Returns a pointer to a filesystem name string (FAT12, FAT16, FAT32, exFAT, etc.).
+' @returns p_fsName - pointer to filesystem type name string
+' @local pType - partition type byte from MBR offset $1C2
 
     utils.initGuard(@sect_buf_guard)
     sd.readSectorRaw(0, @sect_buf)
@@ -457,7 +474,12 @@ PRI detectFilesystem() : p_fsName | pType
         other : return @fsUnknown
 
 
-PRI readOEMName() | partStart, i
+PRI readOEMName() | partStart, idx
+' Read the OEM name from the Volume Boot Record (VBR) of the first partition.
+' Reads MBR to find partition start sector, then reads the VBR and extracts the
+' 8-byte OEM name field (offset 3). Trailing spaces are trimmed. Result stored in oemBuf.
+' @local partStart - starting sector number of the first partition from MBR
+' @local idx - index for trimming trailing spaces from the OEM name
 
     utils.initGuard(@sect_buf_guard)
     sd.readSectorRaw(0, @sect_buf)
@@ -470,10 +492,10 @@ PRI readOEMName() | partStart, i
             utils.checkGuard(@sect_buf_guard, @"sect_buf guard")
             bytemove(@oemBuf, @sect_buf + 3, 8)
             oemBuf[8] := 0
-            i := 7
-            repeat while i >= 0 and oemBuf[i] == " "
-                oemBuf[i] := 0
-                i--
+            idx := 7
+            repeat while idx >= 0 and oemBuf[idx] == " "
+                oemBuf[idx] := 0
+                idx--
         else
             bytemove(@oemBuf, @"n/a", 4)
     else

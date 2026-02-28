@@ -196,19 +196,19 @@ PUB rxcheck() : rxbyte | check
     rxbyte := rdpin(rxp) >> 24
     rxbyte &= byteMask  ' handle 7bit data (e.g., 7N1 vs. 8N1)
 
-PUB rxtime(ms) : chr | mstix, t
+PUB rxtime(ms) : chr | mstix, startTime
 '' Wait ms milliseconds for a byte to be received
 ''
 '' @param ms - maximum time to wait in milliseconds
 '' @returns chr - received byte ($00..$FF), or -1 if no byte received
 '' @local mstix - clock ticks per millisecond
-'' @local t - start time
+'' @local startTime - start time
 
   mstix := clkfreq / 1000
 
-  t := getct()
+  startTime := getct()
   repeat
-  until ((chr := rxcheck()) >= 0) or (((getct() - t) / mstix) > ms)
+  until ((chr := rxcheck()) >= 0) or (((getct() - startTime) / mstix) > ms)
 
 
 PUB rx() : rxbyte

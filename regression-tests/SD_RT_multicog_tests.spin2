@@ -70,7 +70,8 @@ test_phase      LONG    0                     ' Current test phase
 ' Cog IDs of launched workers
 launched_cogs   LONG    0[NUM_WORKER_COGS]
 
-PUB go() | result, i, firstCogId, allSame, totalErrors
+PUB go() | result, idx, firstCogId, allSame, totalErrors
+'' Main entry point — runs multi-cog concurrent access tests.
 
     debug(" ")
     debug("==============================================")
@@ -81,12 +82,12 @@ PUB go() | result, i, firstCogId, allSame, totalErrors
     debug("  and API lock serialization with ", udec_(NUM_WORKER_COGS), " worker cogs")
 
     ' Initialize worker status
-    repeat i from 0 to NUM_WORKER_COGS - 1
-        worker_status[i] := STATUS_IDLE
-        worker_cogid[i] := -1
-        worker_result[i] := 0
-        worker_errors[i] := 0
-        launched_cogs[i] := -1
+    repeat idx from 0 to NUM_WORKER_COGS - 1
+        worker_status[idx] := STATUS_IDLE
+        worker_cogid[idx] := -1
+        worker_result[idx] := 0
+        worker_errors[idx] := 0
+        launched_cogs[idx] := -1
 
     ' ----------------------------------
     ' TEST GROUP: Singleton Pattern
@@ -129,12 +130,12 @@ PUB go() | result, i, firstCogId, allSame, totalErrors
     utils.initGuard(@worker_buffers_guard)
 
     ' Launch worker cogs
-    repeat i from 0 to NUM_WORKER_COGS - 1
-        worker_status[i] := STATUS_RUNNING
-        launched_cogs[i] := cogspin(NEWCOG, worker_singleton_test(i), @worker_stacks[i * STACK_SIZE])
-        if launched_cogs[i] == -1
-            debug("  FAIL: Could not launch worker cog ", udec_(i))
-            worker_status[i] := STATUS_FAIL
+    repeat idx from 0 to NUM_WORKER_COGS - 1
+        worker_status[idx] := STATUS_RUNNING
+        launched_cogs[idx] := cogspin(NEWCOG, worker_singleton_test(idx), @worker_stacks[idx * STACK_SIZE])
+        if launched_cogs[idx] == -1
+            debug("  FAIL: Could not launch worker cog ", udec_(idx))
+            worker_status[idx] := STATUS_FAIL
 
     ' Release workers
     sync_barrier := 1
@@ -147,18 +148,18 @@ PUB go() | result, i, firstCogId, allSame, totalErrors
     ' Verify all workers got the same cog ID
     utils.startTest(@"All workers see same cog ID (singleton)")
     allSame := true
-    repeat i from 0 to NUM_WORKER_COGS - 1
-        if worker_cogid[i] <> firstCogId
+    repeat idx from 0 to NUM_WORKER_COGS - 1
+        if worker_cogid[idx] <> firstCogId
             allSame := false
-            debug("  Worker ", udec_(i), " got cog ID ", sdec_(worker_cogid[i]), " (expected ", udec_(firstCogId), ")")
+            debug("  Worker ", udec_(idx), " got cog ID ", sdec_(worker_cogid[idx]), " (expected ", udec_(firstCogId), ")")
     utils.evaluateBool(allSame, @"All workers see same cog ID", true)
 
     utils.startTest(@"All workers report success")
     totalErrors := 0
-    repeat i from 0 to NUM_WORKER_COGS - 1
-        if worker_status[i] <> STATUS_PASS
+    repeat idx from 0 to NUM_WORKER_COGS - 1
+        if worker_status[idx] <> STATUS_PASS
             totalErrors++
-            debug("  Worker ", udec_(i), " status: ", sdec_(worker_status[i]))
+            debug("  Worker ", udec_(idx), " status: ", sdec_(worker_status[idx]))
     utils.evaluateSingleValue(totalErrors, @"Worker failures", 0)
 
     ' Stop worker cogs
@@ -175,17 +176,17 @@ PUB go() | result, i, firstCogId, allSame, totalErrors
     utils.initGuard(@worker_buffers_guard)
 
     ' Reset worker status
-    repeat i from 0 to NUM_WORKER_COGS - 1
-        worker_status[i] := STATUS_RUNNING
-        worker_result[i] := 0
-        worker_errors[i] := 0
+    repeat idx from 0 to NUM_WORKER_COGS - 1
+        worker_status[idx] := STATUS_RUNNING
+        worker_result[idx] := 0
+        worker_errors[idx] := 0
 
     ' Launch worker cogs
-    repeat i from 0 to NUM_WORKER_COGS - 1
-        launched_cogs[i] := cogspin(NEWCOG, worker_read_test(i), @worker_stacks[i * STACK_SIZE])
-        if launched_cogs[i] == -1
-            debug("  FAIL: Could not launch worker cog ", udec_(i))
-            worker_status[i] := STATUS_FAIL
+    repeat idx from 0 to NUM_WORKER_COGS - 1
+        launched_cogs[idx] := cogspin(NEWCOG, worker_read_test(idx), @worker_stacks[idx * STACK_SIZE])
+        if launched_cogs[idx] == -1
+            debug("  FAIL: Could not launch worker cog ", udec_(idx))
+            worker_status[idx] := STATUS_FAIL
 
     ' Release workers
     sync_barrier := 1
@@ -201,11 +202,11 @@ PUB go() | result, i, firstCogId, allSame, totalErrors
     ' that at least ONE worker succeeds (proves the lock mechanism works).
     utils.startTest(@"Concurrent operations completed (lock mechanism works)")
     totalErrors := 0
-    repeat i from 0 to NUM_WORKER_COGS - 1
-        if worker_status[i] == STATUS_PASS
-            debug("  Worker ", udec_(i), ": read ", udec_(worker_result[i]), " bytes OK")
+    repeat idx from 0 to NUM_WORKER_COGS - 1
+        if worker_status[idx] == STATUS_PASS
+            debug("  Worker ", udec_(idx), ": read ", udec_(worker_result[idx]), " bytes OK")
         else
-            debug("  Worker ", udec_(i), ": status=", sdec_(worker_status[i]), " (expected due to shared file state)")
+            debug("  Worker ", udec_(idx), ": status=", sdec_(worker_status[idx]), " (expected due to shared file state)")
             totalErrors++
     ' At least one worker should succeed to prove lock serialization works
     utils.evaluateRange(totalErrors, @"Failed workers (0-2 acceptable)", 0, NUM_WORKER_COGS - 1)
@@ -224,17 +225,17 @@ PUB go() | result, i, firstCogId, allSame, totalErrors
     utils.initGuard(@worker_buffers_guard)
 
     ' Reset worker status
-    repeat i from 0 to NUM_WORKER_COGS - 1
-        worker_status[i] := STATUS_RUNNING
-        worker_result[i] := 0
-        worker_errors[i] := 0
+    repeat idx from 0 to NUM_WORKER_COGS - 1
+        worker_status[idx] := STATUS_RUNNING
+        worker_result[idx] := 0
+        worker_errors[idx] := 0
 
     ' Launch worker cogs
-    repeat i from 0 to NUM_WORKER_COGS - 1
-        launched_cogs[i] := cogspin(NEWCOG, worker_stress_test(i), @worker_stacks[i * STACK_SIZE])
-        if launched_cogs[i] == -1
-            debug("  FAIL: Could not launch worker cog ", udec_(i))
-            worker_status[i] := STATUS_FAIL
+    repeat idx from 0 to NUM_WORKER_COGS - 1
+        launched_cogs[idx] := cogspin(NEWCOG, worker_stress_test(idx), @worker_stacks[idx * STACK_SIZE])
+        if launched_cogs[idx] == -1
+            debug("  FAIL: Could not launch worker cog ", udec_(idx))
+            worker_status[idx] := STATUS_FAIL
 
     ' Release workers
     sync_barrier := 1
@@ -249,9 +250,9 @@ PUB go() | result, i, firstCogId, allSame, totalErrors
     ' lock prevents crashes and operations complete safely.
     utils.startTest(@"Stress test completed (no crashes, lock works under load)")
     totalErrors := 0
-    repeat i from 0 to NUM_WORKER_COGS - 1
-        debug("  Worker ", udec_(i), ": ", udec_(worker_result[i]), " iterations, ", udec_(worker_errors[i]), " errors")
-        if worker_result[i] < ITERATIONS
+    repeat idx from 0 to NUM_WORKER_COGS - 1
+        debug("  Worker ", udec_(idx), ": ", udec_(worker_result[idx]), " iterations, ", udec_(worker_errors[idx]), " errors")
+        if worker_result[idx] < ITERATIONS
             totalErrors++   ' Worker didn't complete all iterations
     ' All workers should complete all iterations (even if some ops fail)
     utils.evaluateSingleValue(totalErrors, @"Workers that didn't complete", 0)
@@ -302,7 +303,10 @@ PUB go() | result, i, firstCogId, allSame, totalErrors
 ' ═══════════════════════════════════════════════════════════════════════════
 
 PRI worker_singleton_test(worker_id) | cogResult
-    '' Worker cog: Test that start() returns the singleton cog ID
+    ' Worker cog: Test that start() returns the singleton cog ID
+    '
+    ' @param worker_id - Worker cog identifier (0 or 1)
+    ' @local cogResult - Cog ID returned by sd.start()
 
     ' Wait for barrier
     repeat until sync_barrier <> 0
@@ -319,8 +323,12 @@ PRI worker_singleton_test(worker_id) | cogResult
     ' Worker cog terminates here
 
 PRI worker_read_test(worker_id) | handle, bytesRead
-    '' Worker cog: Perform file read operations
-    '' Each worker opens/reads/closes via handle API.
+    ' Worker cog: Perform file read operations
+    ' Each worker opens/reads/closes via handle API.
+    '
+    ' @param worker_id - Worker cog identifier (0 or 1)
+    ' @local handle - File handle from openFileRead()
+    ' @local bytesRead - Number of bytes successfully read
 
     ' Wait for barrier
     repeat until sync_barrier <> 0
@@ -343,7 +351,13 @@ PRI worker_read_test(worker_id) | handle, bytesRead
         worker_status[worker_id] := STATUS_FAIL
 
 PRI worker_stress_test(worker_id) | iter, handle, bytesRead, expectedLen
-    '' Worker cog: Rapid open/read/close cycles
+    ' Worker cog: Rapid open/read/close cycles
+    '
+    ' @param worker_id - Worker cog identifier (0 or 1)
+    ' @local iter - Current iteration counter (1 to ITERATIONS)
+    ' @local handle - File handle from openFileRead()
+    ' @local bytesRead - Number of bytes returned by readHandle()
+    ' @local expectedLen - Expected file content length from strsize()
 
     ' Wait for barrier
     repeat until sync_barrier <> 0
@@ -376,15 +390,15 @@ PRI worker_stress_test(worker_id) | iter, handle, bytesRead, expectedLen
 ' HELPER METHODS
 ' ═══════════════════════════════════════════════════════════════════════════
 
-PRI waitForWorkers() | i, allDone
-    '' Wait for all worker cogs to complete
-    '' No internal timeout - if workers hang, that's a driver bug to expose.
-    '' External test runner provides CI safety timeout.
+PRI waitForWorkers() | idx, allDone
+    ' Wait for all worker cogs to complete
+    ' No internal timeout - if workers hang, that's a driver bug to expose.
+    ' External test runner provides CI safety timeout.
 
     repeat
         allDone := true
-        repeat i from 0 to NUM_WORKER_COGS - 1
-            if worker_status[i] == STATUS_RUNNING
+        repeat idx from 0 to NUM_WORKER_COGS - 1
+            if worker_status[idx] == STATUS_RUNNING
                 allDone := false
                 quit
 
@@ -394,17 +408,23 @@ PRI waitForWorkers() | i, allDone
         waitms(10)
 
 
-PRI stopWorkerCogs() | i
-    '' Stop all launched worker cogs
+PRI stopWorkerCogs() | idx
+    ' Stop all launched worker cogs
 
-    repeat i from 0 to NUM_WORKER_COGS - 1
-        if launched_cogs[i] <> -1
-            cogstop(launched_cogs[i])
-            launched_cogs[i] := -1
+    repeat idx from 0 to NUM_WORKER_COGS - 1
+        if launched_cogs[idx] <> -1
+            cogstop(launched_cogs[idx])
+            launched_cogs[idx] := -1
 
 
 PRI readFileToBuffer(worker_id, handle) : bytesRead | fileSize, toRead
-    '' Read file into worker's dedicated buffer (NOT the stack!)
+    ' Read file into worker's dedicated buffer (NOT the stack!)
+    '
+    ' @param worker_id - Worker cog identifier used to index into worker_buffers
+    ' @param handle - Open file handle to read from
+    ' @returns bytesRead - Number of bytes actually read into buffer
+    ' @local fileSize - Total file size reported by fileSizeHandle()
+    ' @local toRead - Clamped byte count (min of fileSize, 64)
 
     fileSize := sd.fileSizeHandle(handle)
     toRead := fileSize <# 64  ' Limit to 64 bytes to fit in worker buffer
@@ -415,8 +435,12 @@ PRI readFileToBuffer(worker_id, handle) : bytesRead | fileSize, toRead
         worker_errors[worker_id]++
 
 
-PRI createTestFiles() | i, pFile, handle
-    '' Create test files for multi-cog read tests
+PRI createTestFiles() | idx, pFile, handle
+    ' Create test files for multi-cog read tests
+    '
+    ' @local idx - Loop index (0..2) for the three test files
+    ' @local pFile - Pointer to current test filename string
+    ' @local handle - File handle from createFileNew()
 
     debug("  Creating test files for worker cogs...")
 
@@ -426,8 +450,8 @@ PRI createTestFiles() | i, pFile, handle
     sd.deleteFile(@testfile3)
 
     ' Create test files with known content
-    repeat i from 0 to 2
-        case i
+    repeat idx from 0 to 2
+        case idx
             0: pFile := @testfile1
             1: pFile := @testfile2
             2: pFile := @testfile3
@@ -442,7 +466,7 @@ PRI createTestFiles() | i, pFile, handle
 
 
 PRI cleanupTestFiles()
-    '' Remove test files
+    ' Remove test files
 
     sd.deleteFile(@testfile1)
     sd.deleteFile(@testfile2)

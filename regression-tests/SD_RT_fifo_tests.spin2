@@ -24,7 +24,8 @@ DAT
 
 resultBuf       BYTE    0[256]
 
-PUB go() | pStr, i, ok, nLen
+PUB go() | pStr, idx, ok, nLen
+'' Main entry point — tests the SPSC FIFO for inter-cog string communication.
 
     debug(" ")
     debug("==============================================")
@@ -112,13 +113,13 @@ PUB go() | pStr, i, ok, nLen
 
     utils.startTest(@"Fill 15 slots without blocking")
     fifo.init()
-    repeat i from 1 to 15
+    repeat idx from 1 to 15
         fifo.put(@"slot")
     utils.evaluateBool(fifo.hasOutput(), @"hasOutput() when full", true)
 
     utils.startTest(@"Drain all 15 slots")
     ok := true
-    repeat i from 1 to 15
+    repeat idx from 1 to 15
         pStr := fifo.getOutput()
         if pStr == 0
             ok := false
@@ -140,7 +141,7 @@ PUB go() | pStr, i, ok, nLen
     fifo.init()
     ok := true
     ' Do 32 put/get cycles — head and tail both wrap past 16
-    repeat i from 1 to 32
+    repeat idx from 1 to 32
         bytemove(@resultBuf, @"Cycle", 5)
         resultBuf[5] := 0
         fifo.put(@resultBuf)

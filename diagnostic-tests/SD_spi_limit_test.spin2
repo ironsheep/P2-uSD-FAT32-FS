@@ -58,7 +58,7 @@ VAR
     BYTE    readBuffer[MULTI_COUNT * SECTOR_SIZE]
     BYTE    readBuffer_guard[16]
 
-PUB go() | result, hp, actualHz, errors, iter, i, sector, written, readCt, byteErrs
+PUB go() | result, hp, actualHz, errors, iter, idx, sector, written, readCt, byteErrs
 '' Test write-read-verify at max SPI speed for this SYSCLK.
 '' Calls setSPISpeed(25_000_000) — the driver computes hp from clkfreq.
 '' At non-multiple-of-50MHz SYSCLK, hp rounds up and actual SPI < 25 MHz.
@@ -95,8 +95,8 @@ PUB go() | result, hp, actualHz, errors, iter, i, sector, written, readCt, byteE
         sector := WRITE_SECTOR_BASE + (iter * MULTI_COUNT)
 
         ' Fill write buffer
-        repeat i from 0 to (MULTI_COUNT * SECTOR_SIZE) - 1
-            writeBuffer[i] := ((i / SECTOR_SIZE) * 41 + (i // SECTOR_SIZE) + iter * 67) & $FF
+        repeat idx from 0 to (MULTI_COUNT * SECTOR_SIZE) - 1
+            writeBuffer[idx] := ((idx / SECTOR_SIZE) * 41 + (idx // SECTOR_SIZE) + iter * 67) & $FF
 
         ' Write
         written := sd.writeSectorsRaw(sector, MULTI_COUNT, @writeBuffer)
@@ -116,8 +116,8 @@ PUB go() | result, hp, actualHz, errors, iter, i, sector, written, readCt, byteE
 
         ' Verify
         byteErrs := 0
-        repeat i from 0 to (MULTI_COUNT * SECTOR_SIZE) - 1
-            if readBuffer[i] <> writeBuffer[i]
+        repeat idx from 0 to (MULTI_COUNT * SECTOR_SIZE) - 1
+            if readBuffer[idx] <> writeBuffer[idx]
                 byteErrs++
         if byteErrs > 0
             errors++

@@ -43,7 +43,7 @@ CON
 
      BUFFER_SIZE = 512
 
-'' Enable speed and register features
+' Enable speed and register features
 #IFDEF __SPINTOOLS__
 #DEFINE SD_INCLUDE_SPEED
 #DEFINE SD_INCLUDE_REGISTERS

@@ -43,7 +43,7 @@ CON
      E_NOT_A_FILE      = -42
      E_NOT_A_DIR       = -43
 
-'' Enable raw sector access and debug methods for diagnostic tests
+' Enable raw sector access and debug methods for diagnostic tests
 #IFDEF __SPINTOOLS__
 #DEFINE SD_INCLUDE_RAW
 #DEFINE SD_INCLUDE_DEBUG
@@ -74,7 +74,7 @@ dotPath        BYTE    ".", 0
 dotdotPath     BYTE    "..", 0
 testContent1   BYTE    "Hello from subdir", 0
 
-PUB go() | result, handle, dh, count, pEntry, i
+PUB go() | result, handle, dh, count, pEntry
 '' Main entry point for subdirectory operations regression tests
 
     debug(" ")

@@ -51,7 +51,7 @@ CON
     DEFAULT_LABEL_1     = $20_52_45_46  ' "FER " (little endian: F, E, R, space)
     DEFAULT_LABEL_2     = $00_20_20_20  ' "   " + null (spaces to pad to 11)
 
-'' Enable full driver features for this utility
+' Enable full driver features for this utility
 #IFDEF __SPINTOOLS__
 #DEFINE SD_INCLUDE_ALL
 #ELSEIFDEF __FLEXSPIN__
@@ -125,7 +125,7 @@ PUB format(cs, mosi, miso, sck) : result
     setDefaultLabel()
     result := doFormat()
 
-PUB formatWithLabel(cs, mosi, miso, sck, pLabel) : result | i, ch
+PUB formatWithLabel(cs, mosi, miso, sck, pLabel) : result | idx, ch
 '' Format the SD card with a custom volume label.
 ''
 '' @param cs - Chip Select pin number
@@ -144,16 +144,16 @@ PUB formatWithLabel(cs, mosi, miso, sck, pLabel) : result | i, ch
     bytefill(@volumeLabel, " ", 11)
     volumeLabel[11] := 0
 
-    i := 0
-    repeat while i < 11
-        ch := BYTE[pLabel][i]
+    idx := 0
+    repeat while idx < 11
+        ch := BYTE[pLabel][idx]
         if ch == 0
             quit
         ' Convert to uppercase for FAT compatibility
         if ch >= "a" and ch <= "z"
             ch -= 32
-        volumeLabel[i] := ch
-        i++
+        volumeLabel[idx] := ch
+        idx++
 
     result := doFormat()
 
@@ -182,7 +182,7 @@ PUB startFormat(cs, mosi, miso, sck) : ok
     ok := doStartCog()
 
 
-PUB startFormatWithLabel(cs, mosi, miso, sck, pLabel) : ok | i, ch
+PUB startFormatWithLabel(cs, mosi, miso, sck, pLabel) : ok | idx, ch
 '' Launch format with custom label in a new cog
 ''
 '' @param cs, mosi, miso, sck - SD pin configuration
@@ -198,16 +198,16 @@ PUB startFormatWithLabel(cs, mosi, miso, sck, pLabel) : ok | i, ch
     bytefill(@volumeLabel, " ", 11)
     volumeLabel[11] := 0
 
-    i := 0
-    repeat while i < 11
-        ch := BYTE[pLabel][i]
+    idx := 0
+    repeat while idx < 11
+        ch := BYTE[pLabel][idx]
         if ch == 0
             quit
         if ch >= "a"
             if ch <= "z"
                 ch -= 32
-        volumeLabel[i] := ch
-        i++
+        volumeLabel[idx] := ch
+        idx++
 
     ok := doStartCog()
 
@@ -254,9 +254,9 @@ PUB stopCog()
     sd.stop()
 
 
-'' =========================================================================
-'' Cog launch and entry point (private)
-'' =========================================================================
+' =========================================================================
+' Cog launch and entry point (private)
+' =========================================================================
 
 PRI doStartCog() : ok
 ' Initialize FIFO and launch format cog
@@ -284,7 +284,7 @@ PRI runInCog() | result
     fmt_op_done := true
 
 
-PRI doFormatCog() : result | i
+PRI doFormatCog() : result
 ' Execute the format operation with FIFO output instead of debug().
 ' Calls the same write methods (writeMBR, writeVBR, etc.) as doFormat().
 '
@@ -378,7 +378,7 @@ PRI setDefaultLabel()
     BYTE[@volumeLabel][10] := " "
     volumeLabel[11] := 0
 
-PRI doFormat() : result | i
+PRI doFormat() : result
 ' Execute the format operation: MBR, VBR, FSInfo, FAT tables, root directory.
 '
 ' @returns result - TRUE if all steps succeeded, FALSE otherwise
@@ -601,7 +601,7 @@ PRI writeMBR() : success | partitionSectors
     ' Write MBR to sector 0
     success := sd.writeSectorRaw(0, @buf)
 
-PRI writeVBR() : success | i
+PRI writeVBR() : success
 ' Write the Volume Boot Record (first sector of partition).
 '
 ' @returns success - TRUE if write succeeded, FALSE otherwise

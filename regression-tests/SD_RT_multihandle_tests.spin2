@@ -467,44 +467,46 @@ PRI cleanupTestFiles()
     sd.deleteFile(@testfile4)
     sd.deleteFile(@testfile5)
 
-PRI createTestFiles() | h
+PRI createTestFiles() | handle
 ' Create test files with known content
+'
+' @local handle - File handle from createFileNew()
 
     debug(" ")
     debug("* Creating test files...")
 
     ' File 1
-    h := sd.createFileNew(@testfile1)
-    if h >= 0
-        sd.writeHandle(h, @content1, strsize(@content1))
-        sd.closeFileHandle(h)
+    handle := sd.createFileNew(@testfile1)
+    if handle >= 0
+        sd.writeHandle(handle, @content1, strsize(@content1))
+        sd.closeFileHandle(handle)
         debug("  Created: ", zstr_(@testfile1))
     else
         debug("  ERROR creating ", zstr_(@testfile1))
 
     ' File 2
-    h := sd.createFileNew(@testfile2)
-    if h >= 0
-        sd.writeHandle(h, @content2, strsize(@content2))
-        sd.closeFileHandle(h)
+    handle := sd.createFileNew(@testfile2)
+    if handle >= 0
+        sd.writeHandle(handle, @content2, strsize(@content2))
+        sd.closeFileHandle(handle)
         debug("  Created: ", zstr_(@testfile2))
     else
         debug("  ERROR creating ", zstr_(@testfile2))
 
     ' File 3
-    h := sd.createFileNew(@testfile3)
-    if h >= 0
-        sd.writeHandle(h, @content3, strsize(@content3))
-        sd.closeFileHandle(h)
+    handle := sd.createFileNew(@testfile3)
+    if handle >= 0
+        sd.writeHandle(handle, @content3, strsize(@content3))
+        sd.closeFileHandle(handle)
         debug("  Created: ", zstr_(@testfile3))
     else
         debug("  ERROR creating ", zstr_(@testfile3))
 
     ' File 4
-    h := sd.createFileNew(@testfile4)
-    if h >= 0
-        sd.writeHandle(h, @content4, strsize(@content4))
-        sd.closeFileHandle(h)
+    handle := sd.createFileNew(@testfile4)
+    if handle >= 0
+        sd.writeHandle(handle, @content4, strsize(@content4))
+        sd.closeFileHandle(handle)
         debug("  Created: ", zstr_(@testfile4))
     else
         debug("  ERROR creating ", zstr_(@testfile4))
@@ -512,17 +514,17 @@ PRI createTestFiles() | h
     debug("* Test files created")
     debug(" ")
 
-PRI strncmp(p1, p2, n) : match | i
-' Compare first n bytes of two strings
+PRI strncmp(p1, p2, maxLen) : match | idx
+' Compare first maxLen bytes of two strings
 '
 ' @param p1 - pointer to first string
 ' @param p2 - pointer to second string
-' @param n - number of bytes to compare
-' @returns match - true if first n bytes match
+' @param maxLen - number of bytes to compare
+' @returns match - true if first maxLen bytes match
 
     match := true
-    repeat i from 0 to n - 1
-        if BYTE[p1][i] <> BYTE[p2][i]
+    repeat idx from 0 to maxLen - 1
+        if BYTE[p1][idx] <> BYTE[p2][idx]
             match := false
             quit
 

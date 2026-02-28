@@ -48,7 +48,7 @@ CON
   ' Speed test levels (Hz)
   NUM_SPEED_LEVELS   = 11
 
-'' Enable driver features needed for speed characterization
+' Enable driver features needed for speed characterization
 #IFDEF __SPINTOOLS__
 #DEFINE SD_INCLUDE_RAW
 #DEFINE SD_INCLUDE_REGISTERS
@@ -180,15 +180,15 @@ PUB main() | result, level, max_passed_level
 
   repeat  ' Halt
 
-PRI initSpeedArray() | i
+PRI initSpeedArray() | idx
 ' Copy test speeds from DAT table to VAR array and initialize results.
 
   ' Copy speeds from DAT to VAR array
-  repeat i from 0 to NUM_SPEED_LEVELS - 1
-    speed_hz[i] := long[@test_speeds][i]
-    level_passed[i] := false
+  repeat idx from 0 to NUM_SPEED_LEVELS - 1
+    speed_hz[idx] := long[@test_speeds][idx]
+    level_passed[idx] := false
 
-PRI calculateTimingAccuracy() | i, target, hp, actual, delta
+PRI calculateTimingAccuracy() | idx, target, hp, actual, delta
 ' Calculate half_period, actual frequency, and delta for each test speed.
 ' Shows timing accuracy achievable with P2 integer clock division.
 
@@ -200,8 +200,8 @@ PRI calculateTimingAccuracy() | i, target, hp, actual, delta
   debug("| Target  | HalfPer | Actual  | Delta %  |")
   debug("|---------|---------|---------|----------|")
 
-  repeat i from 0 to NUM_SPEED_LEVELS - 1
-    target := speed_hz[i]
+  repeat idx from 0 to NUM_SPEED_LEVELS - 1
+    target := speed_hz[idx]
 
     ' Calculate half-period (same formula as driver)
     hp := (clkfreq + (target * 2) - 1) / (target * 2)
@@ -219,9 +219,9 @@ PRI calculateTimingAccuracy() | i, target, hp, actual, delta
     else
       delta := 0
 
-    half_period[i] := hp
-    actual_hz[i] := actual
-    delta_pct_x10[i] := delta
+    half_period[idx] := hp
+    actual_hz[idx] := actual
+    delta_pct_x10[idx] := delta
 
     ' Display: target, half_period, actual, delta%
     debug("| ", udec_(target/1_000_000), " MHz  |   ", udec_(hp))
@@ -389,7 +389,7 @@ PRI testSpeedLevel(level) : passed | target_hz, ok, crc_err, timeout, delta
   level_passed[level] := true
   return true
 
-PRI runSingleSectorTest(iterations, p_ok, p_crc_err, p_timeout) | i, sector, result, recv_crc, calc_crc
+PRI runSingleSectorTest(iterations, p_ok, p_crc_err, p_timeout) | iter, sector, result, recv_crc, calc_crc
 ' Run single-sector read tests with CRC verification.
 '
 ' @param iterations - Number of read iterations
@@ -401,7 +401,7 @@ PRI runSingleSectorTest(iterations, p_ok, p_crc_err, p_timeout) | i, sector, res
   long[p_crc_err] := 0
   long[p_timeout] := 0
 
-  repeat i from 1 to iterations
+  repeat iter from 1 to iterations
     ' Get random sector within test range
     sector := getRandomTestSector()
 
@@ -422,10 +422,10 @@ PRI runSingleSectorTest(iterations, p_ok, p_crc_err, p_timeout) | i, sector, res
       long[p_timeout]++
 
     ' Progress every 2500
-    if (i // 2500) == 0 and i > 0
-      debug("      Progress: ", udec_(i))
+    if (iter // 2500) == 0 and iter > 0
+      debug("      Progress: ", udec_(iter))
 
-PRI runMultiSectorTest(iterations, sectors_per_read, p_ok, p_crc_err, p_timeout) | i, start_sector, result
+PRI runMultiSectorTest(iterations, sectors_per_read, p_ok, p_crc_err, p_timeout) | iter, start_sector, result
 ' Run multi-sector read tests (CMD18 bulk transfers).
 '
 ' @param iterations - Number of multi-sector read iterations
@@ -438,7 +438,7 @@ PRI runMultiSectorTest(iterations, sectors_per_read, p_ok, p_crc_err, p_timeout)
   long[p_crc_err] := 0
   long[p_timeout] := 0
 
-  repeat i from 1 to iterations
+  repeat iter from 1 to iterations
     ' Get random start sector
     start_sector := getRandomTestSector()
     if start_sector + sectors_per_read > TEST_SECTOR_BASE + TEST_SECTOR_RANGE

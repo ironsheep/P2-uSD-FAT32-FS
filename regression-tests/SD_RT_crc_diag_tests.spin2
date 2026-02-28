@@ -41,7 +41,7 @@ CON
 
      BUFFER_SIZE = 512
 
-'' Enable debug/diagnostic features
+' Enable debug/diagnostic features
 #IFDEF __SPINTOOLS__
 #DEFINE SD_INCLUDE_DEBUG
 #ELSEIFDEF __FLEXSPIN__

@@ -29,7 +29,7 @@ CON
      ' Error codes for pre-mount validation
      E_NOT_MOUNTED   = -20
 
-'' Enable raw sector access and debug diagnostics
+' Enable raw sector access and debug diagnostics
 #IFDEF __SPINTOOLS__
 #DEFINE SD_INCLUDE_RAW
 #DEFINE SD_INCLUDE_DEBUG

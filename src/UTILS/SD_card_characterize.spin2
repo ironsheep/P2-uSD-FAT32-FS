@@ -37,7 +37,7 @@ CON
   SCR_SIZE = 8
   VBR_SIZE = 512
 
-'' Enable full driver features for this utility
+' Enable full driver features for this utility
 #IFDEF __SPINTOOLS__
 #DEFINE SD_INCLUDE_ALL
 #ELSEIFDEF __FLEXSPIN__
@@ -354,7 +354,7 @@ PRI readAllRegisters() | result
 ' CID PARSING AND DISPLAY
 ' ============================================================
 
-PRI parseCID() | i
+PRI parseCID() | idx
 ' Parse all CID register fields.
 ' CID structure (128 bits = 16 bytes):
 '   [127:120] MID - Manufacturer ID (8 bits)
@@ -370,8 +370,8 @@ PRI parseCID() | i
   cid_mid := cid_buf[0]
   cid_oid := (cid_buf[1] << 8) | cid_buf[2]
 
-  repeat i from 0 to 4
-    cid_pnm[i] := cid_buf[3 + i]
+  repeat idx from 0 to 4
+    cid_pnm[idx] := cid_buf[3 + idx]
   cid_pnm[5] := 0  ' null terminate
 
   cid_prv_major := cid_buf[8] >> 4
@@ -551,7 +551,7 @@ PRI parseCSD() | time_val, time_unit, c_size
     csd_read_timeout_ms := 100
     csd_write_timeout_ms := 250
 
-PRI displayCSD() | cap_gb, total_sectors, i
+PRI displayCSD() | cap_gb, total_sectors
 ' Display parsed CSD register fields with timing and capacity information.
 
   debug(" ")
@@ -737,7 +737,7 @@ PRI parseSCR()
   ' CMD_SUPPORT [33:32]
   scr_cmd_support := scr_buf[4] & $03
 
-PRI displaySCR() | sd_version
+PRI displaySCR()
 ' Display parsed SCR register fields including SD version and bus width support.
 
   debug(" ")
@@ -802,7 +802,7 @@ PRI displaySCR() | sd_version
 ' RAW REGISTERS DISPLAY
 ' ============================================================
 
-PRI displayRawRegisters() | i
+PRI displayRawRegisters()
 ' Display raw register data in hexadecimal format for verification.
 
   debug(" ")
@@ -860,7 +860,7 @@ PRI findAndReadVBR() | mbr_buf[128], vbr_sector, type_code
   ' Read VBR
   sd.readSectorRaw(vbr_sector, @vbr_buf)
 
-PRI parseVBR() | i
+PRI parseVBR()
 ' Parse VBR/BPB fields including filesystem parameters.
 
   ' OEM Name at offset 0x03 (8 bytes)
@@ -938,7 +938,7 @@ PRI displayVBR() | cluster_size, data_region, total_clusters
 ' UNIQUE CARD ID GENERATION
 ' ============================================================
 
-PRI generateCardID() | p_dst, p_mfr, i, c
+PRI generateCardID() | p_dst, p_mfr, idx, ch
 ' Generate a unique card ID string from CID fields.
 ' Format: Manufacturer_ProductName_Revision_SerialNumber_ManufacturingDate
 
@@ -946,17 +946,17 @@ PRI generateCardID() | p_dst, p_mfr, i, c
 
   ' Manufacturer name (replace spaces with nothing)
   p_mfr := lookupManufacturer(cid_mid)
-  repeat while (c := BYTE[p_mfr++]) <> 0
-    if c <> " "
-      BYTE[p_dst++] := c
+  repeat while (ch := BYTE[p_mfr++]) <> 0
+    if ch <> " "
+      BYTE[p_dst++] := ch
 
   BYTE[p_dst++] := "_"
 
   ' Product name (trim spaces)
-  repeat i from 0 to 4
-    c := cid_pnm[i]
-    if c <> " " and c <> 0
-      BYTE[p_dst++] := c
+  repeat idx from 0 to 4
+    ch := cid_pnm[idx]
+    if ch <> " " and ch <> 0
+      BYTE[p_dst++] := ch
 
   BYTE[p_dst++] := "_"
 
@@ -981,52 +981,52 @@ PRI generateCardID() | p_dst, p_mfr, i, c
   ' Null terminate
   BYTE[p_dst] := 0
 
-PRI hexLong(p_dst, val) : p_out | i, nibble
+PRI hexLong(p_dst, val) : p_out | idx, nibble
 ' Convert a LONG value to 8-character hex string.
 '
 ' @param p_dst - Destination buffer pointer
 ' @param val - Value to convert
 ' @returns p_out - Pointer to next position after written string
 
-  repeat i from 7 to 0
-    nibble := (val >> (i * 4)) & $0F
+  repeat idx from 7 to 0
+    nibble := (val >> (idx * 4)) & $0F
     if nibble < 10
       BYTE[p_dst++] := nibble + "0"
     else
       BYTE[p_dst++] := nibble - 10 + "A"
   return p_dst
 
-PRI decWord(p_dst, val) : p_out | digits[5], i, started
+PRI decWord(p_dst, val) : p_out | digits[5], idx, started
 ' Convert a WORD value to decimal string.
 '
 ' @param p_dst - Destination buffer pointer
 ' @param val - Value to convert
 ' @returns p_out - Pointer to next position after written string
 
-  repeat i from 0 to 4
-    digits[i] := val // 10
+  repeat idx from 0 to 4
+    digits[idx] := val // 10
     val := val / 10
   started := false
-  repeat i from 4 to 0
-    if digits[i] <> 0 or started or i == 0
-      BYTE[p_dst++] := digits[i] + "0"
+  repeat idx from 4 to 0
+    if digits[idx] <> 0 or started or idx == 0
+      BYTE[p_dst++] := digits[idx] + "0"
       started := true
   return p_dst
 
-PRI decByte(p_dst, val) : p_out | digits[3], i, started
+PRI decByte(p_dst, val) : p_out | digits[3], idx, started
 ' Convert a BYTE value to decimal string.
 '
 ' @param p_dst - Destination buffer pointer
 ' @param val - Value to convert
 ' @returns p_out - Pointer to next position after written string
 
-  repeat i from 0 to 2
-    digits[i] := val // 10
+  repeat idx from 0 to 2
+    digits[idx] := val // 10
     val := val / 10
   started := false
-  repeat i from 2 to 0
-    if digits[i] <> 0 or started or i == 0
-      BYTE[p_dst++] := digits[i] + "0"
+  repeat idx from 2 to 0
+    if digits[idx] <> 0 or started or idx == 0
+      BYTE[p_dst++] := digits[idx] + "0"
       started := true
   return p_dst
 

@@ -73,7 +73,7 @@ CON { FAT32 structure constants }
   STACK_GUARD_LONGS = 4
   STACK_GUARD_BYTE  = $CC
 
-'' Enable full driver features
+' Enable full driver features
 #IFDEF __SPINTOOLS__
 #DEFINE SD_INCLUDE_ALL
 #ELSEIFDEF __FLEXSPIN__
@@ -234,9 +234,9 @@ PUB stop()
     sd.stop()
 
 
-'' =========================================================================
-'' Cog launch (private)
-'' =========================================================================
+' =========================================================================
+' Cog launch (private)
+' =========================================================================
 
 PRI doStart(cs, mosi, miso, sck, mode) : ok
 ' Store pin configuration, init FIFO, launch cog
@@ -264,9 +264,9 @@ PRI doStart(cs, mosi, miso, sck, mode) : ok
     ok := (cog_id >= 0)
 
 
-'' =========================================================================
-'' Cog entry point (runs in new cog)
-'' =========================================================================
+' =========================================================================
+' Cog entry point (runs in new cog)
+' =========================================================================
 
 PRI run() | result, cardSectors
 ' Cog entry point — initializes card and dispatches to audit or fsck
@@ -291,11 +291,17 @@ PRI run() | result, cardSectors
     op_done := true
 
 
-'' =========================================================================
-'' Audit orchestration
-'' =========================================================================
+' =========================================================================
+' Audit orchestration
+' =========================================================================
 
-PRI runAudit(cardSectors) | result, i, n
+PRI runAudit(cardSectors) | result, idx, failsToPrint
+' Run all audit checks and display summary with pass/fail counts.
+'
+' @param cardSectors - Total number of sectors on the card
+' @local result - scratch variable for test results
+' @local idx - loop index for failed test names
+' @local failsToPrint - clamped count of fail names to display
 
     v_passCount := 0
     v_failCount := 0
@@ -330,18 +336,21 @@ PRI runAudit(cardSectors) | result, i, n
         fifo.put(@"FILESYSTEM INTEGRITY: ISSUES DETECTED")
         fifo.put(@" ")
         fifo.put(@"Failed checks:")
-        n := v_failCount <# MAX_FAIL_NAMES
-        repeat i from 0 to n - 1
-            fifo.putFmt1(@"  - %s", v_failNames[i])
+        failsToPrint := v_failCount <# MAX_FAIL_NAMES
+        repeat idx from 0 to failsToPrint - 1
+            fifo.putFmt1(@"  - %s", v_failNames[idx])
         if v_failCount > MAX_FAIL_NAMES
             fifo.putFmt1(@"  ... and %d more", v_failCount - MAX_FAIL_NAMES)
 
 
-'' =========================================================================
-'' FSCK orchestration
-'' =========================================================================
+' =========================================================================
+' FSCK orchestration
+' =========================================================================
 
 PRI runFsck(cardSectors)
+' Run full 4-pass filesystem check and repair, then display summary.
+'
+' @param cardSectors - Total number of sectors on the card
 
     v_repairCount := 0
     v_errorCount := 0
@@ -388,9 +397,9 @@ PRI runFsck(cardSectors)
         fifo.put(@"STATUS: ERRORS REMAIN")
 
 
-'' =========================================================================
-'' Shared geometry reader
-'' =========================================================================
+' =========================================================================
+' Shared geometry reader
+' =========================================================================
 
 PRI readGeometry() : ok | numFats
 ' Read MBR and VBR to extract filesystem geometry.
@@ -459,9 +468,9 @@ PRI readGeometry() : ok | numFats
     ok := true
 
 
-'' =========================================================================
-'' Audit methods
-'' =========================================================================
+' =========================================================================
+' Audit methods
+' =========================================================================
 
 PRI auditRunTest(pTestName, passed)
 ' Record and display a single audit test result
@@ -697,9 +706,9 @@ PRI auditMountTest() | result
     fifo.put(@" ")
 
 
-'' =========================================================================
-'' FSCK Pass 1: Structural integrity
-'' =========================================================================
+' =========================================================================
+' FSCK Pass 1: Structural integrity
+' =========================================================================
 
 PRI fsckPass1() | idx, mismatch, fsinfoDirty, startRepairs
 ' Check and repair structural elements.
@@ -802,9 +811,9 @@ PRI fsckPass1() | idx, mismatch, fsinfoDirty, startRepairs
     fifo.put(@" ")
 
 
-'' =========================================================================
-'' FSCK Pass 2: Directory walk + chain validation
-'' =========================================================================
+' =========================================================================
+' FSCK Pass 2: Directory walk + chain validation
+' =========================================================================
 
 PRI fsckPass2() | startRepairs
 ' Walk directory tree and validate all cluster chains using windowed bitmap.
@@ -1042,9 +1051,9 @@ PRI fsckValidateChain(startClus, fSize, isDir) | clus, nextClus, chainLen, expec
                     v_warningCount++
 
 
-'' =========================================================================
-'' FSCK Pass 3: Lost cluster recovery
-'' =========================================================================
+' =========================================================================
+' FSCK Pass 3: Lost cluster recovery
+' =========================================================================
 
 PRI fsckPass3Window() | clus, fatVal, startClus
 ' Find and free lost clusters within the current bitmap window.
@@ -1069,9 +1078,9 @@ PRI fsckPass3Window() | clus, fatVal, startClus
     flushFAT()
 
 
-'' =========================================================================
-'' FSCK Pass 4: FAT sync + free count
-'' =========================================================================
+' =========================================================================
+' FSCK Pass 4: FAT sync + free count
+' =========================================================================
 
 PRI fsckPass4() | fatSector, entIdx, clus, fatVal, freeCount, syncCount, mismatch, idx, startRepairs
 ' Synchronize FAT1 -> FAT2 and correct the free cluster count.
@@ -1139,9 +1148,9 @@ PRI fsckPass4() | fatSector, entIdx, clus, fatVal, freeCount, syncCount, mismatc
     fifo.put(@" ")
 
 
-'' =========================================================================
-'' FAT cache methods
-'' =========================================================================
+' =========================================================================
+' FAT cache methods
+' =========================================================================
 
 PRI readFAT(cluster) : value | sector, offset
 ' Read a FAT entry with sector caching.
@@ -1189,9 +1198,9 @@ PRI flushFAT()
             fatBufDirty := false
 
 
-'' =========================================================================
-'' Cluster bitmap methods
-'' =========================================================================
+' =========================================================================
+' Cluster bitmap methods
+' =========================================================================
 
 PRI clus2sec(cluster) : sector
 ' Convert cluster number to absolute sector number.

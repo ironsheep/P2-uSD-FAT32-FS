@@ -58,6 +58,7 @@ mediumBuf       BYTE    0[MEDIUM_BUF]
 largeBuf        BYTE    0[LARGE_BUF]
 
 PUB go() | result
+'' Main entry point — validates the pre-built test card content against expected filesystem structure.
 
     debug(" ")
     debug("==============================================")
@@ -111,6 +112,9 @@ PUB go() | result
 
 
 PRI test_mount_validation() | pLabel
+' Validate that the SD card mounted successfully by checking volume label and free space.
+' @local pLabel - pointer to the volume label string
+
     utils.startTestGroup(@"Test 1: Mount Validation")
 
     utils.startTest(@"Card mounted successfully")
@@ -122,6 +126,12 @@ PRI test_mount_validation() | pLabel
 
 
 PRI test_root_directory_enum() | count, idx, pEntry
+' Enumerate all entries in the root directory and verify at least 7 are present.
+' Expects the pre-formatted test card with known files and subdirectories.
+' @local count - number of directory entries found
+' @local idx - directory entry index for readDirectory() calls
+' @local pEntry - pointer to current directory entry (0 when no more entries)
+
     utils.startTestGroup(@"Test 2: Root Directory Enumeration")
 
     utils.startTest(@"Enumerate root directory entries")
@@ -140,6 +150,12 @@ PRI test_root_directory_enum() | count, idx, pEntry
 
 
 PRI test_tiny_file() | handle, fileSize, bytesRead
+' Validate reading a small single-sector file (TINY.TXT, 29 bytes).
+' Verifies file open, size, content match, and first-byte value after seek-to-zero.
+' @local handle - file handle returned by openFileRead()
+' @local fileSize - reported file size in bytes
+' @local bytesRead - number of bytes returned by readHandle()
+
     utils.startTestGroup(@"Test 3: Small File Read (TINY.TXT)")
 
     utils.startTest(@"Open TINY.TXT")
@@ -163,7 +179,14 @@ PRI test_tiny_file() | handle, fileSize, bytesRead
     sd.closeFileHandle(handle)
 
 
-PRI test_exact_sector() | handle, result, i, allMatch
+PRI test_exact_sector() | handle, result, idx, allMatch
+' Validate reading a file exactly 512 bytes long (one sector boundary).
+' Opens EXACT512.BIN and verifies all 512 bytes contain 0x58 ('X').
+' @local handle - file handle returned by openFileRead()
+' @local result - bytes read from readHandle()
+' @local idx - byte index within the 512-byte buffer
+' @local allMatch - flag indicating whether all bytes matched expected value
+
     utils.startTestGroup(@"Test 4: Exact Sector Boundary (EXACT512.BIN)")
 
     utils.startTest(@"Open EXACT512.BIN")
@@ -179,9 +202,9 @@ PRI test_exact_sector() | handle, result, i, allMatch
 
     utils.startTest(@"Verify all bytes are 0x58 ('X')")
     allMatch := true
-    repeat i from 0 to 511
-        if mediumBuf[i] <> $58
-            debug("  Mismatch at ", udec_(i), ": got $", uhex_(mediumBuf[i]))
+    repeat idx from 0 to 511
+        if mediumBuf[idx] <> $58
+            debug("  Mismatch at ", udec_(idx), ": got $", uhex_(mediumBuf[idx]))
             allMatch := false
             quit
     utils.evaluateBool(allMatch, @"all bytes = 0x58", true)
@@ -189,7 +212,16 @@ PRI test_exact_sector() | handle, result, i, allMatch
     sd.closeFileHandle(handle)
 
 
-PRI test_four_k_pattern() | handle, result, i, expected, allMatch
+PRI test_four_k_pattern() | handle, result, idx, expected, allMatch
+' Validate reading a 4096-byte file with a sequential byte pattern across 8 sectors.
+' Each byte in FOUR_K.BIN equals its file offset modulo 256 (byte[n] == n & $FF).
+' Reads sector-by-sector and verifies every byte matches the expected pattern.
+' @local handle - file handle returned by openFileRead()
+' @local result - inner loop byte index within each 512-byte sector
+' @local idx - outer loop sector index (0..7)
+' @local expected - computed expected byte value at each position
+' @local allMatch - flag indicating whether all bytes matched the pattern
+
     utils.startTestGroup(@"Test 5: Multi-Sector Pattern (FOUR_K.BIN)")
 
     utils.startTest(@"Open FOUR_K.BIN")
@@ -202,13 +234,13 @@ PRI test_four_k_pattern() | handle, result, i, expected, allMatch
     utils.startTest(@"Read and verify sequential pattern")
     allMatch := true
 
-    ' Read in chunks and verify pattern: byte[i] = i & 0xFF
-    repeat i from 0 to 7  ' 8 sectors
+    ' Read in chunks and verify pattern: byte[n] = n & 0xFF
+    repeat idx from 0 to 7  ' 8 sectors
         sd.readHandle(handle, @mediumBuf, 512)
         repeat result from 0 to 511
-            expected := ((i * 512) + result) & $FF
+            expected := ((idx * 512) + result) & $FF
             if mediumBuf[result] <> expected
-                debug("  Mismatch at ", udec_((i * 512) + result), ": got $", uhex_(mediumBuf[result]), " expected $", uhex_(expected))
+                debug("  Mismatch at ", udec_((idx * 512) + result), ": got $", uhex_(mediumBuf[result]), " expected $", uhex_(expected))
                 allMatch := false
                 quit
         if not allMatch
@@ -220,6 +252,11 @@ PRI test_four_k_pattern() | handle, result, i, expected, allMatch
 
 
 PRI test_multi_sector_text() | handle, fileSize
+' Validate reading a text file that spans multiple sectors (TWOSEC.TXT, 2550 bytes).
+' Verifies file size and that the first 8 bytes match the expected "LINE0001" header.
+' @local handle - file handle returned by openFileRead()
+' @local fileSize - reported file size in bytes
+
     utils.startTestGroup(@"Test 6: Multi-Sector Text (TWOSEC.TXT)")
 
     utils.startTest(@"Open TWOSEC.TXT")
@@ -239,6 +276,15 @@ PRI test_multi_sector_text() | handle, fileSize
 
 
 PRI test_large_file_cluster_chain() | handle, fileSize, pos, expected, actual
+' Validate reading a 64KB file that spans multiple clusters (SIXTYFK.BIN).
+' Seeks to 8 evenly-spaced positions (every 8KB) and verifies the XOR pattern byte.
+' Pattern: byte[n] = (block << 1) XOR (n & $FF) where block = n / 512.
+' @local handle - file handle returned by openFileRead()
+' @local fileSize - reported file size in bytes
+' @local pos - seek offset for current sub-test check
+' @local expected - computed expected pattern byte at the seek position
+' @local actual - (unused, reads into smallBuf[0] directly)
+
     utils.startTestGroup(@"Test 7: Multi-Cluster File (SIXTYFK.BIN)")
 
     utils.startTest(@"Open SIXTYFK.BIN")
@@ -263,6 +309,12 @@ PRI test_large_file_cluster_chain() | handle, fileSize, pos, expected, actual
 
 
 PRI test_seek_operations() | handle, result
+' Validate seek operations on SEEKTEST.BIN (2016 bytes = 32 blocks of 63 bytes each).
+' Each block starts with "BLK##---" followed by 55 bytes of $55. Seeks to blocks 0, 1,
+' 10, and 31 and verifies the 8-byte header at each position matches expectations.
+' @local handle - file handle returned by openFileRead()
+' @local result - return value from driver API calls
+
     utils.startTestGroup(@"Test 8: Seek Operations (SEEKTEST.BIN)")
 
     utils.startTest(@"Open SEEKTEST.BIN")
@@ -300,7 +352,15 @@ PRI test_seek_operations() | handle, result
     sd.closeFileHandle(handle)
 
 
-PRI test_checksum_integrity() | handle, result, i, sum
+PRI test_checksum_integrity() | handle, result, idx, sum
+' Validate data integrity of CHECKSUM.BIN (1024 bytes) by computing a byte-sum checksum.
+' The file contains bytes 0-255 repeated 4 times. Expected checksum is 130560.
+' Reads in two 512-byte chunks since the medium buffer is one sector.
+' @local handle - file handle returned by openFileRead()
+' @local result - return value from driver API calls
+' @local idx - byte index within each 512-byte chunk
+' @local sum - running byte-sum accumulator across all 1024 bytes
+
     utils.startTestGroup(@"Test 9: Checksum Verification (CHECKSUM.BIN)")
 
     utils.startTest(@"Open CHECKSUM.BIN")
@@ -314,11 +374,11 @@ PRI test_checksum_integrity() | handle, result, i, sum
     ' Read in two chunks since buffer is 512
     sum := 0
     sd.readHandle(handle, @mediumBuf, 512)
-    repeat i from 0 to 511
-        sum += mediumBuf[i]
+    repeat idx from 0 to 511
+        sum += mediumBuf[idx]
     sd.readHandle(handle, @mediumBuf, 512)
-    repeat i from 0 to 511
-        sum += mediumBuf[i]
+    repeat idx from 0 to 511
+        sum += mediumBuf[idx]
 
     ' Expected sum: 130560 (bytes 0-255 repeated 4 times: 4 * (0+1+2+...+255) = 4 * 32640)
     utils.evaluateSingleValue(sum, @"checksum", 130560)
@@ -327,6 +387,11 @@ PRI test_checksum_integrity() | handle, result, i, sum
 
 
 PRI test_path_resolution() | handle, fileSize
+' Validate absolute path resolution into a subdirectory (/LEVEL1/INLEVEL1.TXT).
+' Verifies the file can be opened, has the expected 54-byte size, and content matches.
+' @local handle - file handle returned by openFileRead()
+' @local fileSize - reported file size in bytes
+
     utils.startTestGroup(@"Test 10: Subdirectory Path Resolution")
 
     utils.startTest(@"Open /LEVEL1/INLEVEL1.TXT with absolute path")
@@ -346,6 +411,11 @@ PRI test_path_resolution() | handle, fileSize
 
 
 PRI test_deep_path() | handle, fileSize
+' Validate two-level deep path resolution (/LEVEL1/LEVEL2/DEEP.TXT).
+' Verifies the file can be opened, has the expected 71-byte size, and content matches.
+' @local handle - file handle returned by openFileRead()
+' @local fileSize - reported file size in bytes
+
     utils.startTestGroup(@"Test 11: Deep Nested Path")
 
     utils.startTest(@"Open /LEVEL1/LEVEL2/DEEP.TXT")
@@ -365,6 +435,14 @@ PRI test_deep_path() | handle, fileSize
 
 
 PRI test_directory_navigation() | result, count, idx, pEntry
+' Validate changeDirectory() and directory enumeration within a subdirectory.
+' Changes into the MULTI directory, enumerates entries (expecting 5 files),
+' then navigates back to root.
+' @local result - return value from changeDirectory()
+' @local count - number of directory entries found
+' @local idx - directory entry index for readDirectory() calls
+' @local pEntry - pointer to current directory entry (0 when no more entries)
+
     utils.startTestGroup(@"Test 12: Directory Navigation (MULTI)")
 
     utils.startTest(@"Change to MULTI directory")
@@ -389,14 +467,23 @@ PRI test_directory_navigation() | result, count, idx, pEntry
     utils.evaluateBool(result, @"changeDirectory(/)", true)
 
 
-PRI test_benchmark_sequential() | handle, start, elapsed, bytesRead, i, bytesPerSec
+PRI test_benchmark_sequential() | handle, start, elapsed, bytesRead, idx, bytesPerSec
+' Benchmark sequential read throughput by reading SIXTYFK.BIN (64KB) in 128 sector reads.
+' Measures elapsed clock ticks and computes approximate KB/sec throughput.
+' @local handle - file handle returned by openFileRead()
+' @local start - system counter value at benchmark start (getct())
+' @local elapsed - total clock ticks for the 64KB read
+' @local bytesRead - (unused, reads directly into mediumBuf)
+' @local idx - loop counter for 128 sector reads
+' @local bytesPerSec - computed throughput in bytes per second
+
     utils.startTestGroup(@"Performance Benchmark")
 
     utils.startTest(@"Sequential read 64KB - timing")
     handle := sd.openFileRead(@fileSixtyK)
 
     start := getct()
-    repeat i from 0 to 127
+    repeat idx from 0 to 127
         sd.readHandle(handle, @mediumBuf, 512)
     elapsed := getct() - start
 

@@ -40,7 +40,7 @@ CON
      E_NOT_A_FILE      = -42
      E_NOT_A_DIR       = -43
 
-'' Enable raw sector access and debug methods for diagnostic tests
+' Enable raw sector access and debug methods for diagnostic tests
 #IFDEF __SPINTOOLS__
 #DEFINE SD_INCLUDE_RAW
 #DEFINE SD_INCLUDE_DEBUG
@@ -75,7 +75,7 @@ readBuffer_guard BYTE   0[16]
 sectorBuffer    BYTE    0[512]        ' For reading raw sectors during diagnostics
 sectorBuffer_guard BYTE 0[16]
 
-PUB go() | result, handle, h1, h2, h3, pFilename, fileSize, attrs, bytesWritten, bytesRead, root_sec, i, pEntry, d_sec, d_buftype, d_token, d_b0, d_b1, d_b2, d_b3, d_pbuf, d_bef0, d_bef1, d_bef2, d_bef3, d_spi
+PUB go() | result, handle, h1, h2, h3, pFilename, fileSize, attrs, bytesWritten, bytesRead, root_sec, idx, pEntry, d_sec, d_buftype, d_token, d_b0, d_b1, d_b2, d_b3, d_pbuf, d_bef0, d_bef1, d_bef2, d_bef3, d_spi
 '' Main entry point for file operations regression tests
 ''
 '' Tests file create, open, close, delete, rename using V3 handle API
@@ -112,8 +112,8 @@ PUB go() | result, handle, h1, h2, h3, pFilename, fileSize, attrs, bytesWritten,
     ' EARLY DIAGNOSTIC: Test multiple sectors to find pattern
     debug("  EARLY-DIAG: Testing sector reads...")
     ' Test sectors: 0, 1, 10, 100, 1000, then root_sec
-    repeat i from 0 to 5
-        case i
+    repeat idx from 0 to 5
+        case idx
             0: root_sec := 0
             1: root_sec := 1
             2: root_sec := 10

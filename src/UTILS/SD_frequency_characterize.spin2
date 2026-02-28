@@ -52,7 +52,7 @@ CON
     #6, FREQ_280, FREQ_270, FREQ_260, FREQ_255, FREQ_250, FREQ_240
     #12, FREQ_220, FREQ_200, FREQ_COUNT
 
-'' Enable full driver features for this utility
+' Enable full driver features for this utility
 #IFDEF __SPINTOOLS__
 #DEFINE SD_INCLUDE_ALL
 #ELSEIFDEF __FLEXSPIN__
@@ -207,15 +207,15 @@ PUB go() | result, freq_idx, test_freq, errors, hp
     debug("END_SESSION")
 
 
-PRI fillTestPattern() | i
+PRI fillTestPattern() | idx
 ' Fill write buffer with deterministic pattern.
 ' Pattern: each byte = (sector_num * 17 + byte_offset) & $FF
 
-    repeat i from 0 to (TEST_COUNT * SECTOR_SIZE) - 1
-        write_buf[i] := ((i / SECTOR_SIZE) * 17 + (i // SECTOR_SIZE)) & $FF
+    repeat idx from 0 to (TEST_COUNT * SECTOR_SIZE) - 1
+        write_buf[idx] := ((idx / SECTOR_SIZE) * 17 + (idx // SECTOR_SIZE)) & $FF
 
 
-PRI runTest(freq) : errors | written, readCt, i, sector
+PRI runTest(freq) : errors | written, readCt, idx, sector
 ' Run the critical test: writeSectorsRaw + readSectorsRaw + verify.
 ' This is exactly what fails at 270 MHz.
 '
@@ -241,10 +241,10 @@ PRI runTest(freq) : errors | written, readCt, i, sector
         return -1  ' Indicate complete failure
 
     ' Verify all bytes
-    repeat i from 0 to (TEST_COUNT * SECTOR_SIZE) - 1
-        if read_buf[i] <> write_buf[i]
+    repeat idx from 0 to (TEST_COUNT * SECTOR_SIZE) - 1
+        if read_buf[idx] <> write_buf[idx]
             if errors < 3
-                debug("  byte ", udec_(i), ": exp=$", uhex_byte_(write_buf[i]), " got=$", uhex_byte_(read_buf[i]))
+                debug("  byte ", udec_(idx), ": exp=$", uhex_byte_(write_buf[idx]), " got=$", uhex_byte_(read_buf[idx]))
             errors++
 
     return errors
@@ -316,17 +316,17 @@ PRI changeFrequency(target_freq) | xi, div, mode
             clkset(%1_000001_0000001001_10_11, target_freq)
 
 
-PRI analyzeBoundaries() | i, prev_result, curr_result, prev_freq, curr_freq, prev_hp, curr_hp
+PRI analyzeBoundaries() | idx, prev_result, curr_result, prev_freq, curr_freq, prev_hp, curr_hp
 ' Identify where PASS->FAIL and FAIL->PASS transitions occur.
 
     prev_result := results[0]
     prev_freq := long[@freq_table][0] / 1_000_000
     prev_hp := byte[@hp_table][0]
 
-    repeat i from 1 to FREQ_COUNT - 1
-        curr_result := results[i]
-        curr_freq := long[@freq_table][i] / 1_000_000
-        curr_hp := byte[@hp_table][i]
+    repeat idx from 1 to FREQ_COUNT - 1
+        curr_result := results[idx]
+        curr_freq := long[@freq_table][idx] / 1_000_000
+        curr_hp := byte[@hp_table][idx]
 
         if prev_result <> curr_result and prev_result > 0 and curr_result > 0
             if prev_result == 1 and curr_result == 2

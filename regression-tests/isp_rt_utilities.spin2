@@ -31,16 +31,16 @@ CON
 
 VAR { test stats vars }
 
-  LONG    numberTests
-  LONG    subTestPer
-  LONG    passCount
-  LONG    failCount
-  LONG    passCountSub
-  LONG    failCountSub
+  LONG    numberTests       ' Total test count for the current test suite
+  LONG    subTestPer        ' Number of sub-checks expected per test
+  LONG    passCount         ' Running count of passed tests
+  LONG    failCount         ' Running count of failed tests
+  LONG    passCountSub      ' Running count of passed sub-checks within a test
+  LONG    failCountSub      ' Running count of failed sub-checks within a test
 
-  LONG    varSignature
+  LONG    varSignature      ' Sentinel value for detecting uninitialized state
 
-  byte    filename[128]
+  byte    filename[128]     ' Buffer for constructing test filenames
 
 PUB null()
 '' This is not an application

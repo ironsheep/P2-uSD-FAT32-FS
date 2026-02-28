@@ -215,7 +215,7 @@ PUB sFormatStr8(pUserBuff, maxLen, p_str, arg1, arg2, arg3, arg4, arg5, arg6, ar
     nPlaced := sFormat(pUserBuff, maxLen, p_str, @arg1)
 
 
-PUB sFormat(pUserBuff, maxLen, p_str, p_args) : nPlaced | idx, c, asc, fld, digits, pBffr, pBffrEnd
+PUB sFormat(pUserBuff, maxLen, p_str, p_args) : nPlaced | idx, ch, asc, fld, digits, pBffr, pBffrEnd
 '' Format string with escape sequences and embedded values to {pOutBuf}
 ''
 '' @param pUserBuff - pointer to the users buffer to receive the formatted string
@@ -224,7 +224,7 @@ PUB sFormat(pUserBuff, maxLen, p_str, p_args) : nPlaced | idx, c, asc, fld, digi
 '' @param p_args - pointer to array of longs that hold field values (numbers, characters, or pointers to strings)
 '' @returns nPlaced - count of characters placed into the users buffer (excl zero term.)
 '' @local idx - value index
-'' @local c - current character
+'' @local ch - current character
 '' @local asc - ASCII value for escaped characters
 '' @local fld - field width
 '' @local digits - precision digits
@@ -238,54 +238,54 @@ PUB sFormat(pUserBuff, maxLen, p_str, p_args) : nPlaced | idx, c, asc, fld, digi
   pBffr := pUserBuff
   pBffrEnd := pUserBuff + maxLen - 1                           ' reserve 1 byte for null terminator
   repeat
-    c := byte[p_str++]
-    if (c == 0)
+    ch := byte[p_str++]
+    if (ch == 0)
       quit
 
-    elseif (c == "\")
-      c := byte[p_str++]
-      if (c == "\")
+    elseif (ch == "\")
+      ch := byte[p_str++]
+      if (ch == "\")
         sTx("\", pBffr++, pBffrEnd)
-      elseif (c == "%")
+      elseif (ch == "%")
         sTx("%", pBffr++, pBffrEnd)
-      elseif (c == "q")
+      elseif (ch == "q")
         sTx(34, pBffr++, pBffrEnd)
-      elseif (c == "b")
+      elseif (ch == "b")
         sTx(BKSP, pBffr++, pBffrEnd)
-      elseif (c == "t")
+      elseif (ch == "t")
         sTx(TAB, pBffr++, pBffrEnd)
-      elseif (c == "n")
+      elseif (ch == "n")
         sTx(LF, pBffr++, pBffrEnd)
-      elseif (c == "r")
+      elseif (ch == "r")
         sTx(CR, pBffr++, pBffrEnd)
-      elseif ((c >= "0") and (c <= "9"))
+      elseif ((ch >= "0") and (ch <= "9"))
         --p_str
         p_str, asc, _ := get_nargs(p_str)
         if ((asc >= 0) and (asc <= 255))
           sTx(asc, pBffr++, pBffrEnd)
 
-    elseif (c == "%")
+    elseif (ch == "%")
       p_str, fld, digits := get_nargs(p_str)
-      c := byte[p_str++]
-      if (c == "f")
+      ch := byte[p_str++]
+      if (ch == "f")
         pBffr := sStr(fmt_number(long[p_args][idx++], 99, digits, fld, " "), pBffr, pBffrEnd)
-      elseif (c == "d")
+      elseif (ch == "d")
         pBffr := sStr(fmt_number(long[p_args][idx++], 10, digits, fld, " "), pBffr, pBffrEnd)
-      elseif (c == "x")
+      elseif (ch == "x")
         pBffr := sStr(fmt_number(long[p_args][idx++], 16, digits, fld, " "), pBffr, pBffrEnd)
-      elseif (c == "o")
+      elseif (ch == "o")
         pBffr := sStr(fmt_number(long[p_args][idx++], 08, digits, fld, " "), pBffr, pBffrEnd)
-      elseif (c == "q")
+      elseif (ch == "q")
         pBffr := sStr(fmt_number(long[p_args][idx++], 04, digits, fld, " "), pBffr, pBffrEnd)
-      elseif (c == "b")
+      elseif (ch == "b")
         pBffr := sStr(fmt_number(long[p_args][idx++], 02, digits, fld, " "), pBffr, pBffrEnd)
-      elseif (c == "s")
+      elseif (ch == "s")
         pBffr := sStr(padstr(long[p_args][idx++], fld, " "), pBffr, pBffrEnd)
-      elseif (c == "c")
+      elseif (ch == "c")
         pBffr := sTxn(long[p_args][idx++], (abs fld) #> 1, pBffr, pBffrEnd)
 
     else
-      sTx(c, pBffr++, pBffrEnd)
+      sTx(ch, pBffr++, pBffrEnd)
 
   pBffr := pBffr <# pBffrEnd                                  ' clamp to buffer boundary
   byte[pBffr] := 0                                             ' place terminator
@@ -330,37 +330,37 @@ PRI sStr(pStr, pOutBuf, pBffrEnd) : pBufNext
 
     pBufNext := pOutBuf
 
-PRI get_nargs(p_str) : p_str1, val1, val2 | c, sign
+PRI get_nargs(p_str) : p_str1, val1, val2 | ch, sign
 ' Parse one or two numbers from string in n, -n, n.n, or -n.n format
 '
 ' @param p_str - pointer to string containing number(s)
 ' @returns p_str1 - pointer to first char after value(s)
 ' @returns val1 - first parsed value (may be negative)
 ' @returns val2 - second parsed value (after decimal point, if present)
-' @local c - current character
+' @local ch - current character
 ' @local sign - sign flag for first value
 
-  c := byte[p_str]                                              ' check for negative on first value
-  if (c == "-")
+  ch := byte[p_str]                                             ' check for negative on first value
+  if (ch == "-")
     sign := -1
     ++p_str
   else
     sign := 0
 
   repeat                                                        ' get first value
-    c := byte[p_str++]
-    if ((c >= "0") and (c <= "9"))
-      val1 := (val1 * 10) + (c - "0")
+    ch := byte[p_str++]
+    if ((ch >= "0") and (ch <= "9"))
+      val1 := (val1 * 10) + (ch - "0")
     else
       if (sign)
         val1 := -val1
       quit
 
-  if (c == ".")                                                 ' if dpoint
+  if (ch == ".")                                                ' if dpoint
     repeat                                                      '  get second value
-      c := byte[p_str++]
-      if ((c >= "0") and (c <= "9"))
-        val2 := (val2 * 10) + (c - "0")
+      ch := byte[p_str++]
+      if ((ch >= "0") and (ch <= "9"))
+        val2 := (val2 * 10) + (ch - "0")
       else
         quit
 
@@ -387,7 +387,7 @@ PUB fmt_number(value, radix, digits, width, pad) : p_str
     other        : p_str := string("?")
 
 
-PUB itoa(value, radix, digits) : p_str | sign, len, d
+PUB itoa(value, radix, digits) : p_str | sign, len, digit
 '' Convert signed integer to string
 '' -- supports radix 10, 2, 4, 8, and 16
 '' -- digits is 0 (auto size) to limit for long using radix
@@ -416,8 +416,8 @@ PUB itoa(value, radix, digits) : p_str | sign, len, d
   len := 0
 
   repeat
-    d := value +// radix                                        ' get digit (1s column)
-    byte[p_str++] := (d < 10) ? d + "0" : d - 10 + "A"          ' convert to ASCII
+    digit := value +// radix                                    ' get digit (1s column)
+    byte[p_str++] := (digit < 10) ? digit + "0" : digit - 10 + "A"  ' convert to ASCII
     value +/= radix                                             ' remove digit
     if (digits)                                                 ' length limited?
       if (++len == digits)                                      '  check size

@@ -75,7 +75,7 @@ CON
     FAT_FREE            = $00000000
     FAT_MASK            = $0FFFFFFF
 
-'' Enable full driver features
+' Enable full driver features
 #IFDEF __SPINTOOLS__
 #DEFINE SD_INCLUDE_ALL
 #ELSEIFDEF __FLEXSPIN__

@@ -45,7 +45,10 @@ VAR
 
     byte  msg[80]
 
-PUB go() | handle, i
+PUB go() | handle, idx
+'' Main entry point — creates a LOGS directory and writes MAX_ENTRIES CSV log entries with periodic sync.
+'' @local handle - File handle for the log file
+'' @local idx - Loop index for writing log entries
 
     debug("=== SD Data Logger Example ===")
 
@@ -76,14 +79,14 @@ PUB go() | handle, i
     debug("Log file open, writing ", udec(MAX_ENTRIES), " entries...")
 
     ' Write log entries
-    repeat i from 1 to MAX_ENTRIES
+    repeat idx from 1 to MAX_ENTRIES
         ' Format a simple CSV line: "N,reading"
-        writeLogEntry(handle, i, getReading())
+        writeLogEntry(handle, idx, getReading())
 
         ' Periodic sync — ensures data survives power loss
-        if i // SYNC_INTERVAL == 0
+        if idx // SYNC_INTERVAL == 0
             sd.syncHandle(handle)
-            debug("  Synced at entry ", udec(i))
+            debug("  Synced at entry ", udec(idx))
 
     sd.closeFileHandle(handle)
     debug("Log file closed")
@@ -95,7 +98,11 @@ PUB go() | handle, i
     debug("=== Done — ", udec(MAX_ENTRIES), " entries logged ===")
 
 PRI writeLogEntry(handle, entry_num, value) | len
-    ' Format: "entry_num,value\r\n"
+' Format one CSV line "entry_num,value\r\n" and write it to the log file.
+' @param handle - File handle for the open log file
+' @param entry_num - Entry sequence number to write
+' @param value - Sensor reading value to log
+' @local len - Running byte count for the formatted message
     len := 0
     len += formatDec(@msg + len, entry_num)
     msg[len++] := ","
@@ -105,11 +112,18 @@ PRI writeLogEntry(handle, entry_num, value) | len
     sd.writeHandle(handle, @msg, len)
 
 PRI getReading() : value
-    ' Simulate a sensor reading (replace with actual sensor code)
+' Simulate a sensor reading — returns a random value 0-1023.
+' @returns value - Simulated sensor reading (0-1023)
     value := getrnd() & $3FF                            ' Random 0-1023
 
 PRI formatDec(p_buf, val) : len | digit, started, divisor
-    ' Format integer into buffer, return number of characters written
+' Format an integer as decimal ASCII into a buffer and return the character count.
+' @param p_buf - Pointer to destination byte buffer
+' @param val - Integer value to format (handles negative values)
+' @returns len - Number of characters written to the buffer
+' @local digit - Current digit value (0-9) during formatting
+' @local started - Flag indicating leading zeros have been passed
+' @local divisor - Current power of 10 being extracted
     if val < 0
         byte[p_buf] := "-"
         p_buf++

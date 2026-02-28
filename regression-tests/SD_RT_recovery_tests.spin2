@@ -43,7 +43,7 @@ CON
 
      MAX_READ_CRC_RETRIES = 3  ' Must match driver constant
 
-'' Enable all features including debug/test hooks
+' Enable all features including debug/test hooks
 #IFDEF __SPINTOOLS__
 #DEFINE SD_INCLUDE_ALL
 #ELSEIFDEF __FLEXSPIN__

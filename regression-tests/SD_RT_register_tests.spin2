@@ -34,7 +34,7 @@ CON
      'SD_MISO = 18
      'SD_SCK  = 21
 
-'' Enable register and raw access
+' Enable register and raw access
 #IFDEF __SPINTOOLS__
 #DEFINE SD_INCLUDE_REGISTERS
 #DEFINE SD_INCLUDE_RAW

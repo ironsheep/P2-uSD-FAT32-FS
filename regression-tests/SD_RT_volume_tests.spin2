@@ -37,7 +37,7 @@ CON
 
      MBR_SIGNATURE = $AA55
 
-'' Enable register access and raw sector access for VBR verification
+' Enable register access and raw sector access for VBR verification
 #IFDEF __SPINTOOLS__
 #DEFINE SD_INCLUDE_REGISTERS
 #DEFINE SD_INCLUDE_RAW
@@ -467,12 +467,18 @@ PRI cleanupTestFiles()
     sd.deleteFile(@vlLegacyFile)
     sd.deleteFile(@vlDateDir)
 
-PRI strncmp(p1, p2, n) : match | i
-' Compare first n bytes of two strings
+PRI strncmp(p1, p2, maxLen) : match | idx
+' Compare first maxLen bytes of two strings
+'
+' @param p1 - Pointer to first string
+' @param p2 - Pointer to second string
+' @param maxLen - Number of bytes to compare
+' @returns match - TRUE if first maxLen bytes are identical
+' @local idx - Byte index (0..maxLen-1)
 
     match := true
-    repeat i from 0 to n - 1
-        if BYTE[p1][i] <> BYTE[p2][i]
+    repeat idx from 0 to maxLen - 1
+        if BYTE[p1][idx] <> BYTE[p2][idx]
             match := false
             quit
 
