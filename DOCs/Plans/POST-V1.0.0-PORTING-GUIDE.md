@@ -914,9 +914,9 @@ These are still used internally by `do_movefile()`, `do_delete()`, `do_chdir()`,
 
 | Method | What changed |
 |--------|-------------|
-| `do_open()` | Removed `flags \|= F_OPEN` |
+| `do_open()` | Removed `flags |= F_OPEN` |
 | `do_close()` | Removed `F_NEWDATA` check, removed `F_OPEN` clearing, removed `file_idx := 0` |
-| `do_newfile()` | Changed `flags \|= F_OPEN \| F_NEWDIR` to `flags \|= F_NEWDIR` |
+| `do_newfile()` | Changed `flags |= F_OPEN | F_NEWDIR` to `flags |= F_NEWDIR` |
 
 **`do_sync()`** was also simplified — removed the `F_NEWDATA` check block.
 

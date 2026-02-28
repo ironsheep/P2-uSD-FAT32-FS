@@ -63,7 +63,7 @@ end
 | Parameter | Value | Description |
 |-----------|-------|-------------|
 | `clk_count` | 8192 | Clock transitions (512 bytes × 8 bits × 2 edges) |
-| `stream_mode` | $C081_0000 \| (miso<<17) \| 4096 | RX mode, pin, bit count |
+| `stream_mode` | `$C081_0000 | (miso<<17) | 4096` | RX mode, pin, bit count |
 | `xfrq` | $4000_0000 / spi_period | NCO frequency for sampling |
 | `init_phase` | $4000_0000 | Mid-bit sampling for stability |
 | `align_delay` | spi_period | Half-period alignment delay |

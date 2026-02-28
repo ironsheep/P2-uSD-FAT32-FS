@@ -770,7 +770,7 @@ u/s     dec/hex/bin     _byte/_word/_long     _array     _
 
 | Mechanism | Type | Projects Using It |
 |-----------|------|-------------------|
-| `DEBUG_DISABLE = 0\|1` | Compile-time (per-file) | P2-uSD-FAT32-FS |
+| `DEBUG_DISABLE = 0|1` | Compile-time (per-file) | P2-uSD-FAT32-FS |
 | `DEBUG_BAUD` / `DEBUG_PIN_TX/RX` | Compile-time | P2-BLDC-MotorControl (commented), P2-Magnetic-Imaging-Tile |
 | `#IFDEF SD_INCLUDE_DEBUG` | Compile-time preprocessor | P2-uSD-FAT32-FS |
 | `DEBUG_MASK` + `debug[N]()` | Compile-time channels (v46+) | (Available but not yet used) |

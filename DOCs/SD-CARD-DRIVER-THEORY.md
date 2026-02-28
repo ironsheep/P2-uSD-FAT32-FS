@@ -378,9 +378,9 @@ The driver uses three smart pin modes for SPI mode 0 (CPOL=0, CPHA=0):
 
 | Pin | Smart Pin Mode | Purpose |
 |-----|---------------|---------|
-| SCK | `P_TRANSITION \| P_OE` | Clock generation, idle LOW |
-| MOSI | `P_SYNC_TX \| P_OE \| P_PLUS2_B` | Synchronized transmit, clocked by SCK |
-| MISO | `P_SYNC_RX \| P_PLUS3_B` | Synchronized receive, clocked by SCK |
+| SCK | `P_TRANSITION | P_OE` | Clock generation, idle LOW |
+| MOSI | `P_SYNC_TX | P_OE | P_PLUS2_B` | Synchronized transmit, clocked by SCK |
+| MISO | `P_SYNC_RX | P_PLUS3_B` | Synchronized receive, clocked by SCK |
 
 The `P_PLUS2_B` and `P_PLUS3_B` selectors route the SCK signal to the TX and RX pins respectively, based on the pin assignments (MISO, MOSI, CS, SCK are consecutive pins).
 

@@ -47,7 +47,7 @@ Notes field is optional; preceded by two spaces before the bracket. Shows VBR OE
 | Filesystem | MBR partition type | `sd.readSectorRaw(0, @buf2)` | Partition type byte at offset `$1C2`. Via `detectFilesystem()` |
 | SD Spec Version | SCR register | `sd.readSCRRaw(@scr)` | Decode SD_SPEC, SD_SPEC3, SD_SPEC4, SD_SPECX fields. Via `getSDSpecVersion(@scr)` |
 | Revision | CID byte[8] | `sd.readCIDRaw(@cid)` | PRV = byte[8], major = `PRV >> 4`, minor = `PRV & $0F` |
-| Serial Number | CID bytes[9:12] | `sd.readCIDRaw(@cid)` | PSN = 32-bit big-endian: `(byte[9] << 24) \| (byte[10] << 16) \| (byte[11] << 8) \| byte[12]` |
+| Serial Number | CID bytes[9:12] | `sd.readCIDRaw(@cid)` | PSN = 32-bit big-endian: `(byte[9] << 24) | (byte[10] << 16) | (byte[11] << 8) | byte[12]` |
 | Mfg Date | CID bytes[13:14] | `sd.readCIDRaw(@cid)` | MDT: year = `(byte[13] & $0F) << 4 + (byte[14] >> 4)` + 2000, month = `byte[14] & $0F` |
 
 ### Line 2 Fields
