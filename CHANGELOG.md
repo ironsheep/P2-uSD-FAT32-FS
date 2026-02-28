@@ -11,8 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Driver
 
+- **Breaking:** V1 legacy API removed (`readFile()`, `writeFile()`, `readDirectory()`, etc.) — use handle-based API
 - Volume label scan follows full root directory cluster chain (was limited to first 16 entries)
 - FAT chain end-of-chain comparisons use unsigned operators for 2 TB addressing
+- `readVBRRaw()` cross-ifdef dependency fixed (no longer requires `SD_INCLUDE_RAW`)
+- CRC error injection hooks for hardware-level fault testing (`test_force_read_crc_error`, `test_force_write_crc_error`)
 
 ### Utilities
 
@@ -21,7 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Testing
 
-- Expanded to 345+ tests across 19 suites
+- Expanded to 389 tests across 20 suites (added CRC injection, recovery, and error handling suites)
 - FSCK windowed bitmap diagnostic test for 128 GB cards
 
 ## [1.0.0] - 2026-02-25
