@@ -1,24 +1,16 @@
 {Spin2_v45}
-{{┌──────────────────────────────────────────┐
-  │ SD card driver V3 — Release v1.1.0       │  Verified with Panasonic 512MB SD
-  │ Original: Chris Gadd, V3: S.M. Moraco    │                PNY 8GB SDHC
-  │ Copyright (c) 2023 Chris Gadd            │                SanDisk Extreme 32GB SDHC                                       3V3
-  │ See end of file for terms of use.        │                GSKILL 32GB Micro SDHC                                              ┌─────┐
-  └──────────────────────────────────────────┘  cards must be formatted as FAT32                                               │   ┤ Read / write        ├─────┐
-                                                                                                                             ─┼───┤ CS                  │     │
-  sd.mount(CS,MOSI,MISO,SCK)                            ' mount SD card                                                      ─┼───┤ MOSI                │     │
-  sd.newDirectory(string("folder1"))                    ' create a new directory                                               │ ┌─┤ Gnd                 │     │
-  sd.changeDirectory(string("folder1"))                 ' switch to newly created directory                                    └─┼─┤ Vcc                 │     │
-  h := sd.createFileNew(string("fileA.txt"))            ' create a new file, returns handle                    ───┼─┤ SCK                 │     │
-  sd.writeHandle(h, string("this is file A"), 14)       ' write to file via handle                                            ┣─┤ Gnd                 │     │
-  sd.closeFileHandle(h)                                 ' close handle, update filesize                            ───┼─┤ MISO                │     │
-                                                                                                                                 │ ┤ IRQ                 │     │
-  h := sd.openFileRead(string("fileA.txt"))             ' open file for reading via handle                                         │ ┤ Card detect         │     │
-  -or-                                                  ' -or-                                                                   │ ┤ Write protect       ├─────┘
-  h := sd.openFileRead(string("/folder1/fileA.txt"))    ' open from path (1st "/" resets to root)                 │ └─┳───────────────────┘
-  sd.readHandle(h, @buffer, sd.fileSizeHandle(h))       ' read opened file into buffer                                              
-  debug(zstr(@buffer))
-}}
+'' =================================================================================================
+''
+''   File....... micro_sd_fat32_fs.spin2
+''   Purpose.... High-performance FAT32 microSD card filesystem driver for P2
+''   Authors.... Chris Gadd (original), Stephen M Moraco (V3 handle-based API)
+''               -- Copyright (c) 2023 Chris Gadd
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... 2023
+''   Updated.... FEB 2026
+''
+'' =================================================================================================
 
 ' ═══════════════════════════════════════════════════════════════════════════════
 ' CONDITIONAL COMPILATION - Optional Feature Modules
@@ -5920,82 +5912,94 @@ PUB displayFAT(cluster)
   displaySector()
 #ENDIF
 
-CON {      FAT32 file system
-  ┌─────────────────────────┐     The master boot record contains 446 bytes of boot code
-  │ Master Boot Record      │      followed by four 16-byte partition entries
-  │                         │      terminated with $55 $AA in the final 2 bytes
-  │ Partitions      $55 $AA │     The 16-byte partition
-  ├─────────────────────────┤     ┌──────┬───────┬──────┬─────┬───────┬───────────┐
-  │ Reserved                │     │ Boot │ CHS   │ Type │ CHS │ LBA   │ Number of │  Type code located at byte address $1C2
-  ├─────────────────────────┤     │ Flag │ Begin │ Code │ End │ Begin │ Sectors   │   Type code = $0B or $0C for FAT32
-  │ Volume Boot Record 1    │     ├──────┼───────┼──────┼─────┼───────┼───────────┤  LBA Begin contains address of volume boot record (VBR)
-  ├─────────────────────────┤     │      │       │  5   │     │ 9-12  │           │   VBR address located at byte address $1C6
-  │ Reserved                │     └──────┴───────┴──────┴─────┴───────┴───────────┘
-  ├─────────────────────────┤     Volume boot record contains
-  │ Volume Boot Record 2    │     ┌─────────────────────────────────┬────────┬──────┬────────────────────┐
-  ├─────────────────────────┤     │          Field                  │ Offset │ Size │ Value              │
-  │ Reserved                │     ├─────────────────────────────────┼────────┼──────┼────────────────────┤
-  ├─────────────────────────┤     │ Bytes per Sector                │  $0B   │ 16b  │       512          │
-  │ File allocation table 1 │     │ Sectors per Cluster             │  $0D   │  8b  │1/2/4/8/16/32/64/128│
-  ├─────────────────────────┤     │ Number of Reserved Sectors      │  $0E   │ 16b  │                    │
-  │ File allocation table 2 │     │ Number of FATs                  │  $10   │  8b  │        2           │
-  ├─────────────────────────┤     │ Sectors per FAT                 │  $24   │ 32b  │                    │
-  │ Root directory and      │     │ Root Directory of First Cluster │  $2C   │ 32b  │        2           │
-  │  Data region            │     │ Signature                       │ $1FE   │ 16b  │      $AA55         │
-  │                         │     └─────────────────────────────────┴────────┴──────┴────────────────────┘
-  │                         │      The address of the 1st FAT is VBR address + number of reserved sectors
-  │                         │      The address of the root directory is FAT address + number of FATs x sectors per fat
-  └─────────────────────────┘
-                                  The file system directory contains 32-byte entries for each file in the root directory
-                                  ┌─────────────────────────────────┬────────┬──────┐
-                                  │          Field                  │ Offset │ Size │  The first byte of the short filename indicates the type of entry
-                                  ├─────────────────────────────────┼────────┼──────┤   Normal entry     - as expected   "FILENAMETXT"
-                                  │ Short Filename                  │  $00   │ 11B  │   Unused/deleted   - 1st byte $E5  "åILENAMETXT"
-                                  │ Attrib Byte                     │  $0B   │  1B  │   End of directory - 1st byte $00
-                                  │ Date of creation                │  $0E   │  4B  │
-                                  │ First Cluster High              │  $14   │  2B  │
-                                  │ Date of modification            │  $16   │  4B  │
-                                  │ First Cluster Low               │  $1A   │  2B  │
-                                  │ File Size                       │  $1C   │  4B  │
-                                  └─────────────────────────────────┴────────┴──────┘
-                                  Attrib byte contains bitfields
-                                  ┌───┬───────────┬─────┬────────────────────────────────────┐
-                                  │bit│ Function  │ LFN │ Comment                            │
-                                  ├───┼───────────┼─────┼────────────────────────────────────┤
-                                  │ 7 │ Unused    │  0  │ Should be zero                     │
-                                  │ 6 │ Unused    │  0  │ Should be zero                     │
-                                  │ 5 │ Archive   │  x  │ Has been changed since last backup │
-                                  │ 4 │ Directory │  x  │ Is a subdirectory                  │
-                                  │ 3 │ Volume ID │  1  │ Filename is Volume ID              │
-                                  │ 2 │ System    │  1  │ File is operating system           │
-                                  │ 1 │ Hidden    │  1  │ Should not show in dir listing     │
-                                  │ 0 │ Read Only │  1  │ Should not allow writing           │
-                                  └───┴───────────┴─────┴────────────────────────────────────┘
-                                  Each entry in the file allocation table is 32 bits, entry 0 is associated with cluster 0, entry 1/cluster 1, and so on
-                                   The 32-bit value contains 0 if the associated cluster is available
-                                   contains $0FFF_FFFF if the data in the associated cluster ends in that cluster
-                                   contains the address of the next cluster in the file if the file occupies multiple clusters
-                                  ┌───────────┬───────────┬───────────┬───────────┐
-              clusters $00 - $03  │ 0FFF_FFFF │ 0FFF_FFFF │ 0FFF_FFFF │ 0FFF_FFFF │  1st four clusters occupied by self-contained files
-                       $04 - $07  │ 0000_0005 │ 0000_0006 │ 0000_0007 │ 0FFF_FFFF │  next four clusters occupied by a file in sequential clusters
-                       $08 - $0B  │ 0000_000A │ 0FFF_FFFF │ 0000_000C │ 0FFF_FFFF │  a fragmented file starts in cluster 8, and occupies clusters 10, 12, and ends in 14
-                       $0C - $0F  │ 0000_000E │ 0000_0000 │ 0FFF_FFFF │ 0000_0000 │  clusters 13 and 15 are unused
-}
-CON
+' ---- FAT32 file system ----
+'    ┌─────────────────────────┐     The master boot record contains 446 bytes of boot code
+'    │ Master Boot Record      │      followed by four 16-byte partition entries
+'    │                         │      terminated with $55 $AA in the final 2 bytes
+'    │ Partitions      $55 $AA │     The 16-byte partition
+'    ├─────────────────────────┤     ┌──────┬───────┬──────┬─────┬───────┬───────────┐
+'    │ Reserved                │     │ Boot │ CHS   │ Type │ CHS │ LBA   │ Number of │  Type code located at byte address $1C2
+'    ├─────────────────────────┤     │ Flag │ Begin │ Code │ End │ Begin │ Sectors   │   Type code = $0B or $0C for FAT32
+'    │ Volume Boot Record 1    │     ├──────┼───────┼──────┼─────┼───────┼───────────┤  LBA Begin contains address of volume boot record (VBR)
+'    ├─────────────────────────┤     │      │       │  5   │     │ 9-12  │           │   VBR address located at byte address $1C6
+'    │ Reserved                │     └──────┴───────┴──────┴─────┴───────┴───────────┘
+'    ├─────────────────────────┤     Volume boot record contains
+'    │ Volume Boot Record 2    │     ┌─────────────────────────────────┬────────┬──────┬────────────────────┐
+'    ├─────────────────────────┤     │          Field                  │ Offset │ Size │ Value              │
+'    │ Reserved                │     ├─────────────────────────────────┼────────┼──────┼────────────────────┤
+'    ├─────────────────────────┤     │ Bytes per Sector                │  $0B   │ 16b  │       512          │
+'    │ File allocation table 1 │     │ Sectors per Cluster             │  $0D   │  8b  │1/2/4/8/16/32/64/128│
+'    ├─────────────────────────┤     │ Number of Reserved Sectors      │  $0E   │ 16b  │                    │
+'    │ File allocation table 2 │     │ Number of FATs                  │  $10   │  8b  │        2           │
+'    ├─────────────────────────┤     │ Sectors per FAT                 │  $24   │ 32b  │                    │
+'    │ Root directory and      │     │ Root Directory of First Cluster │  $2C   │ 32b  │        2           │
+'    │  Data region            │     │ Signature                       │ $1FE   │ 16b  │      $AA55         │
+'    │                         │     └─────────────────────────────────┴────────┴──────┴────────────────────┘
+'    │                         │      The address of the 1st FAT is VBR address + number of reserved sectors
+'    │                         │      The address of the root directory is FAT address + number of FATs x sectors per fat
+'    └─────────────────────────┘
+'                                    The file system directory contains 32-byte entries for each file in the root directory
+'                                    ┌─────────────────────────────────┬────────┬──────┐
+'                                    │          Field                  │ Offset │ Size │  The first byte of the short filename indicates the type of entry
+'                                    ├─────────────────────────────────┼────────┼──────┤   Normal entry     - as expected   "FILENAMETXT"
+'                                    │ Short Filename                  │  $00   │ 11B  │   Unused/deleted   - 1st byte $E5  "åILENAMETXT"
+'                                    │ Attrib Byte                     │  $0B   │  1B  │   End of directory - 1st byte $00
+'                                    │ Date of creation                │  $0E   │  4B  │
+'                                    │ First Cluster High              │  $14   │  2B  │
+'                                    │ Date of modification            │  $16   │  4B  │
+'                                    │ First Cluster Low               │  $1A   │  2B  │
+'                                    │ File Size                       │  $1C   │  4B  │
+'                                    └─────────────────────────────────┴────────┴──────┘
+'                                    Attrib byte contains bitfields
+'                                    ┌───┬───────────┬─────┬────────────────────────────────────┐
+'                                    │bit│ Function  │ LFN │ Comment                            │
+'                                    ├───┼───────────┼─────┼────────────────────────────────────┤
+'                                    │ 7 │ Unused    │  0  │ Should be zero                     │
+'                                    │ 6 │ Unused    │  0  │ Should be zero                     │
+'                                    │ 5 │ Archive   │  x  │ Has been changed since last backup │
+'                                    │ 4 │ Directory │  x  │ Is a subdirectory                  │
+'                                    │ 3 │ Volume ID │  1  │ Filename is Volume ID              │
+'                                    │ 2 │ System    │  1  │ File is operating system           │
+'                                    │ 1 │ Hidden    │  1  │ Should not show in dir listing     │
+'                                    │ 0 │ Read Only │  1  │ Should not allow writing           │
+'                                    └───┴───────────┴─────┴────────────────────────────────────┘
+'                                    Each entry in the file allocation table is 32 bits, entry 0 is associated with cluster 0, entry 1/cluster 1, and so on
+'                                     The 32-bit value contains 0 if the associated cluster is available
+'                                     contains $0FFF_FFFF if the data in the associated cluster ends in that cluster
+'                                     contains the address of the next cluster in the file if the file occupies multiple clusters
+'                                    ┌───────────┬───────────┬───────────┬───────────┐
+'                clusters $00 - $03  │ 0FFF_FFFF │ 0FFF_FFFF │ 0FFF_FFFF │ 0FFF_FFFF │  1st four clusters occupied by self-contained files
+'                         $04 - $07  │ 0000_0005 │ 0000_0006 │ 0000_0007 │ 0FFF_FFFF │  next four clusters occupied by a file in sequential clusters
+'                         $08 - $0B  │ 0000_000A │ 0FFF_FFFF │ 0000_000C │ 0FFF_FFFF │  a fragmented file starts in cluster 8, and occupies clusters 10, 12, and ends in 14
+'                         $0C - $0F  │ 0000_000E │ 0000_0000 │ 0FFF_FFFF │ 0000_0000 │  clusters 13 and 15 are unused
+'                                    └───────────┴───────────┴───────────┴───────────┘
+' ---- end FAT32 file system ----
+
+CON { license }
 {{
-┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│                                                   TERMS OF USE: MIT License                                                  │
-├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation    │
-│files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy,    │
-│modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software│
-│is furnished to do so, subject to the following conditions:                                                                   │
-│                                                                                                                              │
-│The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.│
-│                                                                                                                              │
-│THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE          │
-│WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR         │
-│COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,   │
-│ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                         │
-└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+ -------------------------------------------------------------------------------------------------
+  MIT License
+
+  Copyright (c) 2023 Chris Gadd
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+ =================================================================================================
 }}
