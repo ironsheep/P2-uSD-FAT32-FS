@@ -6,7 +6,7 @@
 ''               -- see below for terms of use
 ''   E-mail..... stephen@ironsheep.biz
 ''   Started.... JAN 2026
-''   Updated.... 16 JAN 2026
+''   Updated.... 27 FEB 2026
 ''
 '' =================================================================================================
 
@@ -56,7 +56,10 @@ manyFilesDir    BYTE    "RTMANY", 0
 ' Buffer for generated filenames
 genFileName     BYTE    0[16]
 
-PUB go() | result, pEntry, pFilename, attrs, fileCount, idx
+' Buffer for read-back verification
+readBuf         BYTE    0[32]
+
+PUB go() | result, pEntry, pFilename, attrs, fileCount, idx, handle, bytesRead
 '' Main entry point for directory regression tests
 ''
 '' Tests directory creation, navigation, listing, and nested directories
@@ -318,6 +321,70 @@ PUB go() | result, pEntry, pFilename, attrs, fileCount, idx
     sd.changeDirectory(@"/")
     sd.deleteFile(@manyFilesDir)
 
+    ' ----------------------------------
+    ' TEST GROUP: Many Files Stress Test
+    ' ----------------------------------
+    utils.startTestGroup(@"Many Files Stress Test")
+
+    utils.startTest(@"Create and list 20 files in one directory")
+    utils.setCheckCountPerTest(5)
+
+    ' (a) Create RTMANY directory
+    sd.changeDirectory(@"/")
+    result := sd.newDirectory(@manyFilesDir)
+    utils.evaluateSubValue(result, @"create RTMANY dir", true)
+
+    ' (b) Create 20 files FILE01.TXT through FILE20.TXT
+    sd.changeDirectory(@manyFilesDir)
+    result := true
+    repeat idx from 1 to 20
+        buildFileName(idx)
+        handle := sd.createFileNew(@genFileName)
+        if handle >= 0
+            sd.writeHandle(handle, @genFileName, strsize(@genFileName))
+            sd.closeFileHandle(handle)
+        else
+            debug("  createFileNew failed at FILE", udec_(idx))
+            result := false
+            quit
+    utils.evaluateSubBool(result, @"create 20 files", true)
+
+    ' (c) Count entries via readDirectory - expect 22 (20 files + . + ..)
+    fileCount := 0
+    idx := 0
+    repeat
+        pEntry := sd.readDirectory(idx)
+        if pEntry == 0
+            quit
+        fileCount++
+        idx++
+    debug("  Directory entry count: ", udec_(fileCount))
+    utils.evaluateSubValue(fileCount, @"count == 22 (20+.+..)", 22)
+
+    ' (d) Verify sample file is readable (FILE10.TXT)
+    buildFileName(10)
+    handle := sd.openFileRead(@genFileName)
+    if handle >= 0
+        bytefill(@readBuf, 0, 32)
+        bytesRead := sd.readHandle(handle, @readBuf, 32)
+        sd.closeFileHandle(handle)
+        utils.evaluateSubBool(bytesRead > 0, @"FILE10.TXT readable", true)
+    else
+        utils.evaluateSubBool(false, @"FILE10.TXT readable", true)
+
+    ' (e) Clean up: delete all 20 files and remove directory
+    repeat idx from 1 to 20
+        buildFileName(idx)
+        sd.deleteFile(@genFileName)
+    sd.changeDirectory(@"/")
+    sd.deleteFile(@manyFilesDir)
+    ' Verify directory was removed
+    result := sd.changeDirectory(@manyFilesDir)
+    utils.evaluateSubBool(result == false, @"RTMANY removed", true)
+    sd.changeDirectory(@"/")
+
+    utils.showSubTestResults()
+
     ' Clean up deep directories (must delete from deepest first)
     sd.changeDirectory(@deepDir1)
     sd.changeDirectory(@deepDir2)
@@ -354,6 +421,20 @@ PUB go() | result, pEntry, pFilename, attrs, fileCount, idx
     debug(" ")
     debug("* Directory Tests Complete")
     debug("END_SESSION")
+
+
+PRI buildFileName(fileNum) | d10, d1
+' Build filename "FILEnn.TXT" in genFileName buffer
+'
+' @param fileNum - File number 1..99
+
+  d10 := fileNum / 10
+  d1 := fileNum // 10
+  bytemove(@genFileName, @"FILE", 4)
+  BYTE[@genFileName + 4] := "0" + d10
+  BYTE[@genFileName + 5] := "0" + d1
+  bytemove(@genFileName + 6, @".TXT", 4)
+  BYTE[@genFileName + 10] := 0
 
 
 PRI cleanupTestItems()

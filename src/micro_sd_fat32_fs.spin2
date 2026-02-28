@@ -419,6 +419,14 @@ DAT '' singleton control - SHARED across all object instances
   diag_write_sector  LONG    0          ' Sector number attempted
 
   ' ═══════════════════════════════════════════════════════════════════════
+  ' TEST HOOKS: Error injection for CRC validation testing
+  ' Used by SD_RT_crc_validation_tests and SD_RT_recovery_tests
+  ' ═══════════════════════════════════════════════════════════════════════
+  test_force_read_crc_error   BYTE    0  ' Counter: force N read CRC mismatches
+  test_force_write_crc_error  BYTE    0  ' Flag: corrupt next write CRC (one-shot)
+  test_error_count            LONG    0  ' Count of injected errors triggered
+
+  ' ═══════════════════════════════════════════════════════════════════════
   ' BUFFERS (must be in DAT for worker cog access)
   ' DIAGNOSTIC: Separate buffers for each sector type to isolate conflicts
   ' ═══════════════════════════════════════════════════════════════════════
@@ -611,6 +619,38 @@ PUB getCRCRetryCount() : count
 '' @returns count - Total CRC retry attempts across all sector reads
 
   return diag_crc_retries
+
+PUB setTestForceReadError(count)
+'' Set CRC error injection counter for reads. Each sector read will see a
+'' forced CRC mismatch until the counter reaches zero.
+'' Set to 1: one retry then success. Set to MAX_READ_CRC_RETRIES (3): all retries fail.
+''
+'' @param count - Number of read CRC mismatches to force
+
+  test_force_read_crc_error := count
+
+PUB setTestForceWriteError(enabled)
+'' Arm one-shot CRC error injection for the next write. The next writeSector()
+'' will send a corrupted CRC, causing the card to reject the data.
+''
+'' @param enabled - Non-zero arms, zero disarms
+
+  test_force_write_crc_error := (enabled <> 0) ? 1 : 0
+
+PUB getTestErrorCount() : count
+'' Get count of injected test errors triggered since last clear.
+''
+'' @returns count - Number of injected errors triggered
+
+  return test_error_count
+
+PUB clearTestErrors()
+'' Reset all test error injection state. Disarms read/write hooks
+'' and zeroes the triggered error counter.
+
+  test_force_read_crc_error := 0
+  test_force_write_crc_error := 0
+  test_error_count := 0
 
 PUB setCRCValidation(enabled)
 '' Enable/disable CRC validation for sector reads.
@@ -2674,6 +2714,7 @@ PRI do_rename(old_name, new_name) : result | bookmark, temp_sec, i, saved_entry[
       return SUCCESS
     else
       debug("  [do_rename] New name already exists!")
+      return E_FILE_EXISTS
   else
     debug("  [do_rename] Old file NOT FOUND")
   return E_FILE_NOT_FOUND
@@ -5409,6 +5450,11 @@ PRI readSector(sector, buf_type) : result | _sck, _miso, data, loop_ctr, timeout
 
     ' CRC-16 validation: always validate received data against card's CRC
     diag_calc_crc := calcDataCRC(p_buf, 512)
+    ' TEST HOOK: Force CRC mismatch for error injection testing
+    if test_force_read_crc_error > 0
+      diag_calc_crc ^= $FFFF
+      test_force_read_crc_error--
+      test_error_count++
     if diag_calc_crc == diag_recv_crc
       diag_crc_matches++
       pinh(cs)                                                                  ' Deselect card - CRC OK
@@ -5707,6 +5753,11 @@ PRI writeSector(sector, buf_type) : result | _sck, _mosi, p_buf, stream_mode, cl
   ' Calculate CRC-16 of the data we just sent and transmit it
   ' SD protocol: CRC high byte first, then low byte
   diag_sent_crc := calcDataCRC(p_buf, 512)
+  ' TEST HOOK: Corrupt write CRC for error injection testing (one-shot)
+  if test_force_write_crc_error
+    diag_sent_crc ^= $FFFF
+    test_force_write_crc_error := 0
+    test_error_count++
   sp_transfer_8(diag_sent_crc >> 8)                                             ' CRC high byte
   sp_transfer_8(diag_sent_crc & $FF)                                            ' CRC low byte
 

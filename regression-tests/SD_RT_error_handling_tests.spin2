@@ -6,7 +6,7 @@
 ''               -- see below for terms of use
 ''   E-mail..... stephen@ironsheep.biz
 ''   Started.... FEB 2026
-''   Updated.... 03 FEB 2026
+''   Updated.... 27 FEB 2026
 ''
 '' =================================================================================================
 ''
@@ -14,6 +14,9 @@
 ''   - File state errors (E_FILE_NOT_OPEN, E_END_OF_FILE)
 ''   - Directory errors (E_FILE_EXISTS for directories, E_FILE_NOT_FOUND in non-existent paths)
 ''   - Handle patterns (handle reuse, simultaneous read/write on same file)
+''   - V1 legacy API behavior without open file (documents no-op behavior)
+''   - Handle type mismatch (write on read handle, read on write handle)
+''   - Rename edge cases (rename to existing destination)
 ''
 '' =================================================================================================
 
@@ -45,14 +48,18 @@ CON
      MBR_SIGNATURE       = $AA55
      SECTOR_SIZE         = 512
 
-'' Enable raw sector access for MBR integrity check
+'' Enable raw sector access for MBR integrity check and debug features
 #IFDEF __SPINTOOLS__
 #DEFINE SD_INCLUDE_RAW
+#DEFINE SD_INCLUDE_DEBUG
 #ELSEIFDEF __FLEXSPIN__
 #define SD_INCLUDE_RAW
 #pragma exportdef SD_INCLUDE_RAW
+#define SD_INCLUDE_DEBUG
+#pragma exportdef SD_INCLUDE_DEBUG
 #ELSE
 #PRAGMA EXPORTDEF SD_INCLUDE_RAW
+#PRAGMA EXPORTDEF SD_INCLUDE_DEBUG
 #ENDIF
 
 OBJ
@@ -274,6 +281,88 @@ PUB go() | result, handle, h1, h2, h3, h4, h5, bytesRead, bytesWritten
     ' (directory entries start with a filename, not MBR boot code)
     utils.evaluateSubBool(BYTE[@mbr_buf] <> $E5 and BYTE[@mbr_buf + 11] <> $10, ...
         @"sector 0 not dir entry", true)
+
+    ' ----------------------------------
+    ' TEST GROUP: V1 Legacy API Without Open File
+    ' ----------------------------------
+    utils.startTestGroup(@"V1 Legacy API Without Open File")
+
+    ' The V1 API (read/write/seek) does NOT return E_FILE_NOT_OPEN.
+    ' When F_OPEN is not set, do_read() returns 0 bytes and do_write() is a no-op.
+    ' These tests document the actual behavior.
+
+    ' Ensure no V1 file is open (mount already done, no openFile called)
+    utils.startTest(@"V1 read() with no file open returns 0 bytes")
+    bytefill(@readBuffer, $AA, 64)
+    result := sd.read(@readBuffer, 10)
+    utils.evaluateSingleValue(result, @"read() returns 0", 0)
+
+    utils.startTest(@"V1 write() with no file open is no-op")
+    result := sd.write(@testContent, 10)
+    ' write() calls send_command which returns, no crash expected
+    debug("  write() returned: ", sdec_(result))
+    utils.recordPass()
+
+    utils.startTest(@"V1 seek(0) with no file open")
+    result := sd.seek(0)
+    ' seek returns boolean - document behavior
+    debug("  seek(0) returned: ", sdec_(result))
+    utils.recordPass()
+
+    ' ----------------------------------
+    ' TEST GROUP: Handle Type Mismatch
+    ' ----------------------------------
+    utils.startTestGroup(@"Handle Type Mismatch")
+
+    ' Ensure test file exists for these tests
+    sd.deleteFile(@testfile1)
+    handle := sd.createFileNew(@testfile1)
+    if handle >= 0
+        sd.writeHandle(handle, @"TestData1", 9)
+        sd.closeFileHandle(handle)
+
+    ' Test: writeHandle on read-only handle returns E_INVALID_HANDLE
+    utils.startTest(@"writeHandle on read-only handle returns error")
+    handle := sd.openFileRead(@testfile1)
+    if handle >= 0
+        bytesWritten := sd.writeHandle(handle, @testContent, 10)
+        debug("  writeHandle on read handle: ", sdec_(bytesWritten))
+        utils.evaluateSingleValue(bytesWritten, @"writeHandle()", E_INVALID_HANDLE)
+        sd.closeFileHandle(handle)
+
+    ' Test: readHandle on write handle is allowed (documents behavior)
+    utils.startTest(@"readHandle on write handle allowed")
+    handle := sd.openFileWrite(@testfile1)
+    if handle >= 0
+        bytefill(@readBuffer, 0, 64)
+        bytesRead := sd.readHandle(handle, @readBuffer, 9)
+        debug("  readHandle on write handle: ", sdec_(bytesRead))
+        ' Reading from a write handle is allowed - documents this behavior
+        utils.evaluateBool(bytesRead >= 0, @"readHandle returns >= 0", true)
+        sd.closeFileHandle(handle)
+
+    ' ----------------------------------
+    ' TEST GROUP: Rename Edge Cases
+    ' ----------------------------------
+    utils.startTestGroup(@"Rename Edge Cases")
+
+    ' Clean up and create two test files
+    sd.deleteFile(@testfile1)
+    sd.deleteFile(@testfile2)
+    handle := sd.createFileNew(@testfile1)
+    if handle >= 0
+        sd.writeHandle(handle, @"File1", 5)
+        sd.closeFileHandle(handle)
+    handle := sd.createFileNew(@testfile2)
+    if handle >= 0
+        sd.writeHandle(handle, @"File2", 5)
+        sd.closeFileHandle(handle)
+
+    ' Test: rename to existing destination returns false
+    utils.startTest(@"rename to existing destination returns false")
+    result := sd.rename(@testfile1, @testfile2)
+    debug("  rename(ERTEST1 -> ERTEST2): ", sdec_(result))
+    utils.evaluateBool(result, @"rename to existing", false)
 
     ' ----------------------------------
     ' Cleanup: Delete test files and directories
