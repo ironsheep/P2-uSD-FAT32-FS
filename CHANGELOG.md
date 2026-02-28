@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Utilities
 
 - FSCK full validation now works on cards of any size (windowed bitmap; cards >64 GB scanned in 2M-cluster passes)
-- Flexspin cross-compilation support added to format utility
+- Cross-compilation support added for Spin Tools IDE and flexspin
 
 ### Testing
 

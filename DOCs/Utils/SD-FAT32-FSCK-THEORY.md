@@ -14,11 +14,10 @@ The utility follows a strict four-pass architecture where each pass builds on th
 Pass 1: Structural Integrity
   |  Repairs boot sectors, FSInfo, FAT signatures
   v
-Pass 2: Directory & Chain Validation
-  |  Walks directory tree, validates chains, builds bitmap
-  v
-Pass 3: Lost Cluster Recovery
-  |  Frees allocated clusters not found in bitmap
+Pass 2+3: Directory & Chain Validation + Lost Cluster Recovery (windowed)
+  |  For each bitmap window (2M clusters):
+  |    Pass 2: Clear bitmap, re-walk directory tree, validate chains, build bitmap
+  |    Pass 3: Free allocated clusters not found in bitmap (windowStart..windowEnd-1)
   v
 Pass 4: FAT Sync & Free Count
      Synchronizes FAT1->FAT2, corrects FSInfo
@@ -39,15 +38,20 @@ Checks and repairs the foundational filesystem structures that must be correct b
 - **FAT[1]**: Must contain end-of-chain marker `$0FFFFFFF` (lower 28 bits).
 - **FAT[2]**: Must not be free (`$00000000`). This is the root directory cluster. If free, it is set to EOC. This check was added after discovering a critical bug where pass 3 could free the root cluster.
 
-### Pass 2: Directory & Chain Validation
+### Pass 2: Directory & Chain Validation (Windowed)
 
-Walks the entire directory tree starting from the root cluster, validating every cluster chain and building a bitmap of referenced clusters.
+Walks the entire directory tree starting from the root cluster, validating every cluster chain and building a bitmap of referenced clusters. Processing is done in windows of up to 2 million clusters (MAX_BITMAP_CLUSTERS) each.
 
-**Process:**
-1. Clear the cluster bitmap (256KB of LONGs zeroed)
-2. Mark clusters 0 and 1 as used (they don't exist as data clusters)
-3. Validate and mark the root directory's own cluster chain
-4. Recursively scan the root directory
+**Windowed processing:**
+- Variables: `windowStart`, `windowEnd`, `currentWindow`, `windowCount`
+- Window size: MAX_BITMAP_CLUSTERS = 2,097,152 clusters per window
+- For each window:
+  1. Clear the cluster bitmap (256KB of LONGs zeroed)
+  2. Mark clusters 0 and 1 as used (if within the current window)
+  3. Validate and mark the root directory's own cluster chain
+  4. Recursively scan the root directory (re-walking the entire directory tree)
+  5. Run Pass 3 (lost cluster recovery) for this window's range
+- On windows > 0, only bitmap marking occurs during the directory walk (counting and error messages are suppressed to avoid duplicates)
 
 **For each directory entry found:**
 - Skip deleted entries (`$E5`), long filename entries (attr `$0F`), volume labels (attr `$08`), and `.`/`..` entries
@@ -56,7 +60,7 @@ Walks the entire directory tree starting from the root cluster, validating every
 
 **Chain validation** (`validateChain`):
 - Follows the chain from start cluster, reading FAT entries
-- Marks each cluster in the bitmap via `setBit()`
+- Marks each cluster in the bitmap via `setBit()` (only if within the current window)
 - Detects cross-links (cluster already in bitmap from another chain)
 - Detects bad references (cluster number out of range)
 - Truncates chains at bad references by writing EOC
@@ -69,16 +73,16 @@ Walks the entire directory tree starting from the root cluster, validating every
 - Maximum recursion depth of 16 to prevent stack overflow
 - After returning from subdirectory recursion, re-reads the parent sector (since the buffer was overwritten)
 
-### Pass 3: Lost Cluster Recovery
+### Pass 3: Lost Cluster Recovery (Per Window)
 
-Identifies "lost" clusters -- those marked as allocated in the FAT but not referenced by any file or directory in the bitmap.
+Identifies "lost" clusters -- those marked as allocated in the FAT but not referenced by any file or directory in the bitmap. Pass 3 runs per window, called from within Pass 2's windowed loop after the directory tree walk for each window completes. It scans only the current window's range (from `windowStart` to `windowEnd-1`), not the entire cluster space.
 
 **Process:**
-- Iterates through all clusters (2 to totalClusters+1)
+- Iterates through clusters in the current window range (`windowStart` to `windowEnd-1`)
 - For each cluster NOT in the bitmap, reads its FAT entry
 - If the FAT entry is not free (`$00000000`) and not bad (`$0FFFFFF7`), the cluster is unreferenced
 - Frees unreferenced clusters by writing `$00000000` to their FAT entry
-- Flushes the FAT cache after processing all clusters
+- Flushes the FAT cache after processing the window's clusters
 
 ### Pass 4: FAT Sync & Free Count
 
@@ -104,13 +108,13 @@ LONG bitmapData[65536]    ' 256KB = 65536 LONGs
 
 Each bit represents one cluster. A set bit means the cluster is referenced by a file or directory found during pass 2.
 
-- **Capacity**: 65536 * 32 = 2,097,152 clusters
-- **Coverage**: Cards up to approximately 64GB (depending on cluster size)
-- **Cards exceeding capacity**: Receive structural checks only (passes 1 and 4)
+- **Window size**: MAX_BITMAP_CLUSTERS = 65536 * 32 = 2,097,152 clusters per window
+- **Coverage**: Cards of any size, via windowed bitmap scanning
+- **Windowed processing**: For cards exceeding 2M clusters, the cluster space is divided into windows. Variables `windowStart`, `windowEnd`, `currentWindow`, and `windowCount` track the current window. Each window clears and re-populates the bitmap. The directory tree is re-walked for each window. On windows > 0, only bitmap marking occurs (counting and error messages are suppressed to avoid duplicates).
 
-Bit operations:
-- `setBit(cluster)`: `bitmapData[cluster >> 5] |= (1 << (cluster & $1F))`
-- `testBit(cluster)`: `(bitmapData[cluster >> 5] >> (cluster & $1F)) & 1`
+Bit operations use window-relative indexing:
+- `setBit(cluster)`: Clusters outside the current window (`windowStart` to `windowEnd-1`) are silently ignored. For clusters within the window: `idx := cluster - windowStart`, then `bitmapData[idx >> 5] |= (1 << (idx & $1F))`
+- `testBit(cluster)`: `idx := cluster - windowStart`, then `(bitmapData[idx >> 5] >> (idx & $1F)) & 1`
 
 ### FAT Entry Cache
 

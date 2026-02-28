@@ -124,8 +124,8 @@ All cog-to-worker communication flows through shared hub RAM variables:
 
 1. Caller acquires hardware lock (prevents other cogs from sending commands)
 2. Caller writes `pb_param0..3`, `pb_caller := COGID()`, then `pb_cmd := command`
-3. Caller polls `pb_cmd` until it returns to `CMD_NONE` (worker clears it when done)
-4. Worker wakes caller via `COGATN(1 << pb_caller)`
+3. Caller sleeps via `WAITATN()` (efficient hardware sleep, not polling)
+4. Worker completes command, sets `pb_cmd := CMD_NONE`, wakes caller via `COGATN(1 << pb_caller)`
 5. Caller reads `pb_status` and `pb_data0` for results
 6. Caller releases hardware lock
 
@@ -137,18 +137,13 @@ All cog-to-worker communication flows through shared hub RAM variables:
 |---------|-------|------------|---------|
 | `CMD_MOUNT` | 1 | (pins via DAT) | status |
 | `CMD_UNMOUNT` | 2 | -- | status |
-| `CMD_OPEN` | 3 | param0=filename | status |
-| `CMD_CLOSE` | 4 | -- | status |
-| `CMD_READ` | 5 | param0=buffer, param1=count | status |
-| `CMD_WRITE` | 6 | param0=buffer, param1=count | status |
-| `CMD_SEEK` | 7 | param0=position | status |
-| `CMD_NEWFILE` | 8 | param0=filename | status |
+| *(3–8 unused)* | 3–8 | *(reserved gaps from removed V1 API)* | -- |
 | `CMD_NEWDIR` | 9 | param0=dirname | status |
 | `CMD_DELETE` | 10 | param0=filename | status |
 | `CMD_RENAME` | 11 | param0=old, param1=new | status |
 | `CMD_CHDIR` | 12 | param0=path | status |
 | `CMD_READDIR` | 13 | param0=entry index | data0=entry ptr |
-| `CMD_FILESIZE` | 14 | -- | data0=file size |
+| `CMD_FILESIZE` | 14 | -- | data0=file size (unused -- no public caller after V1 removal) |
 | `CMD_FREESPACE` | 15 | -- | data0=free sectors |
 | `CMD_SYNC` | 16 | -- | status |
 | `CMD_MOVEFILE` | 17 | param0=name, param1=dest | status |
@@ -592,6 +587,7 @@ All structs are packed (Spin2 default) with offsets matching their respective ha
 | `volumeLabel() : pStr` | Pointer to volume label string |
 | `setVolumeLabel(pLabel) : result` | Set volume label |
 | `fileName() : pStr` | Name from last directory read |
+| `fileSize() : size` | File size from last directory read |
 | `attributes() : attr` | Attributes from last directory read |
 | `setDate(y,m,d,h,mi,s)` | Set date/time for new files |
 | `getSPIFrequency() : hz` | Current SPI clock frequency |

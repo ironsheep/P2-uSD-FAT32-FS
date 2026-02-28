@@ -4,7 +4,7 @@
 
 ## Overview
 
-The audit utility is a read-only filesystem validator that checks FAT32 structures without modifying any data on the card. It runs 41 individual tests across 7 categories and reports pass/fail results. Use it to verify filesystem integrity after testing, before deployment, or to diagnose mount failures.
+The audit utility is a read-only filesystem validator that checks FAT32 structures without modifying any data on the card. It runs 39 individual tests across 7 categories and reports pass/fail results. Use it to verify filesystem integrity after testing, before deployment, or to diagnose mount failures.
 
 For a utility that can also repair problems, see `SD_FAT32_fsck.spin2`.
 
@@ -28,7 +28,7 @@ Reads sector 0 and validates the Master Boot Record:
 
 The partition start sector is saved for subsequent VBR reads.
 
-### 2. VBR Verification (17 tests)
+### 2. VBR Verification (18 tests)
 
 Reads the Volume Boot Record at the partition start sector and validates all BPB fields:
 
@@ -36,7 +36,6 @@ Reads the Volume Boot Record at the partition start sector and validates all BPB
 |------|----------------|
 | Jump instruction | $EB or $E9 at offset 0 |
 | Boot signature | $AA55 at offset $1FE |
-| OEM name | Printable ASCII at offset $03 |
 | Bytes/sector | 512 |
 | Sectors/cluster | Power of 2, 1-128 |
 | Reserved sectors | 32 |
@@ -73,7 +72,7 @@ Reads partition sector 1 (FSInfo) and validates:
 | Next free hint | $FFFFFFFF or >= 2 at offset 492 |
 | Backup FSInfo match | Sector 7 matches sector 1 byte-for-byte |
 
-### 5. FAT Table Verification (5 tests)
+### 5. FAT Table Verification (4 tests)
 
 Reads the first sector of FAT1 and FAT2:
 
@@ -82,7 +81,6 @@ Reads the first sector of FAT1 and FAT2:
 | FAT[0] | $0FFFFFF8 (media type) |
 | FAT[1] | $0FFFFFFF (EOC) |
 | FAT[2] | $0FFFFFFF (root cluster EOC) |
-| FAT[3] | 0 (free) |
 | FAT1 == FAT2 | First sector byte-for-byte match |
 
 Note: The audit checks the first sector only for FAT1/FAT2 comparison, while the FSCK utility compares all FAT sectors.
@@ -110,16 +108,16 @@ This verifies the filesystem is mountable by the actual driver, not just structu
 
 ## Test Framework
 
-Each test uses the `runTest(pTestName, passed)` helper:
+Each test uses the `auditRunTest(pTestName, passed)` helper:
 - Increments a global test counter
-- If passed: increments `passCount`, prints `[PASS]` with test name
-- If failed: increments `failCount`, prints `[FAIL]` with test name
+- If passed: increments `v_passCount`, sends `[PASS]` with test name via the string FIFO
+- If failed: increments `v_failCount`, sends `[FAIL]` with test name via the string FIFO
 
 The final summary reports total tests, passes, and failures, with an overall status of **OK** (0 failures) or **ISSUES DETECTED** (any failures).
 
 ## Typical Results
 
-**Clean card** (freshly formatted): 41 tests, 41 pass, 0 fail
+**Clean card** (freshly formatted): 39 tests, 39 pass, 0 fail
 
 **Card after FSCK repair**: May show 2 failures in root directory verification if the volume label entry was overwritten by test data. These are cosmetic issues that don't affect filesystem operation.
 

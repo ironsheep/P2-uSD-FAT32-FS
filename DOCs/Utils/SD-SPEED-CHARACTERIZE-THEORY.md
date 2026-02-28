@@ -118,7 +118,7 @@ This recommended speed can be used to configure the driver's SPI speed for produ
 
 ## Practical Considerations
 
-- **Run at target SYSCLK**: The P2 SPI clock divider depends on SYSCLK. Test at the same SYSCLK you plan to use in production (the utility defaults to 200 MHz).
+- **Run at target SYSCLK**: The P2 SPI clock divider depends on SYSCLK. Test at the same SYSCLK you plan to use in production (the utility defaults to 270 MHz).
 - **Card variation**: Different cards from the same manufacturer can have slightly different speed tolerances. Test representative samples.
 - **Temperature**: SPI reliability can vary with temperature. Test at expected operating conditions.
 - **Conservative margin**: Consider using one speed level below the maximum for production to provide margin.

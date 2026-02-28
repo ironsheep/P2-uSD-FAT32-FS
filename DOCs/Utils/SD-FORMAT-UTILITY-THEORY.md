@@ -6,7 +6,7 @@
 
 The format utility creates a complete FAT32 filesystem on an SD card from scratch. It is a library object (not a standalone program) that provides `format()` and `formatWithLabel()` public methods. The `SD_format_card.spin2` runner and regression tests use this library.
 
-The utility writes all filesystem structures using raw sector access (`initCardOnly` + `writeSectorRaw`), creating a Microsoft-compatible FAT32 filesystem that works with Windows, macOS, and Linux.
+The utility writes all filesystem structures using raw sector access (`initCardOnly` + `writeSectorRaw` / `writeSectorsRaw`), creating a Microsoft-compatible FAT32 filesystem that works with Windows, macOS, and Linux.
 
 ## FAT32 Disk Layout
 
@@ -141,7 +141,7 @@ Called twice (once for FAT1, once for FAT2). Each FAT table requires `sectorsPer
 | FAT[1] | $0FFFFFFF | End-of-chain marker |
 | FAT[2] | $0FFFFFFF | Root directory (single cluster, EOC) |
 
-**Remaining sectors** are written as all zeros (every cluster is free).
+**Remaining sectors** are written as all zeros (every cluster is free). These are written in batches using CMD25 multi-sector writes (`writeSectorsRaw()`) with MULTI_BATCH_SIZE = 64 sectors per batch and a 32 KB zero buffer, providing approximately 5.5x speedup over single-sector writes.
 
 Progress is reported every 256 sectors since this is the longest step (writing thousands of sectors for each FAT copy).
 
@@ -157,7 +157,7 @@ Initializes the first data cluster (cluster 2) with a volume label directory ent
 | $18 | Modification date | $0021 (1980-01-01) |
 | $1C | File size | 0 |
 
-All remaining bytes in the root cluster are zeroed (indicating no more directory entries).
+The remaining sectors in the root cluster are cleared using `writeSectorsRaw()` in a single CMD25 batch (indicating no more directory entries).
 
 ## Volume Label Handling
 

@@ -1,6 +1,6 @@
 '' =================================================================================================
 ''
-''   File....... SD_RT_format_card.spin2
+''   File....... SD_format_card.spin2
 ''   Purpose.... Simple format utility runner for SD cards
 ''   Author..... Stephen M Moraco
 ''   Started.... JAN 2026

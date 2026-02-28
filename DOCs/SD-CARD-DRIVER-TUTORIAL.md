@@ -76,7 +76,7 @@ The driver uses a handle-based file API that supports **multiple files and direc
 
 **File Handles:** Each open file returns a handle (0-5, with the default 6 handles). Use this handle for all subsequent operations on that file.
 
-**Single-Writer Policy:** Only ONE file can be open for writing at a time. This prevents data corruption from concurrent writes.
+**Single-Writer Policy:** Only one write handle per file is allowed. Different files can be open for writing simultaneously.
 
 **Handle Type Enforcement:** `writeHandle()` on a read-only handle returns `E_INVALID_HANDLE` — you must open the file with `openFileWrite()` or `createFileNew()` to write. Reading from a write handle is permitted (useful for verify-after-write patterns).
 
@@ -614,7 +614,7 @@ The driver maintains a file position that advances automatically with each read/
 ### Seek to Position
 
 ```spin2
-PUB seekHandle(handle, pos) : result
+PUB seekHandle(handle, position) : result
 ```
 
 **Parameters:**
@@ -717,10 +717,10 @@ sd.closeFileHandle(handle)
 PUB deleteFile(name_ptr) : result
 ```
 
-Deletes the named file from the current directory. Returns `SUCCESS` (0) on success, or a negative error code. The file must not be open.
+Deletes the named file from the current directory. Returns `true` on success, `false` on failure. The file must not be open. Use `sd.error()` to retrieve the error code on failure.
 
 ```spin2
-if sd.deleteFile(@"OLD_DATA.TXT") == sd.SUCCESS
+if sd.deleteFile(@"OLD_DATA.TXT")
     debug("File deleted")
 else
     debug("Delete failed, error: ", sdec(sd.error()))
@@ -789,7 +789,7 @@ PUB readerTask() | handle, buf[128], bytes_read
 ### Rules for Multi-Cog Access
 
 1. **Mount from one cog only.** Call `mount()` before starting other cogs that use the driver.
-2. **One writer at a time.** Only one file can be open for writing across all cogs. Multiple files can be open for reading simultaneously.
+2. **One writer per file.** Only one write handle per file is allowed across all cogs. Different files can be open for writing simultaneously.
 3. **Close handles when done.** Handles are a shared resource (default 6 total).
 4. **Don't call `stop()` or `unmount()` while other cogs are using the driver.**
 
@@ -972,13 +972,13 @@ PRI findNextLogName() | num, handle
     sd.closeFileHandle(handle)
     num++
 
-PRI formatLogName(num) | tens, ones
+PRI formatLogName(num) | d10, d1
   ' Format as "LOG00.TXT" through "LOG99.TXT"
-  tens := num / 10
-  ones := num // 10
+  d10 := num / 10
+  d1 := num // 10
   bytemove(@log_name, string("LOG00.TXT"), 10)
-  log_name[3] := "0" + tens
-  log_name[4] := "0" + ones
+  log_name[3] := "0" + d10
+  log_name[4] := "0" + d1
 ```
 
 ### Example 3: Binary Record File
@@ -1083,7 +1083,7 @@ All SPI operations are performed by a dedicated worker cog. This:
 |----------|-------|
 | Cogs | 1 (worker) |
 | Locks | 1 |
-| Hub RAM | ~4KB (handles + worker stack + sector buffers) |
+| Hub RAM | ~6KB (handles + worker stack + sector buffers) |
 
 ---
 
@@ -1109,7 +1109,7 @@ These methods are always available in the core driver (no feature flags required
 | `closeFileHandle(handle)` | Close file handle, flush writes |
 | `readHandle(handle, buffer, count)` | Read bytes, returns count read |
 | `writeHandle(handle, buffer, count)` | Write bytes, returns count written |
-| `seekHandle(handle, pos)` | Set file position, returns SUCCESS (0) or error |
+| `seekHandle(handle, position)` | Set file position, returns SUCCESS (0) or error |
 | `tellHandle(handle)` | Get current position |
 | `eofHandle(handle)` | Check if at end of file |
 | `fileSizeHandle(handle)` | Get file size by handle |
@@ -1137,6 +1137,7 @@ These methods are always available in the core driver (no feature flags required
 | Method | Description |
 |--------|-------------|
 | `fileName()` | Name of last directory entry |
+| `fileSize()` | Size of last directory entry in bytes |
 | `attributes()` | Attributes of last directory entry |
 | `volumeLabel()` | Card volume label |
 | `setVolumeLabel(label)` | Set volume label |
@@ -1241,7 +1242,7 @@ For driver development, debugging, and regression testing. Includes CRC diagnost
 | `debugDumpRootDir()` | Print root directory entries to debug |
 | `debugClearRootDir()` | Zero root directory sector (destructive!) |
 | `debugReadSectorSlow(sector, buffer)` | Byte-by-byte read without streamer |
-| `getWriteDiag(...)` | Last writeSector diagnostic (4 return values) |
+| `getWriteDiag()` | Last writeSector diagnostic (returns 4 values: result_code, r1_resp, data_resp, sector_num) |
 | `setTestForceReadError(count)` | Inject N forced CRC mismatches on reads (test hook) |
 | `setTestForceWriteError(enabled)` | Inject one-shot write CRC corruption (test hook) |
 | `getTestErrorCount()` | Count of injected test errors triggered |

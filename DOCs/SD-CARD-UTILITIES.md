@@ -156,8 +156,8 @@ END_SESSION
 Testing proceeds from lowest to highest speed. If any phase fails, testing stops for that speed and higher speeds are skipped.
 
 **Speed Levels Tested:**
-- 18 MHz, 20 MHz, 22 MHz, 25 MHz, 28 MHz
-- 30 MHz, 33 MHz, 37 MHz, 40 MHz, 45 MHz, 50 MHz
+- 18 MHz, 20 MHz, 22 MHz, 25 MHz, 27 MHz
+- 30 MHz, 33 MHz, 36 MHz, 40 MHz, 45 MHz, 50 MHz
 
 **Output Includes:**
 - Target frequency vs actual achievable frequency
@@ -372,8 +372,8 @@ END_SESSION
 | Pass | Name | Purpose |
 |------|------|---------|
 | **Pass 1** | Structural Integrity | Repair VBR backup, FSInfo signatures/backup, FAT[0]/[1]/[2] entries |
-| **Pass 2** | Directory & Chain Validation | Walk directory tree, validate cluster chains, detect cross-links |
-| **Pass 3** | Lost Cluster Recovery | Free allocated clusters not referenced by any file or directory |
+| **Pass 2** | Directory & Chain Validation | Walk directory tree, validate cluster chains, detect cross-links (windowed) |
+| **Pass 3** | Lost Cluster Recovery | Free allocated clusters not referenced by any file or directory (per window, interleaved with Pass 2) |
 | **Pass 4** | FAT Sync & Free Count | Synchronize FAT1 -> FAT2, correct FSInfo free cluster count |
 
 **Repairs Performed:**
@@ -391,9 +391,7 @@ END_SESSION
 
 **Memory Requirements:**
 
-The cluster bitmap uses 256 KB of P2 hub RAM (LONG[65536]), covering up to 2,097,152 clusters — sufficient for cards up to approximately 64 GB. Cards with more clusters receive structural integrity checks only (passes 1 and 4); chain validation and lost cluster recovery (passes 2 and 3) are skipped.
-
-This is a current constraint of the P2's 512 KB hub memory, not a fundamental design limitation. Research into windowed or overlay-based bitmap approaches that could extend full validation to larger cards is on the [Punch List](Plans/PUNCH-LIST.md).
+The cluster bitmap uses 256 KB of P2 hub RAM (LONG[65536]), covering up to 2,097,152 clusters per window. For cards exceeding 2 million clusters (approximately 64 GB), the utility uses windowed bitmap scanning -- processing the cluster space in 2M-cluster passes. The directory tree is re-walked for each window, and lost cluster recovery runs after each window. This extends full 4-pass validation to cards of any size.
 
 **Sample Output:**
 ```
