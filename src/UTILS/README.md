@@ -417,7 +417,7 @@ pnut-term-ts -r SD_FAT32_fsck.bin
 
 **Memory Requirements:**
 
-The cluster bitmap uses 256KB (LONG[65536]) covering up to 2,097,152 clusters. This is sufficient for cards up to approximately 64GB. Cards with more clusters receive structural checks only (passes 1 and 4); passes 2 and 3 are skipped.
+The cluster bitmap uses 256KB (LONG[65536]) covering 2,097,152 clusters per window. For cards up to approximately 64GB, a single window suffices. Larger cards are processed using multiple bitmap windows — the directory tree is re-walked for each window, and lost cluster recovery runs per window. All four passes execute regardless of card size.
 
 **Sample Output:**
 ```

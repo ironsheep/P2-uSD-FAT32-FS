@@ -29,16 +29,20 @@ sd-card-driver/
     │   ├── SD_demo_shell.spin2               Shell application
     │   ├── isp_serial_singleton.spin2        Serial terminal driver
     │   └── isp_mem_strings.spin2             String formatting utilities
-    └── UTILS/                             Standalone utility programs
-        ├── README.md                         Full utility documentation
-        ├── SD_format_card.spin2              FAT32 card formatter
-        ├── isp_format_utility.spin2          FAT32 format library
-        ├── SD_card_characterize.spin2        Card register reader
-        ├── SD_performance_benchmark.spin2    Throughput measurement
-        ├── SD_FAT32_audit.spin2              Filesystem validator (read-only)
-        ├── SD_FAT32_fsck.spin2               Filesystem check & repair
-        ├── isp_fsck_utility.spin2            Combined FSCK + Audit library (runs in temp cog)
-        └── isp_string_fifo.spin2             Lock-free inter-cog string FIFO
+    ├── UTILS/                             Standalone utility programs
+    │   ├── README.md                         Full utility documentation
+    │   ├── SD_format_card.spin2              FAT32 card formatter
+    │   ├── isp_format_utility.spin2          FAT32 format library
+    │   ├── SD_card_characterize.spin2        Card register reader
+    │   ├── SD_performance_benchmark.spin2    Throughput measurement
+    │   ├── SD_FAT32_audit.spin2              Filesystem validator (read-only)
+    │   ├── SD_FAT32_fsck.spin2               Filesystem check & repair
+    │   ├── isp_fsck_utility.spin2            Combined FSCK + Audit library (runs in temp cog)
+    │   └── isp_string_fifo.spin2             Lock-free inter-cog string FIFO
+    ├── regression-tests/                 Regression test suite
+    │   ├── README.md                        Test infrastructure guide
+    │   ├── SD_RT_*_tests.spin2              20 test suites (389 tests)
+    │   └── isp_rt_utilities.spin2           Shared test framework
 ```
 
 ## Prerequisites
@@ -46,6 +50,7 @@ sd-card-driver/
 ### Toolchain (choose one)
 
 - **Flexspin** — Open-source Spin2/PASM2/C compiler ([GitHub](https://github.com/totalspectrum/flexprop))
+- **Spin Tools IDE** — Cross-platform Spin2/PASM2 IDE ([MaccaSoft](https://maccasoft.com/en/spin-tools-ide/))
 - **Propeller Tool** — Parallax's official IDE ([Downloads](https://www.parallax.com/propeller-tool/))
 - **pnut-ts + pnut-term-ts** — Command-line Spin2 compiler and terminal. See detailed install instructions for **[macOS](https://github.com/ironsheep/P2-vscode-langserv-extension/blob/main/TASKS-User-macOS.md#installing-pnut-term-ts-on-macos)**, **[Windows](https://github.com/ironsheep/P2-vscode-langserv-extension/blob/main/TASKS-User-win.md#installing-pnut-term-ts-on-windows)**, and **[Linux/RPi](https://github.com/ironsheep/P2-vscode-langserv-extension/blob/main/TASKS-User-RPi.md#installing-pnut-term-ts-on-rpilinux)**
 
@@ -127,7 +132,7 @@ The default configuration uses base pin 56 (P2 Edge Module), giving pins P58-P61
 
 ## Regression Tests
 
-A comprehensive regression test suite (389 tests across 20 test files) is available in the [GitHub repository](https://github.com/ironsheep/P2-uSD-FAT32-FS). The tests are not included in this release package but can be cloned from the repo if needed.
+The regression test suite (389 tests across 20 test files) is included in `regression-tests/`. Each test compiles with pnut-ts and runs on P2 hardware, producing pass/fail results via debug output.
 
 ## License
 

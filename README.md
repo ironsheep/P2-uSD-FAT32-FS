@@ -21,7 +21,7 @@ This project provides a robust, high-performance SD card driver for the P2 micro
 - **Directory Operations**: Create, navigate, and enumerate directories (index-based and handle-based)
 - **File Operations**: Create, open, read, write, seek, rename, delete
 - **Built-in Card Formatter**: Format any SD card as FAT32 directly from the P2 — no PC required
-- **Filesystem Repair**: Integrated read-only audit (41 checks) and 4-pass fsck with auto-repair
+- **Filesystem Repair**: Integrated read-only audit (39 checks) and 4-pass fsck with auto-repair
 - **Multi-Cog Safe**: Dedicated worker cog with hardware lock serialization
 - **Per-Cog Working Directory**: Each cog maintains its own CWD for safe concurrent navigation
 - **Regression Tested**: 389 automated tests across 20 test suites
@@ -146,13 +146,13 @@ P2-uSD-FAT32-FS/
 │   └── TestCard/                  # Test card setup and validation
 │
 ├── diagnostic-tests/           # Characterization & diagnostic tests
-│   ├── SD_card_info_tests.spin2       # Struct-based register access
-│   ├── SD_freq_sweep_tests.spin2      # SPI frequency sweep (15-25 MHz)
-│   └── SD_spi_limit_test.spin2        # Single SPI frequency probe
+│   ├── SD_card_info_tests.spin2         # Struct-based register access
+│   ├── SD_diag_fsck_window_test.spin2   # FSCK windowed bitmap diagnostic
+│   ├── SD_freq_sweep_tests.spin2        # SPI frequency sweep (15-25 MHz)
+│   └── SD_spi_limit_test.spin2          # Single SPI frequency probe
 │
 ├── tools/                      # Build and test scripts
-│   ├── run_test.sh                 # Test runner (compile + download + capture)
-│   └── logs/                       # Test output logs
+│   └── run_test.sh                 # Test runner (compile + download + capture)
 │
 ├── DOCs/                       # Documentation
 │   ├── SD-CARD-DRIVER-TUTORIAL.md   # Complete guide with examples
@@ -167,8 +167,6 @@ P2-uSD-FAT32-FS/
 │   ├── Reference/                   # Technical references and guides
 │   ├── Research/                    # Hardware research and investigations
 │   └── Utils/                       # Utility theory of operations
-│
-└── REF/                        # Reference material and external code
 ```
 
 ## Known Limitations
@@ -182,7 +180,7 @@ P2-uSD-FAT32-FS/
 
 The driver's goal is full support for cards up to **2 TB** (the FAT32 and SDXC maximum defined by the Microsoft FAT32 specification and SD Physical Layer Specification). Tested with cards up to **128 GB** across 9 manufacturers.
 
-The FSCK utility provides full cluster-chain validation for cards up to approximately **64 GB** (limited by the P2's 512 KB hub RAM — the cluster bitmap requires 256 KB). Cards larger than 64 GB receive structural integrity checks (VBR, FSInfo, FAT table sync) but skip detailed chain validation and lost cluster recovery. Expanding FSCK coverage to larger cards is an active research item — see the [Punch List](DOCs/Plans/PUNCH-LIST.md).
+The FSCK utility provides full cluster-chain validation on cards of any size. For cards exceeding approximately 64 GB, a windowed bitmap approach processes the cluster space in 2M-cluster passes, extending full 4-pass validation (chain integrity, cross-link detection, lost cluster recovery, FAT sync) to any card.
 
 > **Right-size your card.** Larger cards mean larger FAT tables, longer mount times, and longer FSCK scans. Choose the smallest card that comfortably meets your storage needs. For most embedded applications, 8–32 GB provides ample capacity with the best overall performance. See the [Card Performance Guide](DOCs/SD-CARD-PERFORMANCE.md#right-sizing-your-card) for details.
 

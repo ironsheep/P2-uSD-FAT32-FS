@@ -103,6 +103,12 @@ jobs:
           cp src/UTILS/isp_fsck_utility.spin2 "${DEST}/src/UTILS/"
           cp src/UTILS/isp_string_fifo.spin2 "${DEST}/src/UTILS/"
 
+          # regression-tests/ - test suites and framework
+          mkdir -p "${DEST}/regression-tests"
+          cp regression-tests/README.md "${DEST}/regression-tests/"
+          cp regression-tests/SD_RT_*_tests.spin2 "${DEST}/regression-tests/"
+          cp regression-tests/isp_rt_utilities.spin2 "${DEST}/regression-tests/"
+
           # Remove any macOS artifacts
           find "${DEST}" -name '.DS_Store' -delete
 
