@@ -668,14 +668,14 @@ PUB getWriteDiag() : result_code, r1_resp, data_resp, sector_num
   sector_num := diag_write_sector
 #ENDIF
 
-PRI set_error(code) : code_out
+PRI set_error(error_code) : code_out
 ' Set error code for this cog - store error code in per-cog slot and return the code.
 '
-' @param code - Error code to store
+' @param error_code - Error code to store
 ' @returns code_out - The same error code (for chained returns)
 
-  LONG[@last_error][COGID()] := code
-  return code
+  LONG[@last_error][COGID()] := error_code
+  return error_code
 
 PRI fs_worker() | cur_cmd
 ' Worker cog main loop - runs in the dedicated worker cog.
