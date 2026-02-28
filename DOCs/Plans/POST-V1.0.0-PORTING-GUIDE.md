@@ -4,7 +4,7 @@
 
 **Baseline**: v1.0.0 tag (`54121d8`)
 **Head**: Current `main` (Feb 27, 2026)
-**Commits**: 10 + readVBRRaw cross-ifdef fix
+**Commits**: 15 (from `8adf4b5` through `773636e`)
 
 ---
 
@@ -23,6 +23,11 @@
 11. [Test: New readVBRRaw() regression coverage](#11-test-new-readvbrraw-regression-coverage)
 12. [Test: New windowed FSCK diagnostic test](#12-test-new-windowed-fsck-diagnostic-test)
 13. [Misc: Version bump and .txt removal](#13-misc-version-bump-and-txt-removal)
+14. [Bug Fix: do_rename() missing E_FILE_EXISTS return](#14-bug-fix-do_rename-missing-e_file_exists-return)
+15. [Enhancement: CRC error injection test hooks](#15-enhancement-crc-error-injection-test-hooks)
+16. [Removal: V1 legacy API deleted from driver](#16-removal-v1-legacy-api-deleted-from-driver)
+17. [Test: New CRC validation and recovery test suites](#17-test-new-crc-validation-and-recovery-test-suites)
+18. [Test: Error handling and directory stress test enhancements](#18-test-error-handling-and-directory-stress-test-enhancements)
 
 ---
 
@@ -726,6 +731,318 @@ Two locations:
 
 ---
 
+## 14. Bug Fix: do_rename() missing E_FILE_EXISTS return
+
+**Severity**: High (silent misbehavior)
+**Commit**: `984a0f6`
+**File**: `src/micro_sd_fat32_fs.spin2`
+
+### Problem
+
+`do_rename()` checked whether the destination filename already existed but fell through to `return E_FILE_NOT_FOUND` instead of returning an appropriate error. A rename to an existing name would report "file not found" instead of "file exists."
+
+### Fix
+
+Add `return E_FILE_EXISTS` in the "destination already exists" branch:
+
+```spin2
+PRI do_rename(old_name, new_name) : result | ...
+  ...
+  ' Check if new name already exists
+  if searchDirectory(new_name) == SUCCESS
+    if bytecomp(@entry_buffer, @saved_entry, 32)
+      ' Same entry — just success (renaming to same name)
+      return SUCCESS
+    else
+      debug("  [do_rename] New name already exists!")
+      return E_FILE_EXISTS       ' <--- ADD THIS LINE
+  else
+    debug("  [do_rename] Old file NOT FOUND")
+  return E_FILE_NOT_FOUND
+```
+
+### Location
+
+Search for `do_rename` in the driver. The fix is a single `return E_FILE_EXISTS` line after the "New name already exists!" debug message.
+
+---
+
+## 15. Enhancement: CRC error injection test hooks
+
+**Severity**: Enhancement (test infrastructure — no production behavior change)
+**Commit**: `984a0f6`
+**File**: `src/micro_sd_fat32_fs.spin2`
+
+### Purpose
+
+These hooks allow regression tests to force CRC errors on reads and writes, validating that the driver's retry logic and error reporting work correctly.
+
+### DAT additions
+
+Add after the existing `diag_write_sector` variable:
+
+```spin2
+  ' TEST HOOKS: Error injection for CRC validation testing
+  test_force_read_crc_error   BYTE    0  ' Counter: force N read CRC mismatches
+  test_force_write_crc_error  BYTE    0  ' Flag: corrupt next write CRC (one-shot)
+  test_error_count            LONG    0  ' Count of injected errors triggered
+```
+
+### New PUB methods (inside `#IFDEF SD_INCLUDE_DEBUG`)
+
+```spin2
+PUB setTestForceReadError(count)
+'' Set CRC error injection counter for reads. Each sector read will see a
+'' forced CRC mismatch until the counter reaches zero.
+'' Set to 1: one retry then success. Set to MAX_READ_CRC_RETRIES (3): all retries fail.
+''
+'' @param count - Number of read CRC mismatches to force
+
+  test_force_read_crc_error := count
+
+PUB setTestForceWriteError(enabled)
+'' Arm one-shot CRC error injection for the next write. The next writeSector()
+'' will send a corrupted CRC, causing the card to reject the data.
+''
+'' @param enabled - Non-zero arms, zero disarms
+
+  test_force_write_crc_error := (enabled <> 0) ? 1 : 0
+
+PUB getTestErrorCount() : count
+'' Get count of injected test errors triggered since last clear.
+''
+'' @returns count - Number of injected errors triggered
+
+  return test_error_count
+
+PUB clearTestErrors()
+'' Reset all test error injection state. Disarms read/write hooks
+'' and zeroes the triggered error counter.
+
+  test_force_read_crc_error := 0
+  test_force_write_crc_error := 0
+  test_error_count := 0
+```
+
+### readSector() hook
+
+In `readSector()`, insert after the `diag_calc_crc := calcDataCRC(p_buf, 512)` line:
+
+```spin2
+    diag_calc_crc := calcDataCRC(p_buf, 512)
+    ' TEST HOOK: Force CRC mismatch for error injection testing
+    if test_force_read_crc_error > 0
+      diag_calc_crc ^= $FFFF
+      test_force_read_crc_error--
+      test_error_count++
+```
+
+This XORs the calculated CRC with $FFFF, guaranteeing a mismatch with the received CRC, triggering the retry path.
+
+### writeSector() hook
+
+In `writeSector()`, insert after the `diag_sent_crc := calcDataCRC(p_buf, 512)` line:
+
+```spin2
+  diag_sent_crc := calcDataCRC(p_buf, 512)
+  ' TEST HOOK: Corrupt write CRC for error injection testing (one-shot)
+  if test_force_write_crc_error
+    diag_sent_crc ^= $FFFF
+    test_force_write_crc_error := 0
+    test_error_count++
+```
+
+This sends a corrupted CRC to the card, causing it to reject the write (data response != $05).
+
+### Important note
+
+The DAT variables (`test_force_read_crc_error`, etc.) are always present regardless of `#IFDEF`. Only the PUB API methods are gated by `SD_INCLUDE_DEBUG`. This ensures zero overhead in production builds (no PUB entry points) while keeping the DAT cost to 6 bytes.
+
+### Porting note
+
+Only port this if the flash-integrated driver has CRC validation and you want to run CRC injection tests against it.
+
+---
+
+## 16. Removal: V1 legacy API deleted from driver
+
+**Severity**: Major cleanup (reduces driver by ~350 lines, simplifies maintenance)
+**Commit**: `773636e`
+**File**: `src/micro_sd_fat32_fs.spin2`
+
+### What was V1
+
+The "V1" API was the original single-file interface: `openFile()`, `newFile()`, `closeFile()`, `read()`, `readByte()`, `write()`, `writeByte()`, `writeString()`, `seek()`. These operated on a single implicit "current file" with no handle. The "V3" handle-based API (`openFileRead()`, `readHandle()`, etc.) superseded them.
+
+### What was removed
+
+#### 9 PUB methods deleted
+
+| Method | Description |
+|--------|-------------|
+| `newFile(name_ptr)` | Create file (V1) |
+| `openFile(name_ptr)` | Open file (V1) |
+| `closeFile()` | Close current file (V1) |
+| `read(p_buffer, count)` | Read from current file (V1) |
+| `readByte(address)` | Read single byte at address (V1) |
+| `write(p_buffer, count)` | Write to current file (V1) |
+| `writeByte(char)` | Write single byte (V1) |
+| `writeString(p_str)` | Write null-terminated string (V1) |
+| `seek(pos)` | Seek in current file (V1) |
+
+**Kept**: `fileSize()` — still serves `readDirectory()` context, not just V1.
+
+#### 6 CMD constants removed
+
+Remove from CON block: `CMD_OPEN = 3`, `CMD_CLOSE = 4`, `CMD_READ = 5`, `CMD_WRITE = 6`, `CMD_SEEK = 7`, `CMD_NEWFILE = 8`.
+
+#### 6 dispatch entries removed from fs_worker()
+
+Remove the corresponding `case` entries for each CMD.
+
+#### 3 PRI worker methods deleted
+
+| Method | Description |
+|--------|-------------|
+| `do_read()` | V1 read implementation |
+| `do_write()` | V1 write implementation |
+| `do_seek()` | V1 seek implementation |
+
+#### 3 PRI worker methods simplified (NOT deleted)
+
+These are still used internally by `do_movefile()`, `do_delete()`, `do_chdir()`, and `do_unmount()`:
+
+| Method | What changed |
+|--------|-------------|
+| `do_open()` | Removed `flags \|= F_OPEN` |
+| `do_close()` | Removed `F_NEWDATA` check, removed `F_OPEN` clearing, removed `file_idx := 0` |
+| `do_newfile()` | Changed `flags \|= F_OPEN \| F_NEWDIR` to `flags \|= F_NEWDIR` |
+
+**`do_sync()`** was also simplified — removed the `F_NEWDATA` check block.
+
+#### V1-only state removed
+
+| Item | Type | Action |
+|------|------|--------|
+| `F_OPEN` (decod 0) | CON flag | Delete |
+| `F_NEWDATA` (decod 2) | CON flag | Delete |
+| `file_idx` | DAT LONG | Delete |
+
+**Kept**: `F_NEWDIR` (decod 1) — set by `do_newfile()`, checked by `do_close()`/`do_sync()`. **Kept**: `F_MOUNTED` (decod 3) — used by mount/unmount.
+
+#### Mode enforcement range check
+
+The `fs_worker()` mode enforcement previously referenced `CMD_OPEN` as the lower bound:
+```spin2
+' BEFORE: if (cur_cmd >= CMD_OPEN and cur_cmd <= CMD_MOVEFILE) or ...
+' AFTER:  if (cur_cmd >= CMD_NEWDIR and cur_cmd <= CMD_MOVEFILE) or ...
+```
+
+#### Other cleanup
+
+- `searchDirectory()`: Removed `file_idx := 0`
+- `followFatChain()`: Updated comment from `file_idx` to `position`
+- Header comment: Updated V1 usage example to V3 handle API
+
+### Porting note
+
+**Critical**: If the flash-integrated driver still has V1 API methods, remove them following the same pattern. The key insight is that `do_open()`, `do_close()`, and `do_newfile()` must be KEPT because internal operations (`do_movefile`, `do_delete`, `do_chdir`, `do_unmount`) call them for directory manipulation. Only the PUB wrappers and the data-I/O workers (`do_read`, `do_write`, `do_seek`) are truly dead.
+
+---
+
+## 17. Test: New CRC validation and recovery test suites
+
+**Severity**: New test files
+**Commit**: `984a0f6`
+**Files**: `regression-tests/SD_RT_crc_validation_tests.spin2` (new, 275 lines), `regression-tests/SD_RT_recovery_tests.spin2` (new, 381 lines)
+
+### SD_RT_crc_validation_tests.spin2 (6 tests)
+
+Tests the CRC error injection hooks from change #15:
+
+| Test | What it verifies |
+|------|-----------------|
+| Read CRC retry success | Force 1 mismatch, verify retry succeeds and data is correct |
+| Read CRC exhaustive failure | Force MAX_READ_CRC_RETRIES mismatches, verify read fails |
+| Write CRC rejection | Force write CRC error, verify card rejects write |
+| Hook state management | Verify clearTestErrors() resets all state |
+| Hook counter decrement | Verify read hook counter decrements correctly |
+| Hook arming after open | Verify hooks work when armed after file open |
+
+**Important pattern**: CRC error injection hooks must be armed AFTER `openFileRead()`/`createFileNew()`, not before. Internal file operations (directory searches, FAT reads) consume the hook counter before the test's target data operation.
+
+### SD_RT_recovery_tests.spin2 (7 tests)
+
+Tests recovery after error conditions:
+
+| Test | What it verifies |
+|------|-----------------|
+| Read recovery after CRC error | File reads work after a forced CRC failure |
+| Write recovery after CRC error | File writes work after a forced CRC failure |
+| Seek and retry after read error | Seek back and re-read after error succeeds |
+| Remount recovery | Unmount/remount recovers clean state after errors |
+| Handle isolation | Error on one handle doesn't affect other handles |
+| Handle reuse after error close | Closing error handle and opening new one works |
+| Multiple error recovery cycles | Repeated error/recovery cycles don't accumulate state |
+
+### Porting note
+
+These test files are self-contained. Port them if the flash-integrated driver has CRC error injection hooks.
+
+---
+
+## 18. Test: Error handling and directory stress test enhancements
+
+**Severity**: Test coverage expansion
+**Commit**: `984a0f6` (added), `773636e` (V1 tests removed)
+**Files**: `regression-tests/SD_RT_error_handling_tests.spin2`, `regression-tests/SD_RT_directory_tests.spin2`
+
+### Error handling tests
+
+**Added in `984a0f6`** (6 tests):
+- Handle type mismatch: write to read handle, read from write handle (2 tests)
+- Rename edge cases: rename to existing file returns `E_FILE_EXISTS` (1 test)
+- V1 legacy API: read/write/seek with no file open (3 tests)
+
+**Removed in `773636e`** (3 tests):
+- The 3 V1 legacy API tests were deleted when V1 was removed from the driver
+
+**Net result**: error_handling_tests has 10 tests (was 7, +6, -3).
+
+### Directory stress tests
+
+**Added in `984a0f6`**: "Many File Stress Test" group appended to `SD_RT_directory_tests.spin2`:
+- Creates 20 files in a subdirectory
+- Enumerates directory and verifies file count using sub-test framework
+- Reads back each file and verifies content
+- Cleans up all test files and directory
+
+This uses `setCheckCountPerTest()` + `evaluateSubValue()`/`evaluateSubBool()` + `showSubTestResults()` for grouped assertions within the stress test.
+
+### V1 → V3 migration in all test suites
+
+**Commit `773636e`** migrated ~96 V1 call sites across 7 test files to V3 handle API:
+
+| V1 Call | V3 Replacement |
+|---------|---------------|
+| `sd.newFile(@name)` | `handle := sd.createFileNew(@name)` |
+| `sd.openFile(@name)` | `handle := sd.openFileRead(@name)` |
+| `sd.closeFile()` | `sd.closeFileHandle(handle)` |
+| `sd.read(@buf, count)` | `sd.readHandle(handle, @buf, count)` |
+| `sd.write(@buf, count)` | `sd.writeHandle(handle, @buf, count)` |
+| `sd.writeString(@str)` | `sd.writeHandle(handle, @str, strsize(@str))` |
+| `sd.seek(pos)` | `sd.seekHandle(handle, pos)` |
+| `sd.fileSize()` | `sd.fileSizeHandle(handle)` |
+| `sd.readByte(addr)` | `sd.seekHandle(handle, addr)` + `sd.readHandle(handle, @buf, 1)` |
+
+Files migrated: `SD_RT_seek_tests`, `SD_RT_testcard_validation`, `SD_RT_directory_tests`, `SD_RT_multicog_tests`, `SD_RT_mount_tests`, `SD_RT_volume_tests`, `SD_RT_error_handling_tests`.
+
+### Porting note
+
+The test migration is only relevant if the flash-integrated driver has its own test suite using V1 calls. The V1→V3 migration table above provides the complete mapping.
+
+---
+
 ## Porting Priority Summary
 
 | Priority | Change | Risk if skipped |
@@ -742,4 +1059,9 @@ Two locations:
 | **P3 - Low** | #6 CON doc comment cleanup | .txt generation cleanliness |
 | **P3 - Low** | #11 readVBRRaw() tests | Test coverage gap |
 | **P3 - Low** | #12 Windowed FSCK diag test | Test coverage gap |
+| **P1 - High** | #14 do_rename() E_FILE_EXISTS fix | Rename to existing name reports wrong error |
+| **P1 - High** | #16 V1 legacy API removal | Dead code, maintenance burden, confusing API surface |
+| **P2 - Medium** | #15 CRC error injection hooks | No CRC test coverage |
+| **P3 - Low** | #17 CRC validation/recovery test suites | Test coverage gap |
+| **P3 - Low** | #18 Error handling/directory stress tests | Test coverage gap |
 | **P4 - Skip** | #13 Version bump / .txt removal | Administrative |
