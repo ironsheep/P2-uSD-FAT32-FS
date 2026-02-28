@@ -1098,6 +1098,7 @@ These methods are always available in the core driver (no feature flags required
 | `unmount()` | Unmount card cleanly |
 | `stop()` | Stop worker cog |
 | `error()` | Last error code for calling cog |
+| `checkStackGuard()` | Verify worker cog stack integrity |
 
 ### Handle-Based File Operations
 | Method | Description |
