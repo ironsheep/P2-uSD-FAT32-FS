@@ -30,7 +30,7 @@ Automated regression test suite for the P2 SD Card Driver. All tests execute on 
 | **Register Tests** | CSD register access, timeout values, capacity cross-check | 10 |
 | **Speed Tests** | SPI frequency, CMD6, high-speed mode, speed boundaries | 14 |
 | **CRC Diagnostic Tests** | CRC counters, validation toggle, CMD13 diagnostics | 14 |
-| **Error Handling Tests** | Error conditions, invalid handles, V1 legacy API, rename edge cases | 13 |
+| **Error Handling Tests** | Error conditions, invalid handles, handle type mismatch, rename edge cases | 10 |
 | **CRC Validation Tests** | CRC error injection hooks, forced read/write CRC errors, hook state management | 6 |
 | **Recovery Tests** | Recovery after read/write errors, remount recovery, handle isolation | 7 |
 | **FIFO Tests** | String FIFO (isp_string_fifo) inter-cog communication | 21 |

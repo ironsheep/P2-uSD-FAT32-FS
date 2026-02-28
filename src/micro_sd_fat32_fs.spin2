@@ -9,14 +9,14 @@
   sd.mount(CS,MOSI,MISO,SCK)                            ' mount SD card                                                      ─┼───┤ MOSI                │     │
   sd.newDirectory(string("folder1"))                    ' create a new directory                                               │ ┌─┤ Gnd                 │     │
   sd.changeDirectory(string("folder1"))                 ' switch to newly created directory                                    └─┼─┤ Vcc                 │     │
-  sd.newFile(string("fileA.txt"))                       ' create a new file, leaves file open for writing                    ───┼─┤ SCK                 │     │
-  sd.writeString(string("this is file A"))              ' write to newly created file                                            ┣─┤ Gnd                 │     │
-  sd.closeFile()                                        ' close file, update filesize information                            ───┼─┤ MISO                │     │
+  h := sd.createFileNew(string("fileA.txt"))            ' create a new file, returns handle                    ───┼─┤ SCK                 │     │
+  sd.writeHandle(h, string("this is file A"), 14)       ' write to file via handle                                            ┣─┤ Gnd                 │     │
+  sd.closeFileHandle(h)                                 ' close handle, update filesize                            ───┼─┤ MISO                │     │
                                                                                                                                  │ ┤ IRQ                 │     │
-  sd.openFile(string("fileA.txt"))                      ' open file in current directory                                         │ ┤ Card detect         │     │
+  h := sd.openFileRead(string("fileA.txt"))             ' open file for reading via handle                                         │ ┤ Card detect         │     │
   -or-                                                  ' -or-                                                                   │ ┤ Write protect       ├─────┘
-  sd.openFile(string("/folder1/fileA.txt"))             ' open file from path (1st "/" resets directory to root)                 │ └─┳───────────────────┘
-  sd.read(@buffer,sd.fileSize())                        ' read opened file into buffer                                              
+  h := sd.openFileRead(string("/folder1/fileA.txt"))    ' open from path (1st "/" resets to root)                 │ └─┳───────────────────┘
+  sd.readHandle(h, @buffer, sd.fileSizeHandle(h))       ' read opened file into buffer                                              
   debug(zstr(@buffer))
 }}
 
@@ -59,9 +59,7 @@ CON  ' flags
   ' Set to 1 to disable debug in driver and avoid compilation errors
   DEBUG_DISABLE = 1
 
-  F_OPEN    = decod 0
   F_NEWDIR  = decod 1
-  F_NEWDATA = decod 2
   F_MOUNTED = decod 3
 
 CON ' driver mode (enforces valid command sequences)
@@ -73,12 +71,6 @@ CON ' command codes for worker cog
   CMD_NONE      = 0         ' Idle / command complete
   CMD_MOUNT     = 1         ' Mount filesystem
   CMD_UNMOUNT   = 2         ' Unmount filesystem
-  CMD_OPEN      = 3         ' Open file: param0=filename ptr
-  CMD_CLOSE     = 4         ' Close file
-  CMD_READ      = 5         ' Read: param0=buffer ptr, param1=count
-  CMD_WRITE     = 6         ' Write: param0=buffer ptr, param1=count
-  CMD_SEEK      = 7         ' Seek: param0=position
-  CMD_NEWFILE   = 8         ' Create new file: param0=filename ptr
   CMD_NEWDIR    = 9         ' Create new directory: param0=dirname ptr
   CMD_DELETE    = 10        ' Delete file: param0=filename ptr
   CMD_RENAME    = 11        ' Rename: param0=oldname, param1=newname
@@ -356,8 +348,7 @@ DAT '' singleton control - SHARED across all object instances
   entry_address LONG    0               ' Current entry byte address
   date_stamp    LONG    0               ' Timestamp for new files
   n_sec         LONG    0               ' Current sector number
-  file_idx      LONG    0               ' Position within file
-  flags         LONG    0               ' Open/new file flags
+  flags         LONG    0               ' State flags (F_MOUNTED, F_NEWDIR)
   dir_sec_in_buf LONG   0               ' Directory sector currently in dir_buf
   fat_sec_in_buf LONG   0               ' FAT sector currently in fat_buf
   sec_in_buf    LONG    0               ' Data sector currently in buf
@@ -714,8 +705,8 @@ PRI fs_worker() | cur_cmd
     ' File system commands require MODE_FILESYSTEM
     ' Raw sector commands are allowed in both MODE_RAW and MODE_FILESYSTEM
     ' Mode transitions (MOUNT, UNMOUNT, INIT_CARD_ONLY) have their own logic
-    ' V3: Include handle-based commands (CMD_OPEN_READ through CMD_CLOSE_DIR_H)
-    if (cur_cmd >= CMD_OPEN and cur_cmd <= CMD_MOVEFILE) or (cur_cmd >= CMD_OPEN_READ and cur_cmd <= CMD_SET_VOL_LABEL)
+    ' Filesystem commands (CMD_NEWDIR..CMD_MOVEFILE, CMD_OPEN_READ..CMD_SET_VOL_LABEL)
+    if (cur_cmd >= CMD_NEWDIR and cur_cmd <= CMD_MOVEFILE) or (cur_cmd >= CMD_OPEN_READ and cur_cmd <= CMD_SET_VOL_LABEL)
       if driver_mode <> MODE_FILESYSTEM
         debug("  [fs_worker] REJECTED: File operation requires MODE_FILESYSTEM")
         pb_status := E_NOT_MOUNTED
@@ -731,26 +722,6 @@ PRI fs_worker() | cur_cmd
 
       CMD_UNMOUNT:
         pb_status := do_unmount()
-
-      CMD_OPEN:
-        pb_status := do_open(pb_param0)
-
-      CMD_CLOSE:
-        pb_status := do_close()
-
-      CMD_READ:
-        pb_data0 := do_read(pb_param0, pb_param1)
-        pb_status := SUCCESS
-
-      CMD_WRITE:
-        do_write(pb_param0, pb_param1)
-        pb_status := SUCCESS
-
-      CMD_SEEK:
-        pb_status := do_seek(pb_param0)
-
-      CMD_NEWFILE:
-        pb_status := do_newfile(pb_param0)
 
       CMD_NEWDIR:
         pb_status := do_newdir(pb_param0)
@@ -1518,7 +1489,8 @@ PRI do_read_sd_status(p_buf) : result
 #ENDIF
 
 PRI do_open(name_ptr) : result | search_result
-' Internal open file operation - opens an existing file for reading/writing.
+' Internal open file operation - finds existing file in directory.
+' Used internally by do_movefile to locate source file.
 '
 ' @param name_ptr - Pointer to null-terminated filename string
 ' @returns result - SUCCESS on success, E_FILE_NOT_FOUND on failure
@@ -1528,29 +1500,19 @@ PRI do_open(name_ptr) : result | search_result
   search_result := searchDirectory(name_ptr)
   if search_result
     if attributes() & %0001_1110 == 0
-      flags |= F_OPEN
       return SUCCESS
   return E_FILE_NOT_FOUND
 
 PRI do_close() : result
-' Internal close file operation - close the file and write changed data to the card.
-' Flushes pending data buffer (if dirty) and updates directory entry on disk.
+' Internal close operation - flush pending directory entry to disk.
+' Used internally by do_movefile, do_delete, do_chdir, and do_unmount.
 '
 ' @returns result - SUCCESS (0) on success, E_IO_ERROR on write failure
 
   result := SUCCESS
 
-  ' Flush pending data buffer only if it holds valid cached data.
-  ' After multi-sector writes (CMD25), buf is empty and sec_in_buf is -1.
-  ' Writing zeros to n_sec in that case is a spurious write to a wrong sector.
-  if flags & F_NEWDATA
-    if sec_in_buf >= 0
-      if not writeSector(n_sec, BUF_DATA)
-        debug("  [do_close] Data write FAILED for sector ", udec_(n_sec))
-        result := E_IO_ERROR
-
-  ' Update directory entry on disk
-  if flags & (F_NEWDIR | F_NEWDATA)
+  ' Update directory entry on disk if modified
+  if flags & F_NEWDIR
     if readSector(entry_address >> 9, BUF_DIR) < 0
       debug("  [do_close] Directory read FAILED for sector ", udec_(entry_address >> 9))
       result := E_IO_ERROR
@@ -1561,8 +1523,7 @@ PRI do_close() : result
         result := E_IO_ERROR
 
   bytefill(@entry_buffer, 0, 32)
-  flags := flags & !F_NEWDATA & !F_NEWDIR & !F_OPEN
-  file_idx := 0
+  flags := flags & !F_NEWDIR
 
 ' ═══════════════════════════════════════════════════════════════════════════
 ' V3 HANDLE-BASED FILE OPERATIONS
@@ -2284,186 +2245,6 @@ PRI do_close_dir_h(handle) : result
   freeHandle(handle)
   return SUCCESS
 
-PRI do_read(p_buffer, count) : bytes_read | delta, sectors_to_boundary, full_sectors, multi_count, multi_read
-' Internal read operation - optimized with multi-sector support for throughput.
-' Uses CMD18 (readSectors) when reading 2+ full sequential sectors within a cluster.
-'
-' @param p_buffer - Pointer to destination buffer
-' @param count - Number of bytes to read
-' @returns bytes_read - Number of bytes actually read
-' @local delta - Bytes to read in partial sector
-' @local sectors_to_boundary - Sectors remaining before cluster boundary
-' @local full_sectors - Number of full sectors to read
-' @local multi_count - Sectors to read in multi-sector operation
-' @local multi_read - Sectors actually read in multi-sector operation
-
-  if (flags & F_OPEN) and not (attributes() & %0001_1110)
-    count <#= (fileSize() - file_idx)
-
-    ' Handle partial first sector (if not at sector boundary)
-    if (file_idx & 511) and count > 0
-      if readSector(n_sec, BUF_DATA) < 0
-        debug("  [do_read] Sector read FAILED for sector ", udec_(n_sec))
-        return 0
-      delta := (512 - (file_idx & 511)) <# count
-      bytemove(p_buffer, @buf + (file_idx & 511), delta)
-      file_idx += delta
-      bytes_read += delta
-      p_buffer += delta
-      count -= delta
-      if file_idx & 511 == 0
-        readNextSector(BUF_DATA)
-
-    ' Multi-sector optimization: read full sectors directly to user buffer
-    repeat while count >= 512
-      ' Calculate sectors remaining before cluster boundary
-      sectors_to_boundary := sec_per_clus - ((n_sec - cluster_offset) & (sec_per_clus - 1))
-      full_sectors := count >> 9                                                ' Number of full sectors needed
-      multi_count := sectors_to_boundary <# full_sectors                        ' Limit to cluster boundary
-
-      if multi_count >= 2
-        ' Multi-sector read directly to user buffer (more efficient)
-        multi_read := readSectors(n_sec, multi_count, p_buffer)
-        if multi_read > 0
-          file_idx += multi_read << 9
-          bytes_read += multi_read << 9
-          p_buffer += multi_read << 9
-          count -= multi_read << 9
-          n_sec += multi_read
-          sec_in_buf := -1                                                      ' Invalidate cache (we bypassed buf)
-          ' Check if we hit cluster boundary
-          if ((n_sec - cluster_offset) & (sec_per_clus - 1)) == 0
-            followFatChain()                                                    ' Update n_sec to next cluster
-        else
-          quit                                                                  ' Error - exit loop
-      else
-        ' Single-sector read (for partial cluster or small reads)
-        if readSector(n_sec, BUF_DATA) < 0
-          debug("  [do_read] Sector read FAILED for sector ", udec_(n_sec))
-          return bytes_read                                                           ' Return partial read count
-        bytemove(p_buffer, @buf, 512)
-        file_idx += 512
-        bytes_read += 512
-        p_buffer += 512
-        count -= 512
-        readNextSector(BUF_DATA)
-
-    ' Handle partial last sector
-    if count > 0
-      if readSector(n_sec, BUF_DATA) < 0
-        debug("  [do_read] Tail sector read FAILED for sector ", udec_(n_sec))
-        return bytes_read                                                             ' Return partial read count
-      bytemove(p_buffer, @buf, count)
-      file_idx += count
-      bytes_read += count
-
-PRI do_write(p_buffer, count) | delta, temp, sectors_to_boundary, full_sectors, multi_count, multi_written
-' Internal write operation - optimized with multi-sector support for throughput.
-' Uses CMD25 (writeSectors) when writing 2+ full sequential sectors within a cluster.
-'
-' @param p_buffer - Pointer to source data buffer
-' @param count - Number of bytes to write
-' @local delta - Bytes to write in partial sector
-' @local temp - Temporary calculation variable
-' @local sectors_to_boundary - Sectors remaining before cluster boundary
-' @local full_sectors - Number of full sectors to write
-' @local multi_count - Sectors to write in multi-sector operation
-' @local multi_written - Sectors actually written in multi-sector operation
-
-  if (flags & F_OPEN) and (count > 0) and not (attributes() & %0001_1111)
-    if fileSize() & (sec_per_clus << 9 - 1) == 0
-      temp := firstCluster()
-      repeat (fileSize()-1) / (sec_per_clus << 9)
-        temp := long[readFat(temp)]
-      temp := allocateCluster(temp)
-      if fileSize() == 0
-        dirEntSetStartClus(@entry_buffer, temp)
-      n_sec := clus2sec(temp)
-      bytefill(@buf,0,512)
-    else
-      do_seek(fileSize())                                                       ' Use internal seek to avoid deadlock
-
-    ' Handle partial first sector (if not at sector boundary)
-    if (file_idx & 511) and count > 0
-      delta := (512 - (file_idx & 511)) <# count
-      bytemove(@buf + (file_idx & 511), p_buffer, delta)
-      sec_in_buf := n_sec
-      file_idx += delta
-      p_buffer += delta
-      dirEntAddFileSize(@entry_buffer, delta)
-      count -= delta
-      if file_idx & 511 == 0
-        writeSector(n_sec++, BUF_DATA)
-        bytefill(@buf,0,512)
-        if ((n_sec - cluster_offset) & (sec_per_clus - 1)) == 0
-          temp := allocateCluster(sec2clus(n_sec-1))
-          n_sec := clus2sec(temp)
-
-    ' Multi-sector optimization: write full sectors directly from user buffer
-    repeat while count >= 512
-      ' Calculate sectors remaining before cluster boundary
-      sectors_to_boundary := sec_per_clus - ((n_sec - cluster_offset) & (sec_per_clus - 1))
-      full_sectors := count >> 9                                                ' Number of full sectors to write
-      multi_count := sectors_to_boundary <# full_sectors                        ' Limit to cluster boundary
-
-      if multi_count >= 2
-        ' Multi-sector write directly from user buffer (more efficient)
-        multi_written := writeSectors(n_sec, multi_count, p_buffer)
-        if multi_written > 0
-          file_idx += multi_written << 9
-          dirEntAddFileSize(@entry_buffer, multi_written << 9)
-          p_buffer += multi_written << 9
-          count -= multi_written << 9
-          n_sec += multi_written
-          sec_in_buf := -1                                                      ' Invalidate cache (we bypassed buf)
-          ' Check if we hit cluster boundary and need more writes
-          if count > 0 and ((n_sec - cluster_offset) & (sec_per_clus - 1)) == 0
-            temp := allocateCluster(sec2clus(n_sec-1))
-            n_sec := clus2sec(temp)
-        else
-          quit                                                                  ' Error - exit loop
-      else
-        ' Single-sector write (for partial cluster or small writes)
-        bytemove(@buf, p_buffer, 512)
-        writeSector(n_sec++, BUF_DATA)
-        file_idx += 512
-        dirEntAddFileSize(@entry_buffer, 512)
-        p_buffer += 512
-        count -= 512
-        bytefill(@buf,0,512)
-        if ((n_sec - cluster_offset) & (sec_per_clus - 1)) == 0
-          temp := allocateCluster(sec2clus(n_sec-1))
-          n_sec := clus2sec(temp)
-
-    ' Handle partial last sector
-    if count > 0
-      bytemove(@buf + (file_idx & 511), p_buffer, count)
-      sec_in_buf := n_sec
-      file_idx += count
-      dirEntAddFileSize(@entry_buffer, count)
-
-    flags |= F_NEWDATA
-
-PRI do_seek(pos) : result | cluster
-' Internal seek operation - sets file position to specified byte offset.
-'
-' @param pos - Byte position to seek to
-' @returns result - SUCCESS on success, E_END_OF_FILE if past end
-' @local cluster - Current cluster during FAT chain walk
-
-  if pos > fileSize()
-    return E_END_OF_FILE
-  cluster := firstCluster()
-  repeat (pos / (sec_per_clus << 9))
-    cluster := long[readFat(cluster)]
-  n_sec := clus2sec(cluster)
-  n_sec += (pos / 512) // sec_per_clus
-  if readSector(n_sec, BUF_DATA) < 0
-    debug("  [do_seek] Sector read FAILED for sector ", udec_(n_sec))
-    return E_IO_ERROR
-  file_idx := pos
-  return SUCCESS
-
 PRI do_newfile(name_ptr) : result | temp
 ' Internal new file operation - creates a new file in current directory.
 '
@@ -2492,7 +2273,7 @@ PRI do_newfile(name_ptr) : result | temp
   dirEntSetStartClus(@entry_buffer, 0)
   dirEntSetModifyStamp(@entry_buffer, date_stamp)
   dirEntSetFileSize(@entry_buffer, 0)
-  flags |= F_OPEN | F_NEWDIR
+  flags |= F_NEWDIR
   return SUCCESS
 
 PRI do_newdir(name_ptr) : result | temp
@@ -2645,11 +2426,8 @@ PRI do_freespace() : result | cluster
   result := result * sec_per_clus
 
 PRI do_sync()
-' Internal sync operation - flushes pending writes without closing file.
+' Internal sync operation - flushes pending directory writes without closing file.
 
-  if flags & F_NEWDATA
-    writeSector(n_sec, BUF_DATA)
-    flags := flags & !F_NEWDATA
   if flags & F_NEWDIR
     if readSector(entry_address >> 9, BUF_DIR) < 0
       debug("  [do_sync] Directory read FAILED for sector ", udec_(entry_address >> 9))
@@ -3908,19 +3686,6 @@ PRI readSDStatus(p_buf) : result | t, i
   debug("  [readSDStatus] Success")
   return true
 
-PUB newFile(name_ptr) : result
-'' Create and open a new file (multi-cog safe) in current directory.
-''
-'' @param name_ptr - Pointer to null-terminated filename string
-'' @returns result - TRUE on success, FALSE if file exists or error
-
-  result := send_command(CMD_NEWFILE, name_ptr, 0, 0, 0)
-  if result == SUCCESS
-    return true
-  else
-    set_error(result)
-    return false
-
 PUB newDirectory(name_ptr) : result
 '' Create a new directory (multi-cog safe) in current directory.
 ''
@@ -3928,19 +3693,6 @@ PUB newDirectory(name_ptr) : result
 '' @returns result - TRUE on success, FALSE if directory exists or error
 
   result := send_command(CMD_NEWDIR, name_ptr, 0, 0, 0)
-  if result == SUCCESS
-    return true
-  else
-    set_error(result)
-    return false
-
-PUB openFile(name_ptr) : result
-'' Open file (multi-cog safe) - opens existing file for reading/writing.
-''
-'' @param name_ptr - Pointer to null-terminated filename string
-'' @returns result - TRUE on success, FALSE if not found
-
-  result := send_command(CMD_OPEN, name_ptr, 0, 0, 0)
   if result == SUCCESS
     return true
   else
@@ -3959,11 +3711,6 @@ PUB changeDirectory(name_ptr) : result
   else
     set_error(result)
     return false
-
-PUB closeFile()
-'' Close file (multi-cog safe) - closes currently open file, flushing pending writes.
-
-  send_command(CMD_CLOSE, 0, 0, 0, 0)
 
 PUB unmount() : result
 '' Unmount SD card (multi-cog safe) - cleanly unmounts, flushing data and updating FSInfo.
@@ -4294,57 +4041,6 @@ PUB setDate(year, month, day, hour, minute, second)
 
   date_stamp := (year - 1980) << 25 | month << 21 | day << 16 | hour << 11 | minute << 5 | second >> 1
 
-CON     ' read/write methods
-PUB read(p_buffer, count) : result
-'' Read bytes from file (multi-cog safe) - reads up to count bytes.
-''
-'' @param p_buffer - Pointer to destination buffer
-'' @param count - Maximum bytes to read
-'' @returns result - Number of bytes actually read
-
-  if send_command(CMD_READ, p_buffer, count, 0, 0) == SUCCESS
-    return pb_data0                                                             ' pb_data0 contains bytes read
-  else
-    return 0
-
-PUB readByte(address) : result | byte_buf
-'' Read single byte from file (multi-cog safe) - seeks to address and reads one byte.
-''
-'' @param address - Byte offset to read from
-'' @returns result - Byte value read, or 0 on error
-'' @local byte_buf - Buffer for single byte read
-
-  seek(address)
-  if read(@byte_buf, 1) == 1
-    return byte_buf
-  else
-    return 0
-
-PUB write(p_buffer, count) : result
-'' Write bytes to file (multi-cog safe) - writes count bytes to open file.
-''
-'' @param p_buffer - Pointer to source data
-'' @param count - Number of bytes to write
-'' @returns result - Command result status
-
-  send_command(CMD_WRITE, p_buffer, count, 0, 0)
-
-PUB writeByte(char) : result
-'' Write single byte to file (multi-cog safe).
-''
-'' @param char - Byte value to write
-'' @returns result - Command result status
-
-  write(@char, 1)
-
-PUB writeString(p_str) : result
-'' Write string to file (multi-cog safe) - writes null-terminated string.
-''
-'' @param p_str - Pointer to null-terminated string
-'' @returns result - Command result status
-
-  write(p_str, strsize(p_str))
-
 PUB readDirectory(entry) : result
 '' Read directory entry (multi-cog safe) - iterates through directory entries.
 ''
@@ -4387,19 +4083,6 @@ PUB closeDirectoryHandle(handle)
 '' @param handle - Directory handle from openDirectory()
 
   send_command(CMD_CLOSE_DIR_H, handle, 0, 0, 0)
-
-PUB seek(pos) : result
-'' Seek to position in file (multi-cog safe) - sets file position.
-''
-'' @param pos - Byte position from start of file
-'' @returns result - TRUE on success, FALSE if pos is beyond end of file
-
-  result := send_command(CMD_SEEK, pos, 0, 0, 0)
-  if result == SUCCESS
-    return true
-  else
-    set_error(result)
-    return false
 
 CON     ' directory methods
 PRI searchDirectory(name_ptr) : result | p_temp, p_entry, i, search_sec, j
@@ -4476,7 +4159,6 @@ PRI searchDirectory(name_ptr) : result | p_temp, p_entry, i, search_sec, j
       i += 32                                                                   '  increment to next entry
       if i & 511 == 0                                                           '  read new directory sector/cluster if needed
         readNextSector(BUF_DIR)
-  file_idx := 0
   return true
 
 PUB fileName() : result | p_temp, i
@@ -4794,7 +4476,7 @@ PRI followFatChain() | cluster, address, contents
   contents := long[address]                                                     '  read contents to determine next cluster number
   if contents +< $0FFF_FFF8                                                     '  if not end-of-chain marker
     n_sec := clus2sec(contents)                                                 '   convert next cluster number into sector number
-  ' else: end-of-chain - n_sec stays invalid (caller should check file_idx against fileSize)
+  ' else: end-of-chain - n_sec stays invalid (caller should check position against fileSize)
 
 CON     ' helper methods
 PRI byte2clus(byte_address) : result

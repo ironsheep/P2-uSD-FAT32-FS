@@ -139,42 +139,42 @@ PRI test_root_directory_enum() | count, idx, pEntry
     utils.evaluateRange(count, @"directory entry count", 7, 50)
 
 
-PRI test_tiny_file() | result, fileSize, bytesRead
+PRI test_tiny_file() | handle, fileSize, bytesRead
     utils.startTestGroup(@"Test 3: Small File Read (TINY.TXT)")
 
     utils.startTest(@"Open TINY.TXT")
-    result := sd.openFile(@fileTiny)
-    utils.evaluateBool(result, @"openFile()", true)
+    handle := sd.openFileRead(@fileTiny)
+    utils.evaluateBool(handle >= 0, @"openFileRead()", true)
 
     utils.startTest(@"Verify file size is 29 bytes")
-    fileSize := sd.fileSize()
-    utils.evaluateSingleValue(fileSize, @"fileSize()", 29)
+    fileSize := sd.fileSizeHandle(handle)
+    utils.evaluateSingleValue(fileSize, @"fileSizeHandle()", 29)
 
     utils.startTest(@"Read and verify content starts correctly")
-    bytesRead := sd.read(@smallBuf, 14)
+    bytesRead := sd.readHandle(handle, @smallBuf, 14)
     smallBuf[14] := 0  ' null terminate for comparison
     utils.evaluateStringMatch(@smallBuf, @"content start", @tinyContent)
 
     utils.startTest(@"Verify first byte is 'T' (0x54)")
-    sd.seek(0)
-    bytesRead := sd.read(@smallBuf, 1)
+    sd.seekHandle(handle, 0)
+    bytesRead := sd.readHandle(handle, @smallBuf, 1)
     utils.evaluateSingleValueHex(smallBuf[0], @"first byte", $54)
 
-    sd.closeFile()
+    sd.closeFileHandle(handle)
 
 
-PRI test_exact_sector() | result, i, allMatch
+PRI test_exact_sector() | handle, result, i, allMatch
     utils.startTestGroup(@"Test 4: Exact Sector Boundary (EXACT512.BIN)")
 
     utils.startTest(@"Open EXACT512.BIN")
-    result := sd.openFile(@fileExact512)
-    utils.evaluateBool(result, @"openFile()", true)
+    handle := sd.openFileRead(@fileExact512)
+    utils.evaluateBool(handle >= 0, @"openFileRead()", true)
 
     utils.startTest(@"Verify file size is exactly 512 bytes")
-    utils.evaluateSingleValue(sd.fileSize(), @"fileSize()", 512)
+    utils.evaluateSingleValue(sd.fileSizeHandle(handle), @"fileSizeHandle()", 512)
 
     utils.startTest(@"Read 512 bytes")
-    result := sd.read(@mediumBuf, 512)
+    result := sd.readHandle(handle, @mediumBuf, 512)
     utils.evaluateSingleValue(result, @"bytes read", 512)
 
     utils.startTest(@"Verify all bytes are 0x58 ('X')")
@@ -186,25 +186,25 @@ PRI test_exact_sector() | result, i, allMatch
             quit
     utils.evaluateBool(allMatch, @"all bytes = 0x58", true)
 
-    sd.closeFile()
+    sd.closeFileHandle(handle)
 
 
-PRI test_four_k_pattern() | result, i, expected, allMatch
+PRI test_four_k_pattern() | handle, result, i, expected, allMatch
     utils.startTestGroup(@"Test 5: Multi-Sector Pattern (FOUR_K.BIN)")
 
     utils.startTest(@"Open FOUR_K.BIN")
-    result := sd.openFile(@fileFourK)
-    utils.evaluateBool(result, @"openFile()", true)
+    handle := sd.openFileRead(@fileFourK)
+    utils.evaluateBool(handle >= 0, @"openFileRead()", true)
 
     utils.startTest(@"Verify file size is 4096 bytes")
-    utils.evaluateSingleValue(sd.fileSize(), @"fileSize()", 4096)
+    utils.evaluateSingleValue(sd.fileSizeHandle(handle), @"fileSizeHandle()", 4096)
 
     utils.startTest(@"Read and verify sequential pattern")
     allMatch := true
 
     ' Read in chunks and verify pattern: byte[i] = i & 0xFF
     repeat i from 0 to 7  ' 8 sectors
-        sd.read(@mediumBuf, 512)
+        sd.readHandle(handle, @mediumBuf, 512)
         repeat result from 0 to 511
             expected := ((i * 512) + result) & $FF
             if mediumBuf[result] <> expected
@@ -216,152 +216,152 @@ PRI test_four_k_pattern() | result, i, expected, allMatch
 
     utils.evaluateBool(allMatch, @"pattern match", true)
 
-    sd.closeFile()
+    sd.closeFileHandle(handle)
 
 
-PRI test_multi_sector_text() | result, fileSize
+PRI test_multi_sector_text() | handle, fileSize
     utils.startTestGroup(@"Test 6: Multi-Sector Text (TWOSEC.TXT)")
 
     utils.startTest(@"Open TWOSEC.TXT")
-    result := sd.openFile(@fileTwoSec)
-    utils.evaluateBool(result, @"openFile()", true)
+    handle := sd.openFileRead(@fileTwoSec)
+    utils.evaluateBool(handle >= 0, @"openFileRead()", true)
 
     utils.startTest(@"Verify file size is 2550 bytes")
-    fileSize := sd.fileSize()
-    utils.evaluateSingleValue(fileSize, @"fileSize()", 2550)
+    fileSize := sd.fileSizeHandle(handle)
+    utils.evaluateSingleValue(fileSize, @"fileSizeHandle()", 2550)
 
     utils.startTest(@"Read first line - should start with LINE0001")
-    sd.read(@smallBuf, 8)
+    sd.readHandle(handle, @smallBuf, 8)
     smallBuf[8] := 0
     utils.evaluateStringMatch(@smallBuf, @"first 8 bytes", @"LINE0001")
 
-    sd.closeFile()
+    sd.closeFileHandle(handle)
 
 
-PRI test_large_file_cluster_chain() | result, fileSize, pos, expected, actual
+PRI test_large_file_cluster_chain() | handle, fileSize, pos, expected, actual
     utils.startTestGroup(@"Test 7: Multi-Cluster File (SIXTYFK.BIN)")
 
     utils.startTest(@"Open SIXTYFK.BIN")
-    result := sd.openFile(@fileSixtyK)
-    utils.evaluateBool(result, @"openFile()", true)
+    handle := sd.openFileRead(@fileSixtyK)
+    utils.evaluateBool(handle >= 0, @"openFileRead()", true)
 
     utils.startTest(@"Verify file size is 65536 bytes")
-    fileSize := sd.fileSize()
-    utils.evaluateSingleValue(fileSize, @"fileSize()", 65536)
+    fileSize := sd.fileSizeHandle(handle)
+    utils.evaluateSingleValue(fileSize, @"fileSizeHandle()", 65536)
 
     utils.startTest(@"Verify pattern at various positions")
     utils.setCheckCountPerTest(8)
 
     ' Pattern: byte[i] = (block << 1) XOR (i & 0xFF) where block = i / 512
     repeat pos from 0 to 65535 step 8192  ' Check every 8KB
-        sd.seek(pos)
-        sd.read(@smallBuf, 1)
+        sd.seekHandle(handle, pos)
+        sd.readHandle(handle, @smallBuf, 1)
         expected := ((pos / 512) << 1) ^ (pos & $FF)
         utils.evaluateSubValueHex(smallBuf[0], @"pattern byte", expected)
 
-    sd.closeFile()
+    sd.closeFileHandle(handle)
 
 
-PRI test_seek_operations() | result
+PRI test_seek_operations() | handle, result
     utils.startTestGroup(@"Test 8: Seek Operations (SEEKTEST.BIN)")
 
     utils.startTest(@"Open SEEKTEST.BIN")
-    result := sd.openFile(@fileSeekTest)
-    utils.evaluateBool(result, @"openFile()", true)
+    handle := sd.openFileRead(@fileSeekTest)
+    utils.evaluateBool(handle >= 0, @"openFileRead()", true)
 
     utils.startTest(@"Verify file size is 2016 bytes")
-    utils.evaluateSingleValue(sd.fileSize(), @"fileSize()", 2016)
+    utils.evaluateSingleValue(sd.fileSizeHandle(handle), @"fileSizeHandle()", 2016)
 
     ' File has 32 blocks of 63 bytes each: "BLK##---" + 55 bytes of 0x55
     utils.startTest(@"Seek to block 0 (offset 0)")
-    sd.seek(0)
-    sd.read(@smallBuf, 8)
+    sd.seekHandle(handle, 0)
+    sd.readHandle(handle, @smallBuf, 8)
     smallBuf[8] := 0
     utils.evaluateStringMatch(@smallBuf, @"block 0 header", @"BLK00---")
 
     utils.startTest(@"Seek to block 1 (offset 63)")
-    sd.seek(63)
-    sd.read(@smallBuf, 8)
+    sd.seekHandle(handle, 63)
+    sd.readHandle(handle, @smallBuf, 8)
     smallBuf[8] := 0
     utils.evaluateStringMatch(@smallBuf, @"block 1 header", @"BLK01---")
 
     utils.startTest(@"Seek to block 10 (offset 630)")
-    sd.seek(630)
-    sd.read(@smallBuf, 8)
+    sd.seekHandle(handle, 630)
+    sd.readHandle(handle, @smallBuf, 8)
     smallBuf[8] := 0
     utils.evaluateStringMatch(@smallBuf, @"block 10 header", @"BLK10---")
 
     utils.startTest(@"Seek to block 31 (offset 1953)")
-    sd.seek(1953)
-    sd.read(@smallBuf, 8)
+    sd.seekHandle(handle, 1953)
+    sd.readHandle(handle, @smallBuf, 8)
     smallBuf[8] := 0
     utils.evaluateStringMatch(@smallBuf, @"block 31 header", @"BLK31---")
 
-    sd.closeFile()
+    sd.closeFileHandle(handle)
 
 
-PRI test_checksum_integrity() | result, i, sum
+PRI test_checksum_integrity() | handle, result, i, sum
     utils.startTestGroup(@"Test 9: Checksum Verification (CHECKSUM.BIN)")
 
     utils.startTest(@"Open CHECKSUM.BIN")
-    result := sd.openFile(@fileChecksum)
-    utils.evaluateBool(result, @"openFile()", true)
+    handle := sd.openFileRead(@fileChecksum)
+    utils.evaluateBool(handle >= 0, @"openFileRead()", true)
 
     utils.startTest(@"Verify file size is 1024 bytes")
-    utils.evaluateSingleValue(sd.fileSize(), @"fileSize()", 1024)
+    utils.evaluateSingleValue(sd.fileSizeHandle(handle), @"fileSizeHandle()", 1024)
 
     utils.startTest(@"Read and calculate checksum")
     ' Read in two chunks since buffer is 512
     sum := 0
-    sd.read(@mediumBuf, 512)
+    sd.readHandle(handle, @mediumBuf, 512)
     repeat i from 0 to 511
         sum += mediumBuf[i]
-    sd.read(@mediumBuf, 512)
+    sd.readHandle(handle, @mediumBuf, 512)
     repeat i from 0 to 511
         sum += mediumBuf[i]
 
     ' Expected sum: 130560 (bytes 0-255 repeated 4 times: 4 * (0+1+2+...+255) = 4 * 32640)
     utils.evaluateSingleValue(sum, @"checksum", 130560)
 
-    sd.closeFile()
+    sd.closeFileHandle(handle)
 
 
-PRI test_path_resolution() | result, fileSize
+PRI test_path_resolution() | handle, fileSize
     utils.startTestGroup(@"Test 10: Subdirectory Path Resolution")
 
     utils.startTest(@"Open /LEVEL1/INLEVEL1.TXT with absolute path")
-    result := sd.openFile(@fileLevel1)
-    utils.evaluateBool(result, @"openFile()", true)
+    handle := sd.openFileRead(@fileLevel1)
+    utils.evaluateBool(handle >= 0, @"openFileRead()", true)
 
     utils.startTest(@"Verify file size is 54 bytes")
-    fileSize := sd.fileSize()
-    utils.evaluateSingleValue(fileSize, @"fileSize()", 54)
+    fileSize := sd.fileSizeHandle(handle)
+    utils.evaluateSingleValue(fileSize, @"fileSizeHandle()", 54)
 
     utils.startTest(@"Verify content starts correctly")
-    sd.read(@smallBuf, 22)
+    sd.readHandle(handle, @smallBuf, 22)
     smallBuf[22] := 0
     utils.evaluateStringMatch(@smallBuf, @"content start", @level1Content)
 
-    sd.closeFile()
+    sd.closeFileHandle(handle)
 
 
-PRI test_deep_path() | result, fileSize
+PRI test_deep_path() | handle, fileSize
     utils.startTestGroup(@"Test 11: Deep Nested Path")
 
     utils.startTest(@"Open /LEVEL1/LEVEL2/DEEP.TXT")
-    result := sd.openFile(@fileDeep)
-    utils.evaluateBool(result, @"openFile()", true)
+    handle := sd.openFileRead(@fileDeep)
+    utils.evaluateBool(handle >= 0, @"openFileRead()", true)
 
     utils.startTest(@"Verify file size is 71 bytes")
-    fileSize := sd.fileSize()
-    utils.evaluateSingleValue(fileSize, @"fileSize()", 71)
+    fileSize := sd.fileSizeHandle(handle)
+    utils.evaluateSingleValue(fileSize, @"fileSizeHandle()", 71)
 
     utils.startTest(@"Verify content starts correctly")
-    sd.read(@smallBuf, 13)
+    sd.readHandle(handle, @smallBuf, 13)
     smallBuf[13] := 0
     utils.evaluateStringMatch(@smallBuf, @"content start", @deepContent)
 
-    sd.closeFile()
+    sd.closeFileHandle(handle)
 
 
 PRI test_directory_navigation() | result, count, idx, pEntry
@@ -389,18 +389,18 @@ PRI test_directory_navigation() | result, count, idx, pEntry
     utils.evaluateBool(result, @"changeDirectory(/)", true)
 
 
-PRI test_benchmark_sequential() | start, elapsed, bytesRead, i, bytesPerSec
+PRI test_benchmark_sequential() | handle, start, elapsed, bytesRead, i, bytesPerSec
     utils.startTestGroup(@"Performance Benchmark")
 
     utils.startTest(@"Sequential read 64KB - timing")
-    sd.openFile(@fileSixtyK)
+    handle := sd.openFileRead(@fileSixtyK)
 
     start := getct()
     repeat i from 0 to 127
-        sd.read(@mediumBuf, 512)
+        sd.readHandle(handle, @mediumBuf, 512)
     elapsed := getct() - start
 
-    sd.closeFile()
+    sd.closeFileHandle(handle)
 
     ' Calculate throughput
     ' elapsed is in clock ticks, convert to microseconds then to bytes/sec

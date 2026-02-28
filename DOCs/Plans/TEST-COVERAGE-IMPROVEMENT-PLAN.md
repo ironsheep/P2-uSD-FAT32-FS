@@ -355,7 +355,7 @@ Modify `readSector()` to optionally force CRC mismatch and return E_CRC_ERROR.
 4. **Phase 4 complete** - CRC error injection hooks added to driver, SD_RT_crc_validation_tests.spin2 created (6 tests)
 5. **Phase 5 complete** - SD_RT_recovery_tests.spin2 created (7 tests)
 
-All 20 suites (392 tests) verified passing on hardware 2026-02-27.
+All 20 suites (389 tests) verified passing on hardware 2026-02-27.
 
 ---
 

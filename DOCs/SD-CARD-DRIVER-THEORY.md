@@ -609,21 +609,6 @@ All structs are packed (Spin2 default) with offsets matching their respective ha
 | `syncDirCache()` | Invalidate directory sector cache |
 | `sync() : result` | Flush all pending writes |
 
-**Legacy File API (single-file mode):**
-
-| Method | Description |
-|--------|-------------|
-| `newFile(name) : result` | Create new file |
-| `openFile(name) : result` | Open existing file |
-| `closeFile()` | Close current file |
-| `read(pBuf, count) : result` | Read bytes |
-| `readByte(address) : result` | Read byte at offset |
-| `write(pBuf, count) : result` | Write bytes |
-| `writeByte(char) : result` | Write single byte |
-| `writeString(pStr) : result` | Write null-terminated string |
-| `seek(pos) : result` | Set position |
-| `fileSize() : size` | Size of current file |
-
 ### SD_INCLUDE_RAW
 
 | Method | Description |

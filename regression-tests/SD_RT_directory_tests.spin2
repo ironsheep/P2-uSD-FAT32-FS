@@ -112,10 +112,10 @@ PUB go() | result, pEntry, pFilename, attrs, fileCount, idx, handle, bytesRead
     utils.evaluateBool(result, @"changeDirectory()", true)
 
     utils.startTest(@"Create file in subdirectory")
-    result := sd.newFile(@testFile1)
-    utils.evaluateBool(result, @"newFile() in subdir", true)
-    sd.writeString(@testContent)
-    sd.closeFile()
+    handle := sd.createFileNew(@testFile1)
+    utils.evaluateBool(handle >= 0, @"createFileNew() in subdir", true)
+    sd.writeHandle(handle, @testContent, strsize(@testContent))
+    sd.closeFileHandle(handle)
 
     utils.startTest(@"changeDirectory() back to parent with ..")
     result := sd.changeDirectory(@"..")
@@ -153,10 +153,10 @@ PUB go() | result, pEntry, pFilename, attrs, fileCount, idx, handle, bytesRead
     utils.evaluateBool(result, @"changeDirectory() nested", true)
 
     utils.startTest(@"Create file in nested directory")
-    result := sd.newFile(@testFile2)
-    utils.evaluateBool(result, @"newFile() nested", true)
-    sd.writeString(@"Nested file content")
-    sd.closeFile()
+    handle := sd.createFileNew(@testFile2)
+    utils.evaluateBool(handle >= 0, @"createFileNew() nested", true)
+    sd.writeHandle(handle, @"Nested file content", 19)
+    sd.closeFileHandle(handle)
 
     utils.startTest(@"Navigate back to root")
     sd.changeDirectory(@"/")
@@ -169,14 +169,14 @@ PUB go() | result, pEntry, pFilename, attrs, fileCount, idx, handle, bytesRead
     utils.startTestGroup(@"Path Navigation")
 
     utils.startTest(@"Open file with path: /RTDIR1/FILE1.TXT")
-    result := sd.openFile(@"/RTDIR1/FILE1.TXT")
-    utils.evaluateBool(result, @"openFile() with path", true)
-    sd.closeFile()
+    handle := sd.openFileRead(@"/RTDIR1/FILE1.TXT")
+    utils.evaluateBool(handle >= 0, @"openFileRead() with path", true)
+    sd.closeFileHandle(handle)
 
     utils.startTest(@"Open nested file: /RTDIR1/SUBDIR1/FILE2.TXT")
-    result := sd.openFile(@"/RTDIR1/SUBDIR1/FILE2.TXT")
-    utils.evaluateBool(result, @"openFile() nested path", true)
-    sd.closeFile()
+    handle := sd.openFileRead(@"/RTDIR1/SUBDIR1/FILE2.TXT")
+    utils.evaluateBool(handle >= 0, @"openFileRead() nested path", true)
+    sd.closeFileHandle(handle)
 
     utils.startTest(@"Ensure back at root after path operations")
     result := sd.changeDirectory(@"/")
@@ -225,24 +225,24 @@ PUB go() | result, pEntry, pFilename, attrs, fileCount, idx, handle, bytesRead
 
     ' Create a file in root to move
     utils.startTest(@"Create file in root to move")
-    result := sd.newFile(@"MOVEME.TXT")
-    utils.evaluateBool(result, @"newFile()", true)
-    sd.writeString(@"File to be moved")
-    sd.closeFile()
+    handle := sd.createFileNew(@"MOVEME.TXT")
+    utils.evaluateBool(handle >= 0, @"createFileNew()", true)
+    sd.writeHandle(handle, @"File to be moved", 16)
+    sd.closeFileHandle(handle)
 
     utils.startTest(@"moveFile() to subdirectory")
     result := sd.moveFile(@"MOVEME.TXT", @testDir2)
     utils.evaluateBool(result, @"moveFile()", true)
 
     utils.startTest(@"File no longer in root")
-    result := sd.openFile(@"MOVEME.TXT")
-    utils.evaluateBool(result, @"openFile() old location", false)
+    handle := sd.openFileRead(@"MOVEME.TXT")
+    utils.evaluateBool(handle >= 0, @"openFileRead() old location", false)
 
     utils.startTest(@"File exists in new location")
     sd.changeDirectory(@testDir2)
-    result := sd.openFile(@"MOVEME.TXT")
-    utils.evaluateBool(result, @"openFile() new location", true)
-    sd.closeFile()
+    handle := sd.openFileRead(@"MOVEME.TXT")
+    utils.evaluateBool(handle >= 0, @"openFileRead() new location", true)
+    sd.closeFileHandle(handle)
     sd.changeDirectory(@"/")
 
     ' ----------------------------------
@@ -270,10 +270,10 @@ PUB go() | result, pEntry, pFilename, attrs, fileCount, idx, handle, bytesRead
 
     utils.startTest(@"Navigate to deepest level and create file")
     sd.changeDirectory(@deepDir5)
-    result := sd.newFile(@"DEEP.TXT")
-    utils.evaluateSubBool(result, @"create file at depth 5", true)
-    sd.writeString(@"Deep file")
-    sd.closeFile()
+    handle := sd.createFileNew(@"DEEP.TXT")
+    utils.evaluateSubBool(handle >= 0, @"create file at depth 5", true)
+    sd.writeHandle(handle, @"Deep file", 9)
+    sd.closeFileHandle(handle)
 
     utils.startTest(@"Navigate back to root using ..")
     sd.changeDirectory(@"..")  ' DEEP4
@@ -304,15 +304,15 @@ PUB go() | result, pEntry, pFilename, attrs, fileCount, idx, handle, bytesRead
     ' Test: Max filename length (8.3 format)
     utils.startTest(@"Max filename length (8.3)")
     sd.changeDirectory(@manyFilesDir)
-    result := sd.newFile(@maxNameFile)
-    utils.evaluateSubBool(result, @"create 12345678.123", true)
-    sd.writeString(@"Max name file content")
-    sd.closeFile()
+    handle := sd.createFileNew(@maxNameFile)
+    utils.evaluateSubBool(handle >= 0, @"create 12345678.123", true)
+    sd.writeHandle(handle, @"Max name file content", 21)
+    sd.closeFileHandle(handle)
 
     ' Verify can open and read it
-    result := sd.openFile(@maxNameFile)
-    utils.evaluateSubBool(result, @"open 12345678.123", true)
-    sd.closeFile()
+    handle := sd.openFileRead(@maxNameFile)
+    utils.evaluateSubBool(handle >= 0, @"open 12345678.123", true)
+    sd.closeFileHandle(handle)
     sd.changeDirectory(@"/")
 
     ' Clean up boundary test items

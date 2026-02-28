@@ -211,19 +211,19 @@ PUB go() | result, handle, h1, h2, h3, bytesWritten, bytesRead, pLabel, idx, pEn
         sd.closeFileHandle(h2)
 
     ' ======================================================================
-    ' TEST GROUP: sync (legacy)
+    ' TEST GROUP: sync
     ' ======================================================================
-    utils.startTestGroup(@"sync (legacy)")
+    utils.startTestGroup(@"sync")
 
-    ' Test: sync flushes legacy write
-    utils.startTest(@"sync() flushes legacy write")
+    ' Test: sync flushes handle write
+    utils.startTest(@"sync() flushes handle write")
     sd.deleteFile(@vlLegacyFile)
-    result := sd.newFile(@vlLegacyFile)
-    utils.evaluateSubBool(result, @"newFile()", true)
-    sd.writeString(@testContent)
+    h1 := sd.createFileNew(@vlLegacyFile)
+    utils.evaluateSubBool(h1 >= 0, @"createFileNew()", true)
+    sd.writeHandle(h1, @testContent, strsize(@testContent))
     result := sd.sync()
     utils.evaluateSubBool(result, @"sync()", true)
-    sd.closeFile()
+    sd.closeFileHandle(h1)
 
     ' Test: sync with no file open
     utils.startTest(@"sync() with no file open")

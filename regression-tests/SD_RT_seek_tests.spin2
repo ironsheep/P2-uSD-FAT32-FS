@@ -43,7 +43,7 @@ writeBuffer     BYTE    0[TEST_FILE_SIZE]
 readBuffer      BYTE    0[64]
 readBuffer_guard BYTE   0[16]
 
-PUB go() | result, bytesRead, idx, fileSize, expectedByte, actualByte
+PUB go() | result, bytesRead, idx, fileSize, expectedByte, actualByte, handle
 '' Main entry point for seek operation regression tests
 ''
 '' Tests seek operations and random access reading
@@ -80,20 +80,20 @@ PUB go() | result, bytesRead, idx, fileSize, expectedByte, actualByte
     debug("  Buffer filled with position pattern (0-255 repeating)")
 
     utils.startTest(@"Create test file with 2048 bytes")
-    result := sd.newFile(@testSeek)
-    utils.evaluateBool(result, @"newFile()", true)
+    handle := sd.createFileNew(@testSeek)
+    utils.evaluateBool(handle >= 0, @"createFileNew()", true)
 
     ' Write test data and close (setup)
-    sd.write(@writeBuffer, TEST_FILE_SIZE)
-    sd.closeFile()
+    sd.writeHandle(handle, @writeBuffer, TEST_FILE_SIZE)
+    sd.closeFileHandle(handle)
     debug("  Wrote ", udec_(TEST_FILE_SIZE), " bytes")
 
     utils.startTest(@"Verify file size")
-    result := sd.openFile(@testSeek)
-    fileSize := sd.fileSize()
-    utils.evaluateSingleValue(fileSize, @"fileSize()", TEST_FILE_SIZE)
+    handle := sd.openFileRead(@testSeek)
+    fileSize := sd.fileSizeHandle(handle)
+    utils.evaluateSingleValue(fileSize, @"fileSizeHandle()", TEST_FILE_SIZE)
 
-    sd.closeFile()
+    sd.closeFileHandle(handle)
 
     ' ----------------------------------
     ' TEST GROUP: Basic seek operations
@@ -101,50 +101,50 @@ PUB go() | result, bytesRead, idx, fileSize, expectedByte, actualByte
     utils.startTestGroup(@"Basic Seek Operations")
 
     utils.startTest(@"Open file for seek tests")
-    result := sd.openFile(@testSeek)
-    utils.evaluateBool(result, @"openFile()", true)
+    handle := sd.openFileRead(@testSeek)
+    utils.evaluateBool(handle >= 0, @"openFileRead()", true)
 
     utils.startTest(@"seek(0) - beginning of file")
-    result := sd.seek(0)
-    utils.evaluateBool(result, @"seek(0)", true)
+    result := sd.seekHandle(handle, 0)
+    utils.evaluateBool(result, @"seekHandle(0)", true)
 
     utils.startTest(@"Read byte at position 0")
     utils.initGuard(@readBuffer_guard)
-    bytesRead := sd.read(@readBuffer, 1)
+    bytesRead := sd.readHandle(handle, @readBuffer, 1)
     utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
     utils.evaluateSingleValue(readBuffer[0], @"byte at 0", 0)
 
     utils.startTest(@"seek(100) - position 100")
-    result := sd.seek(100)
-    utils.evaluateBool(result, @"seek(100)", true)
+    result := sd.seekHandle(handle, 100)
+    utils.evaluateBool(result, @"seekHandle(100)", true)
 
     utils.startTest(@"Read byte at position 100")
     utils.initGuard(@readBuffer_guard)
-    bytesRead := sd.read(@readBuffer, 1)
+    bytesRead := sd.readHandle(handle, @readBuffer, 1)
     utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
     utils.evaluateSingleValue(readBuffer[0], @"byte at 100", 100)
 
     utils.startTest(@"seek(255) - position 255")
-    result := sd.seek(255)
-    utils.evaluateBool(result, @"seek(255)", true)
+    result := sd.seekHandle(handle, 255)
+    utils.evaluateBool(result, @"seekHandle(255)", true)
 
     utils.startTest(@"Read byte at position 255")
     utils.initGuard(@readBuffer_guard)
-    bytesRead := sd.read(@readBuffer, 1)
+    bytesRead := sd.readHandle(handle, @readBuffer, 1)
     utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
     utils.evaluateSingleValue(readBuffer[0], @"byte at 255", 255)
 
     utils.startTest(@"seek(256) - position 256 (wraps to 0 in pattern)")
-    result := sd.seek(256)
-    utils.evaluateBool(result, @"seek(256)", true)
+    result := sd.seekHandle(handle, 256)
+    utils.evaluateBool(result, @"seekHandle(256)", true)
 
     utils.startTest(@"Read byte at position 256")
     utils.initGuard(@readBuffer_guard)
-    bytesRead := sd.read(@readBuffer, 1)
+    bytesRead := sd.readHandle(handle, @readBuffer, 1)
     utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
     utils.evaluateSingleValue(readBuffer[0], @"byte at 256", 0)  ' 256 & $FF = 0
 
-    sd.closeFile()
+    sd.closeFileHandle(handle)
 
     ' ----------------------------------
     ' TEST GROUP: Cross-sector seeks
@@ -152,51 +152,51 @@ PUB go() | result, bytesRead, idx, fileSize, expectedByte, actualByte
     utils.startTestGroup(@"Cross-Sector Seeks")
 
     utils.startTest(@"Open file")
-    result := sd.openFile(@testSeek)
-    utils.evaluateBool(result, @"openFile()", true)
+    handle := sd.openFileRead(@testSeek)
+    utils.evaluateBool(handle >= 0, @"openFileRead()", true)
 
     ' Sector boundary is at 512 bytes
     utils.startTest(@"seek(511) - last byte of first sector")
-    result := sd.seek(511)
-    utils.evaluateBool(result, @"seek(511)", true)
+    result := sd.seekHandle(handle, 511)
+    utils.evaluateBool(result, @"seekHandle(511)", true)
 
     utils.startTest(@"Read byte at 511")
     utils.initGuard(@readBuffer_guard)
-    bytesRead := sd.read(@readBuffer, 1)
+    bytesRead := sd.readHandle(handle, @readBuffer, 1)
     utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
     utils.evaluateSingleValue(readBuffer[0], @"byte at 511", 511 & $FF)
 
     utils.startTest(@"seek(512) - first byte of second sector")
-    result := sd.seek(512)
-    utils.evaluateBool(result, @"seek(512)", true)
+    result := sd.seekHandle(handle, 512)
+    utils.evaluateBool(result, @"seekHandle(512)", true)
 
     utils.startTest(@"Read byte at 512")
     utils.initGuard(@readBuffer_guard)
-    bytesRead := sd.read(@readBuffer, 1)
+    bytesRead := sd.readHandle(handle, @readBuffer, 1)
     utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
     utils.evaluateSingleValue(readBuffer[0], @"byte at 512", 512 & $FF)
 
     utils.startTest(@"seek(1023) - last byte of second sector")
-    result := sd.seek(1023)
-    utils.evaluateBool(result, @"seek(1023)", true)
+    result := sd.seekHandle(handle, 1023)
+    utils.evaluateBool(result, @"seekHandle(1023)", true)
 
     utils.startTest(@"Read byte at 1023")
     utils.initGuard(@readBuffer_guard)
-    bytesRead := sd.read(@readBuffer, 1)
+    bytesRead := sd.readHandle(handle, @readBuffer, 1)
     utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
     utils.evaluateSingleValue(readBuffer[0], @"byte at 1023", 1023 & $FF)
 
     utils.startTest(@"seek(1024) - first byte of third sector")
-    result := sd.seek(1024)
-    utils.evaluateBool(result, @"seek(1024)", true)
+    result := sd.seekHandle(handle, 1024)
+    utils.evaluateBool(result, @"seekHandle(1024)", true)
 
     utils.startTest(@"Read byte at 1024")
     utils.initGuard(@readBuffer_guard)
-    bytesRead := sd.read(@readBuffer, 1)
+    bytesRead := sd.readHandle(handle, @readBuffer, 1)
     utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
     utils.evaluateSingleValue(readBuffer[0], @"byte at 1024", 1024 & $FF)
 
-    sd.closeFile()
+    sd.closeFileHandle(handle)
 
     ' ----------------------------------
     ' TEST GROUP: Random access pattern
@@ -204,50 +204,58 @@ PUB go() | result, bytesRead, idx, fileSize, expectedByte, actualByte
     utils.startTestGroup(@"Random Access Pattern")
 
     utils.startTest(@"Open file")
-    result := sd.openFile(@testSeek)
-    utils.evaluateBool(result, @"openFile()", true)
+    handle := sd.openFileRead(@testSeek)
+    utils.evaluateBool(handle >= 0, @"openFileRead()", true)
 
     utils.startTest(@"Random seeks and reads")
     utils.setCheckCountPerTest(2)
 
     ' Test several random positions
-    testSeekPosition(1500)
-    testSeekPosition(200)
-    testSeekPosition(1999)
-    testSeekPosition(0)
-    testSeekPosition(750)
-    testSeekPosition(2000)
-    testSeekPosition(512)
-    testSeekPosition(1024)
+    testSeekPosition(handle, 1500)
+    testSeekPosition(handle, 200)
+    testSeekPosition(handle, 1999)
+    testSeekPosition(handle, 0)
+    testSeekPosition(handle, 750)
+    testSeekPosition(handle, 2000)
+    testSeekPosition(handle, 512)
+    testSeekPosition(handle, 1024)
 
-    sd.closeFile()
+    sd.closeFileHandle(handle)
 
     ' ----------------------------------
-    ' TEST GROUP: readByte() with position
+    ' TEST GROUP: readByte via seekHandle+readHandle
     ' ----------------------------------
     utils.startTestGroup(@"readByte() Random Access")
 
     utils.startTest(@"Open file")
-    result := sd.openFile(@testSeek)
-    utils.evaluateBool(result, @"openFile()", true)
+    handle := sd.openFileRead(@testSeek)
+    utils.evaluateBool(handle >= 0, @"openFileRead()", true)
 
     utils.startTest(@"readByte(0)")
-    actualByte := sd.readByte(0)
+    sd.seekHandle(handle, 0)
+    sd.readHandle(handle, @readBuffer, 1)
+    actualByte := readBuffer[0]
     utils.evaluateSingleValue(actualByte, @"readByte(0)", 0)
 
     utils.startTest(@"readByte(100)")
-    actualByte := sd.readByte(100)
+    sd.seekHandle(handle, 100)
+    sd.readHandle(handle, @readBuffer, 1)
+    actualByte := readBuffer[0]
     utils.evaluateSingleValue(actualByte, @"readByte(100)", 100)
 
     utils.startTest(@"readByte(512)")
-    actualByte := sd.readByte(512)
+    sd.seekHandle(handle, 512)
+    sd.readHandle(handle, @readBuffer, 1)
+    actualByte := readBuffer[0]
     utils.evaluateSingleValue(actualByte, @"readByte(512)", 512 & $FF)
 
     utils.startTest(@"readByte(1000)")
-    actualByte := sd.readByte(1000)
+    sd.seekHandle(handle, 1000)
+    sd.readHandle(handle, @readBuffer, 1)
+    actualByte := readBuffer[0]
     utils.evaluateSingleValue(actualByte, @"readByte(1000)", 1000 & $FF)
 
-    sd.closeFile()
+    sd.closeFileHandle(handle)
 
     ' ----------------------------------
     ' TEST GROUP: Seek beyond EOF
@@ -255,24 +263,24 @@ PUB go() | result, bytesRead, idx, fileSize, expectedByte, actualByte
     utils.startTestGroup(@"Seek Edge Cases")
 
     utils.startTest(@"Open file")
-    result := sd.openFile(@testSeek)
-    utils.evaluateBool(result, @"openFile()", true)
+    handle := sd.openFileRead(@testSeek)
+    utils.evaluateBool(handle >= 0, @"openFileRead()", true)
 
     utils.startTest(@"seek() beyond EOF should fail")
-    result := sd.seek(TEST_FILE_SIZE + 100)
-    utils.evaluateBool(result, @"seek(beyond EOF)", false)
+    result := sd.seekHandle(handle, TEST_FILE_SIZE + 100)
+    utils.evaluateBool(result, @"seekHandle(beyond EOF)", false)
 
     utils.startTest(@"seek() to exact EOF should succeed")
-    result := sd.seek(TEST_FILE_SIZE - 1)
-    utils.evaluateBool(result, @"seek(EOF-1)", true)
+    result := sd.seekHandle(handle, TEST_FILE_SIZE - 1)
+    utils.evaluateBool(result, @"seekHandle(EOF-1)", true)
 
     utils.startTest(@"Read at EOF position")
     utils.initGuard(@readBuffer_guard)
-    bytesRead := sd.read(@readBuffer, 1)
+    bytesRead := sd.readHandle(handle, @readBuffer, 1)
     utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
     utils.evaluateSingleValue(readBuffer[0], @"byte at EOF-1", (TEST_FILE_SIZE - 1) & $FF)
 
-    sd.closeFile()
+    sd.closeFileHandle(handle)
 
     ' ----------------------------------
     ' TEST GROUP: Sequential vs seek read
@@ -280,27 +288,27 @@ PUB go() | result, bytesRead, idx, fileSize, expectedByte, actualByte
     utils.startTestGroup(@"Sequential vs Seek Read Comparison")
 
     utils.startTest(@"Open file")
-    result := sd.openFile(@testSeek)
-    utils.evaluateBool(result, @"openFile()", true)
+    handle := sd.openFileRead(@testSeek)
+    utils.evaluateBool(handle >= 0, @"openFileRead()", true)
 
     utils.startTest(@"Sequential read first 10 bytes")
     utils.setCheckCountPerTest(10)
     utils.initGuard(@readBuffer_guard)
-    bytesRead := sd.read(@readBuffer, 10)
+    bytesRead := sd.readHandle(handle, @readBuffer, 10)
     utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
     repeat idx from 0 to 9
         utils.evaluateSubValue(readBuffer[idx], @"sequential byte", idx)
 
     utils.startTest(@"Seek back and re-read")
-    sd.seek(0)
+    sd.seekHandle(handle, 0)
     utils.setCheckCountPerTest(10)
     utils.initGuard(@readBuffer_guard)
-    bytesRead := sd.read(@readBuffer, 10)
+    bytesRead := sd.readHandle(handle, @readBuffer, 10)
     utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
     repeat idx from 0 to 9
         utils.evaluateSubValue(readBuffer[idx], @"re-read byte", idx)
 
-    sd.closeFile()
+    sd.closeFileHandle(handle)
 
     ' ----------------------------------
     ' TEST GROUP: Seek Boundary Conditions
@@ -309,56 +317,56 @@ PUB go() | result, bytesRead, idx, fileSize, expectedByte, actualByte
 
     ' Test: Seek to position 0 returns to absolute start
     utils.startTest(@"Seek to position 0 returns to absolute start")
-    result := sd.openFile(@testSeek)
-    if result
+    handle := sd.openFileRead(@testSeek)
+    if handle >= 0
         ' First read to move position forward
-        sd.read(@readBuffer, 50)
+        sd.readHandle(handle, @readBuffer, 50)
         ' Now seek back to 0
-        result := sd.seek(0)
-        utils.evaluateSubBool(result, @"seek(0)", true)
+        result := sd.seekHandle(handle, 0)
+        utils.evaluateSubBool(result, @"seekHandle(0)", true)
         ' Read first byte - verifies we're at position 0
         utils.initGuard(@readBuffer_guard)
-        bytesRead := sd.read(@readBuffer, 1)
+        bytesRead := sd.readHandle(handle, @readBuffer, 1)
         utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
         utils.evaluateSubValue(readBuffer[0], @"first byte", 0)
-        sd.closeFile()
+        sd.closeFileHandle(handle)
 
     ' Test: Seek to exact EOF and verify read returns 0
     utils.startTest(@"Seek to exact EOF position")
-    result := sd.openFile(@testSeek)
-    if result
+    handle := sd.openFileRead(@testSeek)
+    if handle >= 0
         ' Seek to exact end (file size position)
-        result := sd.seek(TEST_FILE_SIZE)
+        result := sd.seekHandle(handle, TEST_FILE_SIZE)
         ' This should succeed - seeking to EOF is valid
         ' (seeking past EOF is what fails)
-        debug("  seek(", udec_(TEST_FILE_SIZE), ") = ", sdec_(result))
+        debug("  seekHandle(", udec_(TEST_FILE_SIZE), ") = ", sdec_(result))
         ' Try to read - should get 0 bytes
         utils.initGuard(@readBuffer_guard)
-        bytesRead := sd.read(@readBuffer, 10)
+        bytesRead := sd.readHandle(handle, @readBuffer, 10)
         utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
         utils.evaluateSingleValue(bytesRead, @"read at EOF", 0)
-        sd.closeFile()
+        sd.closeFileHandle(handle)
 
     ' Test: Seek in empty file
     utils.startTest(@"Seek in empty file behavior")
     sd.deleteFile(@testEmpty)
-    result := sd.newFile(@testEmpty)
-    if result
-        sd.closeFile()  ' Create 0-byte file
-    result := sd.openFile(@testEmpty)
-    if result
+    handle := sd.createFileNew(@testEmpty)
+    if handle >= 0
+        sd.closeFileHandle(handle)  ' Create 0-byte file
+    handle := sd.openFileRead(@testEmpty)
+    if handle >= 0
         ' Try seek(0) in empty file - should succeed
-        result := sd.seek(0)
-        utils.evaluateSubBool(result, @"seek(0) in empty", true)
+        result := sd.seekHandle(handle, 0)
+        utils.evaluateSubBool(result, @"seekHandle(0) in empty", true)
         ' Try to read - should get 0 bytes
         utils.initGuard(@readBuffer_guard)
-        bytesRead := sd.read(@readBuffer, 1)
+        bytesRead := sd.readHandle(handle, @readBuffer, 1)
         utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
         utils.evaluateSubValue(bytesRead, @"read from empty", 0)
         ' Try seek(1) in empty file - should fail (beyond EOF)
-        result := sd.seek(1)
-        utils.evaluateSubBool(result == false, @"seek(1) in empty fails", true)
-        sd.closeFile()
+        result := sd.seekHandle(handle, 1)
+        utils.evaluateSubBool(result == false, @"seekHandle(1) in empty fails", true)
+        sd.closeFileHandle(handle)
     sd.deleteFile(@testEmpty)
 
     ' ----------------------------------
@@ -381,17 +389,18 @@ PUB go() | result, bytesRead, idx, fileSize, expectedByte, actualByte
     debug("END_SESSION")
 
 
-PRI testSeekPosition(position) | result, bytesRead, expectedByte
+PRI testSeekPosition(handle, position) | result, bytesRead, expectedByte
 ' Helper to test seek to a position and verify content
 '
+' @param handle - file handle to seek/read on
 ' @param position - file position to seek to and verify
 
-    result := sd.seek(position)
+    result := sd.seekHandle(handle, position)
     expectedByte := position & $FF
     utils.initGuard(@readBuffer_guard)
-    bytesRead := sd.read(@readBuffer, 1)
+    bytesRead := sd.readHandle(handle, @readBuffer, 1)
     utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
-    utils.evaluateSubBool(result, @"seek()", true)
+    utils.evaluateSubBool(result, @"seekHandle()", true)
     utils.evaluateSubValue(readBuffer[0], @"byte value", expectedByte)
     debug("  Position ", udec_(position), ": expected $", uhex_(expectedByte), " got $", uhex_(readBuffer[0]))
 

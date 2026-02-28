@@ -318,33 +318,31 @@ PRI worker_singleton_test(worker_id) | cogResult
 
     ' Worker cog terminates here
 
-PRI worker_read_test(worker_id) | result, bytesRead
+PRI worker_read_test(worker_id) | handle, bytesRead
     '' Worker cog: Perform file read operations
-    '' NOTE: All workers use the SAME file because the driver only
-    '' supports one open file at a time. The lock serializes access.
+    '' Each worker opens/reads/closes via handle API.
 
     ' Wait for barrier
     repeat until sync_barrier <> 0
 
-    ' All workers use the same file (driver limitation: one file at a time)
-    ' Perform complete open-read-close cycle
-    result := sd.openFile(@testfile1)
-    if result == false
+    ' Open file for reading via handle
+    handle := sd.openFileRead(@testfile1)
+    if handle < 0
         worker_errors[worker_id]++
         worker_status[worker_id] := STATUS_FAIL
         return
 
-    bytesRead := readFileToBuffer(worker_id)
+    bytesRead := readFileToBuffer(worker_id, handle)
     worker_result[worker_id] := bytesRead
 
-    sd.closeFile()
+    sd.closeFileHandle(handle)
 
     if bytesRead > 0 and worker_errors[worker_id] == 0
         worker_status[worker_id] := STATUS_PASS
     else
         worker_status[worker_id] := STATUS_FAIL
 
-PRI worker_stress_test(worker_id) | iter, result, bytesRead, expectedLen
+PRI worker_stress_test(worker_id) | iter, handle, bytesRead, expectedLen
     '' Worker cog: Rapid open/read/close cycles
 
     ' Wait for barrier
@@ -354,17 +352,17 @@ PRI worker_stress_test(worker_id) | iter, result, bytesRead, expectedLen
 
     repeat iter from 1 to ITERATIONS
         ' Open file
-        result := sd.openFile(@testfile1)
-        if result == false
+        handle := sd.openFileRead(@testfile1)
+        if handle < 0
             worker_errors[worker_id]++
         else
             ' Read into worker's dedicated buffer (NOT stack!)
-            bytesRead := sd.read(@worker_buffers[worker_id * 64], expectedLen)
+            bytesRead := sd.readHandle(handle, @worker_buffers[worker_id * 64], expectedLen)
             if bytesRead <> expectedLen
                 worker_errors[worker_id]++
 
             ' Close file
-            sd.closeFile()
+            sd.closeFileHandle(handle)
 
         worker_result[worker_id] := iter
 
@@ -405,19 +403,19 @@ PRI stopWorkerCogs() | i
             launched_cogs[i] := -1
 
 
-PRI readFileToBuffer(worker_id) : bytesRead | fileSize, toRead
+PRI readFileToBuffer(worker_id, handle) : bytesRead | fileSize, toRead
     '' Read file into worker's dedicated buffer (NOT the stack!)
 
-    fileSize := sd.fileSize()
+    fileSize := sd.fileSizeHandle(handle)
     toRead := fileSize <# 64  ' Limit to 64 bytes to fit in worker buffer
 
-    bytesRead := sd.read(@worker_buffers[worker_id * 64], toRead)
+    bytesRead := sd.readHandle(handle, @worker_buffers[worker_id * 64], toRead)
 
     if bytesRead <> toRead
         worker_errors[worker_id]++
 
 
-PRI createTestFiles() | i, pFile
+PRI createTestFiles() | i, pFile, handle
     '' Create test files for multi-cog read tests
 
     debug("  Creating test files for worker cogs...")
@@ -434,9 +432,10 @@ PRI createTestFiles() | i, pFile
             1: pFile := @testfile2
             2: pFile := @testfile3
 
-        if sd.newFile(pFile)
-            sd.writeString(@testContent)
-            sd.closeFile()
+        handle := sd.createFileNew(pFile)
+        if handle >= 0
+            sd.writeHandle(handle, @testContent, strsize(@testContent))
+            sd.closeFileHandle(handle)
             debug("    Created: ", zstr_(pFile))
         else
             debug("    FAILED to create: ", zstr_(pFile))

@@ -6,9 +6,9 @@
 
 ## 1. Executive Summary
 
-The regression test suite validates the `micro_sd_fat32_fs.spin2` — a Propeller 2 SD card driver that uses smart pins for SPI communication, the P2 streamer for bulk data transfer, and a dedicated worker cog for all card I/O. The suite currently contains **20 test files** producing **392 test assertions**. The original 10 core files are joined by 10 additional files covering directory handles, volume operations, register access, speed/CMD6, CRC diagnostics, subdirectory operations, error handling, CRC error injection validation, recovery scenarios, and inter-cog FIFO infrastructure.
+The regression test suite validates the `micro_sd_fat32_fs.spin2` — a Propeller 2 SD card driver that uses smart pins for SPI communication, the P2 streamer for bulk data transfer, and a dedicated worker cog for all card I/O. The suite currently contains **20 test files** producing **389 test assertions**. The original 10 core files are joined by 10 additional files covering directory handles, volume operations, register access, speed/CMD6, CRC diagnostics, subdirectory operations, error handling, CRC error injection validation, recovery scenarios, and inter-cog FIFO infrastructure.
 
-**Verified on hardware (2026-02-27):** All 20 suites totaling **392 tests** — all passing.
+**Verified on hardware (2026-02-27):** All 20 suites totaling **389 tests** — all passing.
 
 The tests exercise the driver from low-level raw sector I/O through the full FAT32 filesystem stack, including multi-cog concurrent access, multi-handle file operations, and card formatting validation. Every test runs on real hardware (P2 Edge + physical SD card) via the `run_test.sh` headless test runner.
 
@@ -77,7 +77,7 @@ Each test is identified by:
 
 ## 3. Test Suite Overview
 
-### 3.1 Test Files (392 tests — verified 2026-02-27)
+### 3.1 Test Files (389 tests — verified 2026-02-27)
 
 | # | Test File | Tests | Focus Area | Driver API Category |
 |---|-----------|:-----:|------------|---------------------|
@@ -97,11 +97,11 @@ Each test is identified by:
 | 14 | `SD_RT_register_tests.spin2` | 10 | CSD register, timeout values, capacity cross-check | Register Access |
 | 15 | `SD_RT_speed_tests.spin2` | 14 | SPI frequency, CMD6, high-speed mode, speed boundaries | Speed/CMD6 API |
 | 16 | `SD_RT_crc_diag_tests.spin2` | 14 | CRC counters, validation toggle, CMD13 diagnostics | CRC Diagnostic |
-| 17 | `SD_RT_error_handling_tests.spin2` | 13 | Error conditions, V1 legacy API, handle type mismatch, rename edge cases | Error Handling |
+| 17 | `SD_RT_error_handling_tests.spin2` | 10 | Error conditions, invalid handles, handle type mismatch, rename edge cases | Error Handling |
 | 18 | `SD_RT_crc_validation_tests.spin2` | 6 | CRC error injection hooks, forced read/write errors, hook state management | CRC Injection |
 | 19 | `SD_RT_recovery_tests.spin2` | 7 | Recovery after read/write errors, remount recovery, handle isolation | Recovery Scenarios |
 | 20 | `SD_RT_fifo_tests.spin2` | 21 | String FIFO (isp_string_fifo) inter-cog communication | Infrastructure |
-| | **Total** | **392** | | |
+| | **Total** | **389** | | |
 
 ### 3.2 Diagnostic Test Files (in `diagnostic-tests/`)
 
@@ -1168,11 +1168,11 @@ All critical gaps identified in the original analysis have been addressed:
 | SD_RT_register_tests | 10 | 10 pass |
 | SD_RT_speed_tests | 14 | 14 pass |
 | SD_RT_crc_diag_tests | 14 | 14 pass |
-| SD_RT_error_handling_tests | 13 | 13 pass |
+| SD_RT_error_handling_tests | 10 | 10 pass |
 | SD_RT_crc_validation_tests | 6 | 6 pass |
 | SD_RT_recovery_tests | 7 | 7 pass |
 | SD_RT_fifo_tests | 21 | 21 pass |
-| **Total** | **392** | **392 pass** |
+| **Total** | **389** | **389 pass** |
 
 ---
 
@@ -1230,4 +1230,4 @@ cd /path/to/P2-uSD-FAT32-FS/tools
 
 *Document updated: 2026-02-27*
 *Based on: micro_sd_fat32_fs.spin2 (100+ public methods, 46 worker cog commands)*
-*Test suite: 20 test files, 392 assertions — all verified passing on hardware*
+*Test suite: 20 test files, 389 assertions — all verified passing on hardware*

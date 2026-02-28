@@ -283,33 +283,6 @@ PUB go() | result, handle, h1, h2, h3, h4, h5, bytesRead, bytesWritten
         @"sector 0 not dir entry", true)
 
     ' ----------------------------------
-    ' TEST GROUP: V1 Legacy API Without Open File
-    ' ----------------------------------
-    utils.startTestGroup(@"V1 Legacy API Without Open File")
-
-    ' The V1 API (read/write/seek) does NOT return E_FILE_NOT_OPEN.
-    ' When F_OPEN is not set, do_read() returns 0 bytes and do_write() is a no-op.
-    ' These tests document the actual behavior.
-
-    ' Ensure no V1 file is open (mount already done, no openFile called)
-    utils.startTest(@"V1 read() with no file open returns 0 bytes")
-    bytefill(@readBuffer, $AA, 64)
-    result := sd.read(@readBuffer, 10)
-    utils.evaluateSingleValue(result, @"read() returns 0", 0)
-
-    utils.startTest(@"V1 write() with no file open is no-op")
-    result := sd.write(@testContent, 10)
-    ' write() calls send_command which returns, no crash expected
-    debug("  write() returned: ", sdec_(result))
-    utils.recordPass()
-
-    utils.startTest(@"V1 seek(0) with no file open")
-    result := sd.seek(0)
-    ' seek returns boolean - document behavior
-    debug("  seek(0) returned: ", sdec_(result))
-    utils.recordPass()
-
-    ' ----------------------------------
     ' TEST GROUP: Handle Type Mismatch
     ' ----------------------------------
     utils.startTestGroup(@"Handle Type Mismatch")

@@ -70,13 +70,13 @@ PUB go() | result, pLabel, freeSpace, handle
     utils.startTestGroup(@"Operations before mount should fail gracefully")
 
     ' These operations should not crash when card isn't mounted
-    utils.startTest(@"openFile() before mount")
-    result := sd.openFile(@testfile1)
-    utils.evaluateBool(result, @"openFile()", false)
+    utils.startTest(@"openFileRead() before mount")
+    result := sd.openFileRead(@testfile1)
+    utils.evaluateBool(result >= 0, @"openFileRead()", false)
 
-    utils.startTest(@"closeFile() before mount")
-    sd.closeFile()  ' Should not crash
-    utils.evaluateBool(true, @"closeFile() completed without crash", true)
+    utils.startTest(@"createFileNew() before mount")
+    result := sd.createFileNew(@testfile1)
+    utils.evaluateBool(result >= 0, @"createFileNew()", false)
 
     utils.startTest(@"freeSpace() before mount")
     freeSpace := sd.freeSpace()

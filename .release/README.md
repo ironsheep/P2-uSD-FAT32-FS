@@ -127,7 +127,7 @@ The default configuration uses base pin 56 (P2 Edge Module), giving pins P58-P61
 
 ## Regression Tests
 
-A comprehensive regression test suite (390+ tests across 20 test files) is available in the [GitHub repository](https://github.com/ironsheep/P2-uSD-FAT32-FS). The tests are not included in this release package but can be cloned from the repo if needed.
+A comprehensive regression test suite (389 tests across 20 test files) is available in the [GitHub repository](https://github.com/ironsheep/P2-uSD-FAT32-FS). The tests are not included in this release package but can be cloned from the repo if needed.
 
 ## License
 

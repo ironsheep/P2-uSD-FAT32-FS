@@ -78,6 +78,8 @@ The driver uses a handle-based file API that supports **multiple files and direc
 
 **Single-Writer Policy:** Only ONE file can be open for writing at a time. This prevents data corruption from concurrent writes.
 
+**Handle Type Enforcement:** `writeHandle()` on a read-only handle returns `E_INVALID_HANDLE` — you must open the file with `openFileWrite()` or `createFileNew()` to write. Reading from a write handle is permitted (useful for verify-after-write patterns).
+
 **Singleton Architecture:** The driver uses a singleton pattern - all OBJ instances share the same worker cog. Calling `stop()` from any instance affects all instances.
 
 ### Filename Format
@@ -730,10 +732,11 @@ else
 PUB rename(old_name, new_name) : result
 ```
 
-Renames a file or directory within the current directory. Both names are simple filenames (not paths). Returns `SUCCESS` on success.
+Renames a file or directory within the current directory. Both names are simple filenames (not paths). Returns `true` on success, `false` on failure. Fails with `E_FILE_NOT_FOUND` if the source doesn't exist, or `E_FILE_EXISTS` if the destination name is already in use.
 
 ```spin2
-sd.rename(@"DRAFT.TXT", @"FINAL.TXT")
+if not sd.rename(@"DRAFT.TXT", @"FINAL.TXT")
+  debug("Rename failed: ", sdec(sd.error()))
 ```
 
 ### Moving Files Between Directories
@@ -1151,23 +1154,6 @@ These methods are always available in the core driver (no feature flags required
 | `setSPISpeed(freq)` | Set SPI clock frequency in Hz |
 | `syncDirCache()` | Force directory cache re-read |
 | `sync()` | Flush all pending writes |
-
-### Legacy File API
-
-These methods operate on the "current file" (single-file mode). The handle-based API above is preferred for new code.
-
-| Method | Description |
-|--------|-------------|
-| `newFile(name)` | Create new file |
-| `openFile(name)` | Open existing file |
-| `closeFile()` | Close current file |
-| `read(buffer, count)` | Read bytes |
-| `readByte(address)` | Read single byte at offset |
-| `write(buffer, count)` | Write bytes |
-| `writeByte(char)` | Write single byte |
-| `writeString(str)` | Write null-terminated string |
-| `seek(pos)` | Set position in current file |
-| `fileSize()` | Size of current file |
 
 ---
 
