@@ -669,6 +669,10 @@ All structs are packed (Spin2 default) with offsets matching their respective ha
 | `getCRCRetryCount() : count` | CRC retry count |
 | `setCRCValidation(enabled)` | Enable/disable CRC checking |
 | `getWriteDiag() : result_code, r1_resp, data_resp, sector_num` | Last write diagnostic data |
+| `setTestForceReadError(count)` | Inject N forced CRC mismatches on reads (test hook) |
+| `setTestForceWriteError(enabled)` | Inject one-shot write CRC corruption (test hook) |
+| `getTestErrorCount() : count` | Count of injected test errors triggered |
+| `clearTestErrors()` | Reset all test error injection state |
 | `debugGetRootSec() : sector` | Root directory sector |
 | `debugGetDirSec() : sector` | Calling cog's directory sector |
 | `debugGetVbrSec() : sector` | VBR sector |

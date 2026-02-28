@@ -6,9 +6,9 @@
 
 ## 1. Executive Summary
 
-The regression test suite validates the `micro_sd_fat32_fs.spin2` — a Propeller 2 SD card driver that uses smart pins for SPI communication, the P2 streamer for bulk data transfer, and a dedicated worker cog for all card I/O. The suite currently contains **16 core test files** producing an estimated **343 test assertions**. The original 10 files are joined by 6 additional files covering directory handles, volume operations, register access, speed/CMD6, CRC diagnostics, and subdirectory operations with cross-buffer cache coherence testing. Three additional test files (error handling, card info, card display) and infrastructure tests (FIFO, fstr) provide supplementary coverage outside the core count.
+The regression test suite validates the `micro_sd_fat32_fs.spin2` — a Propeller 2 SD card driver that uses smart pins for SPI communication, the P2 streamer for bulk data transfer, and a dedicated worker cog for all card I/O. The suite currently contains **20 test files** producing **392 test assertions**. The original 10 core files are joined by 10 additional files covering directory handles, volume operations, register access, speed/CMD6, CRC diagnostics, subdirectory operations, error handling, CRC error injection validation, recovery scenarios, and inter-cog FIFO infrastructure.
 
-**Verified on hardware (2026-02-24):** 11 core suites totaling **263 tests** — all passing (mount 21, file_ops 22, read_write 38, directory 28, seek 37, multicog 14, multihandle 19, multiblock 6, raw_sector 14, format 46, subdir_ops 18).
+**Verified on hardware (2026-02-27):** All 20 suites totaling **392 tests** — all passing.
 
 The tests exercise the driver from low-level raw sector I/O through the full FAT32 filesystem stack, including multi-cog concurrent access, multi-handle file operations, and card formatting validation. Every test runs on real hardware (P2 Edge + physical SD card) via the `run_test.sh` headless test runner.
 
@@ -77,36 +77,35 @@ Each test is identified by:
 
 ## 3. Test Suite Overview
 
-### 3.1 Core Test Files (~325 tests)
+### 3.1 Test Files (392 tests — verified 2026-02-27)
 
 | # | Test File | Tests | Focus Area | Driver API Category |
 |---|-----------|:-----:|------------|---------------------|
 | 1 | `SD_RT_mount_tests.spin2` | 21 | Mount/unmount lifecycle, card detection, error states | Lifecycle |
 | 2 | `SD_RT_file_ops_tests.spin2` | 22 | File create, open, close, delete, rename, move | File Operations |
 | 3 | `SD_RT_read_write_tests.spin2` | 38 | Read/write data integrity, patterns, boundaries, large multi-cluster | Data I/O |
-| 4 | `SD_RT_directory_tests.spin2` | 28 | Directory create, navigate, enumerate, nesting | Directory Operations |
+| 4 | `SD_RT_directory_tests.spin2` | 29 | Directory create, navigate, enumerate, nesting, many-file stress | Directory Operations |
 | 5 | `SD_RT_seek_tests.spin2` | 37 | Seek, tell, position tracking, cross-sector seeks | File Positioning |
 | 6 | `SD_RT_multicog_tests.spin2` | 14 | Multi-cog singleton, concurrent access, stress test | Multi-Cog Safety |
 | 7 | `SD_RT_multihandle_tests.spin2` | 19 | V3 handle API, independent positions, limits, errors | Multi-Handle |
 | 8 | `SD_RT_multiblock_tests.spin2` | 6 | CMD18/CMD25 multi-sector read/write round-trips | Raw Multi-Block |
 | 9 | `SD_RT_raw_sector_tests.spin2` | 14 | Raw sector read/write, patterns, address boundaries | Raw Sector I/O |
 | 10 | `SD_RT_format_tests.spin2` | 46 | FAT32 format validation, MBR/VBR/FSInfo/FAT structure | Format Utility |
-| 11 | `SD_RT_dirhandle_tests.spin2` | ~22 | V3 directory handle enumeration, pool interaction, paths | Directory Handle API |
-| 12 | `SD_RT_volume_tests.spin2` | ~20 | Volume label, VBR access, syncAll, sync, setDate | Volume Operations |
-| 13 | `SD_RT_register_tests.spin2` | ~10 | CSD register, timeout values, capacity cross-check | Register Access |
-| 14 | `SD_RT_speed_tests.spin2` | ~14 | SPI frequency, CMD6, high-speed mode, speed boundaries | Speed/CMD6 API |
-| 15 | `SD_RT_crc_diag_tests.spin2` | ~14 | CRC counters, validation toggle, CMD13 diagnostics | CRC Diagnostic |
-| 16 | `SD_RT_subdir_ops_tests.spin2` | 18 | Cross-buffer cache coherence, empty files, subdir operations | Subdirectory Ops |
-| | **Total** | **~343** | | |
+| 11 | `SD_RT_subdir_ops_tests.spin2` | 18 | Cross-buffer cache coherence, empty files, subdir operations | Subdirectory Ops |
+| 12 | `SD_RT_dirhandle_tests.spin2` | 22 | V3 directory handle enumeration, pool interaction, paths | Directory Handle API |
+| 13 | `SD_RT_volume_tests.spin2` | 21 | Volume label, VBR access, syncAll, sync, setDate | Volume Operations |
+| 14 | `SD_RT_register_tests.spin2` | 10 | CSD register, timeout values, capacity cross-check | Register Access |
+| 15 | `SD_RT_speed_tests.spin2` | 14 | SPI frequency, CMD6, high-speed mode, speed boundaries | Speed/CMD6 API |
+| 16 | `SD_RT_crc_diag_tests.spin2` | 14 | CRC counters, validation toggle, CMD13 diagnostics | CRC Diagnostic |
+| 17 | `SD_RT_error_handling_tests.spin2` | 13 | Error conditions, V1 legacy API, handle type mismatch, rename edge cases | Error Handling |
+| 18 | `SD_RT_crc_validation_tests.spin2` | 6 | CRC error injection hooks, forced read/write errors, hook state management | CRC Injection |
+| 19 | `SD_RT_recovery_tests.spin2` | 7 | Recovery after read/write errors, remount recovery, handle isolation | Recovery Scenarios |
+| 20 | `SD_RT_fifo_tests.spin2` | 21 | String FIFO (isp_string_fifo) inter-cog communication | Infrastructure |
+| | **Total** | **392** | | |
 
-### 3.2 Supplementary Test Files (not in 236 count)
+### 3.2 Diagnostic Test Files (in `diagnostic-tests/`)
 
-| Test File | Purpose |
-|-----------|---------|
-| `SD_RT_error_handling_tests.spin2` | Error conditions: invalid handles, EOF behavior, directory errors, handle reuse |
-| `SD_RT_fifo_tests.spin2` | String FIFO (isp_string_fifo) inter-cog communication regression tests |
-
-**Diagnostic tests** (moved to `diagnostic-tests/`):
+**Diagnostic tests** (characterization, not regression):
 
 | Test File | Purpose |
 |-----------|---------|
@@ -1149,43 +1148,31 @@ All critical gaps identified in the original analysis have been addressed:
 
 ---
 
-## 7. Test Count Summary
-
-### 7.1 Original Core Suite (236 tests — verified passing)
+## 7. Test Count Summary (verified 2026-02-27)
 
 | Test File | Tests | Status |
 |-----------|:-----:|:------:|
 | SD_RT_mount_tests | 21 | 21 pass |
 | SD_RT_file_ops_tests | 22 | 22 pass |
-| SD_RT_read_write_tests | 29 | 29 pass |
-| SD_RT_directory_tests | 28 | 28 pass |
+| SD_RT_read_write_tests | 38 | 38 pass |
+| SD_RT_directory_tests | 29 | 29 pass |
 | SD_RT_seek_tests | 37 | 37 pass |
 | SD_RT_multicog_tests | 14 | 14 pass |
 | SD_RT_multihandle_tests | 19 | 19 pass |
 | SD_RT_multiblock_tests | 6 | 6 pass |
 | SD_RT_raw_sector_tests | 14 | 14 pass |
 | SD_RT_format_tests | 46 | 46 pass |
-| **Subtotal** | **236** | **236 pass** |
-
-### 7.2 New Coverage Gap Tests (est. ~89 tests — pending hardware verification)
-
-| Test File | Est. Tests | Status |
-|-----------|:----------:|:------:|
-| SD_RT_read_write_tests (+large file) | +9 | Compiles, pending run |
-| SD_RT_dirhandle_tests | ~22 | Compiles, pending run |
-| SD_RT_volume_tests | ~20 | Compiles, pending run |
-| SD_RT_register_tests | ~10 | Compiles, pending run |
-| SD_RT_speed_tests | ~14 | Compiles, pending run |
-| SD_RT_crc_diag_tests | ~14 | Compiles, pending run |
-| **Subtotal** | **~89** | **pending** |
-
-### 7.3 Combined Total
-
-| | Tests | Status |
-|--|:-----:|:------:|
-| **Grand Total** | **~325** | **236 verified + ~89 pending** |
-
-*Supplementary: error_handling, card_info, card_display tests provide additional coverage outside the core count.*
+| SD_RT_subdir_ops_tests | 18 | 18 pass |
+| SD_RT_dirhandle_tests | 22 | 22 pass |
+| SD_RT_volume_tests | 21 | 21 pass |
+| SD_RT_register_tests | 10 | 10 pass |
+| SD_RT_speed_tests | 14 | 14 pass |
+| SD_RT_crc_diag_tests | 14 | 14 pass |
+| SD_RT_error_handling_tests | 13 | 13 pass |
+| SD_RT_crc_validation_tests | 6 | 6 pass |
+| SD_RT_recovery_tests | 7 | 7 pass |
+| SD_RT_fifo_tests | 21 | 21 pass |
+| **Total** | **392** | **392 pass** |
 
 ---
 
@@ -1196,7 +1183,7 @@ All tests run from the `tools/` directory:
 ```bash
 cd /path/to/P2-uSD-FAT32-FS/tools
 
-# Original core tests
+# Core filesystem tests
 ./run_test.sh ../regression-tests/SD_RT_mount_tests.spin2
 ./run_test.sh ../regression-tests/SD_RT_file_ops_tests.spin2
 ./run_test.sh ../regression-tests/SD_RT_read_write_tests.spin2
@@ -1206,19 +1193,27 @@ cd /path/to/P2-uSD-FAT32-FS/tools
 ./run_test.sh ../regression-tests/SD_RT_multihandle_tests.spin2
 ./run_test.sh ../regression-tests/SD_RT_multiblock_tests.spin2
 ./run_test.sh ../regression-tests/SD_RT_raw_sector_tests.spin2
-./run_test.sh ../regression-tests/SD_RT_format_tests.spin2 -t 300   # WARNING: erases card
+./run_test.sh ../regression-tests/SD_RT_subdir_ops_tests.spin2
 
-# New coverage gap tests
+# Extended coverage tests
 ./run_test.sh ../regression-tests/SD_RT_dirhandle_tests.spin2
 ./run_test.sh ../regression-tests/SD_RT_volume_tests.spin2 -t 180
 ./run_test.sh ../regression-tests/SD_RT_register_tests.spin2
 ./run_test.sh ../regression-tests/SD_RT_speed_tests.spin2
 ./run_test.sh ../regression-tests/SD_RT_crc_diag_tests.spin2
-
-# Supplementary tests
 ./run_test.sh ../regression-tests/SD_RT_error_handling_tests.spin2
 
-# Diagnostic tests (in diagnostic-tests/)
+# CRC error injection and recovery tests
+./run_test.sh ../regression-tests/SD_RT_crc_validation_tests.spin2
+./run_test.sh ../regression-tests/SD_RT_recovery_tests.spin2
+
+# Infrastructure tests
+./run_test.sh ../regression-tests/SD_RT_fifo_tests.spin2
+
+# Format test (WARNING: erases card!)
+./run_test.sh ../regression-tests/SD_RT_format_tests.spin2 -t 300
+
+# Diagnostic tests (in diagnostic-tests/, not part of regression suite)
 ./run_test.sh ../diagnostic-tests/SD_card_info_tests.spin2
 ./run_test.sh ../diagnostic-tests/SD_freq_sweep_tests.spin2
 ./run_test.sh ../diagnostic-tests/SD_spi_limit_test.spin2
@@ -1233,6 +1228,6 @@ cd /path/to/P2-uSD-FAT32-FS/tools
 
 ---
 
-*Document updated: 2026-02-18*
+*Document updated: 2026-02-27*
 *Based on: micro_sd_fat32_fs.spin2 (100+ public methods, 46 worker cog commands)*
-*Test suite: 15 core files, ~325 assertions, 3 supplementary files*
+*Test suite: 20 test files, 392 assertions — all verified passing on hardware*

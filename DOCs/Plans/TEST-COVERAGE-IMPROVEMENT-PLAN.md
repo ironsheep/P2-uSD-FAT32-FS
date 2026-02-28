@@ -1,8 +1,8 @@
 # Regression Test Coverage Improvement Plan
 
-**Status:** Partially implemented
+**Status:** Complete — all phases implemented and verified on hardware (2026-02-27)
 **Created:** 2026-01-31
-**Updated:** 2026-02-07
+**Updated:** 2026-02-27
 **Target:** Increase test coverage from ~40% to ~90%
 
 ## Executive Summary
@@ -43,7 +43,7 @@ The regression test suite has strong success-path coverage but significant gaps 
 
 ---
 
-## Phase 1: Parameter Validation (Lowest Complexity) -- PARTIALLY COMPLETE
+## Phase 1: Parameter Validation (Lowest Complexity) -- COMPLETE
 
 **Effort:** 2-3 hours | **Coverage gain:** +15%
 
@@ -349,11 +349,13 @@ Modify `readSector()` to optionally force CRC mismatch and return E_CRC_ERROR.
 
 ## Implementation Checkpoints
 
-1. **Phase 1 complete** - Commit: "Add parameter validation tests"
-2. **Phase 2 complete** - Commit: "Add SD_RT_error_handling_tests.spin2"
-3. **Phase 3 complete** - Commit: "Add boundary condition tests"
-4. **Phase 4 complete** - Commit: "Add CRC validation tests with driver hooks"
-5. **Phase 5 complete** - Commit: "Add recovery scenario tests"
+1. **Phase 1 complete** - Parameter validation tests added to multihandle, file_ops, mount suites
+2. **Phase 2 complete** - Error handling tests augmented with V1 legacy API, handle type mismatch, rename edge cases (13 tests)
+3. **Phase 3 complete** - Directory stress test (20 files) added to directory_tests (29 tests)
+4. **Phase 4 complete** - CRC error injection hooks added to driver, SD_RT_crc_validation_tests.spin2 created (6 tests)
+5. **Phase 5 complete** - SD_RT_recovery_tests.spin2 created (7 tests)
+
+All 20 suites (392 tests) verified passing on hardware 2026-02-27.
 
 ---
 

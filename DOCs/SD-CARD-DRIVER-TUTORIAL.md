@@ -1255,6 +1255,10 @@ For driver development, debugging, and regression testing. Includes CRC diagnost
 | `debugClearRootDir()` | Zero root directory sector (destructive!) |
 | `debugReadSectorSlow(sector, buffer)` | Byte-by-byte read without streamer |
 | `getWriteDiag(...)` | Last writeSector diagnostic (4 return values) |
+| `setTestForceReadError(count)` | Inject N forced CRC mismatches on reads (test hook) |
+| `setTestForceWriteError(enabled)` | Inject one-shot write CRC corruption (test hook) |
+| `getTestErrorCount()` | Count of injected test errors triggered |
+| `clearTestErrors()` | Reset all test error injection state |
 | `debugGetReadSectorDiag(...)` | Last readSector diagnostic data (8 params) |
 | `debugGetReadSectorDiagExt(...)` | Extended diagnostic data (5 params) |
 | `displaySector()` | Hex dump of sector buffer |

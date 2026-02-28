@@ -4,14 +4,14 @@ Automated regression test suite for the P2 SD Card Driver. All tests execute on 
 
 ## Test Summary
 
-### Core Test Suites (verified 2026-02-24)
+### Core Test Suites (verified 2026-02-27)
 
 | Test Suite | Description | Tests |
 |------------|-------------|-------|
 | **Mount Tests** | Card initialization, mounting, unmounting, pre-mount errors | 21 |
 | **File Operations** | Create, open, close, delete, rename (V3 handle API) | 22 |
 | **Read/Write Tests** | Data integrity, sector boundaries, multi-cluster, large files | 38 |
-| **Directory Tests** | Directory listing, navigation, deep nesting, boundaries | 28 |
+| **Directory Tests** | Directory listing, navigation, deep nesting, boundaries, many-file stress | 29 |
 | **Seek Tests** | Random access, cross-sector seeks, seek boundaries | 37 |
 | **Multicog Tests** | Singleton pattern, concurrent access, lock serialization | 14 |
 | **Multihandle Tests** | Multiple simultaneous file handles, error boundaries | 19 |
@@ -19,7 +19,7 @@ Automated regression test suite for the P2 SD Card Driver. All tests execute on 
 | **Raw Sector Tests** | Direct sector read/write, large LBA addressing | 14 |
 | **Format Tests** | FAT32 structure validation, cross-OS compatibility | 46 |
 | **Subdirectory Ops Tests** | Cross-buffer cache coherence, empty files, subdir operations | 18 |
-| **Core Total** | | **263** |
+| **Core Total** | | **264** |
 
 ### Additional Test Suites
 
@@ -30,7 +30,9 @@ Automated regression test suite for the P2 SD Card Driver. All tests execute on 
 | **Register Tests** | CSD register access, timeout values, capacity cross-check | 10 |
 | **Speed Tests** | SPI frequency, CMD6, high-speed mode, speed boundaries | 14 |
 | **CRC Diagnostic Tests** | CRC counters, validation toggle, CMD13 diagnostics | 14 |
-| **Error Handling Tests** | Error conditions, invalid handles, state errors | 6 |
+| **Error Handling Tests** | Error conditions, invalid handles, V1 legacy API, rename edge cases | 13 |
+| **CRC Validation Tests** | CRC error injection hooks, forced read/write CRC errors, hook state management | 6 |
+| **Recovery Tests** | Recovery after read/write errors, remount recovery, handle isolation | 7 |
 | **FIFO Tests** | String FIFO (isp_string_fifo) inter-cog communication | 21 |
 
 ## Prerequisites
@@ -72,6 +74,13 @@ cd tools/
 
 # Subdirectory and cache coherence tests
 ./run_test.sh ../regression-tests/SD_RT_subdir_ops_tests.spin2
+
+# CRC error injection and recovery tests
+./run_test.sh ../regression-tests/SD_RT_crc_validation_tests.spin2
+./run_test.sh ../regression-tests/SD_RT_recovery_tests.spin2
+
+# Error handling tests
+./run_test.sh ../regression-tests/SD_RT_error_handling_tests.spin2
 
 # Format test (WARNING: erases card!)
 ./run_test.sh ../regression-tests/SD_RT_format_tests.spin2 -t 300
