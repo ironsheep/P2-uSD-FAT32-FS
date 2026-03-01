@@ -224,3 +224,4 @@ tests/
 tools/bible_verse.spin2
 tools/archive/
 USER-REPORTs/
+*.gz
