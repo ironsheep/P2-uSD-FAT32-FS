@@ -64,6 +64,41 @@ The driver operates in three modes:
 
 Filesystem commands are rejected with `E_NOT_MOUNTED` when not in `MODE_FILESYSTEM`.
 
+## Card Presence Detection
+
+The P2 Edge Module microSD socket has no card-detect pin, and the SD specification defines no software-only detection method for SPI mode. The driver uses a behavioral approach: probe the card with CMD0 and analyze the MISO line response.
+
+### How It Works
+
+Before the CMD0 probe, the driver enables a P2 internal 15K pull-up resistor on the MISO pin:
+
+```spin2
+wrpin(miso, P_HIGH_15K)       ' Enable 15K pull-up on MISO
+pinf(miso)                    ' Float pin (input with pull-up active)
+waitus(10)                    ' Let pull-up settle
+```
+
+This creates a definitive electrical signal:
+
+| Scenario | MISO Behavior | cmd() Result |
+|----------|---------------|-------------|
+| Card present | Card drives MISO, responds within 0-8 bytes | Non-zero (typically $01) |
+| No card | Pull-up holds MISO high, every byte is $FF | 0 (timeout) |
+
+The driver sends CMD0 up to 5 times, tracking whether any attempt received a non-timeout response. After the retry loop:
+
+- **All timeouts** (MISO never driven): `E_NO_CARD` -- no card is physically present
+- **At least one response but not $01**: `E_BAD_RESPONSE` -- card present but not initializing
+- **Got $01**: card is present and idle, initialization continues
+
+The pull-up is automatically cleared when the SPI smart pins are configured for normal operation.
+
+### Why P2 Internal Pull-Ups
+
+Every P2 I/O pin has configurable internal pull resistors. The 15K pull-up (`P_HIGH_15K`) is ideal: strong enough for reliable $FF reads with no card, weak enough that any SD card (output impedance under 100 ohms) easily overpowers it. This makes detection self-contained -- no external pull-up resistors are needed on any board design.
+
+For full electrical analysis and SD specification research, see `DOCs/Reference/CARD-PRESENCE-DETECTION.md`.
+
 ## Conditional Compilation
 
 The driver uses `#IFDEF` / `#ENDIF` blocks to exclude optional features from minimal builds. The core driver compiles to ~24 KB with no flags defined.
@@ -512,6 +547,7 @@ All structs are packed (Spin2 default) with offsets matching their respective ha
 | `E_WRITE_REJECTED` | -5 | Card rejected write operation |
 | `E_CARD_BUSY` | -6 | Card busy timeout |
 | `E_IO_ERROR` | -7 | General I/O error |
+| `E_NO_CARD` | -8 | No card detected in slot |
 | `E_NOT_MOUNTED` | -20 | Filesystem not mounted |
 | `E_INIT_FAILED` | -21 | Card initialization failed |
 | `E_NOT_FAT32` | -22 | Card not formatted as FAT32 |

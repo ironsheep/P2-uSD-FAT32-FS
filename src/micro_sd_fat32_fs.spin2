@@ -146,6 +146,7 @@ CON ' error codes
   E_WRITE_REJECTED  = -5        ' Card rejected write operation
   E_CARD_BUSY       = -6        ' Card busy
   E_IO_ERROR        = -7        ' General I/O error during read/write
+  E_NO_CARD         = -8        ' No card detected in slot (MISO idle during CMD0 probe)
   E_NOT_MOUNTED     = -20       ' Filesystem not mounted
   E_INIT_FAILED     = -21       ' Card initialization failed
   E_NOT_FAT32       = -22       ' Card not formatted as FAT32
@@ -396,6 +397,7 @@ DAT ' ---- Singleton Control ----
   cog_id        LONG    -1              ' Worker cog ID (-1 = not started)
   api_lock      LONG    -1              ' Hardware lock ID (-1 = not allocated)
   driver_mode   LONG    0               ' Current mode: MODE_NONE, MODE_RAW, or MODE_FILESYSTEM
+  last_init_error LONG  0               ' Specific error from last initCard() failure
 
   ' ═══════════════════════════════════════════════════════════════════════
   ' CMD13 STATUS STAGING - Preserved for diagnostic inspection
@@ -1968,7 +1970,7 @@ PRI fs_worker() | cur_cmd
       CMD_DEBUG_CLEAR_ROOT:
         ' DEBUG: Clear root directory by writing zeros
         bytefill(@buf, 0, SECTOR_SIZE)                                             ' Zero the buffer
-        if writeSector(root_sec, BUF_DATA)                                      ' Write to root directory
+        if writeSector(root_sec, BUF_DATA) == SUCCESS                            ' Write to root directory
           dir_sec_in_buf := -1                                                  ' Invalidate cache
           pb_status := SUCCESS
         else
@@ -1995,7 +1997,7 @@ PRI fs_worker() | cur_cmd
       CMD_WRITE_SECTOR_RAW:
         bytemove(@buf, pb_param1, SECTOR_SIZE)
         debug("  [WRITE_RAW] after bytemove: buf[0..3]=$", uhex_byte_(buf[0]), " $", uhex_byte_(buf[1]), " $", uhex_byte_(buf[2]), " $", uhex_byte_(buf[3]), " sig=$", uhex_word_(WORD[@buf + BOOT_SIG_OFFSET]))
-        if writeSector(pb_param0, BUF_DATA)                                     ' writeSector returns true on success
+        if writeSector(pb_param0, BUF_DATA) == SUCCESS
           pb_status := SUCCESS
         else
           pb_status := E_IO_ERROR
@@ -2527,7 +2529,7 @@ PRI do_mount() : result | reserved, pPart, pVBR, pFSI, idx, p_entry, cluster, se
     debug("  [do_mount] Calling initCard()...")
     if not initCard()
       debug("  [do_mount] FAIL: initCard() returned false")
-      result := E_INIT_FAILED
+      result := last_init_error
 
   ' Card is initialized (either fresh or from RAW mode)
   if result == 0
@@ -2688,7 +2690,7 @@ PRI do_close() : result
       result := E_IO_ERROR
     else
       bytemove(@dir_buf + (entry_address & SECTOR_OFFSET_MASK), @entry_buffer, DIR_ENTRY_SIZE)
-      if not writeSector(entry_address >> SECTOR_SHIFT, BUF_DIR)
+      if writeSector(entry_address >> SECTOR_SHIFT, BUF_DIR) < 0
         debug("  [do_close] Directory write FAILED for sector ", udec_(entry_address >> SECTOR_SHIFT))
         result := E_IO_ERROR
 
@@ -2861,7 +2863,7 @@ PRI do_create(p_path) : handle | temp, first_cluster
         handle := E_IO_ERROR
       else
         bytemove(@dir_buf + (entry_address & SECTOR_OFFSET_MASK), @entry_buffer, DIR_ENTRY_SIZE)
-        if not writeSector(entry_address >> SECTOR_SHIFT, BUF_DIR)
+        if writeSector(entry_address >> SECTOR_SHIFT, BUF_DIR) < 0
           debug("  [do_create] Directory write FAILED for sector ", udec_(entry_address >> SECTOR_SHIFT))
           freeHandle(handle)
           handle := E_IO_ERROR
@@ -2901,7 +2903,7 @@ PRI do_close_h(handle) : result | p_buf
     if h_flags[handle] & HF_DIRTY
       p_buf := getHandleBuffer(handle)
       bytemove(@buf, p_buf, SECTOR_SIZE)                                             ' Copy to shared buffer
-      if not writeSector(h_buf_sector[handle], BUF_DATA)
+      if writeSector(h_buf_sector[handle], BUF_DATA) < 0
         debug("  [do_close_h] Data write FAILED for sector ", udec_(h_buf_sector[handle]))
         result := E_IO_ERROR
 
@@ -2912,7 +2914,7 @@ PRI do_close_h(handle) : result | p_buf
         result := E_IO_ERROR
       else
         long[@dir_buf + h_dir_offset[handle] + DE_FILESIZE_OFFSET] := h_size[handle]  ' Update size field
-        if not writeSector(h_dir_sector[handle], BUF_DIR)
+        if writeSector(h_dir_sector[handle], BUF_DIR) < 0
           debug("  [do_close_h] Directory write FAILED for sector ", udec_(h_dir_sector[handle]))
           result := E_IO_ERROR
 
@@ -3706,7 +3708,7 @@ PRI do_set_vol_label(p_label) : result | idx, ch, p_entry, label_83[3], pVBR
   else
     pVBR := @buf
     bytemove(vbrVolLabelAddr(pVBR), @label_83, SFN_TOTAL_LEN)
-    if writeSector(vbr_sec, BUF_DATA) == 0
+    if writeSector(vbr_sec, BUF_DATA) < 0
       debug("  [do_set_vol_label] FAIL: write VBR")
       result := E_IO_ERROR
 
@@ -3834,7 +3836,7 @@ PRI do_init_card_only() : result
   else
     debug("  [do_init_card_only] FAIL: initCard() returned false")
     driver_mode := MODE_NONE
-    result := E_INIT_FAILED
+    result := last_init_error
 
 
 PRI do_get_card_size() : result | csd[4], c_size, read_bl_len, c_size_mult
@@ -4164,7 +4166,7 @@ PRI allocateCluster(cluster) : result | fat_idx, buf_idx, high_bits
 ' If cluster parameter is non-zero, links the new cluster to that chain.
 '
 ' @param cluster - Previous cluster to link (0 for new chain)
-' @returns result - Newly allocated cluster number
+' @returns result - Cluster number on success, negative error code on failure
 ' @local fat_idx - Current FAT byte index
 ' @local buf_idx - Index within FAT buffer
 ' @local high_bits - Preserved high 4 bits of FAT entry
@@ -4172,14 +4174,14 @@ PRI allocateCluster(cluster) : result | fat_idx, buf_idx, high_bits
   fat_idx := 8                                                                  ' Start at cluster 2 (skip reserved 0,1)
   if readSector(fat_sec, BUF_FAT) < 0                                           ' Pre-load first FAT sector
     debug("  [allocateCluster] FAT pre-load FAILED")
-    result := -1
+    result := E_IO_ERROR
   else
     '   if cluster parameter <> 0, writes newly allocated cluster number in parameter cell
     repeat
       if fat_idx & SECTOR_OFFSET_MASK == 0 and fat_idx > 0                                     '  if at sector boundary (but not first iteration)
         if readSector(fat_sec + fat_idx >> SECTOR_SHIFT, BUF_FAT) < 0                      '   load next sector of FAT
           debug("  [allocateCluster] FAT scan read FAILED")
-          result := -1
+          result := E_IO_ERROR
           quit
       buf_idx := fat_idx & SECTOR_OFFSET_MASK
       result := long[@fat_buf + buf_idx]                                        '  read a cluster cell
@@ -4192,14 +4194,14 @@ PRI allocateCluster(cluster) : result | fat_idx, buf_idx, high_bits
         if cluster <> 0                                                         '  if allocateCluster was called with a non-zero cluster parameter
           if readSector(fat_sec + cluster >> 7, BUF_FAT) < 0                   '   read FAT sector containing cluster cell
             debug("  [allocateCluster] FAT chain-link read FAILED - cluster orphaned")
-            result := -1
+            result := E_IO_ERROR
           else
             buf_idx := (cluster << 2) & SECTOR_OFFSET_MASK
             high_bits := long[@fat_buf + buf_idx] & FAT32_RESERVED_MASK                  '  preserve high 4 bits
             long[@fat_buf + buf_idx] := high_bits | (result & FAT32_ENTRY_MASK)  '  link to new cluster, preserve high bits
             writeSector(fat_sec + cluster >> 7, BUF_FAT)                        '  write FAT1 sector
             writeSector(fat2_sec + cluster >> 7, BUF_FAT)                       '  write FAT2 sector (MIRROR)
-        if result <> -1 and fsi_free_count <> $FFFF_FFFF                       '  track free count incrementally
+        if result >= 0 and fsi_free_count <> $FFFF_FFFF                       '  track free count incrementally
           fsi_free_count--                                                      '   (avoids slow FAT scan on unmount)
         quit
       fat_idx += 4                                                              '  advance index to next cluster cell
@@ -4642,15 +4644,16 @@ PRI sp_transfer_32(data) : result | _sck, _mosi, _miso, tx_data
   end
 
 
-PRI initCard() : result | timeout, resp, card_version, acmd41_arg
+PRI initCard() : result | timeout, resp, card_version, acmd41_arg, got_response
 ' Initialize SD card - performs complete card initialization sequence per SD spec.
-' Steps: power-on delay, SPI setup, CMD0, CMD8, ACMD41 loop, CMD58.
+' Steps: power-on delay, SPI setup, card presence detection, CMD0, CMD8, ACMD41 loop, CMD58.
 '
 ' @returns result - TRUE on successful init, FALSE on failure
 ' @local timeout - Timeout deadline
 ' @local resp - Command response byte
 ' @local card_version - Detected SD version (1 or 2)
 ' @local acmd41_arg - Argument for ACMD41 (HCS flag)
+' @local got_response - TRUE if any CMD0 attempt got a non-timeout response
 
   debug("    [initCard] Starting card init...")
   debug("    [initCard] Reference: SPI_SD_Implementation_Reference.md")
@@ -4675,7 +4678,14 @@ PRI initCard() : result | timeout, resp, card_version, acmd41_arg
   pinh(cs)                                                                      '  CS HIGH = deselected
   pinh(mosi)                                                                    '  MOSI HIGH (card expects high during idle)
   pinl(sck)                                                                     '  SCK LOW (SPI mode 0 idle state)
-  pinf(miso)                                                                    '  MISO as floating input
+
+  ' Enable 15K pull-up on MISO for card-presence detection
+  ' If no card is present, MISO reads $FF (pulled high by P2 internal resistor)
+  ' If card is present, card drives MISO (easily overpowers 15K pull-up)
+  ' Pull-up is cleared later when initSPIPins() configures MISO for smart pin SPI
+  wrpin(miso, P_HIGH_15K)
+  pinf(miso)                                                                    '  MISO as input with pull-up active
+  waitus(10)                                                                    '  Let pull-up settle
 
   debug("    [initCard] Pins: CS=", udec_(pinr(cs)), " MOSI=", udec_(pinr(mosi)), " MISO=", udec_(pinr(miso)), " SCK=", udec_(pinr(sck)))
 
@@ -4713,9 +4723,12 @@ PRI initCard() : result | timeout, resp, card_version, acmd41_arg
   ' ============================================
   debug("    [initCard] Step 4: CMD0 (GO_IDLE_STATE)...")
   resp := 0
+  got_response := false
   repeat CMD0_MAX_RETRIES                                                       '  try up to 5 times
     resp := cmd(CMD0, 0)
     debug("    [initCard] CMD0 response: $", uhex_(resp))
+    if resp <> 0                                                                '  cmd() returns 0 on timeout
+      got_response := true
     if resp == R1_IN_IDLE
       quit
     waitms(CMD_RETRY_DELAY_MS)
@@ -4723,10 +4736,14 @@ PRI initCard() : result | timeout, resp, card_version, acmd41_arg
   result := true                                                                '  optimistic - set false on any failure
 
   if resp <> $01
-    debug("    [initCard] FAIL: CMD0 expected $01, got $", uhex_(resp))
-    if resp == $FF
-      debug("    [initCard] ($FF = no response, check wiring)")
-    result := false
+    if not got_response
+      debug("    [initCard] No card detected (MISO idle across all CMD0 attempts)")
+      result := false
+      last_init_error := E_NO_CARD
+    else
+      debug("    [initCard] Card responded but CMD0 failed: $", uhex_(resp))
+      result := false
+      last_init_error := E_BAD_RESPONSE
 
   if result
     debug("    [initCard] CMD0 OK - card in idle state")
@@ -4787,6 +4804,7 @@ PRI initCard() : result | timeout, resp, card_version, acmd41_arg
         debug("    [initCard] FAIL: ACMD41 timeout after 2 seconds")
         debug("    [initCard] Last response: $", uhex_(resp))
         result := false
+        last_init_error := E_TIMEOUT
         quit
       waitms(ACMD41_POLL_DELAY_MS)
 
@@ -4882,7 +4900,7 @@ PRI readSector(sector, buf_type) : result | _sck, _miso, data, loop_ctr, timeout
 '
 ' @param sector - Sector number to read
 ' @param buf_type - Buffer type: BUF_DIR, BUF_FAT, or BUF_DATA
-' @returns result - 0 on success, -1 on timeout/error
+' @returns result - 0 on success, negative error code on failure
 ' @local _sck - Local copy of SCK pin
 ' @local _miso - Local copy of MISO pin
 ' @local data - Received data/token
@@ -4943,13 +4961,13 @@ PRI readSector(sector, buf_type) : result | _sck, _miso, data, loop_ctr, timeout
           debug("  [readSector] ERROR: got $", uhex_byte_(data), " instead of $FF or $FE")
           pinh(cs)
           long[p_cache] := -1
-          result := -1
+          result := E_BAD_RESPONSE
           quit
         if getct() - timeout > 0
           debug("  [readSector] TIMEOUT waiting for start token")
           pinh(cs)
           long[p_cache] := -1
-          result := -1
+          result := E_TIMEOUT
           quit
       if result < 0                                                             '  token error or timeout
         quit                                                                    '   exit retry loop
@@ -5029,13 +5047,13 @@ PRI readSector(sector, buf_type) : result | _sck, _miso, data, loop_ctr, timeout
         else
           debug("  [readSector] CRC FAILED after ", udec_(MAX_READ_CRC_RETRIES), " attempts recv=$", uhex_(diag_recv_crc), " calc=$", uhex_(diag_calc_crc))
           long[p_cache] := -1                                                   ' Invalidate cache on failure
-          result := -1
+          result := E_CRC_ERROR
 
     ' CMD13: Verify card internal state after read
     ' CRC validates wire integrity; CMD13 validates card-internal state (ECC, address, etc.)
     if result == 0 and checkCardStatus(@"readSector") < 0
       long[p_cache] := -1                                                       ' Invalidate cache on card error
-      result := -1
+      result := E_IO_ERROR
   ' else: cache hit - result stays 0 (success)
 
 
@@ -5154,7 +5172,7 @@ PRI writeSector(sector, buf_type) : result | _sck, _mosi, p_buf, stream_mode, cl
 '
 ' @param sector - Sector number to write
 ' @param buf_type - Buffer type: BUF_DIR, BUF_FAT, or BUF_DATA
-' @returns result - TRUE on success, FALSE on failure
+' @returns result - 0 on success, negative error code on failure
 ' @local _sck - Local copy of SCK pin
 ' @local _mosi - Local copy of MOSI pin
 ' @local p_buf - Pointer to source buffer
@@ -5204,6 +5222,7 @@ PRI writeSector(sector, buf_type) : result | _sck, _mosi, p_buf, stream_mode, cl
     debug("  [writeSector] CMD24 FATAL, R1=$", uhex_byte_(resp))
     diag_write_result := 1                                                       ' 1 = CMD24 fatal
     pinh(cs)
+    result := E_IO_ERROR
   else
     if resp & R1_STALE_MASK                                                      ' Stale R1 bits: idle ($01), erase reset ($02), CRC ($08), erase seq ($10)
       debug("  [writeSector] CMD24 warning: R1=$", uhex_byte_(resp), " (stale bits, proceeding)")
@@ -5269,7 +5288,6 @@ PRI writeSector(sector, buf_type) : result | _sck, _mosi, p_buf, stream_mode, cl
     sp_transfer_8(diag_sent_crc & $FF)                                          ' CRC low byte
 
     ' Wait for data-response token (should be immediate, within a few bytes)
-    result := true                                                              '  optimistic
     timeout := getct() + clkfreq / 10                                           ' 100ms timeout for response
     repeat
       resp := sp_transfer_8($FF)
@@ -5280,26 +5298,28 @@ PRI writeSector(sector, buf_type) : result | _sck, _mosi, p_buf, stream_mode, cl
         diag_write_result := 2                                                  ' 2 = data-response timeout
         diag_write_dresp := $FF
         pinh(cs)
-        result := false
+        result := E_TIMEOUT
         quit
 
-    if result
+    if result == SUCCESS
       diag_write_dresp := resp                                                  ' Capture data response token
       ' Verify data-response token: bits [3:1] decode as: 010=accepted, 101=CRC error, 110=write error
       if (resp & DATA_RESPONSE_MASK) <> $05
         if (resp & DATA_RESPONSE_MASK) == $0B
           debug("  [writeSector] Data REJECTED: CRC error (response=$", uhex_byte_(resp), ")")
           diag_write_result := 3                                                ' 3 = CRC reject
+          result := E_WRITE_REJECTED
         elseif (resp & DATA_RESPONSE_MASK) == $0D
           debug("  [writeSector] Data REJECTED: Write error (response=$", uhex_byte_(resp), ")")
           diag_write_result := 4                                                ' 4 = write error reject
+          result := E_WRITE_REJECTED
         else
           debug("  [writeSector] Data REJECTED: Unknown status (response=$", uhex_byte_(resp), ")")
           diag_write_result := 5                                                ' 5 = unknown reject
+          result := E_IO_ERROR
         pinh(cs)
-        result := false
 
-    if result
+    if result == SUCCESS
       ' Wait for card to finish programming (busy period)
       ' Card holds MISO LOW during internal flash write, releases to HIGH ($FF) when done
       ' CRITICAL for PNY: Keep CS LOW and keep clocking until we see stable $FF!
@@ -5312,17 +5332,17 @@ PRI writeSector(sector, buf_type) : result | _sck, _mosi, p_buf, stream_mode, cl
           debug("  [writeSector] TIMEOUT waiting for programming complete")
           diag_write_result := 6                                                ' 6 = busy timeout
           pinh(cs)
-          result := false
+          result := E_CARD_BUSY
           quit
 
-    if result
+    if result == SUCCESS
       pinh(cs)
       diag_write_result := 7                                                    ' 7 = success
 
       ' CMD13: Verify card internal state after write
       ' Data response $05 confirms wire-level acceptance; CMD13 validates card-internal state
       if checkCardStatus(@"writeSector") < 0
-        result := false
+        result := E_IO_ERROR
 
 
 PRI writeSectors(start_sector, count, p_buffer) : sectors_written | _sck, _mosi, p_buf, stream_mode, clk_count, xfrq, resp, align_delay
@@ -5439,11 +5459,11 @@ PRI waitR1Response() : result | timeout, resp
 ' Wait for R1 response (non-$FF byte) - polls for R1 response after sending a command.
 ' Timeout: 100ms (per SD spec NCR = 0-8 bytes, but we allow more for slow cards)
 '
-' @returns result - R1 response byte on success, -1 on timeout
+' @returns result - R1 response byte on success, negative error code on timeout
 ' @local timeout - Timeout deadline
 ' @local resp - Received response byte
 
-  result := -1                                                                  '  default: timeout
+  result := E_TIMEOUT                                                           '  default: timeout
   timeout := getct() + clkfreq / 10                                             ' 100ms timeout
   repeat
     resp := sp_transfer_8($FF)
@@ -5460,11 +5480,11 @@ PRI waitDataToken() : result | timeout, resp
 ' Error tokens: $01-$0F indicate read errors.
 ' Timeout: Uses card_read_timeout_ms from CSD (minimum 100ms, with 10x safety factor)
 '
-' @returns result - 0 on success (got $FE), -1 on timeout or error token
+' @returns result - 0 on success (got $FE), negative error code on timeout or error token
 ' @local timeout - Timeout deadline
 ' @local resp - Received byte
 
-  result := -1                                                                  '  default: timeout/error
+  result := E_TIMEOUT                                                           '  default: timeout
   timeout := getct() + (clkfreq / 100) * card_read_timeout_ms                   ' CSD-based timeout with 10x margin
   repeat
     resp := sp_transfer_8($FF)
@@ -5473,6 +5493,7 @@ PRI waitDataToken() : result | timeout, resp
       quit
     if resp <> $FF                                                              ' Error token (not $FF, not $FE)
       debug("  [waitDataToken] ERROR token: $", uhex_byte_(resp))
+      result := E_BAD_RESPONSE
       quit
     if getct() - timeout > 0
       debug("  [waitDataToken] TIMEOUT")
@@ -5484,11 +5505,11 @@ PRI waitDataResponse() : result | timeout, resp
 ' Response format: xxx0sss1 where sss = 010 (accepted), 101 (CRC err), 110 (write err)
 ' Timeout: 100ms
 '
-' @returns result - Response status on success, -1 on timeout
+' @returns result - Response status on success, negative error code on timeout
 ' @local timeout - Timeout deadline
 ' @local resp - Received byte
 
-  result := -1                                                                  '  default: timeout
+  result := E_TIMEOUT                                                           '  default: timeout
   timeout := getct() + clkfreq / 10                                             ' 100ms timeout
   repeat
     resp := sp_transfer_8($FF)
@@ -5508,11 +5529,11 @@ PRI waitBusyComplete() : result | timeout, resp
 ' Timeout: Uses card_write_timeout_ms from CSD (default 250ms for SDHC, calculated for SDSC)
 ' CRITICAL: Must keep clocking and CS LOW during busy period!
 '
-' @returns result - 0 on success, -1 on timeout
+' @returns result - 0 on success, negative error code on timeout
 ' @local timeout - Timeout deadline
 ' @local resp - Received byte
 
-  result := -1                                                                  '  default: timeout
+  result := E_TIMEOUT                                                           '  default: timeout
   timeout := getct() + (clkfreq / 1000) * card_write_timeout_ms                 ' CSD-based timeout
   repeat
     resp := sp_transfer_8($FF)
@@ -5528,7 +5549,7 @@ PRI sendStopTransmission() : result | resp
 ' Send CMD12 to stop multi-block operation - terminates multi-block read/write.
 ' Note: CMD12 has a "stuff byte" before the response - we handle this by polling.
 '
-' @returns result - 0 on success, -1 on error
+' @returns result - 0 on success, negative error code on error
 ' @local resp - Response byte
 
   sp_transfer_8($40 | CMD12)                                                    ' Command byte: 0x40 | 12 = 0x4C
@@ -5542,10 +5563,10 @@ PRI sendStopTransmission() : result | resp
   ' Wait for R1b response (R1 followed by busy)
   resp := waitR1Response()
   if resp < 0
-    result := -1
+    result := E_TIMEOUT
   elseif resp <> $00
     debug("  [sendStopTransmission] R1 error: $", uhex_byte_(resp))
-    result := -1
+    result := E_IO_ERROR
   else
     ' Wait for busy to complete (card may still be finishing last block)
     result := waitBusyComplete()
@@ -5557,7 +5578,7 @@ PRI recoverToIdle() : result
 ' Dummy clocks with CS high allow the card to release MISO and transition to standby.
 ' VERIFIES that the card actually released the bus (MISO goes high).
 '
-' @returns result - 0 if card released bus, -1 if card still holding MISO low
+' @returns result - 0 if card released bus, negative error code if card still holding MISO low
 
   pinh(cs)                                                                        ' CS HIGH - abort any pending operation
   repeat 10
@@ -5571,7 +5592,7 @@ PRI recoverToIdle() : result
       sp_transfer_8($FF)                                                          ' 160 more clocks - extended recovery
     if pinr(miso) == 0
       debug("  [recoverToIdle] FAILED: card holding MISO low after 240 clocks")
-      result := -1                                                                ' Card stuck - caller must handle
+      result := E_IO_ERROR                                                        ' Card stuck - caller must handle
 
 
 PRI checkCardStatus(caller) : result | r1, status
@@ -5580,7 +5601,7 @@ PRI checkCardStatus(caller) : result | r1, status
 ' Call this after every write operation and after CMD12.
 '
 ' @param caller - String identifying the calling function (for debug)
-' @returns result - 0 on success (card OK), -1 on error
+' @returns result - 0 on success (card OK), negative error code on error
 ' @local r1 - R1 response byte
 ' @local status - Status byte (second byte of R2)
 
@@ -5606,7 +5627,7 @@ PRI checkCardStatus(caller) : result | r1, status
   if r1 < 0
     debug("  [checkCardStatus] ", zstr_(caller), ": TIMEOUT waiting for R1")
     pinh(cs)
-    result := -1
+    result := E_TIMEOUT
   else
     ' Get status byte (second byte of R2)
     status := sp_transfer_8($FF)
@@ -5624,7 +5645,7 @@ PRI checkCardStatus(caller) : result | r1, status
     ' Check for errors
     if r1 <> $00
       debug("  [checkCardStatus] ", zstr_(caller), ": R1 error=$", uhex_byte_(r1))
-      result := -1
+      result := E_IO_ERROR
     elseif status <> $00
       debug("  [checkCardStatus] ", zstr_(caller), ": STATUS error=$", uhex_byte_(status))
       if status & CSR_OUT_OF_RANGE
@@ -5643,7 +5664,7 @@ PRI checkCardStatus(caller) : result | r1, status
         debug("    -> WP_ERASE_SKIP")
       if status & CSR_CARD_IS_LOCKED
         debug("    -> CARD_IS_LOCKED")
-      result := -1
+      result := E_IO_ERROR
 
 
 PRI transfer(data,bits) : result | _cs, _mosi, _miso, _sck, delay
@@ -6277,7 +6298,7 @@ PRI readSectorSlow(sector, p_buffer) : result | data, idx, timeout
 '
 ' @param sector - Sector number to read
 ' @param p_buffer - Pointer to 512-byte destination buffer
-' @returns result - 0 on success, -1 on timeout/error
+' @returns result - 0 on success, negative error code on failure
 ' @local data - Received byte/token
 ' @local idx - Loop counter
 ' @local timeout - Timeout deadline
@@ -6286,7 +6307,7 @@ PRI readSectorSlow(sector, p_buffer) : result | data, idx, timeout
   cmd(CMD17, sector << hcs)
 
   ' Wait for start token ($FE)
-  result := -1                                                                   '  assume failure
+  result := E_TIMEOUT                                                            '  assume failure
   timeout := getct() + (clkfreq / 100) * card_read_timeout_ms
   repeat
     data := sp_transfer_8($FF)
@@ -6294,6 +6315,7 @@ PRI readSectorSlow(sector, p_buffer) : result | data, idx, timeout
       result := 0                                                                '  got start token
       quit
     if data <> $FF
+      result := E_BAD_RESPONSE
       quit                                                                       '  error token
     if getct() - timeout > 0
       quit                                                                       '  timeout

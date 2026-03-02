@@ -699,7 +699,7 @@ DAT
 
 ---
 
-## Summary: Why This Architecture
+## Summary: Why This Architecture (Decisions 1-11)
 
 | Component | Decision | P2-Specific Reason |
 |-----------|----------|-------------------|
@@ -958,6 +958,126 @@ E_CRC_ERROR = -4    ' Already defined in error codes
 
 ---
 
+## Decision 13: Card Presence Detection via P2 Internal Pull-Up (2026-03-02)
+
+### The Question
+How should the driver detect whether an SD card is physically present in the slot, given that the P2 Edge Module microSD socket has no card-detect pin?
+
+### Background: SD Spec Provides No SPI-Mode Detection Method
+
+The SD Physical Layer Simplified Specification v9.10 (December 2023) was reviewed in detail:
+
+1. **Section 6.2 "Card Detection"** is blank in the publicly available simplified spec. The full mechanism is in the non-public Mechanical Addendum.
+2. **Mechanical card-detect switch** (the standard approach) requires a physical switch in the socket that signals insertion/removal. The P2 Edge Module microSD socket does not expose a card-detect pin.
+3. **DAT3/CS pull-up method** (ACMD42) only works in SD bus mode. In SPI mode, DAT3 is repurposed as CS, which the host actively drives. The host cannot passively sense a pull-up on a line it drives.
+4. **No software-only detection method is defined** for SPI mode.
+
+The only implicit guidance (Section 7.2): "The selected card always responds to the command." If no response comes, no card is present.
+
+Full research: `DOCs/Reference/CARD-PRESENCE-DETECTION.md`
+
+### Electrical Analysis: Card Present vs. No Card
+
+The key distinction is on the MISO line:
+
+| Scenario | MISO Behavior |
+|----------|---------------|
+| Card present, CS low | Card actively drives MISO (responds within NCR = 0-8 bytes) |
+| Card present, CS high | Card drives MISO high (tri-state with internal pull-up) |
+| **No card, with pull-up** | **MISO reads steady $FF (nothing drives it)** |
+| No card, floating | MISO reads noise (unreliable) |
+
+**The decisive signal**: A present card responds to CMD0 with a non-$FF byte within the NCR window. With no card and a pull-up on MISO, every byte read is $FF and cmd() always times out.
+
+### The P2 Advantage: Built-In Programmable Pull-Up Resistors
+
+Every P2 I/O pin has configurable internal pull resistors:
+
+| Constant | Resistance | Suitability |
+|----------|-----------|-------------|
+| `P_HIGH_1K5` | 1.5K | Too strong (may affect card signals) |
+| `P_HIGH_15K` | 15K | Ideal (reliable detection, easily overpowered by card) |
+| `P_HIGH_150K` | 150K | Too weak (slow settling, noise susceptible) |
+
+A present SD card has an output impedance typically under 100 ohms, easily overpowering a 15K pull-up. This makes the detection completely reliable.
+
+**This eliminates any dependency on external board pull-up resistors.** The driver enables the pull-up itself before the CMD0 probe, making card detection self-contained and portable across all P2 board designs.
+
+### The Detection Method: CMD0 Probe with Pull-Up
+
+**Sequence:**
+
+```
+1. Enable P_HIGH_15K pull-up on MISO
+2. Float MISO pin (input with pull-up active)
+3. Wait 10 us for pull-up to settle
+4. Send >=74 clock pulses (standard power-up sequence)
+5. Send CMD0 up to 5 times, tracking got_response flag:
+   - cmd() returns 0 on timeout (all $FF = no driver on MISO)
+   - cmd() returns non-zero = something is driving MISO
+6. After loop:
+   - All timeouts (got_response == false) -> E_NO_CARD
+   - At least one non-$FF response but not $01 -> E_BAD_RESPONSE (card present, not initializing)
+   - Got $01 -> card present and idle, continue init
+7. Pull-up automatically cleared when initSPIPins() configures MISO for smart pin SPI
+```
+
+**Why this works:**
+- SD spec guarantees NCR = 0-8 bytes. A working card responds to CMD0 within microseconds.
+- Our cmd() has a 1-second timeout per attempt. A card that doesn't respond in 1 second is not going to.
+- Five retries with 10ms delays = ~5 seconds total. If nothing responds, nothing is there.
+- The failure mode ($FF from pull-up, no driver on MISO) is electrically distinct from "card present but broken" (card drives MISO to something).
+
+### New Error Code
+
+```spin2
+CON
+  E_NO_CARD = -8    ' No card detected in slot (MISO idle during CMD0 probe)
+```
+
+This sits in the card-level error tier (E_TIMEOUT=-1 through E_IO_ERROR=-7), adding the most fundamental failure: no hardware present.
+
+### Error Flow
+
+```
+User calls mount()
+  -> do_mount()
+    -> initCard()
+      -> Enable P_HIGH_15K on MISO
+      -> CMD0 loop: all timeouts, got_response stays false
+      -> result := false, last_init_error := E_NO_CARD
+    -> do_mount sees initCard() failed
+    -> pb_status := last_init_error  (= E_NO_CARD)
+  -> mount() returns E_NO_CARD to caller
+```
+
+**Caller usage:**
+```spin2
+result := sd.mount(CS, MOSI, MISO, SCK)
+if result == sd.E_NO_CARD
+  debug("No SD card inserted")
+elseif result < 0
+  debug("Mount failed: ", sdec(result))
+```
+
+### Decision
+
+**Detect card presence using P2 internal pull-up on MISO + CMD0 timeout analysis.**
+
+1. **Enable `P_HIGH_15K` on MISO** before the CMD0 probe sequence in `initCard()`
+2. **Track `got_response` flag** across all CMD0 retries
+3. **Return `E_NO_CARD`** when all CMD0 attempts time out (MISO never driven)
+4. **Propagate through `do_mount()`** so `mount()` returns `E_NO_CARD` to the caller
+
+**Rationale:**
+- Self-contained: No external pull-up resistors required on any board
+- Reliable: Electrically definitive ($FF from pull-up vs. card-driven response)
+- Zero cost: Pull-up is automatically cleared by normal SPI pin initialization
+- Specific: Callers get `E_NO_CARD` instead of generic `E_INIT_FAILED`
+- SD spec compliant: Uses the only available approach (behavioral detection) since the spec defines no SPI-mode detection method
+
+---
+
 ## Summary: Why This Architecture
 
 | Component | Decision | P2-Specific Reason |
@@ -972,16 +1092,17 @@ E_CRC_ERROR = -4    ' Already defined in error codes
 | Buffers | 3× hub RAM | Spin2 occupies cog/LUT; streamer needs hub |
 | Errors | Negative codes, per-cog | Thread-safe multi-cog access |
 | Failures | Timeouts, not retries | Caller has context to decide |
-| **CRC validation** | **GETCRC formula discovered** | **`((GETCRC ^ $2C68) REV 31) >> 16` replaces 512-byte table** |
+| CRC validation | GETCRC formula discovered | `((GETCRC ^ $2C68) REV 31) >> 16` replaces 512-byte table |
+| **Card detection** | **P_HIGH_15K pull-up + CMD0 probe** | **P2 built-in pull resistors eliminate external hardware** |
 
 These decisions work together to create a driver that is:
 - **Safe**: Multiple cogs can call APIs without conflicts
 - **Efficient**: COGATN signaling, optimal FIFO usage
-- **Reliable**: Timeout protection prevents hangs
+- **Reliable**: Timeout protection prevents hangs; card presence reliably detected
 - **Maintainable**: Spin2 for logic, PASM2 only where needed
 
 ---
 
 *Document created: 2026-01-17*
-*Last updated: 2026-01-31 (Decision 12: CRC algorithm SOLVED - GETCRC formula discovered)*
+*Last updated: 2026-03-02 (Decision 13: Card presence detection via P2 internal pull-up)*
 *For use by: Implementation agents, code reviewers*
