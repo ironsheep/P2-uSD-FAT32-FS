@@ -85,7 +85,7 @@ readBuffer_guard BYTE   0[16]
 ' Saved original label
 origLabel       BYTE    0[12]
 
-PUB go() | result, handle, h1, h2, h3, bytesWritten, bytesRead, pLabel, idx, pEntry, wrtDate, wrtTime, fileSize, vbrSector, found
+PUB go() | result, h1, h2, bytesWritten, bytesRead, pLabel, idx, pEntry, wrtDate, wrtTime, vbrSector, found
 '' Main entry point for volume operation regression tests
 
     debug(" ")
