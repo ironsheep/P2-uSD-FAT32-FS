@@ -47,9 +47,9 @@ CON
     SMALL_COUNT      = 8            ' Standard multi-block test size
     LARGE_COUNT      = 64           ' Large multi-block test
 
-    SECTOR_SIZE      = 512
 
 ' Enable full driver features for multi-block testing
+' Uncomment SD_INCLUDE_STACK_CHECK to measure worker cog stack depth
 #IFDEF __SPINTOOLS__
 #DEFINE SD_INCLUDE_ALL
 #ELSEIFDEF __FLEXSPIN__
@@ -57,6 +57,8 @@ CON
 #pragma exportdef SD_INCLUDE_ALL
 #ELSE
 #PRAGMA EXPORTDEF SD_INCLUDE_ALL
+#DEFINE SD_INCLUDE_STACK_CHECK
+#PRAGMA EXPORTDEF SD_INCLUDE_STACK_CHECK
 #ENDIF
 
 OBJ
@@ -65,11 +67,11 @@ OBJ
 
 VAR
     ' Buffers for multi-sector operations
-    BYTE    write_buf[SMALL_COUNT * SECTOR_SIZE]     ' 4KB for 8 sectors
-    BYTE    read_buf[SMALL_COUNT * SECTOR_SIZE]
+    BYTE    write_buf[SMALL_COUNT * sd.SECTOR_SIZE]     ' 4KB for 8 sectors
+    BYTE    read_buf[SMALL_COUNT * sd.SECTOR_SIZE]
     BYTE    read_buf_guard[16]
-    BYTE    large_write_buf[LARGE_COUNT * SECTOR_SIZE]  ' 32KB for 64 sectors
-    BYTE    large_read_buf[LARGE_COUNT * SECTOR_SIZE]
+    BYTE    large_write_buf[LARGE_COUNT * sd.SECTOR_SIZE]  ' 32KB for 64 sectors
+    BYTE    large_read_buf[LARGE_COUNT * sd.SECTOR_SIZE]
     BYTE    large_read_buf_guard[16]
 
     LONG    pass_count
@@ -125,6 +127,12 @@ PUB go() | result
     ' ========================================
     testLargeMultiBlock()
 
+    ' Report stack depth while worker cog is still running
+#IFDEF SD_INCLUDE_STACK_CHECK
+    debug(" ")
+    debug("* Worker cog stack: ", udec_(sd.reportStackDepth()), " of ", udec_(sd.STACK_SIZE), " longs used")
+#ENDIF
+
     debug(" ")
     debug("============================================================")
     debug("  Multi-Block Tests - Pass: ", udec_(pass_count), ", Fail: ", udec_(fail_count))
@@ -146,8 +154,8 @@ PRI testRoundTripMultiBlock() | sector, idx, written, readCt, errors
     sector := TEST_SECTOR_BASE
 
     ' Fill write buffer with known pattern: each byte = (sector_offset * 17 + byte_offset) & $FF
-    repeat idx from 0 to (SMALL_COUNT * SECTOR_SIZE) - 1
-        write_buf[idx] := ((idx / SECTOR_SIZE) * 17 + (idx // SECTOR_SIZE)) & $FF
+    repeat idx from 0 to (SMALL_COUNT * sd.SECTOR_SIZE) - 1
+        write_buf[idx] := ((idx / sd.SECTOR_SIZE) * 17 + (idx // sd.SECTOR_SIZE)) & $FF
 
     ' Write all 8 sectors at once
     debug("* Writing 8 sectors starting at ", udec_(sector))
@@ -158,7 +166,7 @@ PRI testRoundTripMultiBlock() | sector, idx, written, readCt, errors
         return
 
     ' Clear read buffer
-    bytefill(@read_buf, $00, SMALL_COUNT * SECTOR_SIZE)
+    bytefill(@read_buf, $00, SMALL_COUNT * sd.SECTOR_SIZE)
 
     ' Read all 8 sectors at once
     debug("* Reading 8 sectors starting at ", udec_(sector))
@@ -172,14 +180,14 @@ PRI testRoundTripMultiBlock() | sector, idx, written, readCt, errors
 
     ' Verify every byte
     errors := 0
-    repeat idx from 0 to (SMALL_COUNT * SECTOR_SIZE) - 1
+    repeat idx from 0 to (SMALL_COUNT * sd.SECTOR_SIZE) - 1
         if read_buf[idx] <> write_buf[idx]
             if errors < 5  ' Only report first 5 errors
                 debug("  ERROR at byte ", udec_(idx), ": expected $", uhex_byte_(write_buf[idx]), " got $", uhex_byte_(read_buf[idx]))
             errors++
 
     if errors == 0
-        debug("  -> PASS: All ", udec_(SMALL_COUNT * SECTOR_SIZE), " bytes verified")
+        debug("  -> PASS: All ", udec_(SMALL_COUNT * sd.SECTOR_SIZE), " bytes verified")
         recordPass()
     else
         debug("  -> FAIL: ", udec_(errors), " byte mismatches")
@@ -203,8 +211,8 @@ PRI testMultiWriteSingleRead() | sector, idx, jdx, written, errors, expected, ac
     sector := TEST_SECTOR_BASE + 10
 
     ' Fill write buffer with different pattern
-    repeat idx from 0 to (SMALL_COUNT * SECTOR_SIZE) - 1
-        write_buf[idx] := ((idx / SECTOR_SIZE) * 23 + (idx // SECTOR_SIZE) + $A0) & $FF
+    repeat idx from 0 to (SMALL_COUNT * sd.SECTOR_SIZE) - 1
+        write_buf[idx] := ((idx / sd.SECTOR_SIZE) * 23 + (idx // sd.SECTOR_SIZE) + $A0) & $FF
 
     ' Write all 8 sectors at once
     debug("* Writing 8 sectors with writeSectorsRaw at ", udec_(sector))
@@ -223,8 +231,8 @@ PRI testMultiWriteSingleRead() | sector, idx, jdx, written, errors, expected, ac
         utils.initAndCheckGuard(@read_buf_guard, @"read_buf guard")
 
         ' Verify this sector's data against write_buf
-        bufOffset := idx * SECTOR_SIZE
-        repeat jdx from 0 to SECTOR_SIZE - 1
+        bufOffset := idx * sd.SECTOR_SIZE
+        repeat jdx from 0 to sd.SECTOR_SIZE - 1
             expected := write_buf[bufOffset + jdx]
             actual := read_buf[jdx]
             if actual <> expected
@@ -260,8 +268,8 @@ PRI testSingleWriteMultiRead() | sector, idx, jdx, readCt, errors, expected, act
     debug("* Writing 8 sectors with individual writeSectorRaw at ", udec_(sector))
     repeat idx from 0 to SMALL_COUNT - 1
         ' Fill single sector buffer
-        bufOffset := idx * SECTOR_SIZE
-        repeat jdx from 0 to SECTOR_SIZE - 1
+        bufOffset := idx * sd.SECTOR_SIZE
+        repeat jdx from 0 to sd.SECTOR_SIZE - 1
             write_buf[bufOffset + jdx] := ((idx * 31) + jdx + $B0) & $FF
 
         ' Write this sector
@@ -271,7 +279,7 @@ PRI testSingleWriteMultiRead() | sector, idx, jdx, readCt, errors, expected, act
             return
 
     ' Clear read buffer
-    bytefill(@read_buf, $00, SMALL_COUNT * SECTOR_SIZE)
+    bytefill(@read_buf, $00, SMALL_COUNT * sd.SECTOR_SIZE)
 
     ' Read all 8 sectors at once
     debug("* Reading 8 sectors with readSectorsRaw")
@@ -286,8 +294,8 @@ PRI testSingleWriteMultiRead() | sector, idx, jdx, readCt, errors, expected, act
     ' Verify all data
     errors := 0
     repeat idx from 0 to SMALL_COUNT - 1
-        bufOffset := idx * SECTOR_SIZE
-        repeat jdx from 0 to SECTOR_SIZE - 1
+        bufOffset := idx * sd.SECTOR_SIZE
+        repeat jdx from 0 to sd.SECTOR_SIZE - 1
             expected := write_buf[bufOffset + jdx]
             actual := read_buf[bufOffset + jdx]
             if actual <> expected
@@ -320,7 +328,7 @@ PRI testEdgeCases() | sector, idx, written, readCt, errors
     debug("* Test 4a: writeSectorsRaw/readSectorsRaw with count=1")
 
     ' Fill single sector
-    repeat idx from 0 to SECTOR_SIZE - 1
+    repeat idx from 0 to sd.SECTOR_SIZE - 1
         write_buf[idx] := (idx + $C0) & $FF
 
     written := sd.writeSectorsRaw(sector, 1, @write_buf)
@@ -328,7 +336,7 @@ PRI testEdgeCases() | sector, idx, written, readCt, errors
         debug("  FAIL: count=1 write returned ", udec_(written))
         recordFail()
     else
-        bytefill(@read_buf, $00, SECTOR_SIZE)
+        bytefill(@read_buf, $00, sd.SECTOR_SIZE)
         utils.initGuard(@read_buf_guard)
         readCt := sd.readSectorsRaw(sector, 1, @read_buf)
         utils.checkGuard(@read_buf_guard, @"read_buf guard")
@@ -337,7 +345,7 @@ PRI testEdgeCases() | sector, idx, written, readCt, errors
             recordFail()
         else
             errors := 0
-            repeat idx from 0 to SECTOR_SIZE - 1
+            repeat idx from 0 to sd.SECTOR_SIZE - 1
                 if read_buf[idx] <> write_buf[idx]
                     errors++
             if errors == 0
@@ -376,8 +384,8 @@ PRI testLargeMultiBlock() | sector, idx, written, readCt, errors
 
     ' Fill large write buffer with pattern
     debug("* Filling 32KB buffer with pattern...")
-    repeat idx from 0 to (LARGE_COUNT * SECTOR_SIZE) - 1
-        large_write_buf[idx] := ((idx / SECTOR_SIZE) + (idx // SECTOR_SIZE)) & $FF
+    repeat idx from 0 to (LARGE_COUNT * sd.SECTOR_SIZE) - 1
+        large_write_buf[idx] := ((idx / sd.SECTOR_SIZE) + (idx // sd.SECTOR_SIZE)) & $FF
 
     ' Write 64 sectors at once
     debug("* Writing 64 sectors starting at ", udec_(sector))
@@ -388,7 +396,7 @@ PRI testLargeMultiBlock() | sector, idx, written, readCt, errors
         return
 
     debug("* Write complete, clearing read buffer...")
-    bytefill(@large_read_buf, $00, LARGE_COUNT * SECTOR_SIZE)
+    bytefill(@large_read_buf, $00, LARGE_COUNT * sd.SECTOR_SIZE)
 
     ' Read 64 sectors at once
     debug("* Reading 64 sectors starting at ", udec_(sector))
@@ -403,14 +411,14 @@ PRI testLargeMultiBlock() | sector, idx, written, readCt, errors
     ' Verify all 32KB
     debug("* Verifying 32KB of data...")
     errors := 0
-    repeat idx from 0 to (LARGE_COUNT * SECTOR_SIZE) - 1
+    repeat idx from 0 to (LARGE_COUNT * sd.SECTOR_SIZE) - 1
         if large_read_buf[idx] <> large_write_buf[idx]
             if errors < 5
                 debug("  ERROR at byte ", udec_(idx), ": expected $", uhex_byte_(large_write_buf[idx]), " got $", uhex_byte_(large_read_buf[idx]))
             errors++
 
     if errors == 0
-        debug("  -> PASS: All 32KB (", udec_(LARGE_COUNT * SECTOR_SIZE), " bytes) verified")
+        debug("  -> PASS: All 32KB (", udec_(LARGE_COUNT * sd.SECTOR_SIZE), " bytes) verified")
         recordPass()
     else
         debug("  -> FAIL: ", udec_(errors), " byte mismatches in 32KB")

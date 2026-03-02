@@ -38,16 +38,13 @@ CON
     'SD_SCK  = 21
 
     ' Expected FAT32 constants
-    MBR_SIGNATURE       = $AA55
-    PARTITION_TYPE_FAT32_LBA = $0C
-    FSINFO_SIG1         = $41615252  ' "RRaA"
-    FSINFO_SIG2         = $61417272  ' "rrAa"
     FSINFO_TRAIL_SIG    = $AA550000  ' Trail signature (stored little-endian)
     FAT32_MEDIA_TYPE    = $F8        ' Fixed disk
     EXT_BOOT_SIG        = $29        ' Extended boot signature
     PARTITION_START     = 8192       ' 4MB alignment
 
 ' Enable full driver features for format testing
+' Uncomment SD_INCLUDE_STACK_CHECK to measure worker cog stack depth
 #IFDEF __SPINTOOLS__
 #DEFINE SD_INCLUDE_ALL
 #ELSEIFDEF __FLEXSPIN__
@@ -55,6 +52,8 @@ CON
 #pragma exportdef SD_INCLUDE_ALL
 #ELSE
 #PRAGMA EXPORTDEF SD_INCLUDE_ALL
+#DEFINE SD_INCLUDE_STACK_CHECK
+#PRAGMA EXPORTDEF SD_INCLUDE_STACK_CHECK
 #ENDIF
 
 OBJ
@@ -65,9 +64,9 @@ OBJ
 
 VAR
 
-    BYTE    buf[512]
+    BYTE    buf[sd.SECTOR_SIZE]
     BYTE    buf_guard[16]
-    BYTE    buf2[512]
+    BYTE    buf2[sd.SECTOR_SIZE]
     BYTE    buf2_guard[16]
     LONG    sectorsPerFat
     LONG    totalSectors
@@ -119,16 +118,16 @@ PUB go() | result, dataStart, fat1Start, fat2Start, idx, mismatch, cardSectors
     utils.checkGuard(@buf_guard, @"buf guard")
 
     utils.startTest(@"MBR boot signature")
-    result := WORD[@buf + $1FE]
-    utils.evaluateBool(result == MBR_SIGNATURE, @"$AA55 at offset $1FE", true)
+    result := WORD[@buf + sd.BOOT_SIG_OFFSET]
+    utils.evaluateBool(result == sd.BOOT_SIGNATURE, @"$AA55 at offset $1FE", true)
 
     utils.startTest(@"Partition 1 bootable flag")
-    result := buf[$1BE]
+    result := buf[sd.MBR_PARTITION_OFFSET]
     utils.evaluateBool(result == $00 OR result == $80, @"$00 or $80", true)
 
     utils.startTest(@"Partition 1 type")
     result := buf[$1C2]
-    utils.evaluateBool(result == PARTITION_TYPE_FAT32_LBA, @"$0C (FAT32 LBA)", true)
+    utils.evaluateBool(result == sd.PART_TYPE_FAT32_LBA, @"$0C (FAT32 LBA)", true)
 
     utils.startTest(@"Partition 1 start sector")
     partitionStart := LONG[@buf + $1C6]
@@ -155,8 +154,8 @@ PUB go() | result, dataStart, fat1Start, fat2Start, idx, mismatch, cardSectors
     utils.evaluateBool(result == $EB OR result == $E9, @"Jump ($EB or $E9)", true)
 
     utils.startTest(@"VBR boot signature")
-    result := WORD[@buf + $1FE]
-    utils.evaluateBool(result == MBR_SIGNATURE, @"$AA55 at offset $1FE", true)
+    result := WORD[@buf + sd.BOOT_SIG_OFFSET]
+    utils.evaluateBool(result == sd.BOOT_SIGNATURE, @"$AA55 at offset $1FE", true)
 
     utils.startTest(@"OEM name present")
     ' OEM name at offset $03, should be printable ASCII
@@ -166,7 +165,7 @@ PUB go() | result, dataStart, fat1Start, fat2Start, idx, mismatch, cardSectors
 
     utils.startTest(@"Bytes per sector")
     result := WORD[@buf + $0B]
-    utils.evaluateBool(result == 512, @"512 bytes/sector", true)
+    utils.evaluateBool(result == sd.SECTOR_SIZE, @"512 bytes/sector", true)
 
     utils.startTest(@"Sectors per cluster")
     result := buf[$0D]
@@ -267,11 +266,11 @@ PUB go() | result, dataStart, fat1Start, fat2Start, idx, mismatch, cardSectors
 
     utils.startTest(@"FSInfo lead signature")
     result := LONG[@buf + 0]
-    utils.evaluateBool(result == FSINFO_SIG1, @"$41615252 (RRaA)", true)
+    utils.evaluateBool(result == sd.FSINFO_LEAD_SIG, @"$41615252 (RRaA)", true)
 
     utils.startTest(@"FSInfo structure signature")
     result := LONG[@buf + 484]
-    utils.evaluateBool(result == FSINFO_SIG2, @"$61417272 (rrAa)", true)
+    utils.evaluateBool(result == sd.FSINFO_STRUCT_SIG, @"$61417272 (rrAa)", true)
 
     utils.startTest(@"FSInfo trail signature")
     result := LONG[@buf + $1FC]
@@ -389,7 +388,7 @@ PUB go() | result, dataStart, fat1Start, fat2Start, idx, mismatch, cardSectors
     utils.startTest(@"Second entry is end marker or empty")
     result := buf[$20]
     ' Should be $00 (end) or another valid entry
-    utils.evaluateBool(result == $00 OR result == $E5 OR (result >= $20 AND result <= $7E), @"Valid second entry", true)
+    utils.evaluateBool(result == $00 OR result == sd.DIR_ENTRY_DELETED OR (result >= $20 AND result <= $7E), @"Valid second entry", true)
 
     utils.startTest(@"Rest of root cluster is zeroed")
     mismatch := false
@@ -417,6 +416,12 @@ PUB go() | result, dataStart, fat1Start, fat2Start, idx, mismatch, cardSectors
     result := sd.freeSpace()
     utils.evaluateBool(result > 0, @"Free space > 0", true)
     debug("  Free space: ", udec(result), " sectors")
+
+    ' Report stack depth while worker cog is still running
+#IFDEF SD_INCLUDE_STACK_CHECK
+    debug(" ")
+    debug("* Worker cog stack: ", udec_(sd.reportStackDepth()), " of ", udec_(sd.STACK_SIZE), " longs used")
+#ENDIF
 
     sd.unmount()
 

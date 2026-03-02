@@ -56,6 +56,7 @@ CON
     NUM_TEST_SECTORS = 5
 
 ' Enable full driver features for raw sector testing
+' Uncomment SD_INCLUDE_STACK_CHECK to measure worker cog stack depth
 #IFDEF __SPINTOOLS__
 #DEFINE SD_INCLUDE_ALL
 #ELSEIFDEF __FLEXSPIN__
@@ -63,6 +64,8 @@ CON
 #pragma exportdef SD_INCLUDE_ALL
 #ELSE
 #PRAGMA EXPORTDEF SD_INCLUDE_ALL
+#DEFINE SD_INCLUDE_STACK_CHECK
+#PRAGMA EXPORTDEF SD_INCLUDE_STACK_CHECK
 #ENDIF
 
 OBJ
@@ -269,6 +272,12 @@ PUB go() | result, idx, sector
         debug("  High sector read returned: ", sdec_(result))
         debug("  -> pass (driver returned error for out-of-range sector)")
         recordPass()
+
+    ' Report stack depth while worker cog is still running
+#IFDEF SD_INCLUDE_STACK_CHECK
+    debug(" ")
+    debug("* Worker cog stack: ", udec_(sd.reportStackDepth()), " of ", udec_(sd.STACK_SIZE), " longs used")
+#ENDIF
 
     debug(" ")
     debug("============================================================")

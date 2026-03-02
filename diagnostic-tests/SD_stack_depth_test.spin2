@@ -1,0 +1,144 @@
+'' =================================================================================================
+''
+''   File....... SD_stack_depth_test.spin2
+''   Purpose.... Measure worker cog stack depth after Phase C refactoring
+''   Author..... Stephen M Moraco
+''   Started.... MAR 2026
+''
+'' =================================================================================================
+''
+'' Temporary diagnostic: mounts the card, calls freeSpace() (deepest call chain),
+'' then asks the worker cog to report actual stack usage via isp_stack_check.
+''
+'' =================================================================================================
+
+CON
+
+     _CLKFREQ        = 350_000_000
+
+     ' P2 Edge module SD slot pins
+     SD_CS   = 60
+     SD_MOSI = 59
+     SD_MISO = 58
+     SD_SCK  = 61
+
+     SECTOR_SIZE = 512
+
+' Enable all features plus stack checking
+#IFDEF __SPINTOOLS__
+#DEFINE SD_INCLUDE_ALL
+#DEFINE SD_INCLUDE_STACK_CHECK
+#ELSEIFDEF __FLEXSPIN__
+#define SD_INCLUDE_ALL
+#pragma exportdef SD_INCLUDE_ALL
+#define SD_INCLUDE_STACK_CHECK
+#pragma exportdef SD_INCLUDE_STACK_CHECK
+#ELSE
+#PRAGMA EXPORTDEF SD_INCLUDE_ALL
+#PRAGMA EXPORTDEF SD_INCLUDE_STACK_CHECK
+#ENDIF
+
+OBJ
+    sd : "micro_sd_fat32_fs"
+
+VAR
+    BYTE    readBuf[8 * SECTOR_SIZE]
+
+PUB go() | result, freeSpace, handle, bytesRead, depth
+
+    debug(" ")
+    debug("============================================================")
+    debug("  Worker Cog Stack Depth Measurement")
+    debug("============================================================")
+    debug("  Stack size: ", udec_(sd.STACK_SIZE), " longs")
+    debug(" ")
+
+    ' Mount
+    debug("--- Mount ---")
+    result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    debug("  mount() = ", sdec_(result))
+    depth := sd.reportStackDepth()
+    debug("  STACK: ", udec_(depth), " of ", udec_(sd.STACK_SIZE), " longs used")
+
+    if result == sd.SUCCESS
+        ' freeSpace (deep: do_freespace -> readSector x N)
+        debug(" ")
+        debug("--- freeSpace ---")
+        freeSpace := sd.freeSpace()
+        debug("  freeSpace() = ", udec_(freeSpace))
+        depth := sd.reportStackDepth()
+    debug("  STACK: ", udec_(depth), " of ", udec_(sd.STACK_SIZE), " longs used")
+
+        ' Open, read, close a file (deep: do_open_read -> searchDirectory -> readSector)
+        debug(" ")
+        debug("--- openFileRead ---")
+        handle := sd.openFileRead(@testFile)
+        debug("  openFileRead() = ", sdec_(handle))
+        depth := sd.reportStackDepth()
+    debug("  STACK: ", udec_(depth), " of ", udec_(sd.STACK_SIZE), " longs used")
+
+        if handle >= 0
+            debug(" ")
+            debug("--- readHandle ---")
+            bytesRead := sd.readHandle(handle, @readBuf, SECTOR_SIZE)
+            debug("  readHandle() = ", sdec_(bytesRead))
+            depth := sd.reportStackDepth()
+    debug("  STACK: ", udec_(depth), " of ", udec_(sd.STACK_SIZE), " longs used")
+
+            sd.closeFileHandle(handle)
+
+        ' Multi-block read (deep: readSectors with streamer)
+        debug(" ")
+        debug("--- readSectorsRaw (8 sectors) ---")
+        result := sd.readSectorsRaw(100, 8, @readBuf)
+        debug("  readSectorsRaw() = ", sdec_(result))
+        depth := sd.reportStackDepth()
+    debug("  STACK: ", udec_(depth), " of ", udec_(sd.STACK_SIZE), " longs used")
+
+        ' Write + read verify (deep: writeSector with streamer)
+        debug(" ")
+        debug("--- writeSectorRaw ---")
+        bytefill(@readBuf, $A5, SECTOR_SIZE)
+        result := sd.writeSectorRaw(200_000, @readBuf)
+        debug("  writeSectorRaw() = ", sdec_(result))
+        depth := sd.reportStackDepth()
+    debug("  STACK: ", udec_(depth), " of ", udec_(sd.STACK_SIZE), " longs used")
+
+        ' Create + write (deep: do_create -> allocateCluster -> readSector + writeSector)
+        debug(" ")
+        debug("--- createFileNew ---")
+        handle := sd.createFileNew(@tempFile)
+        debug("  createFileNew() = ", sdec_(handle))
+        depth := sd.reportStackDepth()
+    debug("  STACK: ", udec_(depth), " of ", udec_(sd.STACK_SIZE), " longs used")
+
+        if handle >= 0
+            debug(" ")
+            debug("--- writeHandle ---")
+            bytefill(@readBuf, $42, 256)
+            result := sd.writeHandle(handle, @readBuf, 256)
+            debug("  writeHandle() = ", sdec_(result))
+            depth := sd.reportStackDepth()
+    debug("  STACK: ", udec_(depth), " of ", udec_(sd.STACK_SIZE), " longs used")
+
+            sd.closeFileHandle(handle)
+
+        ' Clean up test file
+        sd.deleteFile(@tempFile)
+
+        ' Unmount
+        debug(" ")
+        debug("--- unmount ---")
+        sd.unmount()
+        depth := sd.reportStackDepth()
+    debug("  STACK: ", udec_(depth), " of ", udec_(sd.STACK_SIZE), " longs used")
+
+    debug(" ")
+    debug("============================================================")
+    debug("  Stack Depth Measurement Complete")
+    debug("============================================================")
+    debug("END_SESSION")
+
+DAT
+    testFile    BYTE    "TEST1.TXT", 0
+    tempFile    BYTE    "STKTEST.TMP", 0

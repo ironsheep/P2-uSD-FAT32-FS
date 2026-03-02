@@ -37,11 +37,6 @@ CON
      'SD_MISO = 18
      'SD_SCK  = 21
 
-     ' V3 Error codes
-     E_FILE_EXISTS     = -41
-     E_FILE_NOT_FOUND  = -40
-     E_NOT_A_FILE      = -42
-     E_NOT_A_DIR       = -43
 
 ' Enable raw sector access and debug methods for diagnostic tests
 #IFDEF __SPINTOOLS__
@@ -131,7 +126,7 @@ PUB go() | result, handle, dh, count, pEntry
     ' Test #4: Verify empty file is deleted
     utils.startTest(@"Verify empty file deleted (openFileRead fails)")
     handle := sd.openFileRead(@emptyFile)
-    utils.evaluateSingleValue(handle, @"openFileRead() after delete", E_FILE_NOT_FOUND)
+    utils.evaluateSingleValue(handle, @"openFileRead() after delete", sd.E_FILE_NOT_FOUND)
 
     ' ══════════════════════════════════════════════════════════════════════
     ' TEST GROUP: Dir enumeration immediately after file creation
@@ -309,7 +304,7 @@ PUB go() | result, handle, dh, count, pEntry
     ' Test #13: Verify deleted file not found
     utils.startTest(@"Deleted file not found in subdirectory")
     handle := sd.openFileRead(@testfile1)
-    utils.evaluateSingleValue(handle, @"openFileRead() after del", E_FILE_NOT_FOUND)
+    utils.evaluateSingleValue(handle, @"openFileRead() after del", sd.E_FILE_NOT_FOUND)
 
     ' Test #14: Delete file with data in subdirectory
     utils.startTest(@"Delete file with data in subdirectory")
@@ -352,7 +347,7 @@ PUB go() | result, handle, dh, count, pEntry
     utils.startTest(@"Renamed file accessible under new name")
     utils.setCheckCountPerTest(2)
     handle := sd.openFileRead(@emptyFile)
-    utils.evaluateSubValue(handle, @"old name gone", E_FILE_NOT_FOUND)
+    utils.evaluateSubValue(handle, @"old name gone", sd.E_FILE_NOT_FOUND)
     handle := sd.openFileRead(@renamedEmpty)
     utils.evaluateSubBool(handle >= 0, @"new name accessible", true)
     if handle >= 0

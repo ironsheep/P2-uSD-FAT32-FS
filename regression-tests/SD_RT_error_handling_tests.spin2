@@ -36,17 +36,6 @@ CON
      'SD_MISO = 18
      'SD_SCK  = 21
 
-     ' Error codes
-     E_FILE_NOT_FOUND    = -40
-     E_FILE_EXISTS       = -41
-     E_FILE_NOT_OPEN     = -45
-     E_END_OF_FILE       = -46
-     E_TOO_MANY_FILES    = -90
-     E_INVALID_HANDLE    = -91
-     E_FILE_ALREADY_OPEN = -92
-
-     MBR_SIGNATURE       = $AA55
-     SECTOR_SIZE         = 512
 
 ' Enable raw sector access for MBR integrity check and debug features
 #IFDEF __SPINTOOLS__
@@ -80,7 +69,7 @@ badPath1        BYTE    "NOEXIST/CHILD", 0    ' parent doesn't exist
 testContent     BYTE    "0123456789", 0       ' Exactly 10 bytes
 
 ' Buffer for MBR integrity check
-mbr_buf         BYTE    0[SECTOR_SIZE]
+mbr_buf         BYTE    0[sd.SECTOR_SIZE]
 
 readBuffer      BYTE    0[64]
 readBuffer_guard BYTE   0[16]
@@ -123,7 +112,7 @@ PUB go() | result, handle, h1, h2, h3, h4, h5, bytesRead, bytesWritten
     ' (This complements the multihandle tests but focuses on closed handles)
     utils.startTest(@"readHandle() on never-opened handle returns error")
     bytesRead := sd.readHandle(99, @readBuffer, 10)
-    utils.evaluateSingleValue(bytesRead, @"readHandle(99)", E_INVALID_HANDLE)
+    utils.evaluateSingleValue(bytesRead, @"readHandle(99)", sd.E_INVALID_HANDLE)
 
     ' Test: E_END_OF_FILE - create small file, read past end
     utils.startTest(@"Read past EOF returns partial data then 0")
@@ -248,7 +237,7 @@ PUB go() | result, handle, h1, h2, h3, h4, h5, bytesRead, bytesWritten
     else
         ' Document if driver doesn't allow this
         debug("  NOTE: Driver doesn't allow read while write-open")
-        utils.evaluateSubBool(h2 == E_FILE_ALREADY_OPEN, @"error is E_FILE_ALREADY_OPEN", true)
+        utils.evaluateSubBool(h2 == sd.E_FILE_ALREADY_OPEN, @"error is E_FILE_ALREADY_OPEN", true)
 
     if h1 >= 0
         sd.closeFileHandle(h1)
@@ -266,7 +255,7 @@ PUB go() | result, handle, h1, h2, h3, h4, h5, bytesRead, bytesWritten
 
     ' Read MBR before the test -- save signature as ground truth
     sd.readSectorRaw(0, @mbr_buf)
-    utils.evaluateSubValue(WORD[@mbr_buf + $1FE], @"MBR sig before", MBR_SIGNATURE)
+    utils.evaluateSubValue(WORD[@mbr_buf + sd.BOOT_SIG_OFFSET], @"MBR sig before", sd.BOOT_SIGNATURE)
 
     ' Attempt to create directory with non-existent parent
     result := sd.newDirectory(@badPath1)
@@ -275,11 +264,11 @@ PUB go() | result, handle, h1, h2, h3, h4, h5, bytesRead, bytesWritten
 
     ' Re-read MBR -- signature MUST still be intact
     sd.readSectorRaw(0, @mbr_buf)
-    utils.evaluateSubValue(WORD[@mbr_buf + $1FE], @"MBR sig after", MBR_SIGNATURE)
+    utils.evaluateSubValue(WORD[@mbr_buf + sd.BOOT_SIG_OFFSET], @"MBR sig after", sd.BOOT_SIGNATURE)
 
     ' Also verify first bytes of MBR are not a directory entry
     ' (directory entries start with a filename, not MBR boot code)
-    utils.evaluateSubBool(BYTE[@mbr_buf] <> $E5 and BYTE[@mbr_buf + 11] <> $10, ...
+    utils.evaluateSubBool(BYTE[@mbr_buf] <> sd.DIR_ENTRY_DELETED and BYTE[@mbr_buf + sd.DE_ATTR_OFFSET] <> sd.ATTR_DIRECTORY, ...
         @"sector 0 not dir entry", true)
 
     ' ----------------------------------
@@ -300,7 +289,7 @@ PUB go() | result, handle, h1, h2, h3, h4, h5, bytesRead, bytesWritten
     if handle >= 0
         bytesWritten := sd.writeHandle(handle, @testContent, 10)
         debug("  writeHandle on read handle: ", sdec_(bytesWritten))
-        utils.evaluateSingleValue(bytesWritten, @"writeHandle()", E_INVALID_HANDLE)
+        utils.evaluateSingleValue(bytesWritten, @"writeHandle()", sd.E_INVALID_HANDLE)
         sd.closeFileHandle(handle)
 
     ' Test: readHandle on write handle is allowed (documents behavior)

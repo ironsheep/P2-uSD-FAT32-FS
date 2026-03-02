@@ -36,14 +36,7 @@ CON
      'SD_MISO = 18
      'SD_SCK  = 21
 
-     ' V3 Error codes we expect to encounter
-     E_TOO_MANY_FILES    = -90
-     E_INVALID_HANDLE    = -91
-     E_FILE_ALREADY_OPEN = -92
-     E_FILE_NOT_FOUND    = -40
-     E_FILE_EXISTS       = -41
-
-     ' Maximum handles to test (must match driver's MAX_OPEN_FILES)
+' Maximum handles to test (must match driver's MAX_OPEN_FILES)
      MAX_TEST_HANDLES = 6
 
 OBJ
@@ -195,7 +188,7 @@ PUB go() | result, h1, h2, h3, h4, h5, h6, bytesRead, bytesWritten, pos, size
     utils.evaluateSubBool(h1 >= 0, @"First write-open succeeds", true)
 
     h2 := sd.openFileWrite(@testfile1)
-    utils.evaluateSubValue(h2, @"Second write-open error", E_FILE_ALREADY_OPEN)
+    utils.evaluateSubValue(h2, @"Second write-open error", sd.E_FILE_ALREADY_OPEN)
 
     sd.closeFileHandle(h1)
 
@@ -239,7 +232,7 @@ PUB go() | result, h1, h2, h3, h4, h5, h6, bytesRead, bytesWritten, pos, size
     utils.evaluateSubBool(h6 >= 0, @"Handle 6 allocated", true)
 
     result := sd.openFileRead(@testfile2)
-    utils.evaluateSubValue(result, @"7th open error", E_TOO_MANY_FILES)
+    utils.evaluateSubValue(result, @"7th open error", sd.E_TOO_MANY_FILES)
 
     sd.closeFileHandle(h1)
     sd.closeFileHandle(h2)
@@ -399,24 +392,24 @@ PUB go() | result, h1, h2, h3, h4, h5, h6, bytesRead, bytesWritten, pos, size
     ' Test: readHandle with -1 returns E_INVALID_HANDLE
     utils.startTest(@"readHandle(-1) returns E_INVALID_HANDLE")
     result := sd.readHandle(-1, @readBuffer, 10)
-    utils.evaluateSingleValue(result, @"readHandle(-1)", E_INVALID_HANDLE)
+    utils.evaluateSingleValue(result, @"readHandle(-1)", sd.E_INVALID_HANDLE)
 
     ' Test: readHandle with 99 returns E_INVALID_HANDLE
     utils.startTest(@"readHandle(99) returns E_INVALID_HANDLE")
     result := sd.readHandle(99, @readBuffer, 10)
-    utils.evaluateSingleValue(result, @"readHandle(99)", E_INVALID_HANDLE)
+    utils.evaluateSingleValue(result, @"readHandle(99)", sd.E_INVALID_HANDLE)
 
     ' Test: writeHandle on closed handle returns E_INVALID_HANDLE
     utils.startTest(@"writeHandle on closed handle returns E_INVALID_HANDLE")
     h1 := sd.createFileNew(@testfile5)
     sd.closeFileHandle(h1)
     result := sd.writeHandle(h1, @"test", 4)
-    utils.evaluateSingleValue(result, @"writeHandle(closed)", E_INVALID_HANDLE)
+    utils.evaluateSingleValue(result, @"writeHandle(closed)", sd.E_INVALID_HANDLE)
 
     ' Test: seekHandle with invalid handle returns E_INVALID_HANDLE
     utils.startTest(@"seekHandle(-1) returns E_INVALID_HANDLE")
     result := sd.seekHandle(-1, 0)
-    utils.evaluateSingleValue(result, @"seekHandle(-1)", E_INVALID_HANDLE)
+    utils.evaluateSingleValue(result, @"seekHandle(-1)", sd.E_INVALID_HANDLE)
 
     ' Test: closeFileHandle twice returns E_INVALID_HANDLE on second call
     utils.startTest(@"Double close returns E_INVALID_HANDLE")
@@ -424,27 +417,27 @@ PUB go() | result, h1, h2, h3, h4, h5, h6, bytesRead, bytesWritten, pos, size
     result := sd.closeFileHandle(h1)
     utils.evaluateSubValue(result, @"First close", 0)
     result := sd.closeFileHandle(h1)
-    utils.evaluateSubValue(result, @"Second close", E_INVALID_HANDLE)
+    utils.evaluateSubValue(result, @"Second close", sd.E_INVALID_HANDLE)
 
     ' Test: tellHandle with invalid handle returns E_INVALID_HANDLE
     utils.startTest(@"tellHandle(-1) returns E_INVALID_HANDLE")
     result := sd.tellHandle(-1)
-    utils.evaluateSingleValue(result, @"tellHandle(-1)", E_INVALID_HANDLE)
+    utils.evaluateSingleValue(result, @"tellHandle(-1)", sd.E_INVALID_HANDLE)
 
     ' Test: fileSizeHandle with invalid handle returns E_INVALID_HANDLE
     utils.startTest(@"fileSizeHandle(-1) returns E_INVALID_HANDLE")
     result := sd.fileSizeHandle(-1)
-    utils.evaluateSingleValue(result, @"fileSizeHandle(-1)", E_INVALID_HANDLE)
+    utils.evaluateSingleValue(result, @"fileSizeHandle(-1)", sd.E_INVALID_HANDLE)
 
     ' Test: syncHandle with invalid handle returns E_INVALID_HANDLE
     utils.startTest(@"syncHandle(-1) returns E_INVALID_HANDLE")
     result := sd.syncHandle(-1)
-    utils.evaluateSingleValue(result, @"syncHandle(-1)", E_INVALID_HANDLE)
+    utils.evaluateSingleValue(result, @"syncHandle(-1)", sd.E_INVALID_HANDLE)
 
     ' Test: eofHandle with invalid handle returns E_INVALID_HANDLE
     utils.startTest(@"eofHandle(-1) returns E_INVALID_HANDLE")
     result := sd.eofHandle(-1)
-    utils.evaluateSingleValue(result, @"eofHandle(-1)", E_INVALID_HANDLE)
+    utils.evaluateSingleValue(result, @"eofHandle(-1)", sd.E_INVALID_HANDLE)
 
     ' ======================================================================
     ' Cleanup and Summary

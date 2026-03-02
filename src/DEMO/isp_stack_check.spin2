@@ -43,14 +43,23 @@ PUB checkStack(pStack, nStackLongCt)
         debug("^^^ STACK Overflow! Depth greater than ", udec(nStackLongCt),  " longs")
         lockupForAnly()
 
-PUB reportStackUse(pStack, nStackLongCt)
-'' Write stack usage to debug()
-    nStkChkUsed := 0
+PUB getStackDepth(pStack, nStackLongCt) : depth
+'' Return number of stack longs used (high-water mark).
+'' Counts from bottom up until first sentinel found.
+''
+'' @param pStack - Pointer to stack buffer (previously prepared with prepStackForCheck)
+'' @param nStackLongCt - Size of stack in longs
+'' @returns depth - Number of longs used
+    depth := 0
     repeat nStkChkIdx from 0 to nStackLongCt - 1
         if LONG[pStack][nStkChkIdx] <> NOT_WRITTEN_MARK
-            nStkChkUsed++
+            depth++
         else
-            quit    ' done we have our count
+            quit
+
+PUB reportStackUse(pStack, nStackLongCt)
+'' Write stack usage to debug()
+    nStkChkUsed := getStackDepth(pStack, nStackLongCt)
     debug("^^^ STACK used ", udec(nStkChkUsed), " of ", udec(nStackLongCt))
 
 PUB testReport(pStack, nStackLongCt, pTestId, bPassFail)

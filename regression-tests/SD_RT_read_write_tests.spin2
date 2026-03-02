@@ -36,6 +36,14 @@ CON
      BUFFER_SIZE = 512
      LARGE_BUFFER_SIZE = 2048
 
+' Uncomment SD_INCLUDE_STACK_CHECK to measure worker cog stack depth
+#IFDEF __SPINTOOLS__
+#ELSEIFDEF __FLEXSPIN__
+#ELSE
+#DEFINE SD_INCLUDE_STACK_CHECK
+#PRAGMA EXPORTDEF SD_INCLUDE_STACK_CHECK
+#ENDIF
+
 OBJ
     sd    : "micro_sd_fat32_fs"
     utils : "isp_rt_utilities"
@@ -624,6 +632,12 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize
     sd.deleteFile(@testLarge)
     sd.deleteFile(@testMulti)
     sd.deleteFile(@testPattern)
+
+    ' Report stack depth while worker cog is still running
+#IFDEF SD_INCLUDE_STACK_CHECK
+    debug(" ")
+    debug("* Worker cog stack: ", udec_(sd.reportStackDepth()), " of ", udec_(sd.STACK_SIZE), " longs used")
+#ENDIF
 
     ' Unmount
     sd.unmount()

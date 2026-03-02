@@ -37,14 +37,7 @@ CON
      'SD_MISO = 18
      'SD_SCK  = 21
 
-     ' Error codes we expect to encounter
-     E_TOO_MANY_FILES    = -90
-     E_INVALID_HANDLE    = -91
-     E_FILE_NOT_FOUND    = -40
-     E_NOT_A_DIR         = -43
-     E_NOT_A_DIR_HANDLE  = -93
-
-     ' Maximum handles (must match driver's MAX_OPEN_FILES)
+' Maximum handles (must match driver's MAX_OPEN_FILES)
      MAX_TEST_HANDLES = 6
 
 OBJ
@@ -177,7 +170,7 @@ PUB go() | result, h1, h2, h3, h4, h5, h6, hDir, hDir2, pEntry, pName, attrs, en
                 quit
             pName := sd.fileName()
             attrs := sd.attributes()
-            if attrs & $10  ' directory attribute
+            if attrs & sd.ATTR_DIRECTORY  ' directory attribute
                 foundDirs++
             else
                 foundFiles++
@@ -220,7 +213,7 @@ PUB go() | result, h1, h2, h3, h4, h5, h6, hDir, hDir2, pEntry, pName, attrs, en
             if pEntry == 0
                 quit
             attrs := sd.attributes()
-            if attrs & $10
+            if attrs & sd.ATTR_DIRECTORY
                 foundDirs++
             else
                 foundFiles++
@@ -252,7 +245,7 @@ PUB go() | result, h1, h2, h3, h4, h5, h6, hDir, hDir2, pEntry, pName, attrs, en
             if pEntry == 0
                 quit
             attrs := sd.attributes()
-            if (attrs & $10) == 0  ' not a directory
+            if (attrs & sd.ATTR_DIRECTORY) == 0  ' not a directory
                 foundFiles++
         utils.evaluateSubBool(foundFiles >= 1, @"subdir has file", true)
         sd.closeDirectoryHandle(hDir)
@@ -267,13 +260,13 @@ PUB go() | result, h1, h2, h3, h4, h5, h6, hDir, hDir2, pEntry, pName, attrs, en
     ' Test: Non-existent directory returns E_FILE_NOT_FOUND
     utils.startTest(@"openDirectory non-existent returns E_FILE_NOT_FOUND")
     result := sd.openDirectory(@dhNonExist)
-    utils.evaluateSingleValue(result, @"openDirectory(NXDIR999)", E_FILE_NOT_FOUND)
+    utils.evaluateSingleValue(result, @"openDirectory(NXDIR999)", sd.E_FILE_NOT_FOUND)
 
     ' Test: Opening a file as directory returns E_NOT_A_DIR
     utils.startTest(@"openDirectory on a file returns E_NOT_A_DIR")
     sd.changeDirectory(@dhTestDir)
     result := sd.openDirectory(@dhFile1)
-    utils.evaluateSingleValue(result, @"openDirectory(DH1.TXT)", E_NOT_A_DIR)
+    utils.evaluateSingleValue(result, @"openDirectory(DH1.TXT)", sd.E_NOT_A_DIR)
     sd.changeDirectory(@"/")
 
     ' Test: Invalid handle to readDirectoryHandle returns 0
@@ -318,7 +311,7 @@ PUB go() | result, h1, h2, h3, h4, h5, h6, hDir, hDir2, pEntry, pName, attrs, en
     utils.evaluateSubBool(hDir >= 0, @"6th handle (dir) OK", true)
     ' 7th should fail
     result := sd.openDirectory(@dhTestDir)
-    utils.evaluateSubValue(result, @"7th handle fails", E_TOO_MANY_FILES)
+    utils.evaluateSubValue(result, @"7th handle fails", sd.E_TOO_MANY_FILES)
     ' Clean up
     sd.closeFileHandle(h1)
     sd.closeFileHandle(h2)

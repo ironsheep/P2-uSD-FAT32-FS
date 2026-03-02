@@ -34,13 +34,9 @@ CON
      'SD_MISO = 18
      'SD_SCK  = 21
 
-     ' V3 Error codes
-     E_FILE_EXISTS     = -41
-     E_FILE_NOT_FOUND  = -40
-     E_NOT_A_FILE      = -42
-     E_NOT_A_DIR       = -43
 
 ' Enable raw sector access and debug methods for diagnostic tests
+' Uncomment SD_INCLUDE_STACK_CHECK to measure worker cog stack depth
 #IFDEF __SPINTOOLS__
 #DEFINE SD_INCLUDE_RAW
 #DEFINE SD_INCLUDE_DEBUG
@@ -52,6 +48,8 @@ CON
 #ELSE
 #PRAGMA EXPORTDEF SD_INCLUDE_RAW
 #PRAGMA EXPORTDEF SD_INCLUDE_DEBUG
+#DEFINE SD_INCLUDE_STACK_CHECK
+#PRAGMA EXPORTDEF SD_INCLUDE_STACK_CHECK
 #ENDIF
 
 OBJ
@@ -206,7 +204,7 @@ PUB go() | result, handle, h1, h2, h3, pFilename, fileSize, attrs, bytesWritten,
     ' Check if buffer was written at all
     if sectorBuffer[0] == $BB
         debug("  DIAG: Buffer NOT WRITTEN!")
-    elseif sectorBuffer[0] == 0 or sectorBuffer[0] == $E5
+    elseif sectorBuffer[0] == 0 or sectorBuffer[0] == sd.DIR_ENTRY_DELETED
         debug("  DIAG: Root entry is empty/deleted")
     elseif sectorBuffer[0] >= $20 and sectorBuffer[0] < $7F
         debug("  DIAG: Root entry: [", lstr_(@sectorBuffer, 11), "]")
@@ -224,7 +222,7 @@ PUB go() | result, handle, h1, h2, h3, pFilename, fileSize, attrs, bytesWritten,
     debug("  DEBUG: Attempting to create same file again...")
     handle := sd.createFileNew(@testfile1)
     debug("  DEBUG: Second createFileNew returned handle=", sdec_(handle))
-    utils.evaluateSingleValue(handle, @"createFileNew() on existing", E_FILE_EXISTS)
+    utils.evaluateSingleValue(handle, @"createFileNew() on existing", sd.E_FILE_EXISTS)
 
     ' ----------------------------------
     ' TEST GROUP: File open/close with handles
@@ -256,7 +254,7 @@ PUB go() | result, handle, h1, h2, h3, pFilename, fileSize, attrs, bytesWritten,
 
     utils.startTest(@"openFileRead() fails for non-existent file")
     handle := sd.openFileRead(@"NOEXIST.TXT")
-    utils.evaluateSingleValue(handle, @"openFileRead() non-existent", E_FILE_NOT_FOUND)
+    utils.evaluateSingleValue(handle, @"openFileRead() non-existent", sd.E_FILE_NOT_FOUND)
 
     ' ----------------------------------
     ' TEST GROUP: File deletion
@@ -277,7 +275,7 @@ PUB go() | result, handle, h1, h2, h3, pFilename, fileSize, attrs, bytesWritten,
 
     utils.startTest(@"Verify file is deleted (openFileRead fails)")
     handle := sd.openFileRead(@testfile2)
-    utils.evaluateSingleValue(handle, @"openFileRead() after delete", E_FILE_NOT_FOUND)
+    utils.evaluateSingleValue(handle, @"openFileRead() after delete", sd.E_FILE_NOT_FOUND)
 
     utils.startTest(@"deleteFile() fails for non-existent file")
     result := sd.deleteFile(@testfile2)
@@ -297,7 +295,7 @@ PUB go() | result, handle, h1, h2, h3, pFilename, fileSize, attrs, bytesWritten,
 
     utils.startTest(@"Original file no longer accessible")
     handle := sd.openFileRead(@testfile1)
-    utils.evaluateSingleValue(handle, @"openFileRead() old name", E_FILE_NOT_FOUND)
+    utils.evaluateSingleValue(handle, @"openFileRead() old name", sd.E_FILE_NOT_FOUND)
 
     utils.startTest(@"Renamed file is accessible")
     handle := sd.openFileRead(@renamedFile)
@@ -420,7 +418,7 @@ PUB go() | result, handle, h1, h2, h3, pFilename, fileSize, attrs, bytesWritten,
 
     utils.startTest(@"openFileRead() on directory returns E_NOT_A_FILE")
     handle := sd.openFileRead(@testdir1)
-    utils.evaluateSingleValue(handle, @"openFileRead(dir)", E_NOT_A_FILE)
+    utils.evaluateSingleValue(handle, @"openFileRead(dir)", sd.E_NOT_A_FILE)
 
     ' NOTE: changeDirectory() on file test SKIPPED - driver bug allows cd into files
     ' See DRIVER-CHANGES-NEEDED.md - do_chdir() needs to check ATTR_DIR
@@ -428,7 +426,7 @@ PUB go() | result, handle, h1, h2, h3, pFilename, fileSize, attrs, bytesWritten,
 
     utils.startTest(@"openFileWrite() on non-existent returns E_FILE_NOT_FOUND")
     handle := sd.openFileWrite(@nonexistent)
-    utils.evaluateSingleValue(handle, @"openFileWrite(nonexistent)", E_FILE_NOT_FOUND)
+    utils.evaluateSingleValue(handle, @"openFileWrite(nonexistent)", sd.E_FILE_NOT_FOUND)
 
     ' Clean up the test directory
     sd.deleteFile(@testdir1)
@@ -442,6 +440,12 @@ PUB go() | result, handle, h1, h2, h3, pFilename, fileSize, attrs, bytesWritten,
     sd.deleteFile(@testfile2)
     sd.deleteFile(@testfile3)
     sd.deleteFile(@renamedFile)
+
+    ' Report stack depth while worker cog is still running
+#IFDEF SD_INCLUDE_STACK_CHECK
+    debug(" ")
+    debug("* Worker cog stack: ", udec_(sd.reportStackDepth()), " of ", udec_(sd.STACK_SIZE), " longs used")
+#ENDIF
 
     ' Unmount
     sd.unmount()
