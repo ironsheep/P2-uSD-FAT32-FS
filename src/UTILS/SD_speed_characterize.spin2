@@ -17,7 +17,7 @@
     P2 SPI clock = SYSCLK / (2 * half_period), where half_period is integer.
     This shows how close we get to target vs actual achievable frequency.
 
-  Author: Claude Code + Stephen M Moraco
+  Author: Stephen M Moraco
   Date: 2026-02-02
   Target: P2 Edge with SD card breakout
 }

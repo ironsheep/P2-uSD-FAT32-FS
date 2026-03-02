@@ -264,7 +264,7 @@ PUB go() | result, handle, h1, h2, h3, h4, h5, bytesRead, bytesWritten
     '       a directory entry to sector 0 (MBR), corrupting the partition table.
     utils.startTest(@"newDirectory() with bad parent path preserves MBR")
 
-    ' Read MBR before the test — save signature as ground truth
+    ' Read MBR before the test -- save signature as ground truth
     sd.readSectorRaw(0, @mbr_buf)
     utils.evaluateSubValue(WORD[@mbr_buf + $1FE], @"MBR sig before", MBR_SIGNATURE)
 
@@ -273,7 +273,7 @@ PUB go() | result, handle, h1, h2, h3, h4, h5, bytesRead, bytesWritten
     debug("  newDirectory(NOEXIST/CHILD) returned ", sdec_(result))
     utils.evaluateSubBool(result, @"newDirectory(bad path)", false)
 
-    ' Re-read MBR — signature MUST still be intact
+    ' Re-read MBR -- signature MUST still be intact
     sd.readSectorRaw(0, @mbr_buf)
     utils.evaluateSubValue(WORD[@mbr_buf + $1FE], @"MBR sig after", MBR_SIGNATURE)
 

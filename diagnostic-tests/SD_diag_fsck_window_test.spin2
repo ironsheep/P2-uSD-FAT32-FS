@@ -2,7 +2,7 @@
 ''
 ''   File....... SD_diag_fsck_window_test.spin2
 ''   Purpose.... Verify FSCK windowed bitmap detects defects in window 2 (clusters > 2M)
-''   Authors.... Claude + Stephen M Moraco
+''   Author..... Stephen M Moraco
 ''   Started.... 26 FEB 2026
 ''   Updated.... 26 FEB 2026
 ''
@@ -66,7 +66,7 @@ CON
     ' Expected repair counts
     ' All 5 injected clusters are orphans (unreferenced by any directory entry),
     ' so FSCK pass 3 frees them all as lost clusters. The bad-ref cluster is also
-    ' an orphan — chain truncation only occurs for clusters reachable from the
+    ' an orphan -- chain truncation only occurs for clusters reachable from the
     ' directory tree.
     EXPECTED_LOST       = 5             ' 1 single + 3 chain + 1 bad-ref = 5 lost clusters freed
 

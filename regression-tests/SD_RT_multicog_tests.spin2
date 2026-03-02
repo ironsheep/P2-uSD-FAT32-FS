@@ -71,7 +71,7 @@ test_phase      LONG    0                     ' Current test phase
 launched_cogs   LONG    0[NUM_WORKER_COGS]
 
 PUB go() | result, idx, firstCogId, allSame, totalErrors
-'' Main entry point — runs multi-cog concurrent access tests.
+'' Main entry point -- runs multi-cog concurrent access tests.
 
     debug(" ")
     debug("==============================================")

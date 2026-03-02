@@ -46,7 +46,7 @@ VAR
     byte  msg[80]
 
 PUB go() | handle, idx
-'' Main entry point — creates a LOGS directory and writes MAX_ENTRIES CSV log entries with periodic sync.
+'' Main entry point -- creates a LOGS directory and writes MAX_ENTRIES CSV log entries with periodic sync.
 '' @local handle - File handle for the log file
 '' @local idx - Loop index for writing log entries
 
@@ -67,7 +67,7 @@ PUB go() | handle, idx
     ' Open existing log for append, or create new
     handle := sd.openFileWrite(@"DATALOG.CSV")
     if handle < 0
-        ' File doesn't exist yet — create it with a header
+        ' File doesn't exist yet -- create it with a header
         handle := sd.createFileNew(@"DATALOG.CSV")
         if handle < 0
             debug("Cannot create log file, error: ", sdec(handle))
@@ -83,7 +83,7 @@ PUB go() | handle, idx
         ' Format a simple CSV line: "N,reading"
         writeLogEntry(handle, idx, getReading())
 
-        ' Periodic sync — ensures data survives power loss
+        ' Periodic sync -- ensures data survives power loss
         if idx // SYNC_INTERVAL == 0
             sd.syncHandle(handle)
             debug("  Synced at entry ", udec(idx))
@@ -95,7 +95,7 @@ PUB go() | handle, idx
     sd.changeDirectory(@"/")
     sd.unmount()
 
-    debug("=== Done — ", udec(MAX_ENTRIES), " entries logged ===")
+    debug("=== Done -- ", udec(MAX_ENTRIES), " entries logged ===")
 
 PRI writeLogEntry(handle, entry_num, value) | len
 ' Format one CSV line "entry_num,value\r\n" and write it to the log file.
@@ -112,7 +112,7 @@ PRI writeLogEntry(handle, entry_num, value) | len
     sd.writeHandle(handle, @msg, len)
 
 PRI getReading() : value
-' Simulate a sensor reading — returns a random value 0-1023.
+' Simulate a sensor reading -- returns a random value 0-1023.
 ' @returns value - Simulated sensor reading (0-1023)
     value := getrnd() & $3FF                            ' Random 0-1023
 

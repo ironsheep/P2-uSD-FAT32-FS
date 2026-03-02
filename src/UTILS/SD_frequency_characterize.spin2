@@ -2,7 +2,7 @@
 ''
 ''   File....... SD_frequency_characterize.spin2
 ''   Purpose.... Sweep sysclk frequencies to find failure boundaries for streamer timing
-''   Author..... Claude + Stephen M Moraco
+''   Author..... Stephen M Moraco
 ''   Started.... JAN 2026
 ''
 '' =================================================================================================

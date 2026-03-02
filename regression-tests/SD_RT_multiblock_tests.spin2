@@ -2,7 +2,7 @@
 ''
 ''   File....... SD_RT_multiblock_tests.spin2
 ''   Purpose.... Multi-block read/write data integrity tests for V2 driver
-''   Author..... Claude + Stephen M Moraco
+''   Author..... Stephen M Moraco
 ''   Started.... JAN 2026
 ''
 '' =================================================================================================

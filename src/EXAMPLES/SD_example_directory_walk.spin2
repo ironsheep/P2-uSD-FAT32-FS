@@ -39,7 +39,7 @@ VAR
     byte  name_copy[13]
 
 PUB go() | handle
-'' Main entry point — lists root directory, creates EXDIR with files, demonstrates handle-based
+'' Main entry point -- lists root directory, creates EXDIR with files, demonstrates handle-based
 '' directory enumeration, delete, and rename operations.
 '' @local handle - File handle for creating test files
 
@@ -59,7 +59,7 @@ PUB go() | handle
     listCurrentDirectory()
 
     ' --- Create a test subdirectory with files ---
-    '   newDirectory() fails if the directory already exists — that's OK.
+    '   newDirectory() fails if the directory already exists -- that's OK.
     '   deleteFile() before createFileNew() makes this re-runnable.
     debug(" ")
     debug("--- Creating EXDIR with files ---")

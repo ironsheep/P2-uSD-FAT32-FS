@@ -2,7 +2,7 @@
 ''
 ''   File....... SD_RT_raw_sector_tests.spin2
 ''   Purpose.... Round-trip test of raw sector read/write using V2 driver streamer
-''   Author..... Claude + Stephen M Moraco
+''   Author..... Stephen M Moraco
 ''   Started.... JAN 2026
 ''
 '' =================================================================================================

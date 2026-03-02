@@ -25,7 +25,7 @@ DAT
 resultBuf       BYTE    0[256]
 
 PUB go() | pStr, idx, ok, nLen
-'' Main entry point — tests the SPSC FIFO for inter-cog string communication.
+'' Main entry point -- tests the SPSC FIFO for inter-cog string communication.
 
     debug(" ")
     debug("==============================================")
@@ -140,7 +140,7 @@ PUB go() | pStr, idx, ok, nLen
     utils.startTest(@"put/get cycles wrap head and tail past NUM_SLOTS")
     fifo.init()
     ok := true
-    ' Do 32 put/get cycles — head and tail both wrap past 16
+    ' Do 32 put/get cycles -- head and tail both wrap past 16
     repeat idx from 1 to 32
         bytemove(@resultBuf, @"Cycle", 5)
         resultBuf[5] := 0

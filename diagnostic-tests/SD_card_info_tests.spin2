@@ -3,7 +3,7 @@
 ''
 ''   File....... SD_card_info_tests.spin2
 ''   Purpose.... Certify struct-based access to driver API methods (matches demo shell pattern)
-''   Authors.... Claude + Stephen M Moraco
+''   Author..... Stephen M Moraco
 ''   Started.... FEB 2026
 ''
 '' =================================================================================================

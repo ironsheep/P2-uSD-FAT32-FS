@@ -40,7 +40,7 @@ VAR
     byte  buffer[512]
 
 PUB go() | handle, bytes_read, bytes_written
-'' Main entry point — creates EXAMPLE.TXT, writes a greeting, reads it back, and displays the result.
+'' Main entry point -- creates EXAMPLE.TXT, writes a greeting, reads it back, and displays the result.
 '' @local handle - File handle for write then read operations
 '' @local bytes_read - Number of bytes read back from the file
 '' @local bytes_written - Number of bytes written to the file

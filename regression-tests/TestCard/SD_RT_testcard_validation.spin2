@@ -58,7 +58,7 @@ mediumBuf       BYTE    0[MEDIUM_BUF]
 largeBuf        BYTE    0[LARGE_BUF]
 
 PUB go() | result
-'' Main entry point — validates the pre-built test card content against expected filesystem structure.
+'' Main entry point -- validates the pre-built test card content against expected filesystem structure.
 
     debug(" ")
     debug("==============================================")

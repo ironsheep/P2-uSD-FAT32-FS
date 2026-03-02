@@ -2731,7 +2731,7 @@ PRI do_create(p_path) : handle | temp, first_cluster
 
   ' Guard: entry_address 0 means searchDirectory never found a valid directory
   if entry_address == 0
-    debug("  [do_create] entry_address=0 — path not valid, aborting")
+    debug("  [do_create] entry_address=0 -- path not valid, aborting")
     freeHandle(handle)
     return E_FILE_NOT_FOUND
 
@@ -3327,7 +3327,7 @@ PRI do_newfile(name_ptr) : result | temp
   ' Guard: entry_address 0 means searchDirectory never found a valid directory
   ' (e.g., path component doesn't exist). Writing at address 0 would corrupt the MBR.
   if entry_address == 0
-    debug("  [do_newfile] entry_address=0 — path not valid, aborting")
+    debug("  [do_newfile] entry_address=0 -- path not valid, aborting")
     return E_FILE_NOT_FOUND
 
   temp := (entry_address + cluster_offset << 9) & (sec_per_clus << 9 - 1)
@@ -3359,7 +3359,7 @@ PRI do_newdir(name_ptr) : result | temp
   ' Guard: entry_address 0 means searchDirectory never found a valid directory
   ' (e.g., path component doesn't exist). Writing at address 0 would corrupt the MBR.
   if entry_address == 0
-    debug("  [do_newdir] entry_address=0 — path not valid, aborting")
+    debug("  [do_newdir] entry_address=0 -- path not valid, aborting")
     return E_FILE_NOT_FOUND
 
   temp := (entry_address + cluster_offset << 9) & (sec_per_clus << 9 - 1)

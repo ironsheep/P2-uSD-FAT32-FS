@@ -825,7 +825,7 @@ PUB do_move() | p_src, p_dst, p_src_leaf, has_path, dh, result
   ' Check if dest is a directory
   dh := sd.openDirectory(p_dst)
   if dh >= 0
-    ' Dest is a directory — move file into it
+    ' Dest is a directory -- move file into it
     sd.closeDirectoryHandle(dh)
     result := sd.moveFile(p_src_leaf, p_dst)
     if result
@@ -833,7 +833,7 @@ PUB do_move() | p_src, p_dst, p_src_leaf, has_path, dh, result
     else
       serial.fstr1(@"Failed to move: %s\r\n", p_src_leaf)
   else
-    ' Dest is not a directory — rename in place
+    ' Dest is not a directory -- rename in place
     result := sd.rename(p_src_leaf, path_leaf(p_dst))
     if result
       serial.fstr2(@"Renamed '%s' to '%s'\r\n", p_src_leaf, path_leaf(p_dst))
@@ -897,12 +897,12 @@ PUB do_copy() | p_src, p_dst, p_src_leaf, p_dst_leaf, src_has_path, dst_has_path
     sd.closeFileHandle(h_src)
     return
 
-  ' Check if dest leaf is a directory — if so, cd into it and use source name
+  ' Check if dest leaf is a directory -- if so, cd into it and use source name
   dst_is_dir := false
   dh := sd.openDirectory(p_dst_leaf)
   if dh >= 0
     sd.closeDirectoryHandle(dh)
-    ' Dest is a directory — cd into it and use source filename
+    ' Dest is a directory -- cd into it and use source filename
     if not sd.changeDirectory(p_dst_leaf)
       sd.closeFileHandle(h_src)
       serial.fstr1(@"Cannot enter directory: %s\r\n", p_dst_leaf)
@@ -1014,7 +1014,7 @@ PUB do_rmdir() | p_name, p_leaf, has_path, dh, result, p_entry, is_empty
     p_entry := sd.fileName()
     if (strcomp(p_entry, @".") or strcomp(p_entry, @".."))
       next
-    ' Found a real entry — not empty
+    ' Found a real entry -- not empty
     is_empty := false
     quit
 
@@ -1487,7 +1487,7 @@ PRI navigate_to_parent(p_path) : p_leaf, has_path | slash_pos, idx
     idx++
 
   if slash_pos < 0
-    ' No path separator — use as-is in CWD
+    ' No path separator -- use as-is in CWD
     p_leaf := p_path
     has_path := false
     return
@@ -1592,7 +1592,7 @@ PRI tree_walk(p_path, depth) | dh, result, p_name, attrib, idx, name_buf[4]
     attrib := sd.attributes()
 
     if attrib & $10
-      ' Directory entry — print and recurse
+      ' Directory entry -- print and recurse
       tree_indent(depth + 1)
       serial.fstr1(@"%s/\r\n", p_name)
       ' Save name for cd (fileName() buffer gets reused)

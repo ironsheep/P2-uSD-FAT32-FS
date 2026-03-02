@@ -1,7 +1,7 @@
 {Spin2_v45}
 '' =================================================================================================
 ''   File....... SD_example_multicog.spin2
-''   Purpose.... Multi-cog file access example — two cogs reading/writing different files
+''   Purpose.... Multi-cog file access example -- two cogs reading/writing different files
 ''   Author..... Stephen M Moraco
 ''               -- Copyright (c) 2026 Iron Sheep Productions, LLC
 ''               -- see below for terms of use
@@ -17,10 +17,10 @@
 ''    4. Both cogs use the same driver instance (singleton pattern)
 ''
 ''  Key concepts shown:
-''    - The driver serializes SPI access via a hardware lock — safe from any cog
+''    - The driver serializes SPI access via a hardware lock -- safe from any cog
 ''    - Each cog has its own current working directory (CWD)
 ''    - Each cog has its own error slot
-''    - File handles are shared resources — allocate from one cog, use from any
+''    - File handles are shared resources -- allocate from one cog, use from any
 ''    - Only one file can be open for writing at a time (single-writer policy)
 ''
 
@@ -50,7 +50,7 @@ VAR
     long  setup_done                                    ' Flag: main cog sets to 1 when files ready
 
 PUB go() | handle, idx, buf[32]
-'' Main entry point — creates test files, starts a reader cog, and writes concurrently from the main cog.
+'' Main entry point -- creates test files, starts a reader cog, and writes concurrently from the main cog.
 '' @local handle - File handle for creating and writing test files
 '' @local idx - Loop index for writing lines
 '' @local buf - General-purpose buffer
@@ -105,10 +105,10 @@ PUB go() | handle, idx, buf[32]
     ' --- Clean up ---
     sd.unmount()
     debug(" ")
-    debug("=== Done — both cogs completed successfully ===")
+    debug("=== Done -- both cogs completed successfully ===")
 
 PRI readerTask() | handle, buf[128], total_bytes, bytes_read
-' Run in a separate cog — reads READER.TXT and reports the total bytes read.
+' Run in a separate cog -- reads READER.TXT and reports the total bytes read.
 ' The SD driver's hardware lock ensures SPI access is serialized with the main cog.
 ' @local handle - File handle for READER.TXT
 ' @local buf - Read buffer (512 bytes as long array)
