@@ -106,7 +106,7 @@ PUB go() | result, bytesRead, idx, fileSize, expectedByte, actualByte, handle
 
     utils.startTest(@"seek(0) - beginning of file")
     result := sd.seekHandle(handle, 0)
-    utils.evaluateBool(result, @"seekHandle(0)", true)
+    utils.evaluateSingleValue(result, @"seekHandle(0)", sd.SUCCESS)
 
     utils.startTest(@"Read byte at position 0")
     utils.initGuard(@readBuffer_guard)
@@ -116,7 +116,7 @@ PUB go() | result, bytesRead, idx, fileSize, expectedByte, actualByte, handle
 
     utils.startTest(@"seek(100) - position 100")
     result := sd.seekHandle(handle, 100)
-    utils.evaluateBool(result, @"seekHandle(100)", true)
+    utils.evaluateSingleValue(result, @"seekHandle(100)", sd.SUCCESS)
 
     utils.startTest(@"Read byte at position 100")
     utils.initGuard(@readBuffer_guard)
@@ -126,7 +126,7 @@ PUB go() | result, bytesRead, idx, fileSize, expectedByte, actualByte, handle
 
     utils.startTest(@"seek(255) - position 255")
     result := sd.seekHandle(handle, 255)
-    utils.evaluateBool(result, @"seekHandle(255)", true)
+    utils.evaluateSingleValue(result, @"seekHandle(255)", sd.SUCCESS)
 
     utils.startTest(@"Read byte at position 255")
     utils.initGuard(@readBuffer_guard)
@@ -136,7 +136,7 @@ PUB go() | result, bytesRead, idx, fileSize, expectedByte, actualByte, handle
 
     utils.startTest(@"seek(256) - position 256 (wraps to 0 in pattern)")
     result := sd.seekHandle(handle, 256)
-    utils.evaluateBool(result, @"seekHandle(256)", true)
+    utils.evaluateSingleValue(result, @"seekHandle(256)", sd.SUCCESS)
 
     utils.startTest(@"Read byte at position 256")
     utils.initGuard(@readBuffer_guard)
@@ -158,7 +158,7 @@ PUB go() | result, bytesRead, idx, fileSize, expectedByte, actualByte, handle
     ' Sector boundary is at 512 bytes
     utils.startTest(@"seek(511) - last byte of first sector")
     result := sd.seekHandle(handle, 511)
-    utils.evaluateBool(result, @"seekHandle(511)", true)
+    utils.evaluateSingleValue(result, @"seekHandle(511)", sd.SUCCESS)
 
     utils.startTest(@"Read byte at 511")
     utils.initGuard(@readBuffer_guard)
@@ -168,7 +168,7 @@ PUB go() | result, bytesRead, idx, fileSize, expectedByte, actualByte, handle
 
     utils.startTest(@"seek(512) - first byte of second sector")
     result := sd.seekHandle(handle, 512)
-    utils.evaluateBool(result, @"seekHandle(512)", true)
+    utils.evaluateSingleValue(result, @"seekHandle(512)", sd.SUCCESS)
 
     utils.startTest(@"Read byte at 512")
     utils.initGuard(@readBuffer_guard)
@@ -178,7 +178,7 @@ PUB go() | result, bytesRead, idx, fileSize, expectedByte, actualByte, handle
 
     utils.startTest(@"seek(1023) - last byte of second sector")
     result := sd.seekHandle(handle, 1023)
-    utils.evaluateBool(result, @"seekHandle(1023)", true)
+    utils.evaluateSingleValue(result, @"seekHandle(1023)", sd.SUCCESS)
 
     utils.startTest(@"Read byte at 1023")
     utils.initGuard(@readBuffer_guard)
@@ -188,7 +188,7 @@ PUB go() | result, bytesRead, idx, fileSize, expectedByte, actualByte, handle
 
     utils.startTest(@"seek(1024) - first byte of third sector")
     result := sd.seekHandle(handle, 1024)
-    utils.evaluateBool(result, @"seekHandle(1024)", true)
+    utils.evaluateSingleValue(result, @"seekHandle(1024)", sd.SUCCESS)
 
     utils.startTest(@"Read byte at 1024")
     utils.initGuard(@readBuffer_guard)
@@ -268,11 +268,11 @@ PUB go() | result, bytesRead, idx, fileSize, expectedByte, actualByte, handle
 
     utils.startTest(@"seek() beyond EOF should fail")
     result := sd.seekHandle(handle, TEST_FILE_SIZE + 100)
-    utils.evaluateBool(result, @"seekHandle(beyond EOF)", false)
+    utils.evaluateBool(result < 0, @"seekHandle(beyond EOF) returns error", true)
 
     utils.startTest(@"seek() to exact EOF should succeed")
     result := sd.seekHandle(handle, TEST_FILE_SIZE - 1)
-    utils.evaluateBool(result, @"seekHandle(EOF-1)", true)
+    utils.evaluateSingleValue(result, @"seekHandle(EOF-1)", sd.SUCCESS)
 
     utils.startTest(@"Read at EOF position")
     utils.initGuard(@readBuffer_guard)
@@ -323,7 +323,7 @@ PUB go() | result, bytesRead, idx, fileSize, expectedByte, actualByte, handle
         sd.readHandle(handle, @readBuffer, 50)
         ' Now seek back to 0
         result := sd.seekHandle(handle, 0)
-        utils.evaluateSubBool(result, @"seekHandle(0)", true)
+        utils.evaluateSubBool(result == sd.SUCCESS, @"seekHandle(0)", true)
         ' Read first byte - verifies we're at position 0
         utils.initGuard(@readBuffer_guard)
         bytesRead := sd.readHandle(handle, @readBuffer, 1)
@@ -357,7 +357,7 @@ PUB go() | result, bytesRead, idx, fileSize, expectedByte, actualByte, handle
     if handle >= 0
         ' Try seek(0) in empty file - should succeed
         result := sd.seekHandle(handle, 0)
-        utils.evaluateSubBool(result, @"seekHandle(0) in empty", true)
+        utils.evaluateSubBool(result == sd.SUCCESS, @"seekHandle(0) in empty", true)
         ' Try to read - should get 0 bytes
         utils.initGuard(@readBuffer_guard)
         bytesRead := sd.readHandle(handle, @readBuffer, 1)
@@ -365,7 +365,7 @@ PUB go() | result, bytesRead, idx, fileSize, expectedByte, actualByte, handle
         utils.evaluateSubValue(bytesRead, @"read from empty", 0)
         ' Try seek(1) in empty file - should fail (beyond EOF)
         result := sd.seekHandle(handle, 1)
-        utils.evaluateSubBool(result == false, @"seekHandle(1) in empty fails", true)
+        utils.evaluateSubBool(result < 0, @"seekHandle(1) in empty fails", true)
         sd.closeFileHandle(handle)
     sd.deleteFile(@testEmpty)
 
@@ -400,7 +400,7 @@ PRI testSeekPosition(handle, position) | result, bytesRead, expectedByte
     utils.initGuard(@readBuffer_guard)
     bytesRead := sd.readHandle(handle, @readBuffer, 1)
     utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
-    utils.evaluateSubBool(result, @"seekHandle()", true)
+    utils.evaluateSubValue(result, @"seekHandle()", sd.SUCCESS)
     utils.evaluateSubValue(readBuffer[0], @"byte value", expectedByte)
     debug("  Position ", udec_(position), ": expected $", uhex_(expectedByte), " got $", uhex_(readBuffer[0]))
 
