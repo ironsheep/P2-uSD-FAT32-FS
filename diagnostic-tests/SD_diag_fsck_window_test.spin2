@@ -3,8 +3,10 @@
 ''   File....... SD_diag_fsck_window_test.spin2
 ''   Purpose.... Verify FSCK windowed bitmap detects defects in window 2 (clusters > 2M)
 ''   Author..... Stephen M Moraco
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
 ''   Started.... 26 FEB 2026
-''   Updated.... 26 FEB 2026
+''   Updated.... 01 MAR 2026
 ''
 '' =================================================================================================
 ''
@@ -363,8 +365,7 @@ PRI syncFAT2Entry(cluster) | fat1Sector, fat2Sector
     sd.readSectorRaw(fat1Sector, @buf)
     sd.writeSectorRaw(fat2Sector, @buf)
 
-
-CON { license }
+con { license }
 
 {{
   =================================================================================================

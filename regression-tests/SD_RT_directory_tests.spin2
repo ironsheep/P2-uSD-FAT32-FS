@@ -461,7 +461,6 @@ PRI cleanupTestItems()
     sd.deleteFile(@testDir1)  ' Try (won't work if has contents)
     sd.deleteFile(@testDir2)
 
-
 con { license }
 
 {{

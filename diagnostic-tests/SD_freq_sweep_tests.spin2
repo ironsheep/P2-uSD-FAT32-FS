@@ -3,8 +3,10 @@
 ''   File....... SD_freq_sweep_tests.spin2
 ''   Purpose.... Characterize max reliable SPI speed on external header
 ''   Author..... Stephen M Moraco
+''               -- see below for terms of use
 ''   E-mail..... stephen@ironsheep.biz
 ''   Started.... FEB 2026
+''   Updated.... 01 MAR 2026
 ''
 '' =================================================================================================
 ''
@@ -313,7 +315,6 @@ PRI runWriteVerify(speedIdx) : passed | iter, idx, jdx, sector, written, readCt,
     if errors > 0
         return 0
     return 1
-
 
 con { license }
 

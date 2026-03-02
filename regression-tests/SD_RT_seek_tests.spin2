@@ -404,7 +404,6 @@ PRI testSeekPosition(handle, position) | result, bytesRead, expectedByte
     utils.evaluateSubValue(readBuffer[0], @"byte value", expectedByte)
     debug("  Position ", udec_(position), ": expected $", uhex_(expectedByte), " got $", uhex_(readBuffer[0]))
 
-
 con { license }
 
 {{

@@ -428,7 +428,7 @@ PUB go() | result, dataStart, fat1Start, fat2Start, idx, mismatch, cardSectors
     debug(" ")
     debug("END_SESSION")
 
-CON { license }
+con { license }
 
 {{
   =================================================================================================

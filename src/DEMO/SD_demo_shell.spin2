@@ -4,7 +4,6 @@
 ''   File....... SD_demo_shell.spin2
 ''   Purpose.... Interactive command-line shell for SD card filesystem
 ''   Author..... Stephen M Moraco
-''               Copyright (c) 2026 Iron Sheep Productions, LLC
 ''               -- see below for terms of use
 ''   E-mail..... stephen@ironsheep.biz
 ''   Started.... FEB 2026
@@ -2195,12 +2194,14 @@ PRI wait_for_terminal(clear, delay)
     serial.tx(serial.CLS)
     waitms(delay #> 0)
 
-
-CON { license }
+con { license }
 
 {{
+  =================================================================================================
 
   Terms of Use: MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
 
   Permission is hereby granted, free of charge, to any person obtaining a copy of this
   software and associated documentation files (the "Software"), to deal in the Software
@@ -2219,4 +2220,5 @@ CON { license }
   CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
   OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+  =================================================================================================
 }}

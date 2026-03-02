@@ -572,8 +572,7 @@ PRI fillBuffer(size, value)
 
     bytefill(@testBuffer, value, size)
 
-
-CON { license }
+con { license }
 
 {{
   =================================================================================================

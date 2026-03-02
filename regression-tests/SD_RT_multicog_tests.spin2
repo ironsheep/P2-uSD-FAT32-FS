@@ -473,7 +473,6 @@ PRI cleanupTestFiles()
     sd.deleteFile(@testfile3)
     debug("  Test files cleaned up")
 
-
 con { license }
 
 {{

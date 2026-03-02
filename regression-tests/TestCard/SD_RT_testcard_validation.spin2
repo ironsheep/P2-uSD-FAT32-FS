@@ -497,7 +497,6 @@ PRI test_benchmark_sequential() | handle, start, elapsed, bytesRead, idx, bytesP
     debug("  Throughput: ~", udec_(bytesPerSec / 1024), " KB/sec")
     utils.evaluateBool(elapsed > 0, @"benchmark complete", true)
 
-
 con { license }
 
 {{
