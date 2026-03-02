@@ -46,7 +46,7 @@ PUB go() | handle
 
     debug("=== SD Directory Walk Example ===")
 
-    if not sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    if sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK) < 0
         debug("Mount FAILED")
         return
 

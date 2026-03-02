@@ -132,7 +132,7 @@ PUB main() | result, level, max_passed_level
   ' Mount card (use mount instead of initCardOnly for external header compatibility)
   debug("Mounting SD card...")
   result := sd.mount(CS_PIN, MOSI_PIN, MISO_PIN, SCK_PIN)
-  if not result
+  if result < 0
     debug("FATAL: Failed to mount SD card!")
     debug("END_CHARACTERIZATION")
     repeat  ' Halt
@@ -246,7 +246,7 @@ PRI displayCardInfo() | cid[4], mid, sectors, cap_mb
   debug("------------------------------------------------")
 
   ' Read CID
-  if sd.readCIDRaw(@cid)
+  if sd.readCIDRaw(@cid) == sd.SUCCESS
     mid := cid.byte[0]
     debug("  Manufacturer ID: $", uhex_byte_(mid))
     debug("  Product: ", uhex_byte_(cid.byte[3]), " ")
@@ -409,10 +409,10 @@ PRI runSingleSectorTest(iterations, p_ok, p_crc_err, p_timeout) | iter, sector, 
     ' Get random sector within test range
     sector := getRandomTestSector()
 
-    ' Read sector (returns true on success, false on failure)
+    ' Read sector (returns SUCCESS=0 on success, negative on failure)
     result := sd.readSectorRaw(sector, @read_buf)
 
-    if result
+    if result == sd.SUCCESS
       ' Read succeeded - check CRC match
       recv_crc := sd.getLastReceivedCRC()
       calc_crc := sd.getLastCalculatedCRC()

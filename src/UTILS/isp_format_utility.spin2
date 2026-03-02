@@ -297,7 +297,7 @@ PRI doFormatCog() : result
     ' Initialize card
     fifo.put(@"Initializing SD card...")
     result := sd.initCardOnly(pinCS, pinMOSI, pinMISO, pinSCK)
-    if result == false
+    if result < 0
         fifo.put(@"ERROR: Could not initialize SD card!")
         return false
 
@@ -392,7 +392,7 @@ PRI doFormat() : result
     ' Initialize card (low-level, no filesystem mount)
     debug("* Initializing SD card...")
     result := sd.initCardOnly(pinCS, pinMOSI, pinMISO, pinSCK)
-    if result == false
+    if result < 0
         debug("ERROR: Could not initialize SD card!")
         return false
 
@@ -599,7 +599,7 @@ PRI writeMBR() : success | partitionSectors
     debug("  MBR buf addr: $", uhex_long_(@buf))
 
     ' Write MBR to sector 0
-    success := sd.writeSectorRaw(0, @buf)
+    success := (sd.writeSectorRaw(0, @buf) == sd.SUCCESS)
 
 PRI writeVBR() : success
 ' Write the Volume Boot Record (first sector of partition).
@@ -655,7 +655,7 @@ PRI writeVBR() : success
     WORD[@buf + $1FE] := MBR_SIGNATURE
 
     ' Write VBR to partition start
-    success := sd.writeSectorRaw(partitionStart, @buf)
+    success := (sd.writeSectorRaw(partitionStart, @buf) == sd.SUCCESS)
 
 PRI writeFSInfo() : success
 ' Write the FSInfo sector with free cluster count and hint.
@@ -673,7 +673,7 @@ PRI writeFSInfo() : success
     LONG[@buf + $1FC] := FSINFO_SIG3        ' Trail signature (includes $AA55)
 
     ' Write FSInfo to sector 1 of partition
-    success := sd.writeSectorRaw(partitionStart + 1, @buf)
+    success := (sd.writeSectorRaw(partitionStart + 1, @buf) == sd.SUCCESS)
 
 PRI writeBackupBoot() : success
 ' Write backup VBR and FSInfo to sectors 6 and 7 of partition.
@@ -684,12 +684,12 @@ PRI writeBackupBoot() : success
     writeVBR()
 
     ' Write to sector 6 of partition (backup VBR location)
-    if not sd.writeSectorRaw(partitionStart + 6, @buf)
+    if sd.writeSectorRaw(partitionStart + 6, @buf) < 0
         return false
 
     ' Write backup FSInfo to sector 7
     writeFSInfo()
-    success := sd.writeSectorRaw(partitionStart + 7, @buf)
+    success := (sd.writeSectorRaw(partitionStart + 7, @buf) == sd.SUCCESS)
 
 PRI initFAT(fatStart) : success | sector, remaining, batch, written
 ' Initialize a FAT table with media type and root cluster.
@@ -707,7 +707,7 @@ PRI initFAT(fatStart) : success | sector, remaining, batch, written
     LONG[@buf + 8] := FAT32_EOC             ' FAT[2] - root directory (end of chain)
 
     ' Write first FAT sector (single-sector, has special entries)
-    if not sd.writeSectorRaw(fatStart, @buf)
+    if sd.writeSectorRaw(fatStart, @buf) < 0
         return false
 
     ' Write remaining FAT sectors in CMD25 batches (all zeros = free clusters)
@@ -753,7 +753,7 @@ PRI initRootDirectory() : success | written
     LONG[@buf + $1C] := 0       ' File size (0 for volume label)
 
     ' Write first sector of root directory
-    if not sd.writeSectorRaw(dataStart, @buf)
+    if sd.writeSectorRaw(dataStart, @buf) < 0
         return false
 
     ' Clear remaining sectors of root cluster using CMD25 batch write

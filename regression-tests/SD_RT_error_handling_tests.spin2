@@ -97,7 +97,7 @@ PUB go() | result, handle, h1, h2, h3, h4, h5, bytesRead, bytesWritten
 
     ' Mount the card first
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if result == false
+    if result < 0
         debug("ERROR: Could not mount SD card!")
         debug("END_SESSION")
         return
@@ -163,7 +163,7 @@ PUB go() | result, handle, h1, h2, h3, h4, h5, bytesRead, bytesWritten
     result := sd.newDirectory(@testdir1)
     debug("  Second newDirectory: ", sdec_(result))
     ' newDirectory returns boolean, not error code
-    utils.evaluateBool(result, @"second newDirectory()", false)
+    utils.evaluateSingleValue(result, @"second newDirectory()", sd.E_FILE_EXISTS)
 
     ' Test: Create file in non-existent directory
     ' NOTE: This tests path handling - trying to create "NONEXIST/FILE.TXT"
@@ -171,7 +171,7 @@ PUB go() | result, handle, h1, h2, h3, h4, h5, bytesRead, bytesWritten
     utils.startTest(@"createFileNew() in non-existent dir behavior")
     ' First try to cd to non-existent directory
     result := sd.changeDirectory(@testdir2)
-    utils.evaluateBool(result, @"cd to non-existent dir", false)
+    utils.evaluateSingleValue(result, @"cd to non-existent dir", sd.E_NOT_A_DIR)
 
     ' ----------------------------------
     ' TEST GROUP: Handle Reuse Patterns
@@ -271,7 +271,7 @@ PUB go() | result, handle, h1, h2, h3, h4, h5, bytesRead, bytesWritten
     ' Attempt to create directory with non-existent parent
     result := sd.newDirectory(@badPath1)
     debug("  newDirectory(NOEXIST/CHILD) returned ", sdec_(result))
-    utils.evaluateSubBool(result, @"newDirectory(bad path)", false)
+    utils.evaluateSubValue(result, @"newDirectory(bad path)", sd.E_FILE_NOT_FOUND)
 
     ' Re-read MBR -- signature MUST still be intact
     sd.readSectorRaw(0, @mbr_buf)
@@ -335,7 +335,7 @@ PUB go() | result, handle, h1, h2, h3, h4, h5, bytesRead, bytesWritten
     utils.startTest(@"rename to existing destination returns false")
     result := sd.rename(@testfile1, @testfile2)
     debug("  rename(ERTEST1 -> ERTEST2): ", sdec_(result))
-    utils.evaluateBool(result, @"rename to existing", false)
+    utils.evaluateSingleValue(result, @"rename to existing", sd.E_FILE_EXISTS)
 
     ' ----------------------------------
     ' Cleanup: Delete test files and directories

@@ -53,7 +53,7 @@ PUB go() | handle, idx
 
     debug("=== SD Data Logger Example ===")
 
-    if not sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    if sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK) < 0
         debug("Mount FAILED")
         return
 
@@ -61,7 +61,7 @@ PUB go() | handle, idx
     sd.setDate(2026, 2, 25, 12, 0, 0)
 
     ' Create LOGS directory (ignore error if it already exists)
-    if not sd.changeDirectory(@"LOGS")
+    if sd.changeDirectory(@"LOGS") < 0
         sd.newDirectory(@"LOGS")
         sd.changeDirectory(@"LOGS")
 

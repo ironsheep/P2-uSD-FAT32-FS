@@ -76,7 +76,7 @@ PUB go() | result, handle, bytesRead, bytesWritten, matchCount, mismatchCount, r
 
     ' Mount the card first
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if result == false
+    if result < 0
         debug("ERROR: Could not mount SD card!")
         debug("END_SESSION")
         return
@@ -164,7 +164,7 @@ PUB go() | result, handle, bytesRead, bytesWritten, matchCount, mismatchCount, r
     utils.startTest(@"CRC counters reset after unmount/remount")
     sd.unmount()
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    utils.evaluateSubBool(result, @"remount succeeds", true)
+    utils.evaluateSubValue(result, @"remount succeeds", sd.SUCCESS)
     matchCount := sd.getCRCMatchCount()
     debug("   Match count after remount: ", udec(matchCount))
     ' After remount, count should be > 0 (mount reads sectors) but less than before

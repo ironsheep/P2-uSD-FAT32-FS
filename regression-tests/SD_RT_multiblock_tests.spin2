@@ -92,7 +92,7 @@ PUB go() | result
     ' Mount the card (starts worker cog needed for multi-block operations)
     debug("Mounting SD card (V2 driver)...")
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if result == false
+    if result < 0
         debug("ERROR: Mount failed!")
         debug("END_SESSION")
         return
@@ -265,7 +265,7 @@ PRI testSingleWriteMultiRead() | sector, idx, jdx, readCt, errors, expected, act
             write_buf[bufOffset + jdx] := ((idx * 31) + jdx + $B0) & $FF
 
         ' Write this sector
-        if not sd.writeSectorRaw(sector + idx, @write_buf + bufOffset)
+        if sd.writeSectorRaw(sector + idx, @write_buf + bufOffset) < 0
             debug("  FAIL: writeSectorRaw failed for sector ", udec_(idx))
             recordFail()
             return

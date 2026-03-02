@@ -328,7 +328,7 @@ PUB do_cls()
 PUB do_mount() | result
 '' Mount the SD card filesystem and display a brief card summary.
 ''
-' @local result - Mount return value (true/false)
+' @local result - Mount return value (SUCCESS or negative error code)
 
   if (ntokens <> 1)
     bad_syntax()
@@ -342,7 +342,7 @@ PUB do_mount() | result
   result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
   debug("mount result=", sdec_(result), " err=", sdec_(sd.error()))
 
-  if (result)
+  if result == sd.SUCCESS
     mounted := true
     bytemove(@cwd, @"/", 2)                                     ' reset to root
     serial.fstr0(@"Mounted successfully\r\n")
@@ -564,7 +564,7 @@ PUB do_cd() | p_path
     return
 
   ' Try to change to specified directory
-  if (sd.changeDirectory(p_path))
+  if sd.changeDirectory(p_path) == sd.SUCCESS
     update_cwd(p_path)
   else
     serial.fstr1(@"Directory not found: %s\r\n", p_path)
@@ -591,7 +591,7 @@ PUB do_mkdir() | p_name, p_leaf, has_path, result
 ' @local p_name - Pointer to the full path argument
 ' @local p_leaf - Pointer to leaf name within the path
 ' @local has_path - True if path contained "/" separators
-' @local result - newDirectory success/failure
+' @local result - newDirectory result (SUCCESS or negative error code)
 
   if (ntokens <> 2)
     bad_syntax()
@@ -606,7 +606,7 @@ PUB do_mkdir() | p_name, p_leaf, has_path, result
     return
 
   result := sd.newDirectory(p_leaf)
-  if (result)
+  if result == sd.SUCCESS
     serial.fstr1(@"Created: %s\r\n", p_leaf)
   else
     serial.fstr1(@"Failed to create: %s\r\n", p_leaf)
@@ -764,7 +764,7 @@ PUB do_rename() | p_old, p_new, p_old_leaf, p_new_leaf, has_path, result
 ' @local p_old_leaf - Pointer to leaf of old name
 ' @local p_new_leaf - Pointer to leaf of new name
 ' @local has_path - True if old name contained "/" separators
-' @local result - Rename success/failure
+' @local result - Rename result (SUCCESS or negative error code)
 
   if (ntokens <> 3)
     bad_syntax()
@@ -786,7 +786,7 @@ PUB do_rename() | p_old, p_new, p_old_leaf, p_new_leaf, has_path, result
 
   result := sd.rename(p_old_leaf, p_new_leaf)
 
-  if (result)
+  if result == sd.SUCCESS
     serial.fstr2(@"Renamed '%s' to '%s'\r\n", p_old_leaf, p_new_leaf)
   else
     serial.fstr1(@"Failed to rename: %s\r\n", p_old_leaf)
@@ -804,7 +804,7 @@ PUB do_move() | p_src, p_dst, p_src_leaf, has_path, dh, result
 ' @local p_src_leaf - Pointer to leaf of source name
 ' @local has_path - True if source contained "/" separators
 ' @local dh - Directory handle (tests if dest is a directory)
-' @local result - Move/rename success/failure
+' @local result - Move/rename result (SUCCESS or negative error code)
 
   if (ntokens <> 3)
     bad_syntax()
@@ -827,14 +827,14 @@ PUB do_move() | p_src, p_dst, p_src_leaf, has_path, dh, result
     ' Dest is a directory -- move file into it
     sd.closeDirectoryHandle(dh)
     result := sd.moveFile(p_src_leaf, p_dst)
-    if result
+    if result == sd.SUCCESS
       serial.fstr2(@"Moved '%s' to %s/\r\n", p_src_leaf, p_dst)
     else
       serial.fstr1(@"Failed to move: %s\r\n", p_src_leaf)
   else
     ' Dest is not a directory -- rename in place
     result := sd.rename(p_src_leaf, path_leaf(p_dst))
-    if result
+    if result == sd.SUCCESS
       serial.fstr2(@"Renamed '%s' to '%s'\r\n", p_src_leaf, path_leaf(p_dst))
     else
       serial.fstr1(@"Failed to rename: %s\r\n", p_src_leaf)
@@ -902,7 +902,7 @@ PUB do_copy() | p_src, p_dst, p_src_leaf, p_dst_leaf, src_has_path, dst_has_path
   if dh >= 0
     sd.closeDirectoryHandle(dh)
     ' Dest is a directory -- cd into it and use source filename
-    if not sd.changeDirectory(p_dst_leaf)
+    if sd.changeDirectory(p_dst_leaf) < 0
       sd.closeFileHandle(h_src)
       serial.fstr1(@"Cannot enter directory: %s\r\n", p_dst_leaf)
       if dst_has_path
@@ -948,7 +948,7 @@ PUB do_delete() | p_name, p_leaf, has_path, result
 ' @local p_name - Pointer to the full path argument
 ' @local p_leaf - Pointer to leaf filename within the path
 ' @local has_path - True if path contained "/" separators
-' @local result - Delete success/failure
+' @local result - Delete result (SUCCESS or negative error code)
 
   if (ntokens <> 2)
     bad_syntax()
@@ -964,7 +964,7 @@ PUB do_delete() | p_name, p_leaf, has_path, result
 
   result := sd.deleteFile(p_leaf)
 
-  if (result)
+  if result == sd.SUCCESS
     serial.fstr1(@"Deleted: %s\r\n", p_leaf)
   else
     serial.fstr1(@"Failed to delete: %s\r\n", p_leaf)
@@ -980,7 +980,7 @@ PUB do_rmdir() | p_name, p_leaf, has_path, dh, result, p_entry, is_empty
 ' @local p_leaf - Pointer to leaf directory name within the path
 ' @local has_path - True if path contained "/" separators
 ' @local dh - Directory handle to verify existence
-' @local result - readDirectoryHandle/deleteFile result
+' @local result - readDirectoryHandle/deleteFile result (SUCCESS or negative error code)
 ' @local p_entry - Pointer to current entry name during emptiness check
 ' @local is_empty - True if directory contains no real entries
 
@@ -1027,7 +1027,7 @@ PUB do_rmdir() | p_name, p_leaf, has_path, dh, result, p_entry, is_empty
 
   ' Directory is empty, delete it
   result := sd.deleteFile(p_leaf)
-  if (result)
+  if result == sd.SUCCESS
     serial.fstr1(@"Removed: %s\r\n", p_leaf)
   else
     serial.fstr1(@"Failed to remove: %s\r\n", p_leaf)
@@ -1093,7 +1093,7 @@ PUB do_card_info() | wasMounted, ...
   ' If not mounted, initialize card for raw access
   if (not mounted)
     serial.fstr0(@"Initializing card...\r\n")
-    if (not sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK))
+    if sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK) < 0
       serial.fstr0(@"ERROR: Cannot initialize card\r\n")
       return
 
@@ -1271,7 +1271,7 @@ PUB do_bench() | wasMounted, tStart, tElapsed, sector, idx, rate, nSectors, read
   ' If not mounted, initialize card for raw access
   if (not mounted)
     serial.fstr0(@"Initializing card...\r\n")
-    if (not sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK))
+    if sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK) < 0
       serial.fstr0(@"ERROR: Cannot initialize card\r\n")
       return
 
@@ -1389,7 +1389,7 @@ PUB do_label() | p_label
     if strsize(p_label) > 11
       serial.fstr0(@"Label too long (max 11 characters)\r\n")
       return
-    if sd.setVolumeLabel(p_label)
+    if sd.setVolumeLabel(p_label) == sd.SUCCESS
       serial.fstr1(@"Volume label set to: %s\r\n", sd.volumeLabel())
     else
       serial.fstr0(@"Failed to set volume label\r\n")
@@ -1495,7 +1495,7 @@ PRI navigate_to_parent(p_path) : p_leaf, has_path | slash_pos, idx
   p_leaf := p_path + slash_pos + 1
   byte[p_path + slash_pos] := 0                                   ' null-terminate parent
 
-  if not sd.changeDirectory(p_path)
+  if sd.changeDirectory(p_path) < 0
     serial.fstr1(@"Directory not found: %s\r\n", p_path)
     p_leaf := 0
     return
@@ -1599,7 +1599,7 @@ PRI tree_walk(p_path, depth) | dh, result, p_name, attrib, idx, name_buf[4]
       bytemove(@name_buf, p_name, strsize(p_name) <# 15)
       sd.closeDirectoryHandle(dh)
       ' cd into subdirectory and recurse
-      if sd.changeDirectory(@name_buf)
+      if sd.changeDirectory(@name_buf) == sd.SUCCESS
         tree_walk(@".", depth + 1)
         sd.changeDirectory(@"..")
       ' Reopen parent directory and skip past entries already seen

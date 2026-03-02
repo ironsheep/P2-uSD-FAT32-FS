@@ -55,14 +55,22 @@ CON
 ' Same pragmas as mount_tests (known to work on external header)
 #IFDEF __SPINTOOLS__
 #DEFINE SD_INCLUDE_RAW
+#DEFINE SD_INCLUDE_REGISTERS
+#DEFINE SD_INCLUDE_SPEED
 #DEFINE SD_INCLUDE_DEBUG
 #ELSEIFDEF __FLEXSPIN__
 #define SD_INCLUDE_RAW
 #pragma exportdef SD_INCLUDE_RAW
+#define SD_INCLUDE_REGISTERS
+#pragma exportdef SD_INCLUDE_REGISTERS
+#define SD_INCLUDE_SPEED
+#pragma exportdef SD_INCLUDE_SPEED
 #define SD_INCLUDE_DEBUG
 #pragma exportdef SD_INCLUDE_DEBUG
 #ELSE
 #PRAGMA EXPORTDEF SD_INCLUDE_RAW
+#PRAGMA EXPORTDEF SD_INCLUDE_REGISTERS
+#PRAGMA EXPORTDEF SD_INCLUDE_SPEED
 #PRAGMA EXPORTDEF SD_INCLUDE_DEBUG
 #ENDIF
 
@@ -120,7 +128,7 @@ PUB go() | result, speedIdx, testFreq, spiFreq, passCount, failCount, actualHz, 
     ' Mount card at default speed
     debug("Mounting SD card...")
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if result == false
+    if result < 0
         debug("FATAL: Failed to mount SD card!")
         debug("END_SESSION")
         return
@@ -220,7 +228,7 @@ PRI runSingleReads(speedIdx) : passed | idx, sector, readResult, recvCrc, calcCr
         readResult := sd.readSectorRaw(sector, @sectorBuffer)
         utils.checkGuard(@sectorBuffer_guard, @"sectorBuffer guard")
 
-        if readResult
+        if readResult == sd.SUCCESS
             recvCrc := sd.getLastReceivedCRC()
             calcCrc := sd.getLastCalculatedCRC()
             if recvCrc <> calcCrc

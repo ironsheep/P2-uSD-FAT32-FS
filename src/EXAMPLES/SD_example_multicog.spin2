@@ -61,7 +61,7 @@ PUB go() | handle, idx, buf[32]
     reader_done := 0
     setup_done := 0
 
-    if not sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    if sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK) < 0
         debug("Mount FAILED")
         return
 

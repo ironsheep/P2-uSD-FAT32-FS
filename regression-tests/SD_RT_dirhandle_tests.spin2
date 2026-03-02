@@ -86,7 +86,7 @@ PUB go() | result, h1, h2, h3, h4, h5, h6, hDir, hDir2, pEntry, pName, attrs, en
 
     ' Mount the card first
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if result == false
+    if result < 0
         debug("ERROR: Could not mount SD card!")
         debug("END_SESSION")
         return

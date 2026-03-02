@@ -73,7 +73,7 @@ PUB go() | result
 
     ' Mount the card
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if result == false
+    if result < 0
         debug("ERROR: Could not mount SD card!")
         debug("Is the test card inserted?")
         debug("END_SESSION")
@@ -447,7 +447,7 @@ PRI test_directory_navigation() | result, count, idx, pEntry
 
     utils.startTest(@"Change to MULTI directory")
     result := sd.changeDirectory(@dirMulti)
-    utils.evaluateBool(result, @"changeDirectory()", true)
+    utils.evaluateSingleValue(result, @"changeDirectory()", sd.SUCCESS)
 
     utils.startTest(@"Enumerate files in MULTI - expect 5")
     count := 0
@@ -464,7 +464,7 @@ PRI test_directory_navigation() | result, count, idx, pEntry
 
     utils.startTest(@"Navigate back to root")
     result := sd.changeDirectory(@"/")
-    utils.evaluateBool(result, @"changeDirectory(/)", true)
+    utils.evaluateSingleValue(result, @"changeDirectory(/)", sd.SUCCESS)
 
 
 PRI test_benchmark_sequential() | handle, start, elapsed, bytesRead, idx, bytesPerSec

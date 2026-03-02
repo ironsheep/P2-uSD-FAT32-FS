@@ -274,7 +274,7 @@ PRI run() | result, cardSectors
 
     ' Initialize card for raw sector access
     result := sd.initCardOnly(pin_cs, pin_mosi, pin_miso, pin_sck)
-    if result == false
+    if result < 0
         fifo.put(@"FATAL: Cannot initialize card!")
         op_done := true
         return
@@ -694,9 +694,9 @@ PRI auditMountTest() | result
     fifo.put(@"Checking mount/unmount cycle...")
 
     result := sd.mount(pin_cs, pin_mosi, pin_miso, pin_sck)
-    auditRunTest(@"mount() succeeds", result)
+    auditRunTest(@"mount() succeeds", result == sd.SUCCESS)
 
-    if result
+    if result == sd.SUCCESS
         fifo.put(@"  Calculating free space...")
         result := sd.freeSpace()
         auditRunTest(@"Free space > 0", result > 0)

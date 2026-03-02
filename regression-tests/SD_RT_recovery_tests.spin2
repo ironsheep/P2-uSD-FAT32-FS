@@ -86,7 +86,7 @@ PUB go() | result, handle, h0, h1, h2, bytesRead, bytesRead2, bytesWritten
 
     ' Mount the card first
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if result == false
+    if result < 0
         debug("ERROR: Could not mount SD card!")
         debug("END_SESSION")
         return
@@ -245,7 +245,7 @@ PUB go() | result, handle, h0, h1, h2, bytesRead, bytesRead2, bytesWritten
     sd.setTestForceReadError(1)
     sd.unmount()
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    utils.evaluateSubBool(result, @"remount succeeds", true)
+    utils.evaluateSubValue(result, @"remount succeeds", sd.SUCCESS)
 
     ' Create a new file
     sd.clearTestErrors()

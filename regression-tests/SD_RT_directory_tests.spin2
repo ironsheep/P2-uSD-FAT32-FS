@@ -71,7 +71,7 @@ PUB go() | result, pEntry, pFilename, attrs, fileCount, idx, handle, bytesRead
 
     ' Mount the card first
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if result == false
+    if result < 0
         debug("ERROR: Could not mount SD card!")
         debug("END_SESSION")
         return
@@ -92,15 +92,15 @@ PUB go() | result, pEntry, pFilename, attrs, fileCount, idx, handle, bytesRead
 
     utils.startTest(@"newDirectory() creates a directory")
     result := sd.newDirectory(@testDir1)
-    utils.evaluateBool(result, @"newDirectory()", true)
+    utils.evaluateSingleValue(result, @"newDirectory()", sd.SUCCESS)
 
     utils.startTest(@"newDirectory() fails if directory exists")
     result := sd.newDirectory(@testDir1)
-    utils.evaluateBool(result, @"newDirectory() existing", false)
+    utils.evaluateSingleValue(result, @"newDirectory() existing", sd.E_FILE_EXISTS)
 
     utils.startTest(@"Create second directory")
     result := sd.newDirectory(@testDir2)
-    utils.evaluateBool(result, @"newDirectory() second", true)
+    utils.evaluateSingleValue(result, @"newDirectory() second", sd.SUCCESS)
 
     ' ----------------------------------
     ' TEST GROUP: Change directory
@@ -109,7 +109,7 @@ PUB go() | result, pEntry, pFilename, attrs, fileCount, idx, handle, bytesRead
 
     utils.startTest(@"changeDirectory() to new directory")
     result := sd.changeDirectory(@testDir1)
-    utils.evaluateBool(result, @"changeDirectory()", true)
+    utils.evaluateSingleValue(result, @"changeDirectory()", sd.SUCCESS)
 
     utils.startTest(@"Create file in subdirectory")
     handle := sd.createFileNew(@testFile1)
@@ -119,20 +119,20 @@ PUB go() | result, pEntry, pFilename, attrs, fileCount, idx, handle, bytesRead
 
     utils.startTest(@"changeDirectory() back to parent with ..")
     result := sd.changeDirectory(@"..")
-    utils.evaluateBool(result, @"changeDirectory(..) ", true)
+    utils.evaluateSingleValue(result, @"changeDirectory(..) ", sd.SUCCESS)
 
     utils.startTest(@"changeDirectory() to root with /")
     result := sd.changeDirectory(@"/")
-    utils.evaluateBool(result, @"changeDirectory(/)", true)
+    utils.evaluateSingleValue(result, @"changeDirectory(/)", sd.SUCCESS)
 
     utils.startTest(@"changeDirectory() fails for non-existent")
     result := sd.changeDirectory(@"NOEXIST")
-    utils.evaluateBool(result, @"changeDirectory() non-existent", false)
+    utils.evaluateSingleValue(result, @"changeDirectory() non-existent", sd.E_NOT_A_DIR)
 
     utils.startTest(@"changeDirectory() fails on a file (not a directory)")
     sd.changeDirectory(@testDir1)                                               ' Go to RTDIR1 where FILE1.TXT exists
     result := sd.changeDirectory(@testFile1)                                    ' Should fail - FILE1.TXT is not a directory
-    utils.evaluateBool(result, @"changeDirectory() on file", false)
+    utils.evaluateSingleValue(result, @"changeDirectory() on file", sd.E_NOT_A_DIR)
     sd.changeDirectory(@"/")                                                    ' Return to root
 
     ' ----------------------------------
@@ -142,15 +142,15 @@ PUB go() | result, pEntry, pFilename, attrs, fileCount, idx, handle, bytesRead
 
     utils.startTest(@"Change to first directory")
     result := sd.changeDirectory(@testDir1)
-    utils.evaluateBool(result, @"changeDirectory()", true)
+    utils.evaluateSingleValue(result, @"changeDirectory()", sd.SUCCESS)
 
     utils.startTest(@"Create subdirectory")
     result := sd.newDirectory(@subDir1)
-    utils.evaluateBool(result, @"newDirectory() nested", true)
+    utils.evaluateSingleValue(result, @"newDirectory() nested", sd.SUCCESS)
 
     utils.startTest(@"Change to nested subdirectory")
     result := sd.changeDirectory(@subDir1)
-    utils.evaluateBool(result, @"changeDirectory() nested", true)
+    utils.evaluateSingleValue(result, @"changeDirectory() nested", sd.SUCCESS)
 
     utils.startTest(@"Create file in nested directory")
     handle := sd.createFileNew(@testFile2)
@@ -161,7 +161,7 @@ PUB go() | result, pEntry, pFilename, attrs, fileCount, idx, handle, bytesRead
     utils.startTest(@"Navigate back to root")
     sd.changeDirectory(@"/")
     result := sd.changeDirectory(@"/")  ' Should succeed
-    utils.evaluateBool(result, @"changeDirectory(/)", true)
+    utils.evaluateSingleValue(result, @"changeDirectory(/)", sd.SUCCESS)
 
     ' ----------------------------------
     ' TEST GROUP: Path navigation
@@ -180,7 +180,7 @@ PUB go() | result, pEntry, pFilename, attrs, fileCount, idx, handle, bytesRead
 
     utils.startTest(@"Ensure back at root after path operations")
     result := sd.changeDirectory(@"/")
-    utils.evaluateBool(result, @"changeDirectory(/)", true)
+    utils.evaluateSingleValue(result, @"changeDirectory(/)", sd.SUCCESS)
 
     ' ----------------------------------
     ' TEST GROUP: Directory listing
@@ -232,7 +232,7 @@ PUB go() | result, pEntry, pFilename, attrs, fileCount, idx, handle, bytesRead
 
     utils.startTest(@"moveFile() to subdirectory")
     result := sd.moveFile(@"MOVEME.TXT", @testDir2)
-    utils.evaluateBool(result, @"moveFile()", true)
+    utils.evaluateSingleValue(result, @"moveFile()", sd.SUCCESS)
 
     utils.startTest(@"File no longer in root")
     handle := sd.openFileRead(@"MOVEME.TXT")
@@ -254,19 +254,19 @@ PUB go() | result, pEntry, pFilename, attrs, fileCount, idx, handle, bytesRead
     utils.startTest(@"Deep nesting - create 5-level directory structure")
     sd.changeDirectory(@"/")
     result := sd.newDirectory(@deepDir1)
-    utils.evaluateSubBool(result, @"create DEEP1", true)
+    utils.evaluateSubValue(result, @"create DEEP1", sd.SUCCESS)
     sd.changeDirectory(@deepDir1)
     result := sd.newDirectory(@deepDir2)
-    utils.evaluateSubBool(result, @"create DEEP2", true)
+    utils.evaluateSubValue(result, @"create DEEP2", sd.SUCCESS)
     sd.changeDirectory(@deepDir2)
     result := sd.newDirectory(@deepDir3)
-    utils.evaluateSubBool(result, @"create DEEP3", true)
+    utils.evaluateSubValue(result, @"create DEEP3", sd.SUCCESS)
     sd.changeDirectory(@deepDir3)
     result := sd.newDirectory(@deepDir4)
-    utils.evaluateSubBool(result, @"create DEEP4", true)
+    utils.evaluateSubValue(result, @"create DEEP4", sd.SUCCESS)
     sd.changeDirectory(@deepDir4)
     result := sd.newDirectory(@deepDir5)
-    utils.evaluateSubBool(result, @"create DEEP5", true)
+    utils.evaluateSubValue(result, @"create DEEP5", sd.SUCCESS)
 
     utils.startTest(@"Navigate to deepest level and create file")
     sd.changeDirectory(@deepDir5)
@@ -282,7 +282,7 @@ PUB go() | result, pEntry, pFilename, attrs, fileCount, idx, handle, bytesRead
     sd.changeDirectory(@"..")  ' DEEP1
     sd.changeDirectory(@"..")  ' root
     result := sd.changeDirectory(@"/")
-    utils.evaluateBool(result, @"back at root", true)
+    utils.evaluateSingleValue(result, @"back at root", sd.SUCCESS)
 
     ' Test: Empty directory listing
     utils.startTest(@"Empty directory listing")
@@ -332,7 +332,7 @@ PUB go() | result, pEntry, pFilename, attrs, fileCount, idx, handle, bytesRead
     ' (a) Create RTMANY directory
     sd.changeDirectory(@"/")
     result := sd.newDirectory(@manyFilesDir)
-    utils.evaluateSubValue(result, @"create RTMANY dir", true)
+    utils.evaluateSubValue(result, @"create RTMANY dir", sd.SUCCESS)
 
     ' (b) Create 20 files FILE01.TXT through FILE20.TXT
     sd.changeDirectory(@manyFilesDir)
@@ -380,7 +380,7 @@ PUB go() | result, pEntry, pFilename, attrs, fileCount, idx, handle, bytesRead
     sd.deleteFile(@manyFilesDir)
     ' Verify directory was removed
     result := sd.changeDirectory(@manyFilesDir)
-    utils.evaluateSubBool(result == false, @"RTMANY removed", true)
+    utils.evaluateSubBool(result < 0, @"RTMANY removed", true)
     sd.changeDirectory(@"/")
 
     utils.showSubTestResults()

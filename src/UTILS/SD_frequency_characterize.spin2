@@ -118,7 +118,7 @@ PUB go() | result, freq_idx, test_freq, errors, hp
     ' Mount at 320 MHz first (known working)
     debug("Initial mount at 320 MHz...")
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if result == false
+    if result < 0
         debug("ERROR: Initial mount failed!")
         debug("END_SESSION")
         return

@@ -129,7 +129,7 @@ PUB go() | result
     debug(" ")
 
     result := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if not result
+    if result < 0
         debug("FATAL: initCardOnly() failed - cannot proceed")
         debug("END_SESSION")
         return
@@ -148,7 +148,7 @@ PUB go() | result
     debug(" ")
 
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if not result
+    if result < 0
         debug("mount() failed (error=", sdec_(sd.error()), ") - skipping mounted tests")
         fail_count++
     else
@@ -176,7 +176,7 @@ PRI testStructAccess() | sd.cid_t cid, sd.scr_t scr, result, ocr, sectors, spiHz
     debug("--- Test: readCIDRaw() into struct local ---")
     bytefill(@cid, $EE, 16)
     result := sd.readCIDRaw(@cid)
-    if result
+    if result == sd.SUCCESS
         debug("  readCIDRaw: OK")
 
         ' Display raw bytes at @cid for reference
@@ -211,7 +211,7 @@ PRI testStructAccess() | sd.cid_t cid, sd.scr_t scr, result, ocr, sectors, spiHz
     debug("--- Test: readSCRRaw() into struct local ---")
     bytefill(@scr, $EE, 8)
     result := sd.readSCRRaw(@scr)
-    if result
+    if result == sd.SUCCESS
         debug("  readSCRRaw: OK")
 
         ' Display raw bytes at @scr
@@ -281,7 +281,7 @@ PRI testStructAccess() | sd.cid_t cid, sd.scr_t scr, result, ocr, sectors, spiHz
     utils.initGuard(@sdst_buf_guard)
     result := sd.readSDStatusRaw(@sdst_buf)
     utils.checkGuard(@sdst_buf_guard, @"sdst_buf guard")
-    if result
+    if result == sd.SUCCESS
         debug("  readSDStatusRaw: OK (64 bytes)")
 
         ' Hex dump of SD Status (4 rows of 16 bytes)
@@ -355,7 +355,7 @@ PRI generateTwoLineDisplay() | sd.cid_t cid, sd.scr_t scr, ...
     utils.initGuard(@sdst_buf_guard)
     sdstOk := sd.readSDStatusRaw(@sdst_buf)
     utils.checkGuard(@sdst_buf_guard, @"sdst_buf guard")
-    if sdstOk
+    if sdstOk == sd.SUCCESS
         speedClass := decodeSpeedClass(sdst_buf[8])
         uhsGrade := sdst_buf[14] >> 4
         videoClass := sdst_buf[15]
@@ -387,7 +387,7 @@ PRI generateTwoLineDisplay() | sd.cid_t cid, sd.scr_t scr, ...
         debug("L1: ", zstr_(p_mfr), " ", zstr_(@pnm), " ", zstr_(p_type), " ", udec_(sizeMB), "MB [", zstr_(p_fs), "] ", zstr_(p_spec), " rev", udec_(cid.prv >> 4), ".", udec_(cid.prv & $0F), " SN:", uhex_long_(psn), " ", udec_(mdtYear), "/", udec_(mdtMonth))
     else
         debug("L1: ", zstr_(p_mfr), " ", zstr_(@pnm), " ", zstr_(p_type), " ", udec_(sizeMB / 1024), "GB [", zstr_(p_fs), "] ", zstr_(p_spec), " rev", udec_(cid.prv >> 4), ".", udec_(cid.prv & $0F), " SN:", uhex_long_(psn), " ", udec_(mdtYear), "/", udec_(mdtMonth))
-    if sdstOk
+    if sdstOk == sd.SUCCESS
         debug("L2: Class ", udec_(speedClass), ", U", udec_(uhsGrade), ", V", udec_(videoClass), ", SPI ", udec_(spiHz / 1_000_000), " MHz  [", zstr_(@oemBuf), "]")
     else
         debug("L2: SPI ", udec_(spiHz / 1_000_000), " MHz  [", zstr_(@oemBuf), "]  (ACMD13 unavailable)")

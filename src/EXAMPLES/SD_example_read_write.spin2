@@ -49,7 +49,7 @@ PUB go() | handle, bytes_read, bytes_written
     debug("=== SD Read/Write Example ===")
 
     ' --- Step 1: Mount the card ---
-    if not sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    if sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK) < 0
         debug("Mount FAILED, error: ", sdec(sd.error()))
         return
 

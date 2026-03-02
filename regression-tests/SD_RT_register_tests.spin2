@@ -72,7 +72,7 @@ PUB go() | result, csdVer, tranSpeed, capacity, cardSectors, readTimeout, writeT
 
     ' Mount the card first
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if result == false
+    if result < 0
         debug("ERROR: Could not mount SD card!")
         debug("END_SESSION")
         return
@@ -94,7 +94,7 @@ PUB go() | result, csdVer, tranSpeed, capacity, cardSectors, readTimeout, writeT
     utils.initGuard(@csdBuf_guard)
     result := sd.readCSDRaw(@csdBuf)
     utils.checkGuard(@csdBuf_guard, @"csdBuf guard")
-    utils.evaluateBool(result, @"readCSDRaw()", true)
+    utils.evaluateSingleValue(result, @"readCSDRaw()", sd.SUCCESS)
 
     ' Test: CSD version is valid (0 for SDSC, 1 for SDHC/SDXC)
     utils.startTest(@"CSD version is valid (0 or 1)")
@@ -133,12 +133,12 @@ PUB go() | result, csdVer, tranSpeed, capacity, cardSectors, readTimeout, writeT
     utils.startTest(@"readCSDRaw() works after initCardOnly")
     sd.unmount()
     result := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    utils.evaluateSubBool(result, @"initCardOnly()", true)
+    utils.evaluateSubValue(result, @"initCardOnly()", sd.SUCCESS)
     bytefill(@csdBuf, 0, 16)
     utils.initGuard(@csdBuf_guard)
     result := sd.readCSDRaw(@csdBuf)
     utils.checkGuard(@csdBuf_guard, @"csdBuf guard")
-    utils.evaluateSubBool(result, @"readCSDRaw() unmounted", true)
+    utils.evaluateSubValue(result, @"readCSDRaw() unmounted", sd.SUCCESS)
     ' Verify same version
     result := (csdBuf[0] >> 6) & $03
     utils.evaluateSubValue(result, @"CSD version matches", csdVer)
@@ -146,7 +146,7 @@ PUB go() | result, csdVer, tranSpeed, capacity, cardSectors, readTimeout, writeT
 
     ' Remount for timeout tests
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if result == false
+    if result < 0
         debug("ERROR: Could not remount!")
         utils.ShowTestEndCounts()
         debug("END_SESSION")

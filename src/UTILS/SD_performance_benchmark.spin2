@@ -103,7 +103,7 @@ PUB go() | result, spi_hz
 
     ' Mount the card first (for accurate cold-mount timing)
     result := runMountBenchmark()
-    if result == false
+    if result < 0
         debug("ERROR: Could not mount SD card!")
         debug("END_SESSION")
         return
@@ -167,7 +167,7 @@ PRI identifyCard() : result | mid, pnm[2]
 ' Displays MID, product name, and raw CID bytes.
 
     result := sd.readCIDRaw(@cid_buf)
-    if result == false
+    if result < 0
         debug("  readCIDRaw FAILED")
         return false
 

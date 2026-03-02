@@ -131,7 +131,7 @@ PUB go() | result, pStr, cardSectors
     debug("--- Preflight: Card size check ---")
 
     result := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if result == false
+    if result < 0
         debug("FATAL: Cannot initialize card!")
         debug("END_SESSION")
         return
@@ -213,7 +213,7 @@ PUB go() | result, pStr, cardSectors
     debug("=== Phase 3: Inject defects in window 2 ===")
 
     result := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if result == false
+    if result < 0
         debug("FATAL: Cannot init card for injection")
         utils.ShowTestEndCounts()
         debug("END_SESSION")
@@ -314,7 +314,7 @@ PRI readCardGeometry() | result, numFats
 ' Uses sd.initCardOnly() for raw sector access.
 
     result := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if result == false
+    if result < 0
         debug("FATAL: Cannot init card to read geometry")
         return
 

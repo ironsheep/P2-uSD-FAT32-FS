@@ -540,12 +540,12 @@ PUB mount(_cs, _mosi, _miso, _sck) : result
 '' @param _mosi - Master Out Slave In pin number
 '' @param _miso - Master In Slave Out pin number
 '' @param _sck - Serial clock pin number
-'' @returns result - TRUE on success, FALSE on failure
+'' @returns result - SUCCESS (0) on success, negative error code on failure
 
   ' Check if already mounted
   if driver_mode == MODE_FILESYSTEM
     debug("  [mount] Already mounted")
-    return true
+    return SUCCESS
 
   ' MODE_RAW -> MODE_FILESYSTEM upgrade is allowed
   ' Worker is already running, just send mount command
@@ -556,27 +556,26 @@ PUB mount(_cs, _mosi, _miso, _sck) : result
   if cog_id == -1
     if start(_cs, _mosi, _miso, _sck) == -1
       debug("  [mount] Failed to start worker cog")
-      return false
+      return E_NO_LOCK
 
   ' Send mount command to worker
   result := send_command(CMD_MOUNT, 0, 0, 0, 0)
   if result == SUCCESS
     debug("  [mount] Mount successful, mode=FILESYSTEM")
-    return true
   else
     debug("  [mount] Mount failed with error ", sdec_(result))
     set_error(result)
-    return false
 
 
 PUB unmount() : result
 '' Unmount SD card (multi-cog safe) - cleanly unmounts, flushing data and updating FSInfo.
 ''
-'' @returns result - TRUE on success
+'' @returns result - SUCCESS (0) on success, negative error code on failure
 
   result := send_command(CMD_UNMOUNT, 0, 0, 0, 0)
   debug("  [unmount] Card unmounted")
-  return result == SUCCESS
+  if result <> SUCCESS
+    set_error(result)
 
 
 CON ' ═══════════════════════════════════════════════════════════════════════════
@@ -782,11 +781,12 @@ PUB sync() : result
 '' Flush buffers (multi-cog safe) - flushes pending writes without closing file.
 '' Use to checkpoint data during long operations.
 ''
-'' @returns result - TRUE on success
+'' @returns result - SUCCESS (0) on success, negative error code on failure
 
   result := send_command(CMD_SYNC, 0, 0, 0, 0)
   debug("  [sync] Buffers flushed")
-  return result == SUCCESS
+  if result <> SUCCESS
+    set_error(result)
 
 
 CON ' ═══════════════════════════════════════════════════════════════════════════
@@ -844,28 +844,22 @@ PUB newDirectory(name_ptr) : result
 '' Create a new directory (multi-cog safe) in current directory.
 ''
 '' @param name_ptr - Pointer to null-terminated directory name string
-'' @returns result - TRUE on success, FALSE if directory exists or error
+'' @returns result - SUCCESS (0) on success, negative error code on failure
 
   result := send_command(CMD_NEWDIR, name_ptr, 0, 0, 0)
-  if result == SUCCESS
-    return true
-  else
+  if result <> SUCCESS
     set_error(result)
-    return false
 
 
 PUB changeDirectory(name_ptr) : result
 '' Change directory (multi-cog safe) - changes current directory.
 ''
 '' @param name_ptr - Pointer to null-terminated directory name string
-'' @returns result - TRUE on success, FALSE if not found
+'' @returns result - SUCCESS (0) on success, negative error code on failure
 
   result := send_command(CMD_CHDIR, name_ptr, 0, 0, 0)
-  if result == SUCCESS
-    return true
-  else
+  if result <> SUCCESS
     set_error(result)
-    return false
 
 
 CON ' ═══════════════════════════════════════════════════════════════════════════
@@ -876,14 +870,11 @@ PUB deleteFile(name_ptr) : result
 '' Delete file (multi-cog safe) - deletes file from current directory.
 ''
 '' @param name_ptr - Pointer to null-terminated filename string
-'' @returns result - TRUE on success, FALSE if not found or protected
+'' @returns result - SUCCESS (0) on success, negative error code on failure
 
   result := send_command(CMD_DELETE, name_ptr, 0, 0, 0)
-  if result == SUCCESS
-    return true
-  else
+  if result <> SUCCESS
     set_error(result)
-    return false
 
 
 PUB rename(old_name, new_name) : result
@@ -891,14 +882,11 @@ PUB rename(old_name, new_name) : result
 ''
 '' @param old_name - Pointer to current filename string
 '' @param new_name - Pointer to new filename string
-'' @returns result - TRUE on success, FALSE if source not found or dest exists
+'' @returns result - SUCCESS (0) on success, negative error code on failure
 
   result := send_command(CMD_RENAME, old_name, new_name, 0, 0)
-  if result == SUCCESS
-    return true
-  else
+  if result <> SUCCESS
     set_error(result)
-    return false
 
 
 PUB moveFile(name_ptr, dest_folder) : result
@@ -906,14 +894,11 @@ PUB moveFile(name_ptr, dest_folder) : result
 ''
 '' @param name_ptr - Pointer to null-terminated filename to move
 '' @param dest_folder - Pointer to null-terminated destination folder name
-'' @returns result - TRUE on success, FALSE on error
+'' @returns result - SUCCESS (0) on success, negative error code on failure
 
   result := send_command(CMD_MOVEFILE, name_ptr, dest_folder, 0, 0)
-  if result == SUCCESS
-    return true
-  else
+  if result <> SUCCESS
     set_error(result)
-    return false
 
 
 PUB freeSpace() : result
@@ -994,14 +979,11 @@ PUB setVolumeLabel(p_label) : result
 '' Updates both the BPB and root directory volume label entry.
 ''
 '' @param p_label - Pointer to new volume label string (max 11 chars)
-'' @returns result - TRUE on success, FALSE on failure
+'' @returns result - SUCCESS (0) on success, negative error code on failure
 
   result := send_command(CMD_SET_VOL_LABEL, p_label, 0, 0, 0)
-  if result == SUCCESS
-    return true
-  else
+  if result <> SUCCESS
     set_error(result)
-    return false
 
 
 PUB syncDirCache()
@@ -1056,34 +1038,33 @@ PUB initCardOnly(_cs, _mosi, _miso, _sck) : result
 '' @param _mosi - Master Out Slave In pin number
 '' @param _miso - Master In Slave Out pin number
 '' @param _sck - Serial clock pin number
-'' @returns result - TRUE if card initialized successfully, FALSE otherwise
+'' @returns result - SUCCESS (0) on success, negative error code on failure
 
   debug("  [initCardOnly] Pins: CS=P", udec_(_cs), " MOSI=P", udec_(_mosi), " MISO=P", udec_(_miso), " SCK=P", udec_(_sck))
 
   ' Check if already in filesystem mode - reject (must unmount first)
   if driver_mode == MODE_FILESYSTEM
     debug("  [initCardOnly] REJECTED: Already mounted as filesystem, unmount first")
-    return false
+    return E_NOT_MOUNTED
 
   ' Check if already in raw mode - already initialized
   if driver_mode == MODE_RAW
     debug("  [initCardOnly] Already initialized in raw mode")
-    return true
+    return SUCCESS
 
   ' Start worker cog if not already running
   if cog_id == -1
     if start(_cs, _mosi, _miso, _sck) == -1
       debug("  [initCardOnly] FAIL: Could not start worker cog")
-      return false
+      return E_NO_LOCK
 
   ' Send init command to worker
   result := send_command(CMD_INIT_CARD_ONLY, 0, 0, 0, 0)
   if result == SUCCESS
     debug("  [initCardOnly] Card initialized successfully via worker")
-    return true
   else
     debug("  [initCardOnly] Card initialization failed, error=", sdec_(result))
-    return false
+    set_error(result)
 
 
 PUB cardSizeSectors() : result
@@ -1162,13 +1143,15 @@ PUB readSectorRaw(sector, p_buffer) : result
 ''
 '' @param sector - Absolute LBA sector number
 '' @param p_buffer - Pointer to 512-byte buffer to receive data
-'' @returns result - TRUE on success, FALSE on failure
+'' @returns result - SUCCESS (0) on success, negative error code on failure
 
   ' Require worker cog to be running (no direct access allowed)
   if cog_id == -1
     debug("  [readSectorRaw] ERROR: Worker not running - call initCardOnly() or mount() first")
-    return false
-  result := send_command(CMD_READ_SECTOR_RAW, sector, p_buffer, 0, 0) == SUCCESS
+    return E_NOT_MOUNTED
+  result := send_command(CMD_READ_SECTOR_RAW, sector, p_buffer, 0, 0)
+  if result <> SUCCESS
+    set_error(result)
   debug("  [readSectorRaw] Read sector ", udec(sector))
 
 
@@ -1178,17 +1161,18 @@ PUB writeSectorRaw(sector, p_buffer) : result
 ''
 '' @param sector - Absolute LBA sector number
 '' @param p_buffer - Pointer to 512 bytes of data to write
-'' @returns result - TRUE on success, FALSE on failure
+'' @returns result - SUCCESS (0) on success, negative error code on failure
 
   ' Require worker cog to be running (no direct access allowed)
   if cog_id == -1
     debug("  [writeSectorRaw] ERROR: Worker not running - call initCardOnly() or mount() first")
-    return false
-  result := send_command(CMD_WRITE_SECTOR_RAW, sector, p_buffer, 0, 0) == SUCCESS
-  if result
+    return E_NOT_MOUNTED
+  result := send_command(CMD_WRITE_SECTOR_RAW, sector, p_buffer, 0, 0)
+  if result == SUCCESS
     debug("  [writeSectorRaw] Wrote sector ", udec(sector))
   else
     debug("  [writeSectorRaw] FAILED to write sector ", udec(sector))
+    set_error(result)
 
 
 PUB readSectorsRaw(start_sector, count, p_buffer) : result
@@ -1227,12 +1211,14 @@ PUB readVBRRaw(p_buf) : result
 '' Card must be mounted for this method to work (VBR location determined at mount).
 ''
 '' @param p_buf - Pointer to 512-byte buffer to receive VBR data
-'' @returns result - TRUE on success, FALSE if not mounted
+'' @returns result - SUCCESS (0) on success, negative error code on failure
 
   if not (flags & F_MOUNTED)
     debug("  [readVBRRaw] FAILED: Card not mounted")
-    return false
-  result := send_command(CMD_READ_SECTOR_RAW, vbr_sec, p_buf, 0, 0) == SUCCESS
+    return E_NOT_MOUNTED
+  result := send_command(CMD_READ_SECTOR_RAW, vbr_sec, p_buf, 0, 0)
+  if result <> SUCCESS
+    set_error(result)
 
 #ENDIF
 
@@ -1243,75 +1229,67 @@ CON ' ════════════════════════�
 
 #IFDEF SD_INCLUDE_REGISTERS
 
-PUB readCIDRaw(p_buf) : result | status
+PUB readCIDRaw(p_buf) : result
 '' Read CID register (16 bytes) into buffer.
 '' Contains manufacturer ID, product name, serial number, and manufacturing date.
 '' Routes through worker cog which owns the SPI pins.
 ''
 '' @param p_buf - Pointer to 16-byte buffer to receive CID data
-'' @returns result - TRUE on success, FALSE on failure
-'' @local status - Command status
+'' @returns result - SUCCESS (0) on success, negative error code on failure
 
-  status := send_command(CMD_READ_CID, p_buf, 0, 0, 0)
-  if status == SUCCESS
+  result := send_command(CMD_READ_CID, p_buf, 0, 0, 0)
+  if result == SUCCESS
     debug("  [readCIDRaw] CID read successfully")
-    result := true
   else
     debug("  [readCIDRaw] CID read FAILED")
-    result := false
+    set_error(result)
 
 
-PUB readCSDRaw(p_buf) : result | status
+PUB readCSDRaw(p_buf) : result
 '' Read CSD register (16 bytes) into buffer.
 '' Contains card capacity, speed, and features.
 '' Routes through worker cog which owns the SPI pins.
 ''
 '' @param p_buf - Pointer to 16-byte buffer to receive CSD data
-'' @returns result - TRUE on success, FALSE on failure
-'' @local status - Command status
+'' @returns result - SUCCESS (0) on success, negative error code on failure
 
-  status := send_command(CMD_READ_CSD, p_buf, 0, 0, 0)
-  if status == SUCCESS
+  result := send_command(CMD_READ_CSD, p_buf, 0, 0, 0)
+  if result == SUCCESS
     debug("  [readCSDRaw] CSD read successfully")
-    result := true
   else
     debug("  [readCSDRaw] CSD read FAILED")
-    result := false
+    set_error(result)
 
 
-PUB readSCRRaw(p_buf) : result | status
+PUB readSCRRaw(p_buf) : result
 '' Read SCR register (8 bytes) into buffer.
 '' Contains SD spec version and bus widths.
 '' Routes through worker cog which owns the SPI pins.
 ''
 '' @param p_buf - Pointer to 8-byte buffer to receive SCR data
-'' @returns result - TRUE on success, FALSE on failure
-'' @local status - Command status
+'' @returns result - SUCCESS (0) on success, negative error code on failure
 
-  status := send_command(CMD_READ_SCR, p_buf, 0, 0, 0)
-  if status == SUCCESS
+  result := send_command(CMD_READ_SCR, p_buf, 0, 0, 0)
+  if result == SUCCESS
     debug("  [readSCRRaw] SCR read successfully")
-    result := true
   else
     debug("  [readSCRRaw] SCR read FAILED")
-    result := false
+    set_error(result)
 
 
-PUB readSDStatusRaw(p_buf) : result | status
+PUB readSDStatusRaw(p_buf) : result
 '' Read SD Status register (ACMD13) - returns 64 bytes of card status.
 '' Contains Speed Class, UHS Speed Grade, Video Speed Class, and more.
 ''
 '' @param p_buf - Pointer to 64-byte buffer to receive SD Status data
-'' @returns result - TRUE on success, FALSE on failure
-'' @local status - Command status
+'' @returns result - SUCCESS (0) on success, negative error code on failure
 
-  status := send_command(CMD_READ_SD_STATUS, p_buf, 0, 0, 0)
-  if status == SUCCESS
+  result := send_command(CMD_READ_SD_STATUS, p_buf, 0, 0, 0)
+  if result == SUCCESS
     debug("  [readSDStatusRaw] SD Status read successfully")
-    result := true
   else
     debug("  [readSDStatusRaw] SD Status read FAILED")
-    result := false
+    set_error(result)
 
 
 PUB getOCR() : ocr
@@ -1354,7 +1332,7 @@ PUB checkCMD6Support() : supported | scr[2], sd_spec
 '' @local scr - SCR register data (2 longs = 8 bytes)
 '' @local sd_spec - SD spec version from SCR
 
-  if not readSCRRaw(@scr)
+  if readSCRRaw(@scr) < 0
     debug("  [checkCMD6Support] Failed to read SCR")
     return false
   sd_spec := scr.byte[0] & $0F                                                  '  SD_SPEC in bits [3:0]

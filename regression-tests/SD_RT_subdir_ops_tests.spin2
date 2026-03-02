@@ -85,7 +85,7 @@ PUB go() | result, handle, dh, count, pEntry
 
     ' Mount the card first
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if result == false
+    if result < 0
         debug("ERROR: Could not mount SD card!")
         debug("END_SESSION")
         return
@@ -126,7 +126,7 @@ PUB go() | result, handle, dh, count, pEntry
     ' Test #3: Delete empty file succeeds
     utils.startTest(@"deleteFile() on empty file succeeds")
     result := sd.deleteFile(@emptyFile)
-    utils.evaluateBool(result, @"deleteFile() empty", true)
+    utils.evaluateSingleValue(result, @"deleteFile() empty", sd.SUCCESS)
 
     ' Test #4: Verify empty file is deleted
     utils.startTest(@"Verify empty file deleted (openFileRead fails)")
@@ -206,9 +206,9 @@ PUB go() | result, handle, dh, count, pEntry
     utils.startTest(@"mkdir and cd into subdirectory")
     utils.setCheckCountPerTest(2)
     result := sd.newDirectory(@testdir)
-    utils.evaluateSubBool(result, @"newDirectory()", true)
+    utils.evaluateSubValue(result, @"newDirectory()", sd.SUCCESS)
     result := sd.changeDirectory(@testdir)
-    utils.evaluateSubBool(result, @"changeDirectory()", true)
+    utils.evaluateSubValue(result, @"changeDirectory()", sd.SUCCESS)
     utils.showSubTestResults()
 
     ' Test #8: Create file in subdirectory
@@ -304,7 +304,7 @@ PUB go() | result, handle, dh, count, pEntry
     ' Test #12: Delete empty file in subdirectory
     utils.startTest(@"Delete empty file in subdirectory")
     result := sd.deleteFile(@testfile1)
-    utils.evaluateBool(result, @"deleteFile() empty in subdir", true)
+    utils.evaluateSingleValue(result, @"deleteFile() empty in subdir", sd.SUCCESS)
 
     ' Test #13: Verify deleted file not found
     utils.startTest(@"Deleted file not found in subdirectory")
@@ -314,7 +314,7 @@ PUB go() | result, handle, dh, count, pEntry
     ' Test #14: Delete file with data in subdirectory
     utils.startTest(@"Delete file with data in subdirectory")
     result := sd.deleteFile(@testfile2)
-    utils.evaluateBool(result, @"deleteFile() data in subdir", true)
+    utils.evaluateSingleValue(result, @"deleteFile() data in subdir", sd.SUCCESS)
 
     ' Test #15: Dir after delete shows fewer entries
     utils.startTest(@"Dir after delete shows correct count")
@@ -345,7 +345,7 @@ PUB go() | result, handle, dh, count, pEntry
     if handle >= 0
         sd.closeFileHandle(handle)
     result := sd.rename(@emptyFile, @renamedEmpty)
-    utils.evaluateSubBool(result, @"rename() empty file", true)
+    utils.evaluateSubValue(result, @"rename() empty file", sd.SUCCESS)
     utils.showSubTestResults()
 
     ' Test #17: Original name gone, new name accessible
@@ -368,9 +368,9 @@ PUB go() | result, handle, dh, count, pEntry
     utils.startTest(@"cd .. then cd back preserves dir contents")
     utils.setCheckCountPerTest(3)
     result := sd.changeDirectory(@dotdotPath)
-    utils.evaluateSubBool(result, @"cd ..", true)
+    utils.evaluateSubValue(result, @"cd ..", sd.SUCCESS)
     result := sd.changeDirectory(@testdir)
-    utils.evaluateSubBool(result, @"cd back", true)
+    utils.evaluateSubValue(result, @"cd back", sd.SUCCESS)
     ' Dir should still show files
     dh := sd.openDirectory(@dotPath)
     count := 0

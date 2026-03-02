@@ -90,33 +90,6 @@ However, immediately re-reading the card shows the **original factory values are
 
 ---
 
-### API: File/directory operations should return error codes, not true/false
-
-**Goal:** File and directory operation methods that currently return `true`/`false` should return `SUCCESS` (0) on success or a negative error code on failure. Callers should not need to call `sd.error()` separately to find out what went wrong.
-
-**Affected methods** (return `true`/`false` today):
-- `deleteFile(pFilename)` -- returns `true`/`false`
-- `rename(pOldName, pNewName)` -- returns `true`/`false`
-- `moveFile(pFilename, pDestFolder)` -- returns `true`/`false`
-- `newDirectory(pDirname)` -- returns `true`/`false`
-- `changeDirectory(pDirname)` -- returns `true`/`false`
-
-**Target pattern:**
-```spin2
-result := sd.deleteFile(@"OLD.TXT")
-if result < 0
-    debug("Delete failed: ", sdec_(result))    ' e.g., E_FILE_NOT_FOUND (-40)
-```
-
-**Notes:**
-- The handle-based API already returns error codes (e.g., `openFileRead()` returns handle >= 0 or negative error)
-- This change makes file/directory operations consistent with the handle API
-- Update tutorial and all test files after changing
-
-*Noted: 2026-02-28*
-
----
-
 ### Feature: SD 4-bit native mode backend (QSPI adapter support)
 
 **Goal:** Support a second SD card adapter that wires out D0-D3/CLK/CMD for 4-bit parallel transfers, selectable via compile define (e.g., `SD_BUS_4BIT`). Same FAT32 filesystem layer on top, different transport underneath. Theoretical 4x throughput gain at the same clock speed.

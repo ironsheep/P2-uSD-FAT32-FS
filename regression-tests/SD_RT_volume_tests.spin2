@@ -96,7 +96,7 @@ PUB go() | result, handle, h1, h2, h3, bytesWritten, bytesRead, pLabel, idx, pEn
 
     ' Mount the card first
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if result == false
+    if result < 0
         debug("ERROR: Could not mount SD card!")
         debug("END_SESSION")
         return
@@ -124,7 +124,7 @@ PUB go() | result, handle, h1, h2, h3, bytesWritten, bytesRead, pLabel, idx, pEn
     ' Test: Set a new volume label
     utils.startTest(@"setVolumeLabel() changes label")
     result := sd.setVolumeLabel(@newLabel)
-    utils.evaluateBool(result, @"setVolumeLabel()", true)
+    utils.evaluateSingleValue(result, @"setVolumeLabel()", sd.SUCCESS)
 
     ' Test: volumeLabel() returns the new label
     utils.startTest(@"volumeLabel() returns new label after set")
@@ -136,13 +136,13 @@ PUB go() | result, handle, h1, h2, h3, bytesWritten, bytesRead, pLabel, idx, pEn
     ' Test: Max length label (11 chars)
     utils.startTest(@"setVolumeLabel() accepts 11-char label")
     result := sd.setVolumeLabel(@maxLabel)
-    utils.evaluateBool(result, @"setVolumeLabel(11 chars)", true)
+    utils.evaluateSingleValue(result, @"setVolumeLabel(11 chars)", sd.SUCCESS)
 
     ' Test: Label persists through unmount/remount
     utils.startTest(@"Label persists through unmount/remount")
     sd.unmount()
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    utils.evaluateSubBool(result, @"remount succeeds", true)
+    utils.evaluateSubValue(result, @"remount succeeds", sd.SUCCESS)
     pLabel := sd.volumeLabel()
     debug("   Label after remount: [", zstr_(pLabel), "]")
     result := strncmp(pLabel, @"12345678901", 11)
@@ -151,7 +151,7 @@ PUB go() | result, handle, h1, h2, h3, bytesWritten, bytesRead, pLabel, idx, pEn
     ' Test: Restore original label
     utils.startTest(@"Restore original volume label")
     result := sd.setVolumeLabel(@origLabel)
-    utils.evaluateBool(result, @"restore label", true)
+    utils.evaluateSingleValue(result, @"restore label", sd.SUCCESS)
     pLabel := sd.volumeLabel()
     debug("   Restored label: [", zstr_(pLabel), "]")
 
@@ -222,13 +222,13 @@ PUB go() | result, handle, h1, h2, h3, bytesWritten, bytesRead, pLabel, idx, pEn
     utils.evaluateSubBool(h1 >= 0, @"createFileNew()", true)
     sd.writeHandle(h1, @testContent, strsize(@testContent))
     result := sd.sync()
-    utils.evaluateSubBool(result, @"sync()", true)
+    utils.evaluateSubValue(result, @"sync()", sd.SUCCESS)
     sd.closeFileHandle(h1)
 
     ' Test: sync with no file open
     utils.startTest(@"sync() with no file open")
     result := sd.sync()
-    utils.evaluateBool(result, @"sync() no file", true)
+    utils.evaluateSingleValue(result, @"sync() no file", sd.SUCCESS)
 
     ' ======================================================================
     ' TEST GROUP: setDate
@@ -394,7 +394,7 @@ PUB go() | result, handle, h1, h2, h3, bytesWritten, bytesRead, pLabel, idx, pEn
     utils.initGuard(@vbrBuf_guard)
     result := sd.readSectorRaw(0, @vbrBuf)
     utils.checkGuard(@vbrBuf_guard, @"vbrBuf guard")
-    utils.evaluateBool(result, @"readSectorRaw(0)", true)
+    utils.evaluateSingleValue(result, @"readSectorRaw(0)", sd.SUCCESS)
 
     ' Get VBR sector from partition table (offset $1C6 = 454, 4-byte LE)
     utils.startTest(@"MBR partition table has valid VBR sector")
@@ -409,7 +409,7 @@ PUB go() | result, handle, h1, h2, h3, bytesWritten, bytesRead, pLabel, idx, pEn
     utils.initGuard(@vbrBuf_guard)
     result := sd.readSectorRaw(vbrSector, @vbrBuf)
     utils.checkGuard(@vbrBuf_guard, @"vbrBuf guard")
-    if result
+    if result == sd.SUCCESS
         result := WORD[@vbrBuf + $1FE]
         utils.evaluateSingleValueHex(result, @"boot signature", MBR_SIGNATURE)
     else
@@ -437,7 +437,7 @@ PUB go() | result, handle, h1, h2, h3, bytesWritten, bytesRead, pLabel, idx, pEn
     utils.initGuard(@vbrBuf2_guard)
     result := sd.readVBRRaw(@vbrBuf2)
     utils.checkGuard(@vbrBuf2_guard, @"vbrBuf2 guard")
-    utils.evaluateBool(result, @"readVBRRaw()", true)
+    utils.evaluateSingleValue(result, @"readVBRRaw()", sd.SUCCESS)
 
     ' Test: readVBRRaw() data matches readSectorRaw VBR
     utils.startTest(@"readVBRRaw() matches readSectorRaw VBR")

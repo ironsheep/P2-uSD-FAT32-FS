@@ -258,7 +258,7 @@ PUB main() | result
   ' This allows characterization of cards with any filesystem (exFAT, NTFS, etc.)
   debug("Initializing SD card (no-mount mode)...")
   result := sd.initCardOnly(CS_PIN, MOSI_PIN, MISO_PIN, SCK_PIN)
-  if not result
+  if result < 0
     debug("FATAL: Failed to initialize SD card!")
     debug("Check card insertion and wiring.")
     repeat  ' halt
@@ -317,21 +317,21 @@ PRI readAllRegisters() | result
 
   ' Read CID (Card Identification)
   result := sd.readCIDRaw(@cid_buf)
-  if result
+  if result == sd.SUCCESS
     debug("  CID: OK (16 bytes)")
   else
     debug("  CID: FAILED")
 
   ' Read CSD (Card Specific Data)
   result := sd.readCSDRaw(@csd_buf)
-  if result
+  if result == sd.SUCCESS
     debug("  CSD: OK (16 bytes)")
   else
     debug("  CSD: FAILED")
 
   ' Read SCR (SD Configuration Register)
   result := sd.readSCRRaw(@scr_buf)
-  if result
+  if result == sd.SUCCESS
     debug("  SCR: OK (8 bytes)")
   else
     debug("  SCR: FAILED")
@@ -342,7 +342,7 @@ PRI readAllRegisters() | result
 
   ' Read SD Status (ACMD13) - 64 bytes
   result := sd.readSDStatusRaw(@sdst_buf)
-  if result
+  if result == sd.SUCCESS
     debug("  SD Status: OK (64 bytes)")
     sdst_valid := 1
   else

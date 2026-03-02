@@ -109,9 +109,9 @@ PUB go() | result, idx, firstCogId, allSame, totalErrors
     ' Mount the filesystem for subsequent tests
     utils.startTest(@"mount() succeeds")
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    utils.evaluateBool(result, @"mount()", true)
+    utils.evaluateSingleValue(result, @"mount()", sd.SUCCESS)
 
-    if result == false
+    if result < 0
         debug("ERROR: Could not mount SD card - aborting multi-cog tests!")
         debug("END_SESSION")
         return
@@ -281,7 +281,7 @@ PUB go() | result, idx, firstCogId, allSame, totalErrors
 
     utils.startTest(@"unmount() succeeds")
     result := sd.unmount()
-    utils.evaluateBool(result, @"unmount()", true)
+    utils.evaluateSingleValue(result, @"unmount()", sd.SUCCESS)
 
     utils.startTest(@"stop() releases resources")
     sd.stop()

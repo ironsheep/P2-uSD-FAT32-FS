@@ -101,7 +101,7 @@ PUB go() | result, dataStart, fat1Start, fat2Start, idx, mismatch, cardSectors
 
     ' Initialize card for raw access
     result := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if result == false
+    if result < 0
         debug("ERROR: Cannot initialize card for verification!")
         debug("END_SESSION")
         return
@@ -406,7 +406,7 @@ PUB go() | result, dataStart, fat1Start, fat2Start, idx, mismatch, cardSectors
 
     utils.startTest(@"Mount formatted card")
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    utils.evaluateBool(result, @"mount() succeeds", true)
+    utils.evaluateSingleValue(result, @"mount() succeeds", sd.SUCCESS)
 
     utils.startTest(@"Read volume label")
     debug("  Mounted volume: ", zstr_(sd.volumeLabel()))

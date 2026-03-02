@@ -93,7 +93,7 @@ PUB go() | result, idx, sector
     ' Initialize card only (no filesystem mount - we're doing raw sector access)
     debug("Initializing SD card (V2 driver with streamer)...")
     result := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if result == false
+    if result < 0
         debug("ERROR: Card init failed!")
         debug("END_SESSION")
         return
@@ -260,7 +260,7 @@ PUB go() | result, idx, sector
     utils.checkGuard(@read_buf_guard, @"read_buf guard")
     ' This tests that the driver can address high sector numbers
     ' The read may or may not succeed depending on card size, but it shouldn't crash
-    if result == 0 or result == -1
+    if result == sd.SUCCESS
         debug("  High sector read completed (result=", sdec_(result), ")")
         debug("  First bytes: $", uhex_byte_(read_buf[0]), " $", uhex_byte_(read_buf[1]), " $", uhex_byte_(read_buf[2]), " $", uhex_byte_(read_buf[3]))
         debug("  -> pass (driver handled large LBA)")
@@ -315,7 +315,7 @@ PRI writeAndVerify(sector, expectedPattern) : success
 ' @param expectedPattern - expected pattern ID for verification
 ' @returns success - true if write succeeded and readback matches
 
-    if not sd.writeSectorRaw(sector, @write_buf)
+    if sd.writeSectorRaw(sector, @write_buf) < 0
         debug("  WRITE FAILED!")
         return false
 

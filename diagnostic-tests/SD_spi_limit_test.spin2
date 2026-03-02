@@ -41,14 +41,22 @@ CON
 
 #IFDEF __SPINTOOLS__
 #DEFINE SD_INCLUDE_RAW
+#DEFINE SD_INCLUDE_REGISTERS
+#DEFINE SD_INCLUDE_SPEED
 #DEFINE SD_INCLUDE_DEBUG
 #ELSEIFDEF __FLEXSPIN__
 #define SD_INCLUDE_RAW
 #pragma exportdef SD_INCLUDE_RAW
+#define SD_INCLUDE_REGISTERS
+#pragma exportdef SD_INCLUDE_REGISTERS
+#define SD_INCLUDE_SPEED
+#pragma exportdef SD_INCLUDE_SPEED
 #define SD_INCLUDE_DEBUG
 #pragma exportdef SD_INCLUDE_DEBUG
 #ELSE
 #PRAGMA EXPORTDEF SD_INCLUDE_RAW
+#PRAGMA EXPORTDEF SD_INCLUDE_REGISTERS
+#PRAGMA EXPORTDEF SD_INCLUDE_SPEED
 #PRAGMA EXPORTDEF SD_INCLUDE_DEBUG
 #ENDIF
 
@@ -73,7 +81,7 @@ PUB go() | result, hp, actualHz, errors, iter, idx, sector, written, readCt, byt
 
     ' Mount
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if result == false
+    if result < 0
         debug("  MOUNT_FAIL")
         debug("END_SESSION")
         return

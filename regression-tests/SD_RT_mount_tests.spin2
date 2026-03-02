@@ -95,15 +95,15 @@ PUB go() | result, pLabel, freeSpace, handle
     handle := sd.createFileNew(@testfile1)
     utils.evaluateSingleValue(handle, @"createFileNew()", E_NOT_MOUNTED)
 
-    utils.startTest(@"readSectorRaw() before mount returns false")
+    utils.startTest(@"readSectorRaw() before mount returns error")
     utils.initGuard(@sectorBuffer_guard)
     result := sd.readSectorRaw(0, @sectorBuffer)
     utils.checkGuard(@sectorBuffer_guard, @"sectorBuffer guard")
-    utils.evaluateSingleValue(result, @"readSectorRaw()", 0)
+    utils.evaluateSingleValue(result, @"readSectorRaw()", sd.E_NOT_MOUNTED)
 
-    utils.startTest(@"changeDirectory() before mount returns false")
+    utils.startTest(@"changeDirectory() before mount returns error")
     result := sd.changeDirectory(@"TESTDIR")
-    utils.evaluateBool(result, @"changeDirectory()", false)
+    utils.evaluateSingleValue(result, @"changeDirectory()", sd.E_NOT_MOUNTED)
 
     ' ----------------------------------
     ' TEST GROUP: Mount card
@@ -112,7 +112,7 @@ PUB go() | result, pLabel, freeSpace, handle
 
     utils.startTest(@"mount() with valid pins")
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    utils.evaluateBool(result, @"mount()", true)
+    utils.evaluateSingleValue(result, @"mount()", sd.SUCCESS)
 
     ' DIAGNOSTIC: Show CMD13 and CRC state after mount attempt
     debug(" ")
@@ -122,7 +122,7 @@ PUB go() | result, pLabel, freeSpace, handle
     debug("  DIAG: recvCRC=$", uhex_(sd.getLastReceivedCRC()), " calcCRC=$", uhex_(sd.getLastCalculatedCRC()))
     ' Read sector 0 raw to inspect MBR partition table bytes
     utils.initGuard(@sectorBuffer_guard)
-    if sd.readSectorRaw(0, @sectorBuffer)
+    if sd.readSectorRaw(0, @sectorBuffer) == sd.SUCCESS
       utils.checkGuard(@sectorBuffer_guard, @"sectorBuffer guard")
       debug("  DIAG MBR: sig=$", uhex_byte_(sectorBuffer[$1FE]), " $", uhex_byte_(sectorBuffer[$1FF]))
       debug("  DIAG MBR: part1 type=$", uhex_byte_(sectorBuffer[$1C2]), " lba=$", uhex_byte_(sectorBuffer[$1C9]), uhex_byte_(sectorBuffer[$1C8]), uhex_byte_(sectorBuffer[$1C7]), uhex_byte_(sectorBuffer[$1C6]))
@@ -150,7 +150,7 @@ PUB go() | result, pLabel, freeSpace, handle
 
     utils.startTest(@"unmount() card")
     result := sd.unmount()
-    utils.evaluateBool(result, @"unmount()", true)
+    utils.evaluateSingleValue(result, @"unmount()", sd.SUCCESS)
 
     utils.startTest(@"Operations after unmount should fail")
     freeSpace := sd.freeSpace()
@@ -163,7 +163,7 @@ PUB go() | result, pLabel, freeSpace, handle
 
     utils.startTest(@"mount() again")
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    utils.evaluateBool(result, @"mount() second time", true)
+    utils.evaluateSingleValue(result, @"mount() second time", sd.SUCCESS)
 
     ' DIAGNOSTIC: Show CMD13 and CRC state after remount attempt
     debug("  DIAG2: error()=", sdec_(sd.error()))
@@ -181,27 +181,27 @@ PUB go() | result, pLabel, freeSpace, handle
 
     utils.startTest(@"unmount()")
     result := sd.unmount()
-    utils.evaluateBool(result, @"unmount()", true)
+    utils.evaluateSingleValue(result, @"unmount()", sd.SUCCESS)
 
     utils.startTest(@"mount() cycle 1")
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    utils.evaluateBool(result, @"mount()", true)
+    utils.evaluateSingleValue(result, @"mount()", sd.SUCCESS)
 
     utils.startTest(@"unmount()")
     result := sd.unmount()
-    utils.evaluateBool(result, @"unmount()", true)
+    utils.evaluateSingleValue(result, @"unmount()", sd.SUCCESS)
 
     utils.startTest(@"mount() cycle 2")
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    utils.evaluateBool(result, @"mount()", true)
+    utils.evaluateSingleValue(result, @"mount()", sd.SUCCESS)
 
     utils.startTest(@"unmount()")
     result := sd.unmount()
-    utils.evaluateBool(result, @"unmount()", true)
+    utils.evaluateSingleValue(result, @"unmount()", sd.SUCCESS)
 
     utils.startTest(@"mount() cycle 3")
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    utils.evaluateBool(result, @"mount()", true)
+    utils.evaluateSingleValue(result, @"mount()", sd.SUCCESS)
 
     utils.startTest(@"Card still works after 3 mount/unmount cycles")
     freeSpace := sd.freeSpace()

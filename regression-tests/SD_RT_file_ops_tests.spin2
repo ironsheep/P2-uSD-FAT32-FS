@@ -88,7 +88,7 @@ PUB go() | result, handle, h1, h2, h3, pFilename, fileSize, attrs, bytesWritten,
 
     ' Mount the card first
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if result == false
+    if result < 0
         debug("ERROR: Could not mount SD card!")
         debug("END_SESSION")
         return
@@ -273,7 +273,7 @@ PUB go() | result, handle, h1, h2, h3, pFilename, fileSize, attrs, bytesWritten,
 
     utils.startTest(@"deleteFile() removes the file")
     result := sd.deleteFile(@testfile2)
-    utils.evaluateBool(result, @"deleteFile()", true)
+    utils.evaluateSingleValue(result, @"deleteFile()", sd.SUCCESS)
 
     utils.startTest(@"Verify file is deleted (openFileRead fails)")
     handle := sd.openFileRead(@testfile2)
@@ -281,7 +281,7 @@ PUB go() | result, handle, h1, h2, h3, pFilename, fileSize, attrs, bytesWritten,
 
     utils.startTest(@"deleteFile() fails for non-existent file")
     result := sd.deleteFile(@testfile2)
-    utils.evaluateBool(result, @"deleteFile() non-existent", false)
+    utils.evaluateSingleValue(result, @"deleteFile() non-existent", sd.E_FILE_NOT_FOUND)
 
     ' ----------------------------------
     ' TEST GROUP: File rename
@@ -293,7 +293,7 @@ PUB go() | result, handle, h1, h2, h3, pFilename, fileSize, attrs, bytesWritten,
 
     utils.startTest(@"rename() changes filename")
     result := sd.rename(@testfile1, @renamedFile)
-    utils.evaluateBool(result, @"rename()", true)
+    utils.evaluateSingleValue(result, @"rename()", sd.SUCCESS)
 
     utils.startTest(@"Original file no longer accessible")
     handle := sd.openFileRead(@testfile1)
@@ -311,7 +311,7 @@ PUB go() | result, handle, h1, h2, h3, pFilename, fileSize, attrs, bytesWritten,
 
     utils.startTest(@"rename() fails for non-existent source")
     result := sd.rename(@"NOFILE.TXT", @"OTHER.TXT")
-    utils.evaluateBool(result, @"rename() non-existent", false)
+    utils.evaluateSingleValue(result, @"rename() non-existent", sd.E_FILE_NOT_FOUND)
 
     ' ----------------------------------
     ' TEST GROUP: Multiple file creation
