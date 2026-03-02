@@ -90,6 +90,25 @@ However, immediately re-reading the card shows the **original factory values are
 
 ---
 
+### Remove card_is_slow manufacturer override (PNY 20 MHz cap)
+
+**Code:** `identifyCard()` and `setOptimalSpeed()` in `src/micro_sd_fat32_fs.spin2`
+
+The driver flags PNY/AData cards (manufacturer ID $1D) as `card_is_slow := true`, which caps SPI at 20 MHz instead of 25 MHz and skips high-speed mode attempts. This was a theorized need based on early timing sensitivity concerns, but testing proved it unnecessary -- PNY cards work fine at 25 MHz.
+
+**Steps:**
+1. Verify: run full regression suite with a PNY card at 25 MHz (temporarily disable the `card_is_slow` path)
+2. If all tests pass: remove `card_is_slow` DAT variable and all references
+3. Simplify `setOptimalSpeed()` to always use `card_max_speed_hz` (capped at 25 MHz)
+4. Simplify `do_attempt_high_speed()` to remove the `card_is_slow` skip
+5. Remove manufacturer case statement from `identifyCard()` (keep CID read for `card_mfr_id`)
+
+**Files:** `src/micro_sd_fat32_fs.spin2` (DAT line 480, lines 3995, 5948-5964, 5982-5984)
+
+*Noted: 2026-03-02*
+
+---
+
 ### Feature: SD 4-bit native mode backend (QSPI adapter support)
 
 **Goal:** Support a second SD card adapter that wires out D0-D3/CLK/CMD for 4-bit parallel transfers, selectable via compile define (e.g., `SD_BUS_4BIT`). Same FAT32 filesystem layer on top, different transport underneath. Theoretical 4x throughput gain at the same clock speed.

@@ -456,6 +456,46 @@ waitxfi                          ' Wait for completion
 
 The streamer transfers data between hub RAM and the SPI pins at the full SPI clock rate, without per-byte cog intervention.
 
+## Card Identification and Adaptive Timing
+
+After card initialization completes (CMD0/CMD8/ACMD41/CMD58), the driver reads two card registers to configure itself for the specific card inserted:
+
+### What the Driver Reads
+
+**CID register** (16 bytes, via CMD10): Contains manufacturer identity. The driver extracts the manufacturer ID byte (byte 0) to identify the card brand.
+
+**CSD register** (16 bytes, via CMD9): Contains the card's electrical and timing characteristics. The driver extracts three fields:
+
+| CSD Field | Location | What It Tells Us |
+|-----------|----------|-----------------|
+| TRAN_SPEED | Byte 3 | Maximum SPI clock frequency the card supports |
+| TAAC + NSAC | Bytes 1-2 | Read access time (how long a read operation may take) |
+| R2W_FACTOR | Byte 12, bits [4:2] | Write-to-read timeout ratio (writes take longer than reads) |
+
+### How the Driver Uses This Data
+
+**SPI clock speed** (`card_max_speed_hz`): TRAN_SPEED is a two-part encoded field -- a time value multiplier (bits [6:3]) and a rate unit (bits [2:0]). The driver decodes this to get the card's maximum transfer rate in Hz. Most SDHC/SDXC cards report 25 MHz. The SPI clock is set to the lesser of the card's reported maximum and 25 MHz (the SD SPI mode ceiling).
+
+**Read timeouts** (`card_read_timeout_ms`): Used by `readSector()` and `waitDataToken()` when waiting for the card to deliver data. If the card doesn't respond within this window, the operation returns `E_TIMEOUT`.
+
+- SDHC/SDXC (CSD v2.0): Fixed at 100ms per specification
+- SDSC (CSD v1.0): Calculated from TAAC and NSAC with a 100x safety factor, minimum 100ms
+
+**Write timeouts** (`card_write_timeout_ms`): Used by `writeSector()` and `waitBusyComplete()` when waiting for the card to finish programming flash. Write timeouts are longer than read timeouts because flash programming is inherently slower than reading.
+
+- SDHC/SDXC: Fixed at 500ms (2x the 250ms spec value, for margin on cold writes and sector 0)
+- SDSC: Read timeout multiplied by 2^R2W_FACTOR, clamped to 250ms-1000ms
+
+### Fallback Defaults
+
+If CID or CSD reads fail (rare but possible on marginal cards), the driver uses safe defaults:
+
+| Parameter | Default | Rationale |
+|-----------|---------|-----------|
+| `card_max_speed_hz` | 25 MHz | SD SPI mode maximum |
+| `card_read_timeout_ms` | 100 ms | SDHC spec value |
+| `card_write_timeout_ms` | 500 ms | Conservative margin |
+
 ## Multi-Sector Operations
 
 ### CMD18 (READ_MULTIPLE_BLOCK)

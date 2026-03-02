@@ -1,6 +1,6 @@
 # P2 microSD FAT32 Filesystem
 
-A high-performance FAT32-compliant microSD card filesystem driver for the Parallax Propeller 2 (P2) microcontroller.
+A high-performance FAT32-compliant microSD card filesystem driver for the Parallax Propeller 2 (P2) microcontroller. ([Why FAT32?](#why-fat32))
 
 ![Project Status](https://img.shields.io/badge/status-active-brightgreen)
 ![Platform](https://img.shields.io/badge/platform-Propeller%202-blue)
@@ -183,6 +183,16 @@ The driver's goal is full support for cards up to **2 TB** (the FAT32 and SDXC m
 The FSCK utility provides full cluster-chain validation on cards of any size. For cards exceeding approximately 64 GB, a windowed bitmap approach processes the cluster space in 2M-cluster passes, extending full 4-pass validation (chain integrity, cross-link detection, lost cluster recovery, FAT sync) to any card.
 
 > **Right-size your card.** Larger cards mean larger FAT tables, longer mount times, and longer FSCK scans. Choose the smallest card that comfortably meets your storage needs. For most embedded applications, 8–32 GB provides ample capacity with the best overall performance. See the [Card Performance Guide](DOCs/SD-CARD-PERFORMANCE.md#right-sizing-your-card) for details.
+
+---
+
+## Why FAT32?
+
+*Our storage subsystem uses FAT32 rather than exFAT to avoid the patent and licensing constraints that still apply to exFAT in commercial products. exFAT remains covered by Microsoft intellectual property, and compliant implementations are generally expected to be licensed, which can add cost, legal complexity, and contractual obligations that are disproportionate for many embedded systems. In contrast, the relevant FAT patents (including those covering long filenames) have expired, so a clean-room FAT32 implementation can be shipped royalty-free, making it a safer and more predictable choice from an IP and compliance standpoint.*
+
+*Technically, FAT32 also remains the most broadly compatible filesystem for removable media in the embedded space. It is supported by virtually all major desktop and mobile operating systems, works out of the box with common SD and microSD cards up to 32 GB, and has a relatively small code and RAM footprint -- important advantages on microcontrollers. By standardizing on FAT32, our driver delivers simple integration, excellent cross-platform interoperability, and a clear legal posture, which together make it a practical and low-risk foundation for products that need removable storage without the overhead of exFAT licensing.*
+
+---
 
 ## Credits
 

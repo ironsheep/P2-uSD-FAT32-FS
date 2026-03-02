@@ -7,31 +7,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-03-02
+
+**Consistent error codes across the entire public API, card presence detection, and transport-layer diagnostics.**
+
+### Breaking Changes
+
+- 17 PUB methods now return `SUCCESS` (0) / negative error code instead of `true`/`false`: `mount`, `unmount`, `sync`, `newDirectory`, `changeDirectory`, `deleteFile`, `rename`, `moveFile`, `setVolumeLabel`, `initCardOnly`, `readSectorRaw`, `writeSectorRaw`, `readVBRRaw`, `readCIDRaw`, `readCSDRaw`, `readSCRRaw`, `readSDStatusRaw`
+- Code testing `if sd.mount(...)` (truthy = success) must change to `if sd.mount(...) == sd.SUCCESS` -- see [Migration Guide](DOCs/MIGRATION-GUIDE-v1.2.0.md)
+
+### New Features
+
+- `E_NO_CARD` (-8): `mount()` and `initCardOnly()` now detect missing cards using a P2 internal pull-up on MISO and return a specific error code instead of generic `E_INIT_FAILED`
+- `setSPISpeed()`: Public API method for setting SPI clock frequency at runtime
+- `SD_INCLUDE_STACK_CHECK`: Conditional feature flag for worker cog stack depth measurement
+
+### Improvements
+
+- Transport layer returns specific error codes (`E_TIMEOUT`, `E_CRC_ERROR`, `E_BAD_RESPONSE`, `E_WRITE_REJECTED`, `E_CARD_BUSY`, `E_IO_ERROR`) instead of bare `-1` across `readSector`, `writeSector`, `allocateCluster`, and all SPI wait/response methods
+- `writeSector()`: Returns 0/negative error codes instead of boolean, with specific failure reasons for timeout, CRC reject, card busy, and programming errors
+- Magic numbers replaced with named constants throughout the driver (sector geometry, FAT32 structures, SPI commands, R1 response masks, card init timing)
+
+### Documentation
+
+- [Migration Guide](DOCs/MIGRATION-GUIDE-v1.2.0.md) for updating v1.0/v1.1 code to v1.2 error-code patterns
+- [Card Presence Detection](DOCs/Reference/CARD-PRESENCE-DETECTION.md) reference with electrical analysis and SD spec research
+- [Memory Sizing Guide](DOCs/Reference/MEMORY-SIZING-GUIDE.md) for hub RAM planning
+- Theory of Operations expanded: card presence detection, card identification and adaptive timing
+- Architecture Decision 13: Card presence detection via P2 internal pull-up
+
+### Tests
+
+- All 20 regression suites pass (389 tests)
+- Test files use `sd.*` prefixed constants instead of local redefinitions
+- Standardized file headers and MIT license footers across all `.spin2` files
+
 ## [1.1.0] - 2026-02-26
 
-### Driver
+**FSCK scales to any card size, CRC error injection for fault testing, V1 legacy API removed.**
 
-- **Breaking:** V1 legacy API removed (`readFile()`, `writeFile()`, `readDirectory()`, etc.) — use handle-based API
-- Volume label scan follows full root directory cluster chain (was limited to first 16 entries)
-- FAT chain end-of-chain comparisons use unsigned operators for 2 TB addressing
-- `readVBRRaw()` cross-ifdef dependency fixed (no longer requires `SD_INCLUDE_RAW`)
-- CRC error injection hooks for hardware-level fault testing (`test_force_read_crc_error`, `test_force_write_crc_error`)
+### Breaking Changes
 
-### Utilities
+- V1 legacy API removed (`readFile()`, `writeFile()`, `readDirectory()`, etc.) -- use handle-based API
 
-- FSCK full validation now works on cards of any size (windowed bitmap; cards >64 GB scanned in 2M-cluster passes)
-- Cross-compilation support added for Spin Tools IDE and flexspin
+### New Features
 
-### Testing
+- CRC error injection hooks for hardware-level fault testing (`setTestForceReadError`, `setTestForceWriteError`)
+- `readVBRRaw()` available with `SD_INCLUDE_REGISTERS` alone (no longer requires `SD_INCLUDE_RAW`)
 
-- Expanded to 389 tests across 20 suites (added CRC injection, recovery, and error handling suites)
+### Improvements
+
+- Volume label scan follows full root directory cluster chain
+- FAT chain addressing supports cards up to 2 TB
+- FSCK full validation works on cards of any size (windowed bitmap for cards >64 GB)
+- Cross-compilation support for Spin Tools IDE and flexspin
+
+### Tests
+
+- Expanded to 389 tests across 20 suites (CRC injection, recovery, and error handling suites added)
 - FSCK windowed bitmap diagnostic test for 128 GB cards
 
 ## [1.0.0] - 2026-02-25
 
 **Initial release.**
 
-### Driver
+### New Features
 
 - FAT32-compliant SD card filesystem for the Parallax Propeller 2
 - Smart pin SPI with streamer DMA for hardware-accelerated transfers
@@ -42,6 +82,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Directory operations: create, navigate, delete, rename
 - Raw sector read/write and multi-sector bulk transfers (CMD18/CMD25)
 - Hardware-accelerated CRC-16 on all data transfers
+- SDHC and SDXC cards supported; tested with cards up to 128 GB across 9 manufacturers
 
 ### Utilities
 
@@ -49,23 +90,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 4-pass filesystem check and repair (fsck)
 - Read-only filesystem audit
 - Card characterization, SPI speed testing, and performance benchmark
-
-### Demo
-
 - Interactive terminal shell with DOS and Unix-style commands
 
-### Card Compatibility
-
-- SDHC and SDXC cards supported; tested with cards up to 128 GB across 9 manufacturers
-- 22 cards cataloged, 13 benchmarked at both 350 MHz and 250 MHz sysclk
-- Driver goal is 2 TB (FAT32/SDXC maximum); >1 TB requires sector addressing fix (see punch list)
-
-### Known Limits
-
-- FSCK full cluster-chain validation covers cards up to ~64 GB (P2 hub RAM constraint); larger cards receive structural checks only (VBR, FSInfo, FAT sync)
-- Audit (read-only) has no card size constraint — all checks are structural
-
-### Testing
+### Tests
 
 - 345+ automated tests across 19 test suites validated on hardware
 
@@ -73,33 +100,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Driver tutorial, theory of operations, card catalog
 - SD card performance guide with ranked comparisons
-- DOCs directory organized by topic
-
-### Credits
-
-- Original driver concept by Chris Gadd (OB4269 from Parallax OBEX)
-- Driver development by Stephen M. Moraco, Iron Sheep Productions
 
 ## [0.9.3] - 2026-02-24
 
-### Driver
-
-- writeSector(): Cross-buffer cache coherence corrected
-- do_create()/do_newfile()/do_newdir(): Entry address guard prevents MBR corruption
-- do_rename(): 8.3 extension parsing corrected for mixed-case filenames
-- searchDirectory(): Case-insensitive matching corrected
-
-### API
+### Improvements
 
 - File handle limit increased from 4 to 6 (default)
-
-### Utilities
-
-- FSCK, audit, and format refactored into reusable cog+FIFO libraries
-- sFormat() bounds checking added across all string formatting functions
+- writeSector(): Cross-buffer cache coherence verified across all three sector caches
+- File and directory creation validates entry address before writing (prevents MBR corruption)
+- rename(): 8.3 extension parsing handles mixed-case filenames
+- File and directory lookup uses case-insensitive matching
 - Demo shell: Line ending and prompt display corrected
 
-### Testing
+### Tests
 
 - Subdirectory operations test suite added (18 tests)
 - Buffer overflow guard infrastructure added
@@ -111,15 +124,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.9.2] - 2026-02-10
 
-### Utilities
+### Improvements
 
-- Demo shell: Help text reformatted for 80x25 terminal, line ending handling corrected
+- Demo shell: Help text formatted for 80x25 terminal
 
 ## [0.9.1] - 2026-02-09
 
-**Initial testing release** — driver, utilities, demo shell, and 263+ regression tests.
+**Initial testing release** -- driver, utilities, demo shell, and 263+ regression tests.
 
-[Unreleased]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v0.9.3...v1.0.0
 [0.9.3]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v0.9.2...v0.9.3
