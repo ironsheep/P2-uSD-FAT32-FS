@@ -22,32 +22,68 @@ CON
 
     DEBUG_DISABLE = 0   ' Enable debug output
 
-    ' FAT32 constants
-    BYTES_PER_SECTOR    = 512
-    RESERVED_SECTORS    = 32        ' Standard for FAT32
-    NUM_FATS            = 2         ' Always 2 for FAT32 compliance
-    ROOT_CLUSTER        = 2         ' Root directory starts at cluster 2
-
-    ' MBR constants
-    MBR_SIGNATURE       = $AA55
-    PARTITION_TYPE_FAT32_LBA = $0C  ' FAT32 with LBA
-
-    ' FAT32 special values
-    FAT32_EOC           = $0FFFFFFF ' End of chain marker
-    FAT32_MEDIA_TYPE    = $0FFFFFF8 ' Media descriptor in FAT[0]
+    ' FAT32 formatting parameters (values NOT exported by driver)
+    RESERVED_SECTORS    = 32              ' Standard for FAT32
+    FAT32_MEDIA_TYPE    = $0FFFFFF8       ' Media descriptor in FAT[0]
+    FSINFO_TRAIL_SIG    = $AA550000       ' FSInfo trailing signature
 
     ' Multi-sector write batch size for initFAT/initRootDirectory
-    MULTI_BATCH_SIZE    = 64        ' Sectors per CMD25 batch (32 KB)
+    MULTI_BATCH_SIZE    = 64              ' Sectors per CMD25 batch (32 KB)
 
-    ' FSInfo signatures
-    FSINFO_SIG1         = $41615252 ' "RRaA"
-    FSINFO_SIG2         = $61417272 ' "rrAa"
-    FSINFO_SIG3         = $AA550000
+    ' VBR/BPB byte offsets
+    BPB_OEM_NAME        = $03
+    BPB_BYTES_PER_SEC   = $0B
+    BPB_SEC_PER_CLUS    = $0D
+    BPB_RESERVED_SECS   = $0E
+    BPB_NUM_FATS        = $10
+    BPB_ROOT_ENTRY_CT   = $11
+    BPB_TOTAL_SEC_16    = $13
+    BPB_MEDIA_TYPE      = $15
+    BPB_FAT_SIZE_16     = $16
+    BPB_SEC_PER_TRACK   = $18
+    BPB_NUM_HEADS       = $1A
+    BPB_HIDDEN_SECS     = $1C
+    BPB_TOTAL_SEC_32    = $20
+    BPB_FAT_SIZE_32     = $24
+    BPB_EXT_FLAGS       = $28
+    BPB_FS_VERSION      = $2A
+    BPB_ROOT_CLUSTER    = $2C
+    BPB_FSINFO_SEC      = $30
+    BPB_BACKUP_BOOT_SEC = $32
+    BPB_DRIVE_NUM       = $40
+    BPB_EXT_BOOT_SIG    = $42
+    BPB_VOLUME_SERIAL   = $43
+    BPB_VOLUME_LABEL    = $47
+    BPB_FS_TYPE         = $52
+
+    ' VBR field values
+    VBR_JUMP_BYTE0      = $EB
+    VBR_JUMP_BYTE2      = $90
+    MEDIA_TYPE_FIXED    = $F8
+    DRIVE_NUM_HDD       = $80
+    EXT_BOOT_SIG_VAL    = $29
+
+    ' FSInfo field offsets
+    FSINFO_SIG2_OFF        = $1E4
+    FSINFO_FREE_COUNT_OFF  = $1E8
+    FSINFO_NEXT_FREE_OFF   = $1EC
+
+    ' MBR partition sub-offsets
+    MBR_PART_TYPE_OFF   = $1C2
+    MBR_PART_LBA_START  = $1C6
+    MBR_PART_LBA_SIZE   = $1CA
+
+    ' Geometry constants
+    VOLUME_LABEL_LEN        = 11
+    PARTITION_ALIGN_SECTOR  = 8192
+    BACKUP_VBR_OFFSET       = 6
+    FSINFO_SECTOR_OFFSET    = 1
+    MIN_FAT32_CLUSTERS      = 65525
 
     ' Volume label (11 chars, space padded) - "P2-XFER    "
-    DEFAULT_LABEL_0     = $58_2D_32_50  ' "P2-X" (little endian: P, 2, -, X)
-    DEFAULT_LABEL_1     = $20_52_45_46  ' "FER " (little endian: F, E, R, space)
-    DEFAULT_LABEL_2     = $00_20_20_20  ' "   " + null (spaces to pad to 11)
+    DEFAULT_LABEL_0     = $58_2D_32_50    ' "P2-X" (little endian: P, 2, -, X)
+    DEFAULT_LABEL_1     = $20_52_45_46    ' "FER " (little endian: F, E, R, space)
+    DEFAULT_LABEL_2     = $00_20_20_20    ' "   " + null (spaces to pad to 11)
 
 ' Enable full driver features for this utility
 #IFDEF __SPINTOOLS__
@@ -75,9 +111,9 @@ VAR
     LONG    pinCS, pinMOSI, pinMISO, pinSCK
 
     ' Sector buffer
-    BYTE    buf[BYTES_PER_SECTOR]
-    BYTE    verifyBuf[BYTES_PER_SECTOR]
-    BYTE    zeroBuf[MULTI_BATCH_SIZE * BYTES_PER_SECTOR]  ' 32 KB zero buffer for CMD25 batches
+    BYTE    buf[sd.SECTOR_SIZE]
+    BYTE    verifyBuf[sd.SECTOR_SIZE]
+    BYTE    zeroBuf[MULTI_BATCH_SIZE * sd.SECTOR_SIZE]  ' 32 KB zero buffer for CMD25 batches
 
     ' Card geometry
     LONG    totalSectors
@@ -282,11 +318,13 @@ PRI runInCog() | result
     fmt_op_done := true
 
 
-PRI doFormatCog() : result
+PRI doFormatCog() : result | ok
 ' Execute the format operation with FIFO output instead of debug().
 ' Calls the same write methods (writeMBR, writeVBR, etc.) as doFormat().
 '
 ' @returns result - TRUE if all steps succeeded
+
+    result := false
 
     fifo.put(@"=== SD Card FAT32 Formatter ===")
     fifo.putFmt1(@"Volume Label: %s", @volumeLabel)
@@ -294,75 +332,83 @@ PRI doFormatCog() : result
 
     ' Initialize card
     fifo.put(@"Initializing SD card...")
-    result := sd.initCardOnly(pinCS, pinMOSI, pinMISO, pinSCK)
-    if result < 0
+    ok := (sd.initCardOnly(pinCS, pinMOSI, pinMISO, pinSCK) >= 0)
+    if not ok
         fifo.put(@"ERROR: Could not initialize SD card!")
-        return false
 
     ' Get card size
-    totalSectors := sd.cardSizeSectors()
-    if totalSectors == 0
-        fifo.put(@"ERROR: Could not read card size!")
-        return false
+    if ok
+        totalSectors := sd.cardSizeSectors()
+        ok := (totalSectors <> 0)
+        if not ok
+            fifo.put(@"ERROR: Could not read card size!")
 
-    fifo.putFmt2(@"Card: %d sectors (%d MB)", totalSectors, totalSectors / 2048)
+    if ok
+        fifo.putFmt2(@"Card: %d sectors (%d MB)", totalSectors, totalSectors / 2048)
 
-    ' Calculate filesystem parameters
-    if not calculateParameters()
-        fifo.put(@"ERROR: Card too small for FAT32!")
-        return false
+        ' Calculate filesystem parameters
+        ok := calculateParameters()
+        if not ok
+            fifo.put(@"ERROR: Card too small for FAT32!")
 
-    fifo.putFmt1(@"Sectors/cluster: %d", sectorsPerCluster)
-    fifo.putFmt1(@"Sectors/FAT: %d", sectorsPerFat)
-    fifo.putFmt1(@"Total clusters: %d", totalClusters)
+    if ok
+        fifo.putFmt1(@"Sectors/cluster: %d", sectorsPerCluster)
+        fifo.putFmt1(@"Sectors/FAT: %d", sectorsPerFat)
+        fifo.putFmt1(@"Total clusters: %d", totalClusters)
 
-    ' Write MBR
-    fifo.put(@"Writing MBR...")
-    if not writeMBR()
-        fifo.put(@"ERROR: Failed to write MBR!")
-        return false
+        ' Write MBR
+        fifo.put(@"Writing MBR...")
+        ok := writeMBR()
+        if not ok
+            fifo.put(@"ERROR: Failed to write MBR!")
 
-    ' Write VBR
-    fifo.put(@"Writing VBR...")
-    if not writeVBR()
-        fifo.put(@"ERROR: Failed to write VBR!")
-        return false
+    if ok
+        ' Write VBR
+        fifo.put(@"Writing VBR...")
+        ok := writeVBR()
+        if not ok
+            fifo.put(@"ERROR: Failed to write VBR!")
 
-    ' Write FSInfo
-    fifo.put(@"Writing FSInfo...")
-    if not writeFSInfo()
-        fifo.put(@"ERROR: Failed to write FSInfo!")
-        return false
+    if ok
+        ' Write FSInfo
+        fifo.put(@"Writing FSInfo...")
+        ok := writeFSInfo()
+        if not ok
+            fifo.put(@"ERROR: Failed to write FSInfo!")
 
-    ' Write backup boot
-    fifo.put(@"Writing backup boot...")
-    if not writeBackupBoot()
-        fifo.put(@"ERROR: Failed to write backup boot!")
-        return false
+    if ok
+        ' Write backup boot
+        fifo.put(@"Writing backup boot...")
+        ok := writeBackupBoot()
+        if not ok
+            fifo.put(@"ERROR: Failed to write backup boot!")
 
-    ' Initialize FAT tables
-    fifo.put(@"Initializing FAT1...")
-    if not initFAT(fat1Start)
-        fifo.put(@"ERROR: Failed to initialize FAT1!")
-        return false
+    if ok
+        ' Initialize FAT tables
+        fifo.put(@"Initializing FAT1...")
+        ok := initFAT(fat1Start)
+        if not ok
+            fifo.put(@"ERROR: Failed to initialize FAT1!")
 
-    fifo.put(@"Initializing FAT2...")
-    if not initFAT(fat2Start)
-        fifo.put(@"ERROR: Failed to initialize FAT2!")
-        return false
+    if ok
+        fifo.put(@"Initializing FAT2...")
+        ok := initFAT(fat2Start)
+        if not ok
+            fifo.put(@"ERROR: Failed to initialize FAT2!")
 
-    ' Initialize root directory
-    fifo.put(@"Initializing root directory...")
-    if not initRootDirectory()
-        fifo.put(@"ERROR: Failed to initialize root directory!")
-        return false
+    if ok
+        ' Initialize root directory
+        fifo.put(@"Initializing root directory...")
+        ok := initRootDirectory()
+        if not ok
+            fifo.put(@"ERROR: Failed to initialize root directory!")
 
-    fifo.put(@" ")
-    fifo.put(@"=== FORMAT COMPLETE ===")
-    fifo.putFmt1(@"Volume: %s", @volumeLabel)
-    fifo.putFmt2(@"Size: %d MB, Clusters: %d", totalSectors / 2048, totalClusters)
-
-    return true
+    if ok
+        fifo.put(@" ")
+        fifo.put(@"=== FORMAT COMPLETE ===")
+        fifo.putFmt1(@"Volume: %s", @volumeLabel)
+        fifo.putFmt2(@"Size: %d MB, Clusters: %d", totalSectors / 2048, totalClusters)
+        result := true
 
 
 PRI setDefaultLabel()
@@ -376,10 +422,12 @@ PRI setDefaultLabel()
     BYTE[@volumeLabel][10] := " "
     volumeLabel[11] := 0
 
-PRI doFormat() : result
+PRI doFormat() : result | ok
 ' Execute the format operation: MBR, VBR, FSInfo, FAT tables, root directory.
 '
 ' @returns result - TRUE if all steps succeeded, FALSE otherwise
+
+    result := false
 
     debug("==============================================")
     debug("  SD Card FAT32 Formatter")
@@ -389,128 +437,138 @@ PRI doFormat() : result
 
     ' Initialize card (low-level, no filesystem mount)
     debug("* Initializing SD card...")
-    result := sd.initCardOnly(pinCS, pinMOSI, pinMISO, pinSCK)
-    if result < 0
+    ok := (sd.initCardOnly(pinCS, pinMOSI, pinMISO, pinSCK) >= 0)
+    if not ok
         debug("ERROR: Could not initialize SD card!")
-        return false
 
     ' Get card size
-    debug("* Reading card size...")
-    totalSectors := sd.cardSizeSectors()
-    if totalSectors == 0
-        debug("ERROR: Could not read card size!")
-        return false
+    if ok
+        debug("* Reading card size...")
+        totalSectors := sd.cardSizeSectors()
+        ok := (totalSectors <> 0)
+        if not ok
+            debug("ERROR: Could not read card size!")
 
-    debug("  Total sectors: ", udec_(totalSectors))
-    debug("  Card size: ", udec_(totalSectors / 2048), " MB")
+    if ok
+        debug("  Total sectors: ", udec_(totalSectors))
+        debug("  Card size: ", udec_(totalSectors / 2048), " MB")
 
-    ' Calculate filesystem parameters
-    debug("* Calculating filesystem parameters...")
-    if not calculateParameters()
-        debug("ERROR: Card too small for FAT32!")
-        return false
+        ' Calculate filesystem parameters
+        debug("* Calculating filesystem parameters...")
+        ok := calculateParameters()
+        if not ok
+            debug("ERROR: Card too small for FAT32!")
 
-    debug("  Sectors/cluster: ", udec_(sectorsPerCluster))
-    debug("  Sectors/FAT: ", udec_(sectorsPerFat))
-    debug("  Total clusters: ", udec_(totalClusters))
-    debug("  Partition start: ", udec_(partitionStart))
-    debug("  FAT1 start: ", udec_(fat1Start))
-    debug("  FAT2 start: ", udec_(fat2Start))
-    debug("  Data start: ", udec_(dataStart))
+    if ok
+        debug("  Sectors/cluster: ", udec_(sectorsPerCluster))
+        debug("  Sectors/FAT: ", udec_(sectorsPerFat))
+        debug("  Total clusters: ", udec_(totalClusters))
+        debug("  Partition start: ", udec_(partitionStart))
+        debug("  FAT1 start: ", udec_(fat1Start))
+        debug("  FAT2 start: ", udec_(fat2Start))
+        debug("  Data start: ", udec_(dataStart))
 
-    ' Write MBR
-    debug(" ")
-    debug("* Writing MBR...")
-    if not writeMBR()
-        debug("ERROR: Failed to write MBR!")
-        showWriteDiag()
-        return false
+        ' Write MBR
+        debug(" ")
+        debug("* Writing MBR...")
+        ok := writeMBR()
+        if not ok
+            debug("ERROR: Failed to write MBR!")
+            showWriteDiag()
 
-    ' Verify MBR read-back
-    sd.readSectorRaw(0, @verifyBuf)
+    if ok
+        ' Verify MBR read-back
+        sd.readSectorRaw(0, @verifyBuf)
 #IFDEF __FLEXSPIN__
-    debug("  MBR readback: sig=$", uhex_word_(WORD[@verifyBuf + $1FE]), " type=$", uhex_byte_(verifyBuf[$1C2]), " start=", udec_(LONG[@verifyBuf + $1C6]))
-    debug("  MBR read[0..7]: $", uhex_byte_(verifyBuf[0]), " $", uhex_byte_(verifyBuf[1]), " $", uhex_byte_(verifyBuf[2]), " $", uhex_byte_(verifyBuf[3]), " $", uhex_byte_(verifyBuf[4]), " $", uhex_byte_(verifyBuf[5]), " $", uhex_byte_(verifyBuf[6]), " $", uhex_byte_(verifyBuf[7]))
+        debug("  MBR readback: sig=$", uhex_word_(WORD[@verifyBuf + sd.BOOT_SIG_OFFSET]), " type=$", uhex_byte_(verifyBuf[MBR_PART_TYPE_OFF]), " start=", udec_(LONG[@verifyBuf + MBR_PART_LBA_START]))
+        debug("  MBR read[0..7]: $", uhex_byte_(verifyBuf[0]), " $", uhex_byte_(verifyBuf[1]), " $", uhex_byte_(verifyBuf[2]), " $", uhex_byte_(verifyBuf[3]), " $", uhex_byte_(verifyBuf[4]), " $", uhex_byte_(verifyBuf[5]), " $", uhex_byte_(verifyBuf[6]), " $", uhex_byte_(verifyBuf[7]))
 #ELSE
-    debug("  MBR readback: sig=$", uhex_word_(WORD[@verifyBuf + $1FE]), ...
-      " type=$", uhex_byte_(verifyBuf[$1C2]), ...
-      " start=", udec_(LONG[@verifyBuf + $1C6]))
-    debug("  MBR read[0..7]: $", uhex_byte_(verifyBuf[0]), " $", uhex_byte_(verifyBuf[1]), ...
-      " $", uhex_byte_(verifyBuf[2]), " $", uhex_byte_(verifyBuf[3]), ...
-      " $", uhex_byte_(verifyBuf[4]), " $", uhex_byte_(verifyBuf[5]), ...
-      " $", uhex_byte_(verifyBuf[6]), " $", uhex_byte_(verifyBuf[7]))
+        debug("  MBR readback: sig=$", uhex_word_(WORD[@verifyBuf + sd.BOOT_SIG_OFFSET]), ...
+          " type=$", uhex_byte_(verifyBuf[MBR_PART_TYPE_OFF]), ...
+          " start=", udec_(LONG[@verifyBuf + MBR_PART_LBA_START]))
+        debug("  MBR read[0..7]: $", uhex_byte_(verifyBuf[0]), " $", uhex_byte_(verifyBuf[1]), ...
+          " $", uhex_byte_(verifyBuf[2]), " $", uhex_byte_(verifyBuf[3]), ...
+          " $", uhex_byte_(verifyBuf[4]), " $", uhex_byte_(verifyBuf[5]), ...
+          " $", uhex_byte_(verifyBuf[6]), " $", uhex_byte_(verifyBuf[7]))
 #ENDIF
-    debug("  verify buf addr: $", uhex_long_(@verifyBuf))
-    if WORD[@verifyBuf + $1FE] <> MBR_SIGNATURE
-        debug("  *** MBR READBACK MISMATCH! Written data not on card ***")
+        debug("  verify buf addr: $", uhex_long_(@verifyBuf))
+        if WORD[@verifyBuf + sd.BOOT_SIG_OFFSET] <> sd.BOOT_SIGNATURE
+            debug("  *** MBR READBACK MISMATCH! Written data not on card ***")
 
-    ' Write VBR (Volume Boot Record)
-    debug("* Writing VBR...")
-    if not writeVBR()
-        debug("ERROR: Failed to write VBR!")
-        showWriteDiag()
-        return false
+        ' Write VBR (Volume Boot Record)
+        debug("* Writing VBR...")
+        ok := writeVBR()
+        if not ok
+            debug("ERROR: Failed to write VBR!")
+            showWriteDiag()
 
-    ' Verify VBR read-back
-    sd.readSectorRaw(partitionStart, @verifyBuf)
+    if ok
+        ' Verify VBR read-back
+        sd.readSectorRaw(partitionStart, @verifyBuf)
 #IFDEF __FLEXSPIN__
-    debug("  VBR readback: jump=$", uhex_byte_(verifyBuf[0]), " OEM=$", uhex_byte_(verifyBuf[3]), uhex_byte_(verifyBuf[4]), " bps=", udec_(WORD[@verifyBuf + $0B]), " spc=", udec_(verifyBuf[$0D]), " sig=$", uhex_word_(WORD[@verifyBuf + $1FE]))
+        debug("  VBR readback: jump=$", uhex_byte_(verifyBuf[0]), " OEM=$", uhex_byte_(verifyBuf[BPB_OEM_NAME]), uhex_byte_(verifyBuf[BPB_OEM_NAME + 1]), " bps=", udec_(WORD[@verifyBuf + BPB_BYTES_PER_SEC]), " spc=", udec_(verifyBuf[BPB_SEC_PER_CLUS]), " sig=$", uhex_word_(WORD[@verifyBuf + sd.BOOT_SIG_OFFSET]))
 #ELSE
-    debug("  VBR readback: jump=$", uhex_byte_(verifyBuf[0]), ...
-      " OEM=$", uhex_byte_(verifyBuf[3]), uhex_byte_(verifyBuf[4]), ...
-      " bps=", udec_(WORD[@verifyBuf + $0B]), ...
-      " spc=", udec_(verifyBuf[$0D]), ...
-      " sig=$", uhex_word_(WORD[@verifyBuf + $1FE]))
+        debug("  VBR readback: jump=$", uhex_byte_(verifyBuf[0]), ...
+          " OEM=$", uhex_byte_(verifyBuf[BPB_OEM_NAME]), uhex_byte_(verifyBuf[BPB_OEM_NAME + 1]), ...
+          " bps=", udec_(WORD[@verifyBuf + BPB_BYTES_PER_SEC]), ...
+          " spc=", udec_(verifyBuf[BPB_SEC_PER_CLUS]), ...
+          " sig=$", uhex_word_(WORD[@verifyBuf + sd.BOOT_SIG_OFFSET]))
 #ENDIF
-    if verifyBuf[0] <> $EB
-        debug("  *** VBR READBACK MISMATCH! Expected $EB got $", uhex_byte_(verifyBuf[0]), " ***")
+        if verifyBuf[0] <> VBR_JUMP_BYTE0
+            debug("  *** VBR READBACK MISMATCH! Expected $EB got $", uhex_byte_(verifyBuf[0]), " ***")
 
-    ' Write FSInfo sector
-    debug("* Writing FSInfo...")
-    if not writeFSInfo()
-        debug("ERROR: Failed to write FSInfo!")
-        return false
+        ' Write FSInfo sector
+        debug("* Writing FSInfo...")
+        ok := writeFSInfo()
+        if not ok
+            debug("ERROR: Failed to write FSInfo!")
 
-    ' Write backup boot sector (sector 6 of partition)
-    debug("* Writing backup boot sector...")
-    if not writeBackupBoot()
-        debug("ERROR: Failed to write backup boot!")
-        return false
+    if ok
+        ' Write backup boot sector
+        debug("* Writing backup boot sector...")
+        ok := writeBackupBoot()
+        if not ok
+            debug("ERROR: Failed to write backup boot!")
 
-    ' Initialize FAT tables
-    debug("* Initializing FAT1...")
-    if not initFAT(fat1Start)
-        debug("ERROR: Failed to initialize FAT1!")
-        return false
+    if ok
+        ' Initialize FAT tables
+        debug("* Initializing FAT1...")
+        ok := initFAT(fat1Start)
+        if not ok
+            debug("ERROR: Failed to initialize FAT1!")
 
-    debug("* Initializing FAT2...")
-    if not initFAT(fat2Start)
-        debug("ERROR: Failed to initialize FAT2!")
-        return false
+    if ok
+        debug("* Initializing FAT2...")
+        ok := initFAT(fat2Start)
+        if not ok
+            debug("ERROR: Failed to initialize FAT2!")
 
-    ' Initialize root directory
-    debug("* Initializing root directory...")
-    if not initRootDirectory()
-        debug("ERROR: Failed to initialize root directory!")
-        return false
+    if ok
+        ' Initialize root directory
+        debug("* Initializing root directory...")
+        ok := initRootDirectory()
+        if not ok
+            debug("ERROR: Failed to initialize root directory!")
 
-    debug(" ")
-    debug("==============================================")
-    debug("  FORMAT COMPLETE")
-    debug("  Volume: [", zstr_(@volumeLabel), "]")
-    debug("  Size: ", udec_(totalSectors / 2048), " MB")
-    debug("  Clusters: ", udec_(totalClusters))
-    debug("==============================================")
-
-    return true
+    if ok
+        debug(" ")
+        debug("==============================================")
+        debug("  FORMAT COMPLETE")
+        debug("  Volume: [", zstr_(@volumeLabel), "]")
+        debug("  Size: ", udec_(totalSectors / 2048), " MB")
+        debug("  Clusters: ", udec_(totalClusters))
+        debug("==============================================")
+        result := true
 
 PRI calculateParameters() : success | clusterSize
 ' Calculate filesystem parameters based on card size.
 '
 ' @returns success - TRUE if card large enough for FAT32, FALSE otherwise
 
+    success := false
+
     ' Partition starts at sector 8192 (4MB aligned for modern cards)
-    partitionStart := 8192
+    partitionStart := PARTITION_ALIGN_SECTOR
 
     ' Calculate data sectors available
     dataSectors := totalSectors - partitionStart
@@ -532,10 +590,10 @@ PRI calculateParameters() : success | clusterSize
         sectorsPerCluster := 64
 
     ' Calculate sectors per FAT
-    ' Formula: sectorsPerFat = (dataSectors - RESERVED) / (clusterSize * 2 / 4 + NUM_FATS)
+    ' Formula: sectorsPerFat = (dataSectors - RESERVED) / (clusterSize * 2 / 4 + sd.EXPECTED_FAT_COUNT)
     ' Simplified approximation that works well:
     totalClusters := (dataSectors - RESERVED_SECTORS) / sectorsPerCluster
-    sectorsPerFat := (totalClusters * 4 + BYTES_PER_SECTOR - 1) / BYTES_PER_SECTOR
+    sectorsPerFat := (totalClusters * 4 + sd.SECTOR_SIZE - 1) / sd.SECTOR_SIZE
 
     ' Recalculate actual data area
     fat1Start := partitionStart + RESERVED_SECTORS
@@ -547,10 +605,8 @@ PRI calculateParameters() : success | clusterSize
     totalClusters := dataSectors / sectorsPerCluster
 
     ' FAT32 requires at least 65525 clusters
-    if totalClusters < 65525
-        return false
-
-    return true
+    if totalClusters >= MIN_FAT32_CLUSTERS
+        success := true
 
 PRI writeMBR() : success | partitionSectors
 ' Write the Master Boot Record (sector 0) with partition table.
@@ -558,37 +614,37 @@ PRI writeMBR() : success | partitionSectors
 ' @returns success - TRUE if write succeeded, FALSE otherwise
 
     ' Clear buffer
-    bytefill(@buf, 0, BYTES_PER_SECTOR)
+    bytefill(@buf, 0, sd.SECTOR_SIZE)
 
     ' Partition table entry at offset $1BE (446)
     partitionSectors := totalSectors - partitionStart
 
-    buf[$1BE] := $00                    ' Boot indicator (not bootable)
-    buf[$1BF] := $00                    ' Starting head (CHS - ignored for LBA)
-    buf[$1C0] := $00                    ' Starting sector (CHS)
-    buf[$1C1] := $00                    ' Starting cylinder (CHS)
-    buf[$1C2] := PARTITION_TYPE_FAT32_LBA  ' Partition type
-    buf[$1C3] := $FE                    ' Ending head (CHS)
-    buf[$1C4] := $FF                    ' Ending sector (CHS)
-    buf[$1C5] := $FF                    ' Ending cylinder (CHS)
+    buf[sd.MBR_PARTITION_OFFSET] := $00                    ' Boot indicator (not bootable)
+    buf[sd.MBR_PARTITION_OFFSET + 1] := $00                ' Starting head (CHS - ignored for LBA)
+    buf[sd.MBR_PARTITION_OFFSET + 2] := $00                ' Starting sector (CHS)
+    buf[sd.MBR_PARTITION_OFFSET + 3] := $00                ' Starting cylinder (CHS)
+    buf[MBR_PART_TYPE_OFF] := sd.PART_TYPE_FAT32_LBA       ' Partition type
+    buf[MBR_PART_TYPE_OFF + 1] := $FE                      ' Ending head (CHS)
+    buf[MBR_PART_TYPE_OFF + 2] := $FF                      ' Ending sector (CHS)
+    buf[MBR_PART_TYPE_OFF + 3] := $FF                      ' Ending cylinder (CHS)
 
     ' Partition start LBA (little endian)
-    LONG[@buf + $1C6] := partitionStart
+    LONG[@buf + MBR_PART_LBA_START] := partitionStart
 
     ' Partition size in sectors (little endian)
-    LONG[@buf + $1CA] := partitionSectors
+    LONG[@buf + MBR_PART_LBA_SIZE] := partitionSectors
 
     ' MBR signature
-    WORD[@buf + $1FE] := MBR_SIGNATURE
+    WORD[@buf + sd.BOOT_SIG_OFFSET] := sd.BOOT_SIGNATURE
 
     ' Diagnostic: dump write buffer before writing
 #IFDEF __FLEXSPIN__
-    debug("  MBR write buf: sig=$", uhex_word_(WORD[@buf + $1FE]), " type=$", uhex_byte_(buf[$1C2]), " start=", udec_(LONG[@buf + $1C6]))
+    debug("  MBR write buf: sig=$", uhex_word_(WORD[@buf + sd.BOOT_SIG_OFFSET]), " type=$", uhex_byte_(buf[MBR_PART_TYPE_OFF]), " start=", udec_(LONG[@buf + MBR_PART_LBA_START]))
     debug("  MBR buf[0..7]: $", uhex_byte_(buf[0]), " $", uhex_byte_(buf[1]), " $", uhex_byte_(buf[2]), " $", uhex_byte_(buf[3]), " $", uhex_byte_(buf[4]), " $", uhex_byte_(buf[5]), " $", uhex_byte_(buf[6]), " $", uhex_byte_(buf[7]))
 #ELSE
-    debug("  MBR write buf: sig=$", uhex_word_(WORD[@buf + $1FE]), ...
-      " type=$", uhex_byte_(buf[$1C2]), ...
-      " start=", udec_(LONG[@buf + $1C6]))
+    debug("  MBR write buf: sig=$", uhex_word_(WORD[@buf + sd.BOOT_SIG_OFFSET]), ...
+      " type=$", uhex_byte_(buf[MBR_PART_TYPE_OFF]), ...
+      " start=", udec_(LONG[@buf + MBR_PART_LBA_START]))
     debug("  MBR buf[0..7]: $", uhex_byte_(buf[0]), " $", uhex_byte_(buf[1]), ...
       " $", uhex_byte_(buf[2]), " $", uhex_byte_(buf[3]), ...
       " $", uhex_byte_(buf[4]), " $", uhex_byte_(buf[5]), ...
@@ -605,52 +661,52 @@ PRI writeVBR() : success
 ' @returns success - TRUE if write succeeded, FALSE otherwise
 
     ' Clear buffer
-    bytefill(@buf, 0, BYTES_PER_SECTOR)
+    bytefill(@buf, 0, sd.SECTOR_SIZE)
 
     ' Jump instruction
-    buf[$00] := $EB
+    buf[$00] := VBR_JUMP_BYTE0
     buf[$01] := $58
-    buf[$02] := $90
+    buf[$02] := VBR_JUMP_BYTE2
 
     ' OEM name (8 bytes)
-    bytemove(@buf + $03, @"P2FMTER ", 8)
+    bytemove(@buf + BPB_OEM_NAME, @"P2FMTER ", 8)
 
     ' BPB (BIOS Parameter Block)
-    WORD[@buf + $0B] := BYTES_PER_SECTOR    ' Bytes per sector
-    buf[$0D] := sectorsPerCluster           ' Sectors per cluster
-    WORD[@buf + $0E] := RESERVED_SECTORS    ' Reserved sectors
-    buf[$10] := NUM_FATS                    ' Number of FATs
-    WORD[@buf + $11] := 0                   ' Root entries (0 for FAT32)
-    WORD[@buf + $13] := 0                   ' Total sectors 16-bit (0 for FAT32)
-    buf[$15] := $F8                         ' Media type (fixed disk)
-    WORD[@buf + $16] := 0                   ' Sectors per FAT (16-bit, 0 for FAT32)
-    WORD[@buf + $18] := 63                  ' Sectors per track (legacy)
-    WORD[@buf + $1A] := 255                 ' Number of heads (legacy)
-    LONG[@buf + $1C] := partitionStart      ' Hidden sectors (partition start)
-    LONG[@buf + $20] := totalSectors - partitionStart  ' Total sectors 32-bit
+    WORD[@buf + BPB_BYTES_PER_SEC] := sd.SECTOR_SIZE       ' Bytes per sector
+    buf[BPB_SEC_PER_CLUS] := sectorsPerCluster             ' Sectors per cluster
+    WORD[@buf + BPB_RESERVED_SECS] := RESERVED_SECTORS     ' Reserved sectors
+    buf[BPB_NUM_FATS] := sd.EXPECTED_FAT_COUNT             ' Number of FATs
+    WORD[@buf + BPB_ROOT_ENTRY_CT] := 0                    ' Root entries (0 for FAT32)
+    WORD[@buf + BPB_TOTAL_SEC_16] := 0                     ' Total sectors 16-bit (0 for FAT32)
+    buf[BPB_MEDIA_TYPE] := MEDIA_TYPE_FIXED                ' Media type (fixed disk)
+    WORD[@buf + BPB_FAT_SIZE_16] := 0                      ' Sectors per FAT (16-bit, 0 for FAT32)
+    WORD[@buf + BPB_SEC_PER_TRACK] := 63                   ' Sectors per track (legacy)
+    WORD[@buf + BPB_NUM_HEADS] := 255                      ' Number of heads (legacy)
+    LONG[@buf + BPB_HIDDEN_SECS] := partitionStart         ' Hidden sectors (partition start)
+    LONG[@buf + BPB_TOTAL_SEC_32] := totalSectors - partitionStart  ' Total sectors 32-bit
 
     ' FAT32 extended BPB
-    LONG[@buf + $24] := sectorsPerFat       ' Sectors per FAT (32-bit)
-    WORD[@buf + $28] := 0                   ' Flags
-    WORD[@buf + $2A] := 0                   ' Version
-    LONG[@buf + $2C] := ROOT_CLUSTER        ' Root cluster
-    WORD[@buf + $30] := 1                   ' FSInfo sector
-    WORD[@buf + $32] := 6                   ' Backup boot sector
+    LONG[@buf + BPB_FAT_SIZE_32] := sectorsPerFat          ' Sectors per FAT (32-bit)
+    WORD[@buf + BPB_EXT_FLAGS] := 0                        ' Flags
+    WORD[@buf + BPB_FS_VERSION] := 0                       ' Version
+    LONG[@buf + BPB_ROOT_CLUSTER] := sd.ROOT_CLUSTER       ' Root cluster
+    WORD[@buf + BPB_FSINFO_SEC] := FSINFO_SECTOR_OFFSET    ' FSInfo sector
+    WORD[@buf + BPB_BACKUP_BOOT_SEC] := BACKUP_VBR_OFFSET  ' Backup boot sector
     ' Bytes $34-$3F reserved (already 0)
 
-    buf[$40] := $80                         ' Drive number
-    buf[$41] := 0                           ' Reserved
-    buf[$42] := $29                         ' Extended boot signature
-    LONG[@buf + $43] := getct()             ' Volume serial number (random)
+    buf[BPB_DRIVE_NUM] := DRIVE_NUM_HDD                    ' Drive number
+    buf[BPB_DRIVE_NUM + 1] := 0                            ' Reserved
+    buf[BPB_EXT_BOOT_SIG] := EXT_BOOT_SIG_VAL             ' Extended boot signature
+    LONG[@buf + BPB_VOLUME_SERIAL] := getct()              ' Volume serial number (random)
 
     ' Volume label (11 bytes)
-    bytemove(@buf + $47, @volumeLabel, 11)
+    bytemove(@buf + BPB_VOLUME_LABEL, @volumeLabel, VOLUME_LABEL_LEN)
 
     ' File system type (8 bytes)
-    bytemove(@buf + $52, @"FAT32   ", 8)
+    bytemove(@buf + BPB_FS_TYPE, @"FAT32   ", 8)
 
     ' Boot signature
-    WORD[@buf + $1FE] := MBR_SIGNATURE
+    WORD[@buf + sd.BOOT_SIG_OFFSET] := sd.BOOT_SIGNATURE
 
     ' Write VBR to partition start
     success := (sd.writeSectorRaw(partitionStart, @buf) == sd.SUCCESS)
@@ -661,69 +717,70 @@ PRI writeFSInfo() : success
 ' @returns success - TRUE if write succeeded, FALSE otherwise
 
     ' Clear buffer
-    bytefill(@buf, 0, BYTES_PER_SECTOR)
+    bytefill(@buf, 0, sd.SECTOR_SIZE)
 
     ' FSInfo signatures
-    LONG[@buf + $000] := FSINFO_SIG1        ' Lead signature
-    LONG[@buf + $1E4] := FSINFO_SIG2        ' Structure signature
-    LONG[@buf + $1E8] := totalClusters - 1  ' Free cluster count
-    LONG[@buf + $1EC] := 3                  ' Next free cluster hint
-    LONG[@buf + $1FC] := FSINFO_SIG3        ' Trail signature (includes $AA55)
+    LONG[@buf + $000] := sd.FSINFO_LEAD_SIG            ' Lead signature
+    LONG[@buf + FSINFO_SIG2_OFF] := sd.FSINFO_STRUCT_SIG  ' Structure signature
+    LONG[@buf + FSINFO_FREE_COUNT_OFF] := totalClusters - 1  ' Free cluster count
+    LONG[@buf + FSINFO_NEXT_FREE_OFF] := 3             ' Next free cluster hint
+    LONG[@buf + $1FC] := FSINFO_TRAIL_SIG              ' Trail signature (includes $AA55)
 
     ' Write FSInfo to sector 1 of partition
-    success := (sd.writeSectorRaw(partitionStart + 1, @buf) == sd.SUCCESS)
+    success := (sd.writeSectorRaw(partitionStart + FSINFO_SECTOR_OFFSET, @buf) == sd.SUCCESS)
 
 PRI writeBackupBoot() : success
 ' Write backup VBR and FSInfo to sectors 6 and 7 of partition.
 '
 ' @returns success - TRUE if writes succeeded, FALSE otherwise
 
+    success := false
+
     ' Re-create VBR in buffer
     writeVBR()
 
-    ' Write to sector 6 of partition (backup VBR location)
-    if sd.writeSectorRaw(partitionStart + 6, @buf) < 0
-        return false
+    ' Write to backup VBR location
+    if sd.writeSectorRaw(partitionStart + BACKUP_VBR_OFFSET, @buf) >= 0
+        ' Write backup FSInfo
+        writeFSInfo()
+        success := (sd.writeSectorRaw(partitionStart + BACKUP_VBR_OFFSET + FSINFO_SECTOR_OFFSET, @buf) == sd.SUCCESS)
 
-    ' Write backup FSInfo to sector 7
-    writeFSInfo()
-    success := (sd.writeSectorRaw(partitionStart + 7, @buf) == sd.SUCCESS)
-
-PRI initFAT(fatStart) : success | sector, remaining, batch, written
+PRI initFAT(fatStart) : success | ok, sector, remaining, batch, written
 ' Initialize a FAT table with media type and root cluster.
 ' Uses CMD25 multi-sector writes in 64-sector batches for ~5.5x speedup.
 '
 ' @param fatStart - Starting sector of the FAT
 ' @returns success - TRUE if all sectors written, FALSE otherwise
 
+    success := false
+
     ' Clear buffer
-    bytefill(@buf, 0, BYTES_PER_SECTOR)
+    bytefill(@buf, 0, sd.SECTOR_SIZE)
 
     ' First sector of FAT has special entries
     LONG[@buf + 0] := FAT32_MEDIA_TYPE      ' FAT[0] - media type
-    LONG[@buf + 4] := FAT32_EOC             ' FAT[1] - end of chain marker
-    LONG[@buf + 8] := FAT32_EOC             ' FAT[2] - root directory (end of chain)
+    LONG[@buf + 4] := sd.FAT32_EOC_MARK     ' FAT[1] - end of chain marker
+    LONG[@buf + 8] := sd.FAT32_EOC_MARK     ' FAT[2] - root directory (end of chain)
 
     ' Write first FAT sector (single-sector, has special entries)
-    if sd.writeSectorRaw(fatStart, @buf) < 0
-        return false
-
-    ' Write remaining FAT sectors in CMD25 batches (all zeros = free clusters)
-    ' zeroBuf is zero-initialized by Spin2 VAR section
-    sector := 1
-    remaining := sectorsPerFat - 1
-    repeat while remaining > 0
-        batch := remaining <# MULTI_BATCH_SIZE                                   ' Clamp to 64 or remainder
-        written := sd.writeSectorsRaw(fatStart + sector, batch, @zeroBuf)
-        if written <> batch
-            debug("  FAT batch write FAILED at sector ", udec_(sector), " wrote ", udec_(written), "/", udec_(batch))
-            return false
-        if (sector & $FF) == 0 or remaining <= batch
-            debug("  Progress: ", udec_(sector + batch), "/", udec_(sectorsPerFat))
-        sector += batch
-        remaining -= batch
-
-    return true
+    if sd.writeSectorRaw(fatStart, @buf) >= 0
+        ' Write remaining FAT sectors in CMD25 batches (all zeros = free clusters)
+        ' zeroBuf is zero-initialized by Spin2 VAR section
+        ok := true
+        sector := 1
+        remaining := sectorsPerFat - 1
+        repeat while remaining > 0 and ok
+            batch := remaining <# MULTI_BATCH_SIZE                               ' Clamp to 64 or remainder
+            written := sd.writeSectorsRaw(fatStart + sector, batch, @zeroBuf)
+            if written <> batch
+                debug("  FAT batch write FAILED at sector ", udec_(sector), " wrote ", udec_(written), "/", udec_(batch))
+                ok := false
+                quit
+            if (sector & $FF) == 0 or remaining <= batch
+                debug("  Progress: ", udec_(sector + batch), "/", udec_(sectorsPerFat))
+            sector += batch
+            remaining -= batch
+        success := ok
 
 PRI initRootDirectory() : success | written
 ' Initialize the root directory cluster with volume label entry.
@@ -731,38 +788,38 @@ PRI initRootDirectory() : success | written
 ' @returns success - TRUE if all sectors written, FALSE otherwise
 
     ' Clear buffer
-    bytefill(@buf, 0, BYTES_PER_SECTOR)
+    bytefill(@buf, 0, sd.SECTOR_SIZE)
 
     ' Create volume label directory entry at offset 0
     ' Filename (11 bytes) = volume label
-    bytemove(@buf, @volumeLabel, 11)
+    bytemove(@buf, @volumeLabel, VOLUME_LABEL_LEN)
 
-    ' Attributes = $08 (volume label)
-    buf[$0B] := $08
+    ' Attributes = volume label
+    buf[sd.DE_ATTR_OFFSET] := sd.ATTR_VOLUME_ID
 
     ' Creation time/date (use some default)
-    WORD[@buf + $0E] := $0000   ' Creation time
-    WORD[@buf + $10] := $0021   ' Creation date (1980-01-01)
-    WORD[@buf + $12] := $0021   ' Access date
-    WORD[@buf + $14] := $0000   ' High word of cluster (0)
-    WORD[@buf + $16] := $0000   ' Modification time
-    WORD[@buf + $18] := $0021   ' Modification date
-    WORD[@buf + $1A] := $0000   ' Low word of cluster (0)
-    LONG[@buf + $1C] := 0       ' File size (0 for volume label)
+    WORD[@buf + sd.DE_CRT_TIME_OFFSET] := $0000   ' Creation time
+    WORD[@buf + sd.DE_CRT_TIME_OFFSET + 2] := $0021  ' Creation date (1980-01-01)
+    WORD[@buf + sd.DE_CRT_TIME_OFFSET + 4] := $0021  ' Access date
+    WORD[@buf + sd.DE_CLUS_HI_OFFSET] := $0000    ' High word of cluster (0)
+    WORD[@buf + sd.DE_WRT_TIME_OFFSET] := $0000    ' Modification time
+    WORD[@buf + sd.DE_WRT_TIME_OFFSET + 2] := $0021  ' Modification date
+    WORD[@buf + sd.DE_CLUS_LO_OFFSET] := $0000    ' Low word of cluster (0)
+    LONG[@buf + sd.DE_FILESIZE_OFFSET] := 0        ' File size (0 for volume label)
 
     ' Write first sector of root directory
-    if sd.writeSectorRaw(dataStart, @buf) < 0
-        return false
-
-    ' Clear remaining sectors of root cluster using CMD25 batch write
-    ' zeroBuf is zero-initialized by Spin2 VAR section; max 63 sectors fits in 32 KB
-    if sectorsPerCluster > 1
-        written := sd.writeSectorsRaw(dataStart + 1, sectorsPerCluster - 1, @zeroBuf)
-        if written <> sectorsPerCluster - 1
-            debug("  Root dir batch write FAILED: wrote ", udec_(written), "/", udec_(sectorsPerCluster - 1))
-            return false
-
-    return true
+    success := false
+    if sd.writeSectorRaw(dataStart, @buf) >= 0
+        ' Clear remaining sectors of root cluster using CMD25 batch write
+        ' zeroBuf is zero-initialized by Spin2 VAR section; max 63 sectors fits in 32 KB
+        if sectorsPerCluster > 1
+            written := sd.writeSectorsRaw(dataStart + 1, sectorsPerCluster - 1, @zeroBuf)
+            if written == sectorsPerCluster - 1
+                success := true
+            else
+                debug("  Root dir batch write FAILED: wrote ", udec_(written), "/", udec_(sectorsPerCluster - 1))
+        else
+            success := true
 
 PRI showWriteDiag() | wResult, wR1, wDresp, wSector
 ' Display write diagnostic info from driver after a write failure.

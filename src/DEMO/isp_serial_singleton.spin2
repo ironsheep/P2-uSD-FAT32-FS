@@ -237,17 +237,16 @@ PUB rxline(p_dest, maxLen) : len | chr
 
     if (chr == 13)                                                   ' CR = end of line
       BYTE[p_dest][len] := 0
-      return
+      quit
 
-    if (chr == 10)                                                   ' LF = ignore
+    elseif (chr == 10)                                               ' LF = ignore
       next
 
-    if (chr == 8)                                                    ' backspace
+    elseif (chr == 8)                                                ' backspace
       if (len > 0)
         len--
-      next
 
-    if (len < maxLen - 1)                                          ' room in buffer?
+    elseif (len < maxLen - 1)                                        ' room in buffer?
       BYTE[p_dest][len++] := chr
 
 

@@ -36,6 +36,11 @@ CON
 
     READER_STACK_SIZE = 256
 
+    READER_LINE_COUNT = 10            ' Number of lines to write to READER.TXT
+    READER_LINE_LEN   = 33            ' Length of "Line of test data for reader cog."
+    WRITER_LINE_COUNT = 20            ' Number of lines to write to WRITER.TXT
+    WRITER_LINE_LEN   = 20            ' Length of "Written by main cog."
+
     DEBUG_DISABLE = 0
 
 OBJ
@@ -60,52 +65,49 @@ PUB go() | handle, idx, buf[32]
     reader_done := 0
     setup_done := 0
 
-    if sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK) < 0
-        debug("Mount FAILED")
-        return
+    if sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK) >= 0
+        ' --- Create test data files ---
+        debug("[Main] Creating test files...")
 
-    ' --- Create test data files ---
-    debug("[Main] Creating test files...")
+        sd.deleteFile(@"READER.TXT")
+        handle := sd.createFileNew(@"READER.TXT")
+        if handle >= 0
+            repeat idx from 1 to READER_LINE_COUNT
+                sd.writeHandle(handle, @"Line of test data for reader cog.", READER_LINE_LEN)
+                sd.writeHandle(handle, @CRLF, 2)
+            sd.closeFileHandle(handle)
 
-    sd.deleteFile(@"READER.TXT")
-    handle := sd.createFileNew(@"READER.TXT")
-    if handle >= 0
-        repeat idx from 1 to 10
-            sd.writeHandle(handle, @"Line of test data for reader cog.", 33)
-            sd.writeHandle(handle, @CRLF, 2)
-        sd.closeFileHandle(handle)
+        sd.deleteFile(@"WRITER.TXT")
 
-    sd.deleteFile(@"WRITER.TXT")
+        debug("[Main] Test files ready")
 
-    debug("[Main] Test files ready")
+        ' --- Start reader cog ---
+        setup_done := 1
+        reader_cog := cogspin(NEWCOG, readerTask(), @reader_stack)
+        if reader_cog >= 0
+            debug("[Main] Reader cog started (cog ", udec(reader_cog), ")")
 
-    ' --- Start reader cog ---
-    setup_done := 1
-    reader_cog := cogspin(NEWCOG, readerTask(), @reader_stack)
-    if reader_cog < 0
-        debug("[Main] Failed to start reader cog!")
+            ' --- Main cog writes to a different file ---
+            debug("[Main] Writing WRITER.TXT...")
+            handle := sd.createFileNew(@"WRITER.TXT")
+            if handle >= 0
+                repeat idx from 1 to WRITER_LINE_COUNT
+                    sd.writeHandle(handle, @"Written by main cog.", WRITER_LINE_LEN)
+                    sd.writeHandle(handle, @CRLF, 2)
+                sd.closeFileHandle(handle)
+            debug("[Main] Write complete: ", udec(WRITER_LINE_COUNT), " lines")
+
+            ' --- Wait for reader to finish ---
+            repeat until reader_done
+
+            debug(" ")
+            debug("=== Done -- both cogs completed successfully ===")
+        else
+            debug("[Main] Failed to start reader cog!")
+
         sd.unmount()
-        return
-
-    debug("[Main] Reader cog started (cog ", udec(reader_cog), ")")
-
-    ' --- Main cog writes to a different file ---
-    debug("[Main] Writing WRITER.TXT...")
-    handle := sd.createFileNew(@"WRITER.TXT")
-    if handle >= 0
-        repeat idx from 1 to 20
-            sd.writeHandle(handle, @"Written by main cog.", 20)
-            sd.writeHandle(handle, @CRLF, 2)
-        sd.closeFileHandle(handle)
-    debug("[Main] Write complete: ", udec(20), " lines")
-
-    ' --- Wait for reader to finish ---
-    repeat until reader_done
-
-    ' --- Clean up ---
-    sd.unmount()
-    debug(" ")
-    debug("=== Done -- both cogs completed successfully ===")
+    else
+        debug("Mount FAILED")
 
 PRI readerTask() | handle, buf[128], total_bytes, bytes_read
 ' Run in a separate cog -- reads READER.TXT and reports the total bytes read.
@@ -120,22 +122,20 @@ PRI readerTask() | handle, buf[128], total_bytes, bytes_read
 
     debug("[Reader] Opening READER.TXT...")
     handle := sd.openFileRead(@"READER.TXT")
-    if handle < 0
+    if handle >= 0
+        debug("[Reader] File size: ", udec(sd.fileSizeHandle(handle)), " bytes")
+
+        total_bytes := 0
+        repeat
+            bytes_read := sd.readHandle(handle, @buf, sd.SECTOR_SIZE)
+            if bytes_read == 0
+                quit
+            total_bytes += bytes_read
+
+        sd.closeFileHandle(handle)
+        debug("[Reader] Read complete: ", udec(total_bytes), " bytes total")
+    else
         debug("[Reader] Open FAILED, error: ", sdec(handle))
-        reader_done := 1
-        return
-
-    debug("[Reader] File size: ", udec(sd.fileSizeHandle(handle)), " bytes")
-
-    total_bytes := 0
-    repeat
-        bytes_read := sd.readHandle(handle, @buf, 512)
-        if bytes_read == 0
-            quit
-        total_bytes += bytes_read
-
-    sd.closeFileHandle(handle)
-    debug("[Reader] Read complete: ", udec(total_bytes), " bytes total")
 
     reader_done := 1
 

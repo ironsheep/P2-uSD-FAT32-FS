@@ -45,74 +45,73 @@ PUB go() | handle
 
     debug("=== SD Directory Walk Example ===")
 
-    if sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK) < 0
+    if sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK) >= 0
+        ' --- Show volume info ---
+        debug("Volume: ", zstr(sd.volumeLabel()))
+        debug("Free:   ", udec(sd.freeSpace() >> 11), " MB")
+
+        ' --- List root directory ---
+        debug(" ")
+        debug("--- Root Directory ---")
+        listCurrentDirectory()
+
+        ' --- Create a test subdirectory with files ---
+        '   newDirectory() fails if the directory already exists -- that's OK.
+        '   deleteFile() before createFileNew() makes this re-runnable.
+        debug(" ")
+        debug("--- Creating EXDIR with files ---")
+        sd.newDirectory(@"EXDIR")
+        sd.changeDirectory(@"EXDIR")
+
+        sd.deleteFile(@"FILE_A.TXT")
+        handle := sd.createFileNew(@"FILE_A.TXT")
+        if handle >= 0
+            sd.writeHandle(handle, @"Contents of file A", 18)
+            sd.closeFileHandle(handle)
+
+        sd.deleteFile(@"FILE_B.TXT")
+        handle := sd.createFileNew(@"FILE_B.TXT")
+        if handle >= 0
+            sd.writeHandle(handle, @"Contents of file B", 18)
+            sd.closeFileHandle(handle)
+
+        sd.deleteFile(@"TEMP.TXT")
+        handle := sd.createFileNew(@"TEMP.TXT")
+        if handle >= 0
+            sd.writeHandle(handle, @"Temporary file", 14)
+            sd.closeFileHandle(handle)
+
+        sd.changeDirectory(@"/")
+
+        ' --- List subdirectory using handle-based enumeration ---
+        '     This does NOT change our CWD (we stay in root)
+        debug(" ")
+        debug("--- EXDIR contents (via directory handle) ---")
+        listDirectoryByHandle(@"EXDIR")
+
+        ' --- File management: delete and rename ---
+        debug(" ")
+        debug("--- File management ---")
+        sd.changeDirectory(@"EXDIR")
+
+        sd.deleteFile(@"TEMP.TXT")
+        debug("Deleted TEMP.TXT")
+
+        sd.rename(@"FILE_B.TXT", @"RENAMED.TXT")
+        debug("Renamed FILE_B.TXT -> RENAMED.TXT")
+
+        ' Show the result
+        debug(" ")
+        debug("--- EXDIR after changes ---")
+        listCurrentDirectory()
+
+        sd.changeDirectory(@"/")
+        sd.unmount()
+
+        debug(" ")
+        debug("=== Done ===")
+    else
         debug("Mount FAILED")
-        return
-
-    ' --- Show volume info ---
-    debug("Volume: ", zstr(sd.volumeLabel()))
-    debug("Free:   ", udec(sd.freeSpace() >> 11), " MB")
-
-    ' --- List root directory ---
-    debug(" ")
-    debug("--- Root Directory ---")
-    listCurrentDirectory()
-
-    ' --- Create a test subdirectory with files ---
-    '   newDirectory() fails if the directory already exists -- that's OK.
-    '   deleteFile() before createFileNew() makes this re-runnable.
-    debug(" ")
-    debug("--- Creating EXDIR with files ---")
-    sd.newDirectory(@"EXDIR")
-    sd.changeDirectory(@"EXDIR")
-
-    sd.deleteFile(@"FILE_A.TXT")
-    handle := sd.createFileNew(@"FILE_A.TXT")
-    if handle >= 0
-        sd.writeHandle(handle, @"Contents of file A", 18)
-        sd.closeFileHandle(handle)
-
-    sd.deleteFile(@"FILE_B.TXT")
-    handle := sd.createFileNew(@"FILE_B.TXT")
-    if handle >= 0
-        sd.writeHandle(handle, @"Contents of file B", 18)
-        sd.closeFileHandle(handle)
-
-    sd.deleteFile(@"TEMP.TXT")
-    handle := sd.createFileNew(@"TEMP.TXT")
-    if handle >= 0
-        sd.writeHandle(handle, @"Temporary file", 14)
-        sd.closeFileHandle(handle)
-
-    sd.changeDirectory(@"/")
-
-    ' --- List subdirectory using handle-based enumeration ---
-    '     This does NOT change our CWD (we stay in root)
-    debug(" ")
-    debug("--- EXDIR contents (via directory handle) ---")
-    listDirectoryByHandle(@"EXDIR")
-
-    ' --- File management: delete and rename ---
-    debug(" ")
-    debug("--- File management ---")
-    sd.changeDirectory(@"EXDIR")
-
-    sd.deleteFile(@"TEMP.TXT")
-    debug("Deleted TEMP.TXT")
-
-    sd.rename(@"FILE_B.TXT", @"RENAMED.TXT")
-    debug("Renamed FILE_B.TXT -> RENAMED.TXT")
-
-    ' Show the result
-    debug(" ")
-    debug("--- EXDIR after changes ---")
-    listCurrentDirectory()
-
-    sd.changeDirectory(@"/")
-    sd.unmount()
-
-    debug(" ")
-    debug("=== Done ===")
 
 PRI listCurrentDirectory() | entry_num, p_entry, attr
 ' List all entries in the current working directory using index-based enumeration.
@@ -129,7 +128,7 @@ PRI listCurrentDirectory() | entry_num, p_entry, attr
         ' Copy name before next call invalidates it
         bytemove(@name_copy, sd.fileName(), 13)
 
-        if attr & $10
+        if attr & sd.ATTR_DIRECTORY
             debug("  [DIR]  ", zstr(@name_copy))
         else
             debug("  [FILE] ", zstr(@name_copy), "  ", udec(sd.fileSize()), " bytes")
@@ -143,24 +142,23 @@ PRI listDirectoryByHandle(p_path) | dh, p_entry, attr
 ' @local p_entry - Pointer to directory entry returned by readDirectoryHandle()
 ' @local attr - File attribute byte from sd.attributes()
     dh := sd.openDirectory(p_path)
-    if dh < 0
+    if dh >= 0
+        repeat
+            p_entry := sd.readDirectoryHandle(dh)
+            if p_entry == 0
+                quit
+
+            attr := sd.attributes()
+            bytemove(@name_copy, sd.fileName(), 13)
+
+            if attr & sd.ATTR_DIRECTORY
+                debug("  [DIR]  ", zstr(@name_copy))
+            else
+                debug("  [FILE] ", zstr(@name_copy), "  ", udec(sd.fileSize()), " bytes")
+
+        sd.closeDirectoryHandle(dh)
+    else
         debug("  Cannot open directory, error: ", sdec(dh))
-        return
-
-    repeat
-        p_entry := sd.readDirectoryHandle(dh)
-        if p_entry == 0
-            quit
-
-        attr := sd.attributes()
-        bytemove(@name_copy, sd.fileName(), 13)
-
-        if attr & $10
-            debug("  [DIR]  ", zstr(@name_copy))
-        else
-            debug("  [FILE] ", zstr(@name_copy), "  ", udec(sd.fileSize()), " bytes")
-
-    sd.closeDirectoryHandle(dh)
 
 con { license }
 

@@ -419,13 +419,15 @@ PRI lookupManufacturer(mid) : p_name | p_entry, entry_id
 ' @param mid - Manufacturer ID byte from CID
 ' @returns p_name - Pointer to manufacturer name string
 
+  p_name := @"Unknown"
   p_entry := @mfr_table
   repeat
     entry_id := BYTE[p_entry]
     if entry_id == $FF
-      return @"Unknown"
+      quit
     if entry_id == mid
-      return p_entry + 1
+      p_name := p_entry + 1
+      quit
     p_entry++
     repeat while BYTE[p_entry] <> 0
       p_entry++
@@ -850,14 +852,13 @@ PRI findAndReadVBR() | mbr_buf[128], vbr_sector, type_code
 
   if type_code <> $0B and type_code <> $0C
     debug("NOTE: Not FAT32 - VBR parsing skipped")
-    return
+  else
+    ' Get VBR sector from MBR at offset 0x1C6
+    vbr_sector := LONG[@mbr_buf + $1C6]
+    debug("VBR at sector:               ", udec_(vbr_sector))
 
-  ' Get VBR sector from MBR at offset 0x1C6
-  vbr_sector := LONG[@mbr_buf + $1C6]
-  debug("VBR at sector:               ", udec_(vbr_sector))
-
-  ' Read VBR
-  sd.readSectorRaw(vbr_sector, @vbr_buf)
+    ' Read VBR
+    sd.readSectorRaw(vbr_sector, @vbr_buf)
 
 PRI parseVBR()
 ' Parse VBR/BPB fields including filesystem parameters.
@@ -901,37 +902,35 @@ PRI parseVBR()
 PRI displayVBR() | cluster_size, data_region, total_clusters
 ' Display parsed VBR/BPB fields for FAT32 filesystem.
 
-  if vbr_bytes_per_sec == 0
-    return  ' VBR not read
+  if vbr_bytes_per_sec <> 0
+    debug(" ")
+    debug("--- FAT32 Filesystem ---")
+    debug("OEM Name:                    [", zstr_(@vbr_oem_name), "]")
+    debug("Volume Label:                [", zstr_(@vbr_volume_label), "]")
+    debug("Volume Serial:               $", uhex_long_(vbr_volume_serial))
+    debug("FS Type:                     [", zstr_(@vbr_fs_type), "]")
+    debug("Bytes/Sector:                ", udec_(vbr_bytes_per_sec))
 
-  debug(" ")
-  debug("--- FAT32 Filesystem ---")
-  debug("OEM Name:                    [", zstr_(@vbr_oem_name), "]")
-  debug("Volume Label:                [", zstr_(@vbr_volume_label), "]")
-  debug("Volume Serial:               $", uhex_long_(vbr_volume_serial))
-  debug("FS Type:                     [", zstr_(@vbr_fs_type), "]")
-  debug("Bytes/Sector:                ", udec_(vbr_bytes_per_sec))
+    cluster_size := vbr_sec_per_clus * vbr_bytes_per_sec
+    if cluster_size >= 1024
+      debug("Sectors/Cluster:             ", udec_(vbr_sec_per_clus), " (", udec_(cluster_size / 1024), " KB clusters)")
+    else
+      debug("Sectors/Cluster:             ", udec_(vbr_sec_per_clus), " (", udec_(cluster_size), " byte clusters)")
 
-  cluster_size := vbr_sec_per_clus * vbr_bytes_per_sec
-  if cluster_size >= 1024
-    debug("Sectors/Cluster:             ", udec_(vbr_sec_per_clus), " (", udec_(cluster_size / 1024), " KB clusters)")
-  else
-    debug("Sectors/Cluster:             ", udec_(vbr_sec_per_clus), " (", udec_(cluster_size), " byte clusters)")
+    debug("Reserved Sectors:            ", udec_(vbr_reserved_sec))
+    debug("Number of FATs:              ", udec_(vbr_num_fats))
+    debug("Sectors per FAT:             ", udec_(vbr_sec_per_fat))
+    debug("Root Cluster:                ", udec_(vbr_root_cluster))
+    debug("Total Sectors:               ", udec_(vbr_total_sectors))
 
-  debug("Reserved Sectors:            ", udec_(vbr_reserved_sec))
-  debug("Number of FATs:              ", udec_(vbr_num_fats))
-  debug("Sectors per FAT:             ", udec_(vbr_sec_per_fat))
-  debug("Root Cluster:                ", udec_(vbr_root_cluster))
-  debug("Total Sectors:               ", udec_(vbr_total_sectors))
+    ' Calculate data region start
+    data_region := vbr_reserved_sec + (vbr_num_fats * vbr_sec_per_fat)
+    debug("Data Region Start:           Sector ", udec_(data_region))
 
-  ' Calculate data region start
-  data_region := vbr_reserved_sec + (vbr_num_fats * vbr_sec_per_fat)
-  debug("Data Region Start:           Sector ", udec_(data_region))
-
-  ' Calculate total clusters
-  if vbr_sec_per_clus > 0
-    total_clusters := (vbr_total_sectors - data_region) / vbr_sec_per_clus
-    debug("Total Clusters:              ", udec_(total_clusters))
+    ' Calculate total clusters
+    if vbr_sec_per_clus > 0
+      total_clusters := (vbr_total_sectors - data_region) / vbr_sec_per_clus
+      debug("Total Clusters:              ", udec_(total_clusters))
 
 ' ============================================================
 ' UNIQUE CARD ID GENERATION
@@ -993,7 +992,7 @@ PRI hexLong(p_dst, val) : p_out | idx, nibble
       BYTE[p_dst++] := nibble + "0"
     else
       BYTE[p_dst++] := nibble - 10 + "A"
-  return p_dst
+  p_out := p_dst
 
 PRI decWord(p_dst, val) : p_out | digits[5], idx, started
 ' Convert a WORD value to decimal string.
@@ -1010,7 +1009,7 @@ PRI decWord(p_dst, val) : p_out | digits[5], idx, started
     if digits[idx] <> 0 or started or idx == 0
       BYTE[p_dst++] := digits[idx] + "0"
       started := true
-  return p_dst
+  p_out := p_dst
 
 PRI decByte(p_dst, val) : p_out | digits[3], idx, started
 ' Convert a BYTE value to decimal string.
@@ -1027,7 +1026,7 @@ PRI decByte(p_dst, val) : p_out | digits[3], idx, started
     if digits[idx] <> 0 or started or idx == 0
       BYTE[p_dst++] := digits[idx] + "0"
       started := true
-  return p_dst
+  p_out := p_dst
 
 PRI displayCardID()
 ' Display the generated unique card ID string.
@@ -1109,11 +1108,11 @@ PRI getCardTypeStr() : p_str
 '
 ' @returns p_str - Pointer to "SDSC", "SDHC", or "SDXC" string
 
+  p_str := @"SDHC"
   if ocr_ccs == 0
-    return @"SDSC"
-  if csd_capacity_mb > 32768
-    return @"SDXC"
-  return @"SDHC"
+    p_str := @"SDSC"
+  elseif csd_capacity_mb > 32768
+    p_str := @"SDXC"
 
 PRI buildSDSpecStr() | p_dst
 ' Build SD spec version string into sd_spec_str buffer.
@@ -1122,22 +1121,20 @@ PRI buildSDSpecStr() | p_dst
   p_dst := @sd_spec_str
   if scr_sd_spec < 2
     bytemove(p_dst, @"1.x", 4)
-    return
-  if scr_sd_spec3 == 0
+  elseif scr_sd_spec3 == 0
     bytemove(p_dst, @"2.0", 4)
-    return
-  if scr_sd_spec4 == 0
+  elseif scr_sd_spec4 == 0
     bytemove(p_dst, @"3.x", 4)
-    return
-  ' SD_SPEC4 == 1, use SPECX
-  case scr_sd_specx
-    0 : bytemove(p_dst, @"4.x", 4)
-    1 : bytemove(p_dst, @"5.x", 4)
-    2 : bytemove(p_dst, @"6.x", 4)
-    3 : bytemove(p_dst, @"7.x", 4)
-    4 : bytemove(p_dst, @"8.x", 4)
-    5 : bytemove(p_dst, @"9.x", 4)
-    other : bytemove(p_dst, @">9.x", 5)
+  else
+    ' SD_SPEC4 == 1, use SPECX
+    case scr_sd_specx
+      0 : bytemove(p_dst, @"4.x", 4)
+      1 : bytemove(p_dst, @"5.x", 4)
+      2 : bytemove(p_dst, @"6.x", 4)
+      3 : bytemove(p_dst, @"7.x", 4)
+      4 : bytemove(p_dst, @"8.x", 4)
+      5 : bytemove(p_dst, @"9.x", 4)
+      other : bytemove(p_dst, @">9.x", 5)
 
 PRI getFilesystemStr() : p_str
 ' Determine filesystem type string from MBR partition type byte.
@@ -1145,14 +1142,14 @@ PRI getFilesystemStr() : p_str
 ' @returns p_str - Pointer to filesystem name string
 
   case mbr_part_type
-    $00 : return @"Empty"
-    $01 : return @"FAT12"
-    $04, $06, $0E : return @"FAT16"
-    $0B, $0C : return @"FAT32"
-    $07 : return @"exFAT"
-    $83 : return @"Linux"
-    $EE : return @"GPT"
-    other : return @"Unknown"
+    $00 : p_str := @"Empty"
+    $01 : p_str := @"FAT12"
+    $04, $06, $0E : p_str := @"FAT16"
+    $0B, $0C : p_str := @"FAT32"
+    $07 : p_str := @"exFAT"
+    $83 : p_str := @"Linux"
+    $EE : p_str := @"GPT"
+    other : p_str := @"Unknown"
 
 PRI decodeSpeedClass(classByte) : speedClass
 ' Decode SD Status SPEED_CLASS byte to integer speed class.
@@ -1161,12 +1158,12 @@ PRI decodeSpeedClass(classByte) : speedClass
 ' @returns speedClass - Speed class value (0, 2, 4, 6, or 10)
 
   case classByte
-    $00 : return 0
-    $01 : return 2
-    $02 : return 4
-    $03 : return 6
-    $04 : return 10
-    other : return 0
+    $00 : speedClass := 0
+    $01 : speedClass := 2
+    $02 : speedClass := 4
+    $03 : speedClass := 6
+    $04 : speedClass := 10
+    other : speedClass := 0
 
 ' ============================================================
 ' DRIVER USAGE SUMMARY

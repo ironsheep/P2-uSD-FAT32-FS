@@ -35,6 +35,12 @@ CON
     MAX_ENTRIES = 20                    ' Number of log entries to write
     SYNC_INTERVAL = 5                   ' Sync every N entries
 
+    CSV_HEADER_LEN = 11                 ' Length of "Entry,Value"
+    CHAR_CR = 13                        ' Carriage Return
+    CHAR_LF = 10                        ' Line Feed
+    SENSOR_RANGE_MASK = $3FF            ' 10-bit sensor mask (0-1023)
+    MAX_DECIMAL_DIVISOR = 1_000_000_000 ' Largest power of 10 for 32-bit formatting
+
     DEBUG_DISABLE = 0
 
 OBJ
@@ -52,50 +58,49 @@ PUB go() | handle, idx
 
     debug("=== SD Data Logger Example ===")
 
-    if sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK) < 0
-        debug("Mount FAILED")
-        return
+    if sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK) >= 0
+        ' Set timestamp for file creation
+        sd.setDate(2026, 2, 25, 12, 0, 0)
 
-    ' Set timestamp for file creation
-    sd.setDate(2026, 2, 25, 12, 0, 0)
+        ' Create LOGS directory (ignore error if it already exists)
+        if sd.changeDirectory(@"LOGS") < 0
+            sd.newDirectory(@"LOGS")
+            sd.changeDirectory(@"LOGS")
 
-    ' Create LOGS directory (ignore error if it already exists)
-    if sd.changeDirectory(@"LOGS") < 0
-        sd.newDirectory(@"LOGS")
-        sd.changeDirectory(@"LOGS")
-
-    ' Open existing log for append, or create new
-    handle := sd.openFileWrite(@"DATALOG.CSV")
-    if handle < 0
-        ' File doesn't exist yet -- create it with a header
-        handle := sd.createFileNew(@"DATALOG.CSV")
+        ' Open existing log for append, or create new
+        handle := sd.openFileWrite(@"DATALOG.CSV")
         if handle < 0
+            ' File doesn't exist yet -- create it with a header
+            handle := sd.createFileNew(@"DATALOG.CSV")
+            if handle >= 0
+                sd.writeHandle(handle, @"Entry,Value", CSV_HEADER_LEN)
+                sd.writeHandle(handle, @CRLF, 2)
+
+        if handle >= 0
+            debug("Log file open, writing ", udec(MAX_ENTRIES), " entries...")
+
+            ' Write log entries
+            repeat idx from 1 to MAX_ENTRIES
+                ' Format a simple CSV line: "N,reading"
+                writeLogEntry(handle, idx, getReading())
+
+                ' Periodic sync -- ensures data survives power loss
+                if idx // SYNC_INTERVAL == 0
+                    sd.syncHandle(handle)
+                    debug("  Synced at entry ", udec(idx))
+
+            sd.closeFileHandle(handle)
+            debug("Log file closed")
+        else
             debug("Cannot create log file, error: ", sdec(handle))
-            sd.unmount()
-            return
-        sd.writeHandle(handle, @"Entry,Value", 11)
-        sd.writeHandle(handle, @CRLF, 2)
 
-    debug("Log file open, writing ", udec(MAX_ENTRIES), " entries...")
+        ' Return to root before unmount
+        sd.changeDirectory(@"/")
+        sd.unmount()
 
-    ' Write log entries
-    repeat idx from 1 to MAX_ENTRIES
-        ' Format a simple CSV line: "N,reading"
-        writeLogEntry(handle, idx, getReading())
-
-        ' Periodic sync -- ensures data survives power loss
-        if idx // SYNC_INTERVAL == 0
-            sd.syncHandle(handle)
-            debug("  Synced at entry ", udec(idx))
-
-    sd.closeFileHandle(handle)
-    debug("Log file closed")
-
-    ' Return to root before unmount
-    sd.changeDirectory(@"/")
-    sd.unmount()
-
-    debug("=== Done -- ", udec(MAX_ENTRIES), " entries logged ===")
+        debug("=== Done -- ", udec(MAX_ENTRIES), " entries logged ===")
+    else
+        debug("Mount FAILED")
 
 PRI writeLogEntry(handle, entry_num, value) | len
 ' Format one CSV line "entry_num,value\r\n" and write it to the log file.
@@ -107,14 +112,14 @@ PRI writeLogEntry(handle, entry_num, value) | len
     len += formatDec(@msg + len, entry_num)
     msg[len++] := ","
     len += formatDec(@msg + len, value)
-    msg[len++] := 13                                    ' CR
-    msg[len++] := 10                                    ' LF
+    msg[len++] := CHAR_CR
+    msg[len++] := CHAR_LF
     sd.writeHandle(handle, @msg, len)
 
 PRI getReading() : value
 ' Simulate a sensor reading -- returns a random value 0-1023.
 ' @returns value - Simulated sensor reading (0-1023)
-    value := getrnd() & $3FF                            ' Random 0-1023
+    value := getrnd() & SENSOR_RANGE_MASK                ' Random 0-1023
 
 PRI formatDec(p_buf, val) : len | digit, started, divisor
 ' Format an integer as decimal ASCII into a buffer and return the character count.
@@ -124,13 +129,14 @@ PRI formatDec(p_buf, val) : len | digit, started, divisor
 ' @local digit - Current digit value (0-9) during formatting
 ' @local started - Flag indicating leading zeros have been passed
 ' @local divisor - Current power of 10 being extracted
+    len := 0
     if val < 0
         byte[p_buf] := "-"
         p_buf++
         len++
         val := -val
     started := false
-    divisor := 1_000_000_000
+    divisor := MAX_DECIMAL_DIVISOR
     repeat 10
         digit := val / divisor
         val //= divisor

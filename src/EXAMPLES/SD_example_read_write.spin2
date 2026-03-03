@@ -29,6 +29,8 @@ CON
     SD_MOSI = SD_BASE + 3              ' P59 - Master Out, Slave In
     SD_MISO = SD_BASE + 2              ' P58 - Master In, Slave Out
 
+    GREETING_LEN = 27                  ' Length of "Hello from the Propeller 2!"
+
     DEBUG_DISABLE = 0
 
 OBJ
@@ -37,7 +39,7 @@ OBJ
 
 VAR
 
-    byte  buffer[512]
+    byte  buffer[sd.SECTOR_SIZE]
 
 PUB go() | handle, bytes_read, bytes_written
 '' Main entry point -- creates EXAMPLE.TXT, writes a greeting, reads it back, and displays the result.
@@ -48,44 +50,39 @@ PUB go() | handle, bytes_read, bytes_written
     debug("=== SD Read/Write Example ===")
 
     ' --- Step 1: Mount the card ---
-    if sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK) < 0
+    if sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK) >= 0
+        debug("Card mounted, volume: ", zstr(sd.volumeLabel()))
+
+        ' --- Step 2: Create a file and write to it ---
+        '   createFileNew() fails if the file already exists.
+        '   Delete it first to make this example re-runnable.
+        sd.deleteFile(@"EXAMPLE.TXT")
+
+        handle := sd.createFileNew(@"EXAMPLE.TXT")
+        if handle >= 0
+            bytes_written := sd.writeHandle(handle, @"Hello from the Propeller 2!", GREETING_LEN)
+            debug("Wrote ", udec(bytes_written), " bytes")
+            sd.closeFileHandle(handle)
+
+            ' --- Step 3: Re-open the file for reading ---
+            handle := sd.openFileRead(@"EXAMPLE.TXT")
+            if handle >= 0
+                debug("File size: ", udec(sd.fileSizeHandle(handle)), " bytes")
+
+                ' --- Step 4: Read the data back ---
+                bytes_read := sd.readHandle(handle, @buffer, sd.SECTOR_SIZE)
+                buffer[bytes_read] := 0                 ' Null-terminate for display
+                debug("Read ", udec(bytes_read), " bytes: ", zstr(@buffer))
+                sd.closeFileHandle(handle)
+            else
+                debug("Open FAILED, error: ", sdec(handle))
+        else
+            debug("Create FAILED, error: ", sdec(handle))
+
+        ' --- Step 5: Unmount cleanly ---
+        sd.unmount()
+    else
         debug("Mount FAILED, error: ", sdec(sd.error()))
-        return
-
-    debug("Card mounted, volume: ", zstr(sd.volumeLabel()))
-
-    ' --- Step 2: Create a file and write to it ---
-    '   createFileNew() fails if the file already exists.
-    '   Delete it first to make this example re-runnable.
-    sd.deleteFile(@"EXAMPLE.TXT")
-
-    handle := sd.createFileNew(@"EXAMPLE.TXT")
-    if handle < 0
-        debug("Create FAILED, error: ", sdec(handle))
-        sd.unmount()
-        return
-
-    bytes_written := sd.writeHandle(handle, @"Hello from the Propeller 2!", 27)
-    debug("Wrote ", udec(bytes_written), " bytes")
-    sd.closeFileHandle(handle)
-
-    ' --- Step 3: Re-open the file for reading ---
-    handle := sd.openFileRead(@"EXAMPLE.TXT")
-    if handle < 0
-        debug("Open FAILED, error: ", sdec(handle))
-        sd.unmount()
-        return
-
-    debug("File size: ", udec(sd.fileSizeHandle(handle)), " bytes")
-
-    ' --- Step 4: Read the data back ---
-    bytes_read := sd.readHandle(handle, @buffer, 512)
-    buffer[bytes_read] := 0                             ' Null-terminate for display
-    debug("Read ", udec(bytes_read), " bytes: ", zstr(@buffer))
-    sd.closeFileHandle(handle)
-
-    ' --- Step 5: Unmount cleanly ---
-    sd.unmount()
 
     debug("=== Done ===")
 

@@ -325,6 +325,8 @@ PRI testSpeedLevel(level) : passed | target_hz, ok, crc_err, timeout, delta
     else
       debug("  High Speed: Failed")
 
+  passed := false
+
   ' Phase 1: Quick check
   debug(" ")
   debug("  Phase 1: ", udec_(PHASE1_ITERATIONS), " reads...")
@@ -340,56 +342,50 @@ PRI testSpeedLevel(level) : passed | target_hz, ok, crc_err, timeout, delta
 
   if crc_err > 0 or timeout > 0
     debug("  Phase 1: FAILED")
-    level_passed[level] := false
-    return false
+  else
+    debug("  Phase 1: PASSED")
 
-  debug("  Phase 1: PASSED")
+    ' Phase 2: Statistical confidence
+    debug(" ")
+    debug("  Phase 2: ", udec_(PHASE2_ITERATIONS), " reads...")
 
-  ' Phase 2: Statistical confidence
-  debug(" ")
-  debug("  Phase 2: ", udec_(PHASE2_ITERATIONS), " reads...")
+    runSingleSectorTest(PHASE2_ITERATIONS, @ok, @crc_err, @timeout)
 
-  runSingleSectorTest(PHASE2_ITERATIONS, @ok, @crc_err, @timeout)
+    phase2_ok[level] := ok
+    phase2_crc_err[level] := crc_err
+    phase2_timeout[level] := timeout
 
-  phase2_ok[level] := ok
-  phase2_crc_err[level] := crc_err
-  phase2_timeout[level] := timeout
+    debug("    OK=", udec_(ok), " CRC_Err=", udec_(crc_err))
+    debug(" Timeout=", udec_(timeout))
 
-  debug("    OK=", udec_(ok), " CRC_Err=", udec_(crc_err))
-  debug(" Timeout=", udec_(timeout))
+    if crc_err > 0 or timeout > 0
+      debug("  Phase 2: FAILED")
+    else
+      debug("  Phase 2: PASSED")
 
-  if crc_err > 0 or timeout > 0
-    debug("  Phase 2: FAILED")
-    level_passed[level] := false
-    return false
+      ' Phase 3: Multi-sector reads
+      debug(" ")
+      debug("  Phase 3: ", udec_(PHASE3_ITERATIONS), " x ")
+      debug(udec_(PHASE3_SECTORS), "-sector reads...")
 
-  debug("  Phase 2: PASSED")
+      runMultiSectorTest(PHASE3_ITERATIONS, PHASE3_SECTORS, @ok, @crc_err, @timeout)
 
-  ' Phase 3: Multi-sector reads
-  debug(" ")
-  debug("  Phase 3: ", udec_(PHASE3_ITERATIONS), " x ")
-  debug(udec_(PHASE3_SECTORS), "-sector reads...")
+      phase3_ok[level] := ok
+      phase3_crc_err[level] := crc_err
+      phase3_timeout[level] := timeout
 
-  runMultiSectorTest(PHASE3_ITERATIONS, PHASE3_SECTORS, @ok, @crc_err, @timeout)
+      debug("    OK=", udec_(ok), " CRC_Err=", udec_(crc_err))
+      debug(" Timeout=", udec_(timeout))
 
-  phase3_ok[level] := ok
-  phase3_crc_err[level] := crc_err
-  phase3_timeout[level] := timeout
+      if crc_err > 0 or timeout > 0
+        debug("  Phase 3: FAILED")
+      else
+        debug("  Phase 3: PASSED")
+        debug(" ")
+        debug("  *** ", udec_(target_hz / 1_000_000), " MHz PASSED ***")
+        passed := true
 
-  debug("    OK=", udec_(ok), " CRC_Err=", udec_(crc_err))
-  debug(" Timeout=", udec_(timeout))
-
-  if crc_err > 0 or timeout > 0
-    debug("  Phase 3: FAILED")
-    level_passed[level] := false
-    return false
-
-  debug("  Phase 3: PASSED")
-  debug(" ")
-  debug("  *** ", udec_(target_hz / 1_000_000), " MHz PASSED ***")
-
-  level_passed[level] := true
-  return true
+  level_passed[level] := passed
 
 PRI runSingleSectorTest(iterations, p_ok, p_crc_err, p_timeout) | iter, sector, result, recv_crc, calc_crc
 ' Run single-sector read tests with CRC verification.

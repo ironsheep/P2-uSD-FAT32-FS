@@ -41,23 +41,21 @@ PUB go() | pStr
     debug("==============================================")
     debug(" ")
 
-    if not fsck.startFsck(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-        debug("FATAL: Could not start FSCK cog")
-        debug("END_SESSION")
-        return
-
-    ' Pump FIFO output to debug
-    repeat
-        pStr := fsck.getOutput()
-        if pStr
-            debug(zstr_(pStr))
-        elseif fsck.isDone()
-            ' Drain any remaining output
-            repeat while (pStr := fsck.getOutput())
+    if fsck.startFsck(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+        ' Pump FIFO output to debug
+        repeat
+            pStr := fsck.getOutput()
+            if pStr
                 debug(zstr_(pStr))
-            quit
+            elseif fsck.isDone()
+                ' Drain any remaining output
+                repeat while (pStr := fsck.getOutput())
+                    debug(zstr_(pStr))
+                quit
 
-    fsck.stop()
+        fsck.stop()
+    else
+        debug("FATAL: Could not start FSCK cog")
 
     debug(" ")
     debug("END_SESSION")

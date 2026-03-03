@@ -46,7 +46,7 @@ CON
     ' Test parameters
     TEST_SECTOR_BASE = 200_100          ' Different from other tests to avoid collisions
     TEST_COUNT       = 8                ' 8 sectors = 4KB
-    SECTOR_SIZE      = 512
+    CLK_SETTLE_MS    = 10               ' Clock stabilization delay after frequency change
 
     ' Frequency test points (in MHz)
     #0, FREQ_320, FREQ_310, FREQ_305, FREQ_300, FREQ_295, FREQ_290
@@ -93,8 +93,8 @@ DAT
     results         byte    0[FREQ_COUNT]
 
 VAR
-    BYTE    write_buf[TEST_COUNT * SECTOR_SIZE]
-    BYTE    read_buf[TEST_COUNT * SECTOR_SIZE]
+    BYTE    write_buf[TEST_COUNT * sd.SECTOR_SIZE]
+    BYTE    read_buf[TEST_COUNT * sd.SECTOR_SIZE]
     LONG    pass_count
     LONG    fail_count
 
@@ -116,93 +116,89 @@ PUB go() | result, freq_idx, test_freq, errors, hp
     ' Mount at 320 MHz first (known working)
     debug("Initial mount at 320 MHz...")
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if result < 0
-        debug("ERROR: Initial mount failed!")
-        debug("END_SESSION")
-        return
+    if result >= 0
+        debug("Card mounted successfully")
+        debug(" ")
 
-    debug("Card mounted successfully")
-    debug(" ")
+        ' Fill write buffer with test pattern
+        fillTestPattern()
 
-    ' Fill write buffer with test pattern
-    fillTestPattern()
+        ' Run baseline test at 320 MHz
+        debug("--- BASELINE TEST @ 320 MHz ---")
+        errors := runTest(320_000_000)
+        if errors == 0
+            debug("  -> PASS (baseline verified)")
+            results[FREQ_320] := 1
+            pass_count++
 
-    ' Run baseline test at 320 MHz
-    debug("--- BASELINE TEST @ 320 MHz ---")
-    errors := runTest(320_000_000)
-    if errors == 0
-        debug("  -> PASS (baseline verified)")
-        results[FREQ_320] := 1
-        pass_count++
-    else
-        debug("  -> FAIL: ", udec_(errors), " errors at baseline - ABORTING")
-        debug("END_SESSION")
-        return
+            debug(" ")
+            debug("============================================================")
+            debug("  FREQUENCY SWEEP")
+            debug("============================================================")
 
-    debug(" ")
-    debug("============================================================")
-    debug("  FREQUENCY SWEEP")
-    debug("============================================================")
+            ' Sweep through all test frequencies
+            repeat freq_idx from 1 to FREQ_COUNT - 1
+                test_freq := long[@freq_table][freq_idx]
+                hp := byte[@hp_table][freq_idx]
 
-    ' Sweep through all test frequencies
-    repeat freq_idx from 1 to FREQ_COUNT - 1
-        test_freq := long[@freq_table][freq_idx]
-        hp := byte[@hp_table][freq_idx]
+                debug(" ")
+                debug("--- ", udec_(test_freq / 1_000_000), " MHz (hp=", udec_(hp), ") ---")
+
+                ' Change system clock
+                changeFrequency(test_freq)
+
+                ' Small delay for clock to stabilize
+                waitms(CLK_SETTLE_MS)
+
+                ' Verify frequency change
+                debug("  clkfreq = ", udec_(clkfreq))
+
+                ' Run the critical test
+                errors := runTest(test_freq)
+
+                if errors == 0
+                    debug("  -> PASS")
+                    results[freq_idx] := 1
+                    pass_count++
+                else
+                    debug("  -> FAIL: ", udec_(errors), " byte errors")
+                    results[freq_idx] := 2
+                    fail_count++
+        else
+            debug("  -> FAIL: ", udec_(errors), " errors at baseline - ABORTING")
+
+        ' Return to 320 MHz for summary
+        changeFrequency(320_000_000)
+        waitms(CLK_SETTLE_MS)
+
+        ' Print summary
+        debug(" ")
+        debug("============================================================")
+        debug("  FREQUENCY SWEEP RESULTS")
+        debug("============================================================")
+        debug(" ")
+        debug("  Freq    hp   Result")
+        debug("  ------  ---  ------")
+
+        repeat freq_idx from 0 to FREQ_COUNT - 1
+            test_freq := long[@freq_table][freq_idx]
+            hp := byte[@hp_table][freq_idx]
+            case results[freq_idx]
+                1: debug("  ", udec_long_(test_freq / 1_000_000), " MHz  ", udec_(hp), "   PASS")
+                2: debug("  ", udec_long_(test_freq / 1_000_000), " MHz  ", udec_(hp), "   FAIL")
+                other: debug("  ", udec_long_(test_freq / 1_000_000), " MHz  ", udec_(hp), "   ???")
 
         debug(" ")
-        debug("--- ", udec_(test_freq / 1_000_000), " MHz (hp=", udec_(hp), ") ---")
+        debug("  Total: ", udec_(pass_count), " PASS, ", udec_(fail_count), " FAIL")
+        debug(" ")
 
-        ' Change system clock
-        changeFrequency(test_freq)
-
-        ' Small delay for clock to stabilize
-        waitms(10)
-
-        ' Verify frequency change
-        debug("  clkfreq = ", udec_(clkfreq))
-
-        ' Run the critical test
-        errors := runTest(test_freq)
-
-        if errors == 0
-            debug("  -> PASS")
-            results[freq_idx] := 1
-            pass_count++
-        else
-            debug("  -> FAIL: ", udec_(errors), " byte errors")
-            results[freq_idx] := 2
-            fail_count++
-
-    ' Return to 320 MHz for summary
-    changeFrequency(320_000_000)
-    waitms(10)
-
-    ' Print summary
-    debug(" ")
-    debug("============================================================")
-    debug("  FREQUENCY SWEEP RESULTS")
-    debug("============================================================")
-    debug(" ")
-    debug("  Freq    hp   Result")
-    debug("  ------  ---  ------")
-
-    repeat freq_idx from 0 to FREQ_COUNT - 1
-        test_freq := long[@freq_table][freq_idx]
-        hp := byte[@hp_table][freq_idx]
-        case results[freq_idx]
-            1: debug("  ", udec_long_(test_freq / 1_000_000), " MHz  ", udec_(hp), "   PASS")
-            2: debug("  ", udec_long_(test_freq / 1_000_000), " MHz  ", udec_(hp), "   FAIL")
-            other: debug("  ", udec_long_(test_freq / 1_000_000), " MHz  ", udec_(hp), "   ???")
-
-    debug(" ")
-    debug("  Total: ", udec_(pass_count), " PASS, ", udec_(fail_count), " FAIL")
-    debug(" ")
-
-    ' Identify boundaries
-    debug("============================================================")
-    debug("  BOUNDARY ANALYSIS")
-    debug("============================================================")
-    analyzeBoundaries()
+        ' Identify boundaries
+        debug("============================================================")
+        debug("  BOUNDARY ANALYSIS")
+        debug("============================================================")
+        analyzeBoundaries()
+    else
+        debug("ERROR: Initial mount failed!")
 
     debug(" ")
     debug("END_SESSION")
@@ -212,8 +208,8 @@ PRI fillTestPattern() | idx
 ' Fill write buffer with deterministic pattern.
 ' Pattern: each byte = (sector_num * 17 + byte_offset) & $FF
 
-    repeat idx from 0 to (TEST_COUNT * SECTOR_SIZE) - 1
-        write_buf[idx] := ((idx / SECTOR_SIZE) * 17 + (idx // SECTOR_SIZE)) & $FF
+    repeat idx from 0 to (TEST_COUNT * sd.SECTOR_SIZE) - 1
+        write_buf[idx] := ((idx / sd.SECTOR_SIZE) * 17 + (idx // sd.SECTOR_SIZE)) & $FF
 
 
 PRI runTest(freq) : errors | written, readCt, idx, sector
@@ -223,32 +219,29 @@ PRI runTest(freq) : errors | written, readCt, idx, sector
 ' @param freq - Current sysclk frequency (for logging)
 ' @returns errors - Number of byte errors (0 = pass)
 
-    errors := 0
+    errors := -1
     sector := TEST_SECTOR_BASE
 
     ' Write 8 sectors
     written := sd.writeSectorsRaw(sector, TEST_COUNT, @write_buf)
     if written <> TEST_COUNT
         debug("  writeSectorsRaw returned ", udec_(written))
-        return -1  ' Indicate complete failure
+    else
+        ' Clear read buffer
+        bytefill(@read_buf, $00, TEST_COUNT * sd.SECTOR_SIZE)
 
-    ' Clear read buffer
-    bytefill(@read_buf, $00, TEST_COUNT * SECTOR_SIZE)
-
-    ' Read 8 sectors
-    readCt := sd.readSectorsRaw(sector, TEST_COUNT, @read_buf)
-    if readCt <> TEST_COUNT
-        debug("  readSectorsRaw returned ", udec_(readCt))
-        return -1  ' Indicate complete failure
-
-    ' Verify all bytes
-    repeat idx from 0 to (TEST_COUNT * SECTOR_SIZE) - 1
-        if read_buf[idx] <> write_buf[idx]
-            if errors < 3
-                debug("  byte ", udec_(idx), ": exp=$", uhex_byte_(write_buf[idx]), " got=$", uhex_byte_(read_buf[idx]))
-            errors++
-
-    return errors
+        ' Read 8 sectors
+        readCt := sd.readSectorsRaw(sector, TEST_COUNT, @read_buf)
+        if readCt <> TEST_COUNT
+            debug("  readSectorsRaw returned ", udec_(readCt))
+        else
+            ' Verify all bytes
+            errors := 0
+            repeat idx from 0 to (TEST_COUNT * sd.SECTOR_SIZE) - 1
+                if read_buf[idx] <> write_buf[idx]
+                    if errors < 3
+                        debug("  byte ", udec_(idx), ": exp=$", uhex_byte_(write_buf[idx]), " got=$", uhex_byte_(read_buf[idx]))
+                    errors++
 
 
 PRI changeFrequency(target_freq) | xi, div, mode
