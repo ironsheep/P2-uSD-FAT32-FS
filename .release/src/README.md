@@ -6,6 +6,8 @@ All Spin2 source code for the P2 SD Card Driver, demo application, and utility p
 
 **micro_sd_fat32_fs.spin2** — The FAT32-compliant SD card filesystem driver for the Parallax Propeller 2.
 
+**isp_stack_check.spin2** — Worker cog stack usage monitor (used internally by the driver).
+
 Features:
 - Smart pin SPI with streamer DMA for hardware-accelerated transfers
 - Dedicated worker cog with hardware lock serialization
@@ -33,16 +35,15 @@ CON
     SD_MISO = SD_BASE + 2             ' Master In, Slave Out
 
 PUB main() | handle, buffer[128], bytes_read
-    if not sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    if sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK) < 0
         debug("Mount failed!")
-        return
+    else
+        handle := sd.openFileRead(@"CONFIG.TXT")
+        if handle >= 0
+            bytes_read := sd.readHandle(handle, @buffer, 512)
+            sd.closeFileHandle(handle)
 
-    handle := sd.openFileRead(@"CONFIG.TXT")
-    if handle >= 0
-        bytes_read := sd.readHandle(handle, @buffer, 512)
-        sd.closeFileHandle(handle)
-
-    sd.unmount()
+        sd.unmount()
 ```
 
 ### Conditional Compilation

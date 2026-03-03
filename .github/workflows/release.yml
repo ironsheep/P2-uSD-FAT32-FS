@@ -71,10 +71,11 @@ jobs:
           cp DOCs/images/samsug-pro-128gb.jpg "${DEST}/DOCs/images/"
           cp DOCs/images/wd-purple-64gb.jpg "${DEST}/DOCs/images/"
 
-          # src/ - driver
+          # src/ - driver and support libraries
           mkdir -p "${DEST}/src"
           cp .release/src/README.md "${DEST}/src/README.md"
           cp src/micro_sd_fat32_fs.spin2 "${DEST}/src/"
+          cp src/isp_stack_check.spin2 "${DEST}/src/"
 
           # src/DEMO/ - demo shell and support files
           mkdir -p "${DEST}/src/DEMO"

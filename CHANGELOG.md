@@ -38,9 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Tests
 
-- All 20 regression suites pass (389 tests)
-- Test files use `sd.*` prefixed constants instead of local redefinitions
-- Standardized file headers and MIT license footers across all `.spin2` files
+- All 20 regression suites pass (392 tests)
 
 ## [1.1.0] - 2026-02-26
 

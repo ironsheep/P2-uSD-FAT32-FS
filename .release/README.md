@@ -18,6 +18,7 @@ sd-card-driver/
 │
 └── src/                                Driver and application source
     ├── micro_sd_fat32_fs.spin2            The SD card driver
+    ├── isp_stack_check.spin2              Worker cog stack usage monitor
     ├── EXAMPLES/                          Compilable example programs
     │   ├── README.md                         Build instructions
     │   ├── SD_example_read_write.spin2       Basic file read/write
@@ -41,7 +42,7 @@ sd-card-driver/
     │   └── isp_string_fifo.spin2             Lock-free inter-cog string FIFO
     ├── regression-tests/                 Regression test suite
     │   ├── README.md                        Test infrastructure guide
-    │   ├── SD_RT_*_tests.spin2              20 test suites (389 tests)
+    │   ├── SD_RT_*_tests.spin2              20 test suites (392 tests)
     │   └── isp_rt_utilities.spin2           Shared test framework
 ```
 
@@ -76,16 +77,15 @@ CON
     SD_MISO = SD_BASE + 2             ' Master In, Slave Out
 
 PUB main() | handle, buffer[128], bytes_read
-    if not sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    if sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK) < 0
         debug("Mount failed!")
-        return
+    else
+        handle := sd.openFileRead(@"CONFIG.TXT")
+        if handle >= 0
+            bytes_read := sd.readHandle(handle, @buffer, 512)
+            sd.closeFileHandle(handle)
 
-    handle := sd.openFileRead(@"CONFIG.TXT")
-    if handle >= 0
-        bytes_read := sd.readHandle(handle, @buffer, 512)
-        sd.closeFileHandle(handle)
-
-    sd.unmount()
+        sd.unmount()
 ```
 
 ### Running the Demo Shell
@@ -132,7 +132,7 @@ The default configuration uses base pin 56 (P2 Edge Module), giving pins P58-P61
 
 ## Regression Tests
 
-The regression test suite (389 tests across 20 test files) is included in `regression-tests/`. Each test compiles with pnut-ts and runs on P2 hardware, producing pass/fail results via debug output.
+The regression test suite (392 tests across 20 test files) is included in `regression-tests/`. Each test compiles with pnut-ts and runs on P2 hardware, producing pass/fail results via debug output.
 
 ## License
 
