@@ -8,7 +8,7 @@
 
 The regression test suite validates the `micro_sd_fat32_fs.spin2` — a Propeller 2 SD card driver that uses smart pins for SPI communication, the P2 streamer for bulk data transfer, and a dedicated worker cog for all card I/O. The suite currently contains **20 test files** producing **392 test assertions**. The original 10 core files are joined by 10 additional files covering directory handles, volume operations, register access, speed/CMD6, CRC diagnostics, subdirectory operations, error handling, CRC error injection validation, recovery scenarios, and inter-cog FIFO infrastructure.
 
-**Verified on hardware (2026-02-28):** All 20 suites totaling **392 tests** — all passing.
+**Verified on hardware (2026-03-02):** All 20 suites totaling **392 tests** — all passing.
 
 The tests exercise the driver from low-level raw sector I/O through the full FAT32 filesystem stack, including multi-cog concurrent access, multi-handle file operations, and card formatting validation. Every test runs on real hardware (P2 Edge + physical SD card) via the `run_test.sh` headless test runner.
 
@@ -77,7 +77,7 @@ Each test is identified by:
 
 ## 3. Test Suite Overview
 
-### 3.1 Test Files (392 tests — verified 2026-02-28)
+### 3.1 Test Files (392 tests — verified 2026-03-02)
 
 | # | Test File | Tests | Focus Area | Driver API Category |
 |---|-----------|:-----:|------------|---------------------|
@@ -1148,7 +1148,7 @@ All critical gaps identified in the original analysis have been addressed:
 
 ---
 
-## 7. Test Count Summary (verified 2026-02-28)
+## 7. Test Count Summary (verified 2026-03-02)
 
 | Test File | Tests | Status |
 |-----------|:-----:|:------:|
