@@ -1,23 +1,22 @@
 {Spin2_v45}
-'' =================================================================================================
-''
-''   File....... SD_example_read_write.spin2
-''   Purpose.... Basic file read/write example for the P2 SD card driver
-''   Author..... Stephen M Moraco
-''               -- see below for terms of use
-''   E-mail..... stephen@ironsheep.biz
-''   Started.... 25 FEB 2026
-''   Updated.... 01 MAR 2026
-''
-'' =================================================================================================
-''
-''  This example demonstrates the most common file operations:
-''    1. Mount the SD card
-''    2. Create a new file and write text to it
-''    3. Close and re-open the file for reading
-''    4. Read the data back and display it
-''    5. Unmount cleanly
-''
+{{ =================================================================================================
+
+   File....... SD_example_read_write.spin2
+   Purpose.... Basic file read/write example for the P2 SD card driver
+   Author..... Stephen M Moraco
+               -- see below for terms of use
+   E-mail..... stephen@ironsheep.biz
+   Started.... 25 FEB 2026
+   Updated.... 01 MAR 2026
+
+   This example demonstrates the most common file operations:
+     1. Mount the SD card
+     2. Create a new file and write text to it
+     3. Close and re-open the file for reading
+     4. Read the data back and display it
+     5. Unmount cleanly
+
+================================================================================================= }}
 
 CON
 
@@ -42,9 +41,9 @@ VAR
 
 PUB go() | handle, bytes_read, bytes_written
 '' Main entry point -- creates EXAMPLE.TXT, writes a greeting, reads it back, and displays the result.
-'' @local handle - File handle for write then read operations
-'' @local bytes_read - Number of bytes read back from the file
-'' @local bytes_written - Number of bytes written to the file
+' @local handle - File handle for write then read operations
+' @local bytes_read - Number of bytes read back from the file
+' @local bytes_written - Number of bytes written to the file
 
     debug("=== SD Read/Write Example ===")
 

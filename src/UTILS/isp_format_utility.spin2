@@ -1,24 +1,22 @@
-'' =================================================================================================
-''
-''   File....... isp_format_utility.spin2
-''   Purpose.... FAT32 format utility for SD cards using the micro_sd_fat32_fs
-''   Author..... Stephen M Moraco
-''               -- see below for terms of use
-''   E-mail..... stephen@ironsheep.biz
-''   Started.... JAN 2026
-''   Updated.... 16 JAN 2026
-''
-'' =================================================================================================
-''
-''  This utility formats an SD card with a FAT32 filesystem.
-''
-''  USAGE:
-''    fmt.format(cs, mosi, miso, sck)                    ' Format with default label "P2-XFER"
-''    fmt.formatWithLabel(cs, mosi, miso, sck, @"MYCARD")  ' Format with custom label (max 11 chars)
-''
-''  WARNING: This will ERASE ALL DATA on the card!
-''
-'' =================================================================================================
+{{ =================================================================================================
+
+   File....... isp_format_utility.spin2
+   Purpose.... FAT32 format utility for SD cards using the micro_sd_fat32_fs
+   Author..... Stephen M Moraco
+               -- see below for terms of use
+   E-mail..... stephen@ironsheep.biz
+   Started.... JAN 2026
+   Updated.... 16 JAN 2026
+
+   This utility formats an SD card with a FAT32 filesystem.
+
+   USAGE:
+     fmt.format(cs, mosi, miso, sck)                    ' Format with default label "P2-XFER"
+     fmt.formatWithLabel(cs, mosi, miso, sck, @"MYCARD")  ' Format with custom label (max 11 chars)
+
+   WARNING: This will ERASE ALL DATA on the card!
+
+================================================================================================= }}
 
 CON
 

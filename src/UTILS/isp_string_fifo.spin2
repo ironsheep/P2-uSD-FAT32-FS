@@ -1,29 +1,27 @@
-'' =================================================================================================
-''
-''   File....... isp_string_fifo.spin2
-''   Purpose.... Lock-free SPSC slot-based string FIFO for inter-cog communication
-''   Author..... Stephen M Moraco
-''               -- see below for terms of use
-''   E-mail..... stephen@ironsheep.biz
-''   Started.... 21 FEB 2026
-''   Updated.... 21 FEB 2026
-''
-'' =================================================================================================
-''
-''  Lock-free single-producer single-consumer (SPSC) string FIFO.
-''  Uses DAT storage (singleton) so both producer and consumer cogs
-''  see the same head/tail/slots data in hub RAM.
-''
-''  Design:
-''    - 16 slots x 128 bytes = 2 KB
-''    - Producer calls put() / putFmtN() -- blocks (spin-waits) when full
-''    - Consumer calls hasOutput() / getOutput()
-''    - One slot is always kept empty to distinguish full from empty
-''      (usable capacity = NUM_SLOTS - 1 = 15)
-''
-''  IMPORTANT: Only one utility runs at a time. Call init() before each use.
-''
-'' =================================================================================================
+{{ =================================================================================================
+
+   File....... isp_string_fifo.spin2
+   Purpose.... Lock-free SPSC slot-based string FIFO for inter-cog communication
+   Author..... Stephen M Moraco
+               -- see below for terms of use
+   E-mail..... stephen@ironsheep.biz
+   Started.... 21 FEB 2026
+   Updated.... 21 FEB 2026
+
+   Lock-free single-producer single-consumer (SPSC) string FIFO.
+   Uses DAT storage (singleton) so both producer and consumer cogs
+   see the same head/tail/slots data in hub RAM.
+
+   Design:
+     - 16 slots x 128 bytes = 2 KB
+     - Producer calls put() / putFmtN() -- blocks (spin-waits) when full
+     - Consumer calls hasOutput() / getOutput()
+     - One slot is always kept empty to distinguish full from empty
+       (usable capacity = NUM_SLOTS - 1 = 15)
+
+   IMPORTANT: Only one utility runs at a time. Call init() before each use.
+
+================================================================================================= }}
 
 CON { suppress debug output }
 

@@ -1,15 +1,15 @@
-'' =================================================================================================
-''
-''   File....... isp_stack_check.spin2
-''   Purpose.... Utility Object Providing Stack-overflow testing
-''
-''   Authors.... Stephen M. Moraco
-''               -- see below for terms of use
-''   E-mail..... stephen@ironsheep.biz
-''   Started.... Sep 2022
-''   Updated.... 29 Sep 2022
-''
-'' =================================================================================================
+{{ =================================================================================================
+
+   File....... isp_stack_check.spin2
+   Purpose.... Utility Object Providing Stack-overflow testing
+
+   Authors.... Stephen M. Moraco
+               -- see below for terms of use
+   E-mail..... stephen@ironsheep.biz
+   Started.... Sep 2022
+   Updated.... 29 Sep 2022
+
+================================================================================================= }}
 
 CON { ----- TEST Support ----- }
 
@@ -78,7 +78,7 @@ PUB dumpStack(pStack, nStackLongCt)
 '' Dump stack memory
     dbgMemDump(@"TASK Stack", pStack, (nStackLongCt + 1) * 4)
 
-PUB dbgMemDump(pMessage, pBytes, lenBytes) | rowCount, rowLen, pCurrByte, lastRowByteCount, bytesSoFar
+PUB dbgMemDump(pMessage, pBytes, lenBytes) | rowCount, pCurrByte, lastRowByteCount, bytesSoFar
 '' Dump rows of hex values with address preceeding
 
     if pMessage

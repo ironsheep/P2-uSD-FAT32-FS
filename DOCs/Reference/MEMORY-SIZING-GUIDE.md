@@ -108,9 +108,9 @@ The map file (`.map`) is the primary tool for memory analysis. It has five secti
 ```
 === PROGRAM SUMMARY ===
 
-  Total Size:    25012 bytes (24844 code/data + 168 var bytes)
-  Objects:       3
-  Methods:       213
+  Total Size:    25664 bytes (25492 code/data + 172 var bytes)
+  Objects:       4
+  Methods:       226
 ```
 
 This is your top-level answer: **total hub RAM consumed** = code/data + VAR. The binary file will be larger than the code/data value because it includes the P2 loader stub (~6 KB).
@@ -121,8 +121,9 @@ This is your top-level answer: **total hub RAM consumed** = code/data + VAR. The
 === OBJECT HIERARCHY ===
 
   SD_RT_mount_tests  (1 methods)
-      +-- SD : micro_sd_fat32_fs  (182 methods)
-      \-- UTILS : isp_rt_utilities  (30 methods)
+      +-- SD : micro_sd_fat32_fs  (185 methods)
+      |   \-- STACKUTILS : isp_rt_utilities  (30 methods)
+      \-- UTILS : isp_stack_check  (10 methods)
 ```
 
 This shows the tree of objects, their instance names, and how many methods each contributes. Use this to understand which objects are included and their nesting.
@@ -134,15 +135,16 @@ This shows the tree of objects, their instance names, and how many methods each 
 
   Start   End      Size  Object           Instance         Overrides
   ------  ------  -----  ---------------  ---------------  ---------
-  $00000  $00979   2426  SD_RT_mount_tests  (entry)
-  $0097C  $05C22  21159  micro_sd_fat32_fs  SD
-  $05C24  $06109   1254  isp_rt_utilities  UTILS
+  $00000  $008C5   2246  SD_RT_mount_tests  (entry)
+  $008C8  $05EB3  21996  micro_sd_fat32_fs  SD
+  $05EB4  $05FD6    291  isp_stack_check  UTILS
+  $05FD8  $06393    956  isp_rt_utilities  STACKUTILS
 
-    CODE/DATA TOTAL:   24844 bytes
+    CODE/DATA TOTAL:   25492 bytes
 
-  $0610C  $061B3    168  VAR SPACE        (runtime)
+  $06394  $0643F    172  VAR SPACE        (runtime)
 
-    PROGRAM TOTAL:     25012 bytes
+    PROGRAM TOTAL:     25664 bytes
 ```
 
 This is the key table. It shows:
@@ -150,7 +152,7 @@ This is the key table. It shows:
 - **Size** of each object in bytes (code + DAT combined)
 - The **VAR SPACE** line shows total runtime variable allocation across all objects
 
-From this table you can immediately answer: "How much space does object X add to my program?" For example, the SD driver adds 21,159 bytes of code/data.
+From this table you can immediately answer: "How much space does object X add to my program?" For example, the SD driver adds 21,996 bytes of code/data.
 
 ### 3.4 Object Details
 
@@ -160,15 +162,15 @@ Each object gets a detailed breakdown:
 
 ```
 --- SD : micro_sd_fat32_fs ---
-    Location: $0097C-$05C22 (21159 bytes)
-    VAR Base: $06110
+    Location: $008C8-$05EB3 (21996 bytes)
+    VAR Base: $06398
     Source:   micro_sd_fat32_fs.spin2
 
     Methods:
-      NULL                  Entry $00000  ($0097C)
-      START                 Entry $00001  ($0097D)
-      STOP                  Entry $00002  ($0097E)
-      MOUNT                 Entry $00013  ($0098F)
+      NULL                  Entry $00002  ($008CA)
+      START                 Entry $00003  ($008CB)
+      STOP                  Entry $00004  ($008CC)
+      MOUNT                 Entry $00005  ($008CD)
       ...
 ```
 
@@ -181,13 +183,13 @@ Each object gets a detailed breakdown:
 
 ```
     DAT:
-      LONG      COG_ID                +$002DC  ($00C58)
-      LONG      API_LOCK              +$002E0  ($00C5C)
-      BYTE      DIR_BUF               +$00651  ($00FCD)
-      BYTE      FAT_BUF               +$00851  ($011CD)
-      BYTE      BUF                   +$00A51  ($013CD)
-      BYTE      H_BUF                 +$00D25  ($016A1)
-      LONG      H_BUF_SECTOR          +$01925  ($022A1)
+      LONG      COG_ID                +$002F0  ($00BB8)
+      LONG      API_LOCK              +$002F4  ($00BBC)
+      BYTE      DIR_BUF               +$006E9  ($00FB1)
+      BYTE      FAT_BUF               +$008E9  ($011B1)
+      BYTE      BUF                   +$00AE9  ($013B1)
+      BYTE      H_BUF                 +$00DBD  ($01685)
+      LONG      H_BUF_SECTOR          +$019BD  ($02285)
 ```
 
 Each DAT variable shows:
@@ -199,21 +201,21 @@ Each DAT variable shows:
 To calculate the size of a DAT variable, subtract its offset from the next variable's offset. For arrays and buffers, this reveals their actual footprint:
 
 ```
-H_BUF    at +$00D25
-H_BUF_SECTOR at +$01925
-  => H_BUF size = $01925 - $00D25 = $0C00 = 3,072 bytes (6 handles x 512 bytes)
+H_BUF    at +$00DBD
+H_BUF_SECTOR at +$019BD
+  => H_BUF size = $019BD - $00DBD = $0C00 = 3,072 bytes (6 handles x 512 bytes)
 ```
 
 #### VAR Section
 
 ```
---- UTILS : isp_rt_utilities ---
+--- STACKUTILS : isp_rt_utilities ---
     VAR:
-      LONG      NUMBERTESTS           +$0004  ($06118)
-      LONG      SUBTESTPER            +$0008  ($0611C)
-      LONG      PASSCOUNT             +$000C  ($06120)
-      LONG      FAILCOUNT             +$0010  ($06124)
-      BYTE      FILENAME              +$0020  ($06134)
+      LONG      NUMBERTESTS           +$0004  ($063A4)
+      LONG      SUBTESTPER            +$0008  ($063A8)
+      LONG      PASSCOUNT             +$000C  ($063AC)
+      LONG      FAILCOUNT             +$0010  ($063B0)
+      BYTE      FILENAME              +$0020  ($063C0)
 ```
 
 VAR variables use the same format as DAT. These consume runtime hub RAM but are NOT stored in the binary file.
@@ -222,10 +224,10 @@ VAR variables use the same format as DAT. These consume runtime hub RAM but are 
 
 ```
     PASM Labels:
-      ENTRY_BUFFER          COG $003  HUB $00988
+      ENTRY_BUFFER          COG $003  HUB $008D4
 
     Inline PASM:
-      WAITRX'0099           +$00A  ($009A4)
+      WAITRX'0100           +$00A  ($008F0)
 ```
 
 If your object contains inline PASM (`org / end`), the map shows COG-space labels and inline PASM block locations. These don't add extra hub RAM -- the PASM is part of the bytecode/DAT already accounted for.
@@ -303,9 +305,9 @@ Every COG running Spin2 code needs a stack. The top-level COG uses the remainder
 Look for stack allocations in the map's DAT section:
 
 ```
-LONG      COG_STACK             +$00310  ($00C8C)
-LONG      COG_STACK_GUARD       +$00510  ($00E8C)
-  => Stack size = $00510 - $00310 = $0200 = 512 bytes (128 LONGs)
+LONG      COG_STACK             +$00328  ($00BF0)
+LONG      COG_STACK_GUARD       +$005A8  ($00E70)
+  => Stack size = $005A8 - $00328 = $0280 = 640 bytes (160 LONGs)
 ```
 
 ### Complete Accounting Example
@@ -313,13 +315,13 @@ LONG      COG_STACK_GUARD       +$00510  ($00E8C)
 For a program like `SD_format_card`:
 
 ```
-Code/Data:           31,300 bytes   (from map: CODE/DATA TOTAL)
+Code/Data:           30,904 bytes   (from map: CODE/DATA TOTAL)
 VAR:                 33,876 bytes   (from map: VAR SPACE size)
                     ---------
-Program Total:       65,176 bytes
+Program Total:       64,780 bytes
 
 P2 Hub RAM:         524,288 bytes   (512 KB)
-Available:          459,112 bytes   (for main COG stack + other uses)
+Available:          459,508 bytes   (for main COG stack + other uses)
 ```
 
 The large VAR here comes from the format utility's 32 KB zero-fill buffer. This is why VAR analysis matters -- a single large buffer in VAR can dominate your memory budget.
@@ -333,19 +335,19 @@ To measure the cost of optional features, generate map files for each configurat
 ```bash
 # Minimal build
 pnut-ts -m src/micro_sd_fat32_fs.spin2
-# => Total Size: 19,464 bytes (19,460 code/data + 4 var bytes), 145 methods
+# => Total Size: 19,880 bytes (19,876 code/data + 4 var bytes), 145 methods
 
 # Full build
 pnut-ts -m -D SD_INCLUDE_ALL src/micro_sd_fat32_fs.spin2
-# => Total Size: 21,984 bytes (21,980 code/data + 4 var bytes), 198 methods
+# => Total Size: 22,840 bytes (22,836 code/data + 4 var bytes), 202 methods
 ```
 
 Comparison:
 
 | | Minimal | Full | Delta |
 |---|---|---|---|
-| Methods | 145 | 198 | +53 |
-| Code/Data | 19,460 B | 21,980 B | +2,520 B |
+| Methods | 145 | 202 | +57 |
+| Code/Data | 19,876 B | 22,836 B | +2,960 B |
 | VAR | 4 B | 4 B | +0 B |
 
 The DAT section is identical in both builds (data doesn't change). Only method table entries and bytecodes are added by optional features. This tells you the conditional compilation gates affect only code, not static data.
@@ -361,15 +363,16 @@ Real programs include multiple objects. The map file shows each object's contrib
 
   Start   End      Size  Object             Instance
   ------  ------  -----  -----------------  ---------
-  $00000  $00979   2426  SD_RT_mount_tests  (entry)
-  $0097C  $05C22  21159  micro_sd_fat32_fs  SD
-  $05C24  $06109   1254  isp_rt_utilities   UTILS
+  $00000  $008C5   2246  SD_RT_mount_tests  (entry)
+  $008C8  $05EB3  21996  micro_sd_fat32_fs  SD
+  $05EB4  $05FD6    291  isp_stack_check    UTILS
+  $05FD8  $06393    956  isp_rt_utilities   STACKUTILS
 
-    CODE/DATA TOTAL:   24844 bytes
+    CODE/DATA TOTAL:   25492 bytes
 
-  $0610C  $061B3    168  VAR SPACE          (runtime)
+  $06394  $0643F    172  VAR SPACE          (runtime)
 
-    PROGRAM TOTAL:     25012 bytes
+    PROGRAM TOTAL:     25664 bytes
 ```
 
 ### Per-Object Breakdown
@@ -378,10 +381,11 @@ To understand where your memory is going, extract each object's contribution:
 
 | Object | Code/Data | % of Total |
 |---|---|---|
-| SD_RT_mount_tests (top-level) | 2,426 B | 9.8% |
-| micro_sd_fat32_fs (driver) | 21,159 B | 85.2% |
-| isp_rt_utilities (test framework) | 1,254 B | 5.0% |
-| **Total** | **24,844 B** | **100%** |
+| SD_RT_mount_tests (top-level) | 2,246 B | 8.8% |
+| micro_sd_fat32_fs (driver) | 21,996 B | 86.3% |
+| isp_stack_check (stack checker) | 291 B | 1.1% |
+| isp_rt_utilities (test framework) | 956 B | 3.8% |
+| **Total** | **25,492 B** | **100%** |
 
 This immediately shows that the driver dominates the code/data budget. If you need to reduce program size, the driver is where to look (or use a minimal build configuration).
 
@@ -390,13 +394,14 @@ This immediately shows that the driver dominates the code/data budget. If you ne
 The Object Details section shows each object's VAR variables. To find which object owns the most VAR space, check the VAR Base addresses:
 
 ```
-SD_RT_mount_tests:   VAR Base: $0610C
-micro_sd_fat32_fs:   VAR Base: $06110   (= $0610C + 4 bytes for top-level)
-isp_rt_utilities:    VAR Base: $06114   (= $06110 + 4 bytes for driver)
-                     VAR End:  $061B3   (= $06114 + 160 bytes for utilities)
+SD_RT_mount_tests:   VAR Base: $06394
+micro_sd_fat32_fs:   VAR Base: $06398   (= $06394 + 4 bytes for top-level)
+isp_stack_check:     VAR Base: $063A0   (= $06398 + 8 bytes for driver)
+isp_rt_utilities:    VAR Base: $063A0   (= $063A0 + 0 bytes for stack checker)
+                     VAR End:  $0643F   (= $063A0 + 160 bytes for utilities)
 ```
 
-So: top-level = 4 B, driver = 4 B, utilities = 160 B of VAR.
+So: top-level = 4 B, driver = 8 B, stack checker = 0 B, utilities = 160 B of VAR.
 
 ---
 

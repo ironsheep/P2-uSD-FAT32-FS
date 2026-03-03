@@ -1,27 +1,25 @@
-'' =================================================================================================
-''
-''   File....... SD_card_characterize.spin2
-''   Purpose.... Comprehensive diagnostic tool to characterize SD cards
-''   Author..... Stephen M Moraco
-''               -- see below for terms of use
-''   E-mail..... stephen@ironsheep.biz
-''   Started.... JAN 2026
-''   Updated.... 01 MAR 2026
-''
-'' =================================================================================================
-''
-''   Extracts and displays ALL fields from card registers:
-''     - CID (Card Identification Register) - 16 bytes
-''     - CSD (Card Specific Data Register) - 16 bytes
-''     - SCR (SD Configuration Register) - 8 bytes
-''     - OCR (Operating Conditions Register) - 4 bytes
-''     - VBR/BPB (Volume Boot Record / BIOS Parameter Block)
-''
-''   Output: Formatted debug report with ALL fields.
-''   Fields marked with [USED] are actively used by V3 driver.
-''   Fields marked with [INFO] are informational only.
-''
-'' =================================================================================================
+{{ =================================================================================================
+
+   File....... SD_card_characterize.spin2
+   Purpose.... Comprehensive diagnostic tool to characterize SD cards
+   Author..... Stephen M Moraco
+               -- see below for terms of use
+   E-mail..... stephen@ironsheep.biz
+   Started.... JAN 2026
+   Updated.... 01 MAR 2026
+
+   Extracts and displays ALL fields from card registers:
+     - CID (Card Identification Register) - 16 bytes
+     - CSD (Card Specific Data Register) - 16 bytes
+     - SCR (SD Configuration Register) - 8 bytes
+     - OCR (Operating Conditions Register) - 4 bytes
+     - VBR/BPB (Volume Boot Record / BIOS Parameter Block)
+
+   Output: Formatted debug report with ALL fields.
+   Fields marked with [USED] are actively used by V3 driver.
+   Fields marked with [INFO] are informational only.
+
+================================================================================================= }}
 
 CON
   _CLKFREQ = 270_000_000

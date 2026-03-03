@@ -1,29 +1,28 @@
 {Spin2_v45}
-'' =================================================================================================
-''
-''   File....... SD_example_multicog.spin2
-''   Purpose.... Multi-cog file access example -- two cogs reading/writing different files
-''   Author..... Stephen M Moraco
-''               -- see below for terms of use
-''   E-mail..... stephen@ironsheep.biz
-''   Started.... 25 FEB 2026
-''   Updated.... 01 MAR 2026
-''
-'' =================================================================================================
-''
-''  This example demonstrates multi-cog SD card access:
-''    1. Main cog mounts the card and creates test files
-''    2. A second cog is started that reads from one file
-''    3. Main cog writes to a different file concurrently
-''    4. Both cogs use the same driver instance (singleton pattern)
-''
-''  Key concepts shown:
-''    - The driver serializes SPI access via a hardware lock -- safe from any cog
-''    - Each cog has its own current working directory (CWD)
-''    - Each cog has its own error slot
-''    - File handles are shared resources -- allocate from one cog, use from any
-''    - Only one file can be open for writing at a time (single-writer policy)
-''
+{{ =================================================================================================
+
+   File....... SD_example_multicog.spin2
+   Purpose.... Multi-cog file access example -- two cogs reading/writing different files
+   Author..... Stephen M Moraco
+               -- see below for terms of use
+   E-mail..... stephen@ironsheep.biz
+   Started.... 25 FEB 2026
+   Updated.... 01 MAR 2026
+
+   This example demonstrates multi-cog SD card access:
+     1. Main cog mounts the card and creates test files
+     2. A second cog is started that reads from one file
+     3. Main cog writes to a different file concurrently
+     4. Both cogs use the same driver instance (singleton pattern)
+
+   Key concepts shown:
+     - The driver serializes SPI access via a hardware lock -- safe from any cog
+     - Each cog has its own current working directory (CWD)
+     - Each cog has its own error slot
+     - File handles are shared resources -- allocate from one cog, use from any
+     - Only one file can be open for writing at a time (single-writer policy)
+
+================================================================================================= }}
 
 CON
 
@@ -52,9 +51,9 @@ VAR
 
 PUB go() | handle, idx, buf[32]
 '' Main entry point -- creates test files, starts a reader cog, and writes concurrently from the main cog.
-'' @local handle - File handle for creating and writing test files
-'' @local idx - Loop index for writing lines
-'' @local buf - General-purpose buffer
+' @local handle - File handle for creating and writing test files
+' @local idx - Loop index for writing lines
+' @local buf - General-purpose buffer
 
     debug("=== SD Multi-Cog Example ===")
 

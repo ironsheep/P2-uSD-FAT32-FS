@@ -1,19 +1,17 @@
-'' =================================================================================================
-''
-''   File....... SD_FAT32_audit.spin2
-''   Purpose.... FAT32 filesystem audit tool (thin wrapper around isp_fsck_utility)
-''   Author..... Stephen M Moraco
-''               -- see below for terms of use
-''   E-mail..... stephen@ironsheep.biz
-''   Started.... JAN 2026
-''   Updated.... 21 FEB 2026
-''
-'' =================================================================================================
-''
-''  Thin wrapper that launches the Audit library in a temporary cog
-''  and displays output via debug(). Read-only -- does not modify card.
-''
-'' =================================================================================================
+{{ =================================================================================================
+
+   File....... SD_FAT32_audit.spin2
+   Purpose.... FAT32 filesystem audit tool (thin wrapper around isp_fsck_utility)
+   Author..... Stephen M Moraco
+               -- see below for terms of use
+   E-mail..... stephen@ironsheep.biz
+   Started.... JAN 2026
+   Updated.... 21 FEB 2026
+
+   Thin wrapper that launches the Audit library in a temporary cog
+   and displays output via debug(). Read-only -- does not modify card.
+
+================================================================================================= }}
 
 CON
 

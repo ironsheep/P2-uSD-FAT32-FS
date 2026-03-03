@@ -1,36 +1,34 @@
-'' =================================================================================================
-''
-''   File....... SD_performance_benchmark.spin2
-''   Purpose.... Performance benchmark for SD card driver - measures real-world throughput
-''   Author..... Stephen M Moraco
-''               -- see below for terms of use
-''   E-mail..... stephen@ironsheep.biz
-''   Started.... JAN 2026
-''   Updated.... 07 FEB 2026
-''
-'' =================================================================================================
-''
-'' Measures SD card driver performance across three levels:
-''
-''   1. RAW SINGLE-SECTOR: readSectorsRaw/writeSectorsRaw with count=1
-''      - Isolates: command dispatch + SPI transfer + card latency
-''      - Uses multi-sector API with count=1 to avoid debug print overhead
-''
-''   2. RAW MULTI-SECTOR: readSectorsRaw/writeSectorsRaw with CMD18/CMD25
-''      - Shows benefit of amortizing command overhead across N sectors
-''      - Tests at 8, 32, and 64 sector counts
-''
-''   3. FILE-LEVEL: createFileNew/openFileRead + writeHandle/readHandle + closeFileHandle
-''      - Includes FAT traversal, cluster allocation, sector caching
-''      - Real-world throughput an application developer will see
-''
-'' Run on each card, at both 320 MHz and 270 MHz sysclk, to build performance catalog.
-''
-'' Test sizes (embedded use cases):
-''   Write: 512B (log entry), 4KB (config), 32KB (data batch)
-''   Read:  4KB (config), 32KB (icon), 128KB (small image), 256KB (large image)
-''
-'' =================================================================================================
+{{ =================================================================================================
+
+   File....... SD_performance_benchmark.spin2
+   Purpose.... Performance benchmark for SD card driver - measures real-world throughput
+   Author..... Stephen M Moraco
+               -- see below for terms of use
+   E-mail..... stephen@ironsheep.biz
+   Started.... JAN 2026
+   Updated.... 07 FEB 2026
+
+   Measures SD card driver performance across three levels:
+
+     1. RAW SINGLE-SECTOR: readSectorsRaw/writeSectorsRaw with count=1
+        - Isolates: command dispatch + SPI transfer + card latency
+        - Uses multi-sector API with count=1 to avoid debug print overhead
+
+     2. RAW MULTI-SECTOR: readSectorsRaw/writeSectorsRaw with CMD18/CMD25
+        - Shows benefit of amortizing command overhead across N sectors
+        - Tests at 8, 32, and 64 sector counts
+
+     3. FILE-LEVEL: createFileNew/openFileRead + writeHandle/readHandle + closeFileHandle
+        - Includes FAT traversal, cluster allocation, sector caching
+        - Real-world throughput an application developer will see
+
+   Run on each card, at both 320 MHz and 270 MHz sysclk, to build performance catalog.
+
+   Test sizes (embedded use cases):
+     Write: 512B (log entry), 4KB (config), 32KB (data batch)
+     Read:  4KB (config), 32KB (icon), 128KB (small image), 256KB (large image)
+
+================================================================================================= }}
 
 CON
 

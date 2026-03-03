@@ -1,38 +1,36 @@
-'' =================================================================================================
-''
-''   File....... SD_frequency_characterize.spin2
-''   Purpose.... Sweep sysclk frequencies to find failure boundaries for streamer timing
-''   Author..... Stephen M Moraco
-''               -- see below for terms of use
-''   E-mail..... stephen@ironsheep.biz
-''   Started.... JAN 2026
-''   Updated.... 01 MAR 2026
-''
-'' =================================================================================================
-''
-''   This utility dynamically changes sysclk frequency using clkset() to find exactly where
-''   the driver's multi-block operations fail. The goal is to identify timing-sensitive
-''   frequency ranges and quantization boundaries.
-''
-''   Test Matrix (from SYSCLK-TIMING-ANALYSIS.md):
-''     320 MHz - hp=7, PASS (baseline verified)
-''     310 MHz - hp=7
-''     305 MHz - hp=7 (boundary, hp changes 7->6 below this)
-''     300 MHz - hp=6, exact 25 MHz SPI
-''     295 MHz - hp=6
-''     290 MHz - hp=6
-''     280 MHz - hp=6
-''     270 MHz - hp=6, FAIL (verified)
-''     260 MHz - hp=6
-''     255 MHz - hp=6 (boundary, hp changes 6->5 below this)
-''     250 MHz - hp=5, HDMI target
-''     240 MHz - hp=5
-''     200 MHz - hp=4, exact division
-''
-''   The test runs writeSectorsRaw(8) + readSectorsRaw(8) and checks data integrity.
-''   This is the exact operation that fails at 270 MHz.
-''
-'' =================================================================================================
+{{ =================================================================================================
+
+   File....... SD_frequency_characterize.spin2
+   Purpose.... Sweep sysclk frequencies to find failure boundaries for streamer timing
+   Author..... Stephen M Moraco
+               -- see below for terms of use
+   E-mail..... stephen@ironsheep.biz
+   Started.... JAN 2026
+   Updated.... 01 MAR 2026
+
+   This utility dynamically changes sysclk frequency using clkset() to find exactly where
+   the driver's multi-block operations fail. The goal is to identify timing-sensitive
+   frequency ranges and quantization boundaries.
+
+   Test Matrix (from SYSCLK-TIMING-ANALYSIS.md):
+     320 MHz - hp=7, PASS (baseline verified)
+     310 MHz - hp=7
+     305 MHz - hp=7 (boundary, hp changes 7->6 below this)
+     300 MHz - hp=6, exact 25 MHz SPI
+     295 MHz - hp=6
+     290 MHz - hp=6
+     280 MHz - hp=6
+     270 MHz - hp=6, FAIL (verified)
+     260 MHz - hp=6
+     255 MHz - hp=6 (boundary, hp changes 6->5 below this)
+     250 MHz - hp=5, HDMI target
+     240 MHz - hp=5
+     200 MHz - hp=4, exact division
+
+   The test runs writeSectorsRaw(8) + readSectorsRaw(8) and checks data integrity.
+   This is the exact operation that fails at 270 MHz.
+
+================================================================================================= }}
 
 CON
 

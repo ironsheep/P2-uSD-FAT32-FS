@@ -1,23 +1,22 @@
 {Spin2_v45}
-'' =================================================================================================
-''
-''   File....... SD_example_directory_walk.spin2
-''   Purpose.... Directory enumeration, file management, and tree walk example
-''   Author..... Stephen M Moraco
-''               -- see below for terms of use
-''   E-mail..... stephen@ironsheep.biz
-''   Started.... 25 FEB 2026
-''   Updated.... 01 MAR 2026
-''
-'' =================================================================================================
-''
-''  This example demonstrates directory operations:
-''    1. List files in the root directory with sizes and attributes
-''    2. Create a subdirectory and files within it
-''    3. List a subdirectory using handle-based enumeration (without changing CWD)
-''    4. Delete a file and rename another
-''    5. Show volume information
-''
+{{ =================================================================================================
+
+   File....... SD_example_directory_walk.spin2
+   Purpose.... Directory enumeration, file management, and tree walk example
+   Author..... Stephen M Moraco
+               -- see below for terms of use
+   E-mail..... stephen@ironsheep.biz
+   Started.... 25 FEB 2026
+   Updated.... 01 MAR 2026
+
+   This example demonstrates directory operations:
+     1. List files in the root directory with sizes and attributes
+     2. Create a subdirectory and files within it
+     3. List a subdirectory using handle-based enumeration (without changing CWD)
+     4. Delete a file and rename another
+     5. Show volume information
+
+================================================================================================= }}
 
 CON
 
@@ -42,7 +41,7 @@ VAR
 PUB go() | handle
 '' Main entry point -- lists root directory, creates EXDIR with files, demonstrates handle-based
 '' directory enumeration, delete, and rename operations.
-'' @local handle - File handle for creating test files
+' @local handle - File handle for creating test files
 
     debug("=== SD Directory Walk Example ===")
 

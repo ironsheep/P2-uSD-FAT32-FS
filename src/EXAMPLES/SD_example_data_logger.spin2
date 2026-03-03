@@ -1,27 +1,26 @@
 {Spin2_v45}
-'' =================================================================================================
-''
-''   File....... SD_example_data_logger.spin2
-''   Purpose.... Data logging example with append and sync for power-fail safety
-''   Author..... Stephen M Moraco
-''               -- see below for terms of use
-''   E-mail..... stephen@ironsheep.biz
-''   Started.... 25 FEB 2026
-''   Updated.... 01 MAR 2026
-''
-'' =================================================================================================
-''
-''  This example demonstrates a data logging pattern:
-''    1. Mount the card and create a LOGS directory
-''    2. Open an existing log file for append (or create a new one)
-''    3. Write log entries with periodic sync for power-fail safety
-''    4. Close and unmount cleanly
-''
-''  Key concepts shown:
-''    - openFileWrite() positions at end of file (append mode)
-''    - syncHandle() flushes data to card without closing the file
-''    - Directory creation with existence check
-''
+{{ =================================================================================================
+
+   File....... SD_example_data_logger.spin2
+   Purpose.... Data logging example with append and sync for power-fail safety
+   Author..... Stephen M Moraco
+               -- see below for terms of use
+   E-mail..... stephen@ironsheep.biz
+   Started.... 25 FEB 2026
+   Updated.... 01 MAR 2026
+
+   This example demonstrates a data logging pattern:
+     1. Mount the card and create a LOGS directory
+     2. Open an existing log file for append (or create a new one)
+     3. Write log entries with periodic sync for power-fail safety
+     4. Close and unmount cleanly
+
+   Key concepts shown:
+     - openFileWrite() positions at end of file (append mode)
+     - syncHandle() flushes data to card without closing the file
+     - Directory creation with existence check
+
+================================================================================================= }}
 
 CON
 
@@ -48,8 +47,8 @@ VAR
 
 PUB go() | handle, idx
 '' Main entry point -- creates a LOGS directory and writes MAX_ENTRIES CSV log entries with periodic sync.
-'' @local handle - File handle for the log file
-'' @local idx - Loop index for writing log entries
+' @local handle - File handle for the log file
+' @local idx - Loop index for writing log entries
 
     debug("=== SD Data Logger Example ===")
 

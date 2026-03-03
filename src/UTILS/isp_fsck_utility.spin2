@@ -1,35 +1,33 @@
-'' =================================================================================================
-''
-''   File....... isp_fsck_utility.spin2
-''   Purpose.... Combined FSCK (repair) + Audit (read-only) library for FAT32 filesystems
-''               Runs in a temporary cog, communicates via FIFO strings
-''   Author..... Stephen M Moraco
-''               -- see below for terms of use
-''   E-mail..... stephen@ironsheep.biz
-''   Started.... 21 FEB 2026
-''   Updated.... 26 FEB 2026
-''
-'' =================================================================================================
-''
-''  Reusable library that runs FSCK or Audit in a temporary cog.
-''  Output is sent via isp_string_fifo for the caller to display.
-''
-''  Two modes:
-''    MODE_AUDIT - Read-only filesystem integrity check
-''    MODE_FSCK  - Full check and repair (4-pass)
-''
-''  Usage:
-''    caller: sd.stop()
-''    caller: fsck.startFsck(cs, mosi, miso, sck)   ' or startAudit()
-''    caller: repeat
-''              if fsck.hasOutput()
-''                display(fsck.getOutput())
-''              if fsck.isDone()
-''                drain remaining, quit
-''    caller: fsck.stop()
-''    caller: sd.mount(cs, mosi, miso, sck)
-''
-'' =================================================================================================
+{{ =================================================================================================
+
+   File....... isp_fsck_utility.spin2
+   Purpose.... Combined FSCK (repair) + Audit (read-only) library for FAT32 filesystems
+               Runs in a temporary cog, communicates via FIFO strings
+   Author..... Stephen M Moraco
+               -- see below for terms of use
+   E-mail..... stephen@ironsheep.biz
+   Started.... 21 FEB 2026
+   Updated.... 26 FEB 2026
+
+   Reusable library that runs FSCK or Audit in a temporary cog.
+   Output is sent via isp_string_fifo for the caller to display.
+
+   Two modes:
+     MODE_AUDIT - Read-only filesystem integrity check
+     MODE_FSCK  - Full check and repair (4-pass)
+
+   Usage:
+     caller: sd.stop()
+     caller: fsck.startFsck(cs, mosi, miso, sck)   ' or startAudit()
+     caller: repeat
+               if fsck.hasOutput()
+                 display(fsck.getOutput())
+               if fsck.isDone()
+                 drain remaining, quit
+     caller: fsck.stop()
+     caller: sd.mount(cs, mosi, miso, sck)
+
+================================================================================================= }}
 
 CON { suppress debug output }
 

@@ -1,17 +1,17 @@
-'' =================================================================================================
-''
-''   File....... isp_serial_singleton.spin2
-''   Purpose.... True mode, unbuffererd serial coms using smart pins
-''               -- same features as original P1 FDS with minor enhancements/changes
-''               -- VAR content moved to DAT so we could share this singleton object across all objects in demo
-''   Authors.... Eric Smith, Chip Gracey, and Jon McPhalen
-''               (singleton adaptation by Stephen M. Moraco from older file jm_serial.spin2)
-''               -- see below for terms of use
-''   E-mail..... stephen@ironsheep.biz
-''   Started....
-''   Updated.... 21 May 2021  by Stephen M. Moraco
-''
-'' =================================================================================================
+{{ =================================================================================================
+
+   File....... isp_serial_singleton.spin2
+   Purpose.... True mode, unbuffererd serial coms using smart pins
+               -- same features as original P1 FDS with minor enhancements/changes
+               -- VAR content moved to DAT so we could share this singleton object across all objects in demo
+   Authors.... Eric Smith, Chip Gracey, and Jon McPhalen
+               (singleton adaptation by Stephen M. Moraco from older file jm_serial.spin2)
+               -- see below for terms of use
+   E-mail..... stephen@ironsheep.biz
+   Started....
+   Updated.... 21 May 2021  by Stephen M. Moraco
+
+================================================================================================= }}
 
 {
 
@@ -128,10 +128,10 @@ PUB startx(rxpin, txpin, baudrate, txPullup) | bitperiod, txbitmode, rxbitmode, 
 '' @param txpin - transmit pin number
 '' @param baudrate - baud rate for serial communication
 '' @param txPullup - drive option for tx pin (PU_NONE, PU_1K5, PU_3K3, PU_15K)
-'' @local bitperiod - calculated bit period
-'' @local txbitmode - smart pin TX bit mode (may include extra stop bit)
-'' @local rxbitmode - smart pin RX bit mode (data bits only)
-'' @local databits - number of TX data bits (includes extra stop bit for 8N2)
+' @local bitperiod - calculated bit period
+' @local txbitmode - smart pin TX bit mode (may include extra stop bit)
+' @local rxbitmode - smart pin RX bit mode (data bits only)
+' @local databits - number of TX data bits (includes extra stop bit for 8N2)
 
   longmove(@rxp, @rxpin, 3)  ' also save baudrate incase driver is asked
   bitperiod := clkfreq / baudrate
@@ -188,7 +188,7 @@ PUB rxcheck() : rxbyte | check
 '' Check for serial input
 ''
 '' @returns rxbyte - received byte ($00..$FF), or -1 if nothing available
-'' @local check - pin state check
+' @local check - pin state check
 
   rxbyte := -1
   check := pinr(rxp)
@@ -201,8 +201,8 @@ PUB rxtime(ms) : chr | mstix, startTime
 ''
 '' @param ms - maximum time to wait in milliseconds
 '' @returns chr - received byte ($00..$FF), or -1 if no byte received
-'' @local mstix - clock ticks per millisecond
-'' @local startTime - start time
+' @local mstix - clock ticks per millisecond
+' @local startTime - start time
 
   mstix := clkfreq / 1000
 
@@ -276,7 +276,7 @@ PUB txn(chr, chrCt)
 PUB txflush() | check
 '' Wait until last byte has finished
 ''
-'' @local check - pin state check
+' @local check - pin state check
 
   repeat
     check := pinr(txp)
@@ -297,7 +297,7 @@ PUB substr(p_str, len) | chr
 ''
 '' @param p_str - pointer to string
 '' @param len - number of characters to emit
-'' @local chr - current byte
+' @local chr - current byte
 
   repeat len
     chr := byte[p_str++]
@@ -450,11 +450,11 @@ PUB format(p_str, p_args) | idx, chr, asc, fld, digits
 ''
 '' @param p_str - pointer to the format control string
 '' @param p_args - pointer to array of longs that hold field values (numbers, characters, or pointers to strings)
-'' @local idx - value index
-'' @local chr - current character
-'' @local asc - ASCII value for escape sequences
-'' @local fld - field width
-'' @local digits - precision digits
+' @local idx - value index
+' @local chr - current character
+' @local asc - ASCII value for escape sequences
+' @local fld - field width
+' @local digits - precision digits
 debug("FMT: [", zstr_(p_str), "]")
 
   if sLock <> -1
@@ -731,11 +731,11 @@ PUB memDump(pBytes, lenBytes, pMessage) | rowCount, rowLen, pCurrByte, lastRowBy
 '' @param pBytes - pointer to byte array to dump
 '' @param lenBytes - number of bytes to dump
 '' @param pMessage - pointer to message string (or 0 for no message)
-'' @local rowCount - number of full 16-byte rows
-'' @local rowLen - length of current row
-'' @local pCurrByte - pointer to current byte
-'' @local lastRowByteCount - bytes in final partial row
-'' @local bytesSoFar - bytes dumped so far
+' @local rowCount - number of full 16-byte rows
+' @local rowLen - length of current row
+' @local pCurrByte - pointer to current byte
+' @local lastRowByteCount - bytes in final partial row
+' @local bytesSoFar - bytes dumped so far
 
     if pMessage
         fstr1(string("** %s:\r\n"), pMessage)

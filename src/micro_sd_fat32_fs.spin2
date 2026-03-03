@@ -1031,8 +1031,8 @@ PUB fileName() : result | p_temp, idx
 '' Return the 8.3 filename of the currently opened file.
 ''
 '' @returns result - Pointer to filename string
-'' @local p_temp - Pointer to temporary filename buffer
-'' @local idx - Loop counter for parsing
+' @local p_temp - Pointer to temporary filename buffer
+' @local idx - Loop counter for parsing
 
   p_temp := @"filename.txt"
   bytemove(p_temp, @entry_buffer, SFN_TOTAL_LEN)
@@ -1199,8 +1199,8 @@ PUB testCMD13() : r2_response | r1, status
 '' NOTE: This is a diagnostic method - not for normal operation.
 ''
 '' @returns r2_response - R2 response word ($0000=OK, $FFFF=timeout, other=error)
-'' @local r1 - R1 response byte (decoded from R2 for debug output)
-'' @local status - Status byte (decoded from R2 for debug output)
+' @local r1 - R1 response byte (decoded from R2 for debug output)
+' @local status - Status byte (decoded from R2 for debug output)
 
   if cog_id == -1
     r2_response := $FFFF
@@ -1444,8 +1444,8 @@ PUB checkCMD6Support() : supported | scr[2], sd_spec
 '' CMD6 supported by SD 2.0 and later cards (SD_SPEC >= 2).
 ''
 '' @returns supported - TRUE if CMD6 is available
-'' @local scr - SCR register data (2 longs = 8 bytes)
-'' @local sd_spec - SD spec version from SCR
+' @local scr - SCR register data (2 longs = 8 bytes)
+' @local sd_spec - SD spec version from SCR
 
   if readSCRRaw(@scr) < 0
     debug("  [checkCMD6Support] Failed to read SCR")
@@ -1734,9 +1734,9 @@ PUB debugReadSectorSlow(sector, p_buffer) : result | data, idx, timeout
 '' @param sector - Sector number to read
 '' @param p_buffer - Pointer to 512-byte destination buffer
 '' @returns result - 0 on success, -1 on timeout/error
-'' @local data - (unused in wrapper)
-'' @local idx - (unused in wrapper)
-'' @local timeout - (unused in wrapper)
+' @local data - (unused in wrapper)
+' @local idx - (unused in wrapper)
+' @local timeout - (unused in wrapper)
 
   result := send_command(CMD_DEBUG_SLOW_READ, sector, p_buffer, 0, 0)
 
@@ -1787,10 +1787,10 @@ PUB debugDumpRootDir() | sec, idx, p_entry, local_buf[128]
 '' and prints each entry's first 11 bytes (filename) and first cluster.
 '' Called from test cog so output appears in headless logs.
 ''
-'' @local sec - Current sector being read
-'' @local idx - Entry index counter
-'' @local p_entry - Pointer to current directory entry
-'' @local local_buf - Local 512-byte buffer for sector data
+' @local sec - Current sector being read
+' @local idx - Entry index counter
+' @local p_entry - Pointer to current directory entry
+' @local local_buf - Local 512-byte buffer for sector data
 
   sec := root_sec
   debug("  [debugDumpRootDir] root_sec=", udec_(sec), " cog_dir_sec=", udec_(cog_dir_sec[COGID()]))
@@ -1812,10 +1812,10 @@ PUB debugDumpRootDir() | sec, idx, p_entry, local_buf[128]
 PUB displaySector() | address, char, ascii_ptr, idx
 '' Display sector in buffer - prints hex dump with ASCII representation.
 ''
-'' @local address - Current byte offset in buffer
-'' @local char - Current character being processed
-'' @local ascii_ptr - Pointer to ASCII representation string
-'' @local idx - Loop counter
+' @local address - Current byte offset in buffer
+' @local char - Current character being processed
+' @local ascii_ptr - Pointer to ASCII representation string
+' @local idx - Loop counter
 
   ascii_ptr := string("0123456789ABCDEF")
   repeat address from 0 to 495 step 16
@@ -1833,10 +1833,10 @@ PUB displaySector() | address, char, ascii_ptr, idx
 PUB displayEntry() | address, char, ascii_ptr, idx
 '' Display directory entry - prints hex dump of entry_buffer with ASCII representation.
 ''
-'' @local address - Current byte offset in entry
-'' @local char - Current character being processed
-'' @local ascii_ptr - Pointer to ASCII representation string
-'' @local idx - Loop counter
+' @local address - Current byte offset in entry
+' @local char - Current character being processed
+' @local ascii_ptr - Pointer to ASCII representation string
+' @local idx - Loop counter
 
   ascii_ptr := string("0123456789ABCDEF")
   repeat address from 0 to 31 step 16
@@ -1856,8 +1856,8 @@ PUB displayFAT(cluster) | fat_sector, local_buf[128]
 '' Routes through worker cog which owns the SPI pins.
 ''
 '' @param cluster - Cluster number to display FAT sector for
-'' @local fat_sector - Computed FAT sector number
-'' @local local_buf - Local 512-byte buffer for sector data
+' @local fat_sector - Computed FAT sector number
+' @local local_buf - Local 512-byte buffer for sector data
 
   fat_sector := fat_sec + cluster >> 7
   if send_command(CMD_READ_SECTOR_RAW, fat_sector, @local_buf, 0, 0) <> SUCCESS
@@ -6435,4 +6435,3 @@ CON { license }
   SOFTWARE.
  =================================================================================================
 }}
-
