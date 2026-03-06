@@ -1,0 +1,259 @@
+{Spin2_v49}
+'' =================================================================================================
+''
+''   File....... SD_diag_cmd13_capture.spin2
+''   Purpose.... Diagnostic: capture CMD13 byte streams for framing analysis
+''   Author..... Stephen M Moraco
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... MAR 2026
+''   Updated.... 06 MAR 2026
+''
+'' =================================================================================================
+''
+''   Captures the full-duplex MISO byte stream during CMD13 (SEND_STATUS) command
+''   transmission, plus the raw post-command byte stream (NCR gap, R1, STATUS).
+''
+''   Designed for cards with suspected CMD13 issues (e.g., AData SDHC 16GB).
+''   The driver's probeCmd13() runs at init and captures baseline data even on
+''   cards that fail the probe. After mount, setForceCmd13(TRUE) re-enables
+''   CMD13 so post-operation captures can be collected.
+''
+''   Exercises all five checkCardStatus() call sites:
+''     1. readSector (single-sector read) - after MBR/VBR reads during mount
+''     2. readSectors (multi-block read via CMD18+CMD12)
+''     3. writeSector (single-sector write)
+''     4. readSector again (verify written data)
+''     5. Multiple iterations to detect intermittent issues
+''
+''   All output via debug() - no serial singleton needed.
+''   Usage: ./run_test.sh ../diagnostic-tests/SD_diag_cmd13_capture.spin2
+''
+'' =================================================================================================
+
+CON
+
+    _CLKFREQ        = 350_000_000
+
+    ' P2 Edge module SD slot pins
+    SD_CS   = 60
+    SD_MOSI = 59
+    SD_MISO = 58
+    SD_SCK  = 61
+
+    NUM_ITERATIONS  = 5             ' repeat each operation this many times
+    MULTI_SECTORS   = 8             ' sectors per multi-block read test
+
+' Enable full driver features
+#IFDEF __SPINTOOLS__
+#DEFINE SD_INCLUDE_ALL
+#PRAGMA EXPORTDEF SD_INCLUDE_ALL
+#ELSE
+#DEFINE SD_INCLUDE_ALL
+#PRAGMA EXPORTDEF SD_INCLUDE_ALL
+#ENDIF
+
+OBJ
+    sd    : "micro_sd_fat32_fs"
+
+DAT
+    testFilename    BYTE    "CMD13TST.BIN", 0
+    writeBuf        BYTE    0[512]
+    readBuf         BYTE    0[512]
+    multiBuf        BYTE    0[MULTI_SECTORS * 512]
+    preCapBuf       BYTE    0[7]
+    capBuf          BYTE    0[8]
+
+PUB go() | handle, result, warnings, iteration, idx, ncrLen, bytesRead
+
+    debug("##############################################")
+    debug("#  CMD13 Diagnostic Capture                  #")
+    debug("#  Framing analysis for problem cards         #")
+    debug("##############################################")
+    debug(" ")
+
+    ' ======================================================================
+    ' PHASE 1: Mount (probeCmd13 runs automatically, captures init baseline)
+    ' ======================================================================
+    debug("=== PHASE 1: Mount and Init-Time Probe ===")
+    debug(" ")
+
+    result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    debug("  mount() returned: ", sdec(result))
+
+    warnings := sd.cardWarnings()
+    debug("  cardWarnings(): $", uhex_byte_(warnings))
+    if warnings & sd.CW_CMD13_UNRELIABLE
+        debug("  >> CMD13 flagged UNRELIABLE by probe")
+    else
+        debug("  >> CMD13 passed probe (reliable)")
+    if warnings & sd.CW_CMD23_SUPPORTED
+        debug("  >> CMD23 supported")
+
+    ' Dump init-time probe capture (populated by probeCmd13 during initCard)
+    debug(" ")
+    debug("--- Init-Time Probe Capture ---")
+    dumpCmd13State(@"probeCmd13 (init)")
+
+    if result < 0
+        debug(" ")
+        debug("!! Mount FAILED - cannot continue post-mount tests")
+        debug("!! The init-time probe capture above is the diagnostic data")
+        debug(" ")
+        debug("END_SESSION")
+        repeat
+
+    ' ======================================================================
+    ' PHASE 2: Force CMD13 on and do single-sector reads
+    ' ======================================================================
+    debug(" ")
+    debug("=== PHASE 2: Forced CMD13 - Single Sector Reads ===")
+    debug(" ")
+
+    sd.setForceCmd13(TRUE)
+    debug("  setForceCmd13(TRUE) - CMD13 forced on")
+    debug(" ")
+
+    ' Open an existing file for read (any file on the card)
+    ' If no file exists, we'll create one first
+    handle := sd.openFileRead(@testFilename)
+    if handle < 0
+        debug("  No test file found, creating one first...")
+        handle := sd.createFileNew(@testFilename)
+        if handle >= 0
+            bytefill(@writeBuf, $A5, 512)
+            sd.writeHandle(handle, @writeBuf, 512)
+            sd.closeFileHandle(handle)
+            debug("  Test file created (512 bytes, pattern $A5)")
+            debug(" ")
+            debug("--- Capture: after createFileNew + write + close ---")
+            dumpCmd13State(@"post-create")
+            handle := sd.openFileRead(@testFilename)
+
+    if handle >= 0
+        repeat iteration from 1 to NUM_ITERATIONS
+            debug(" ")
+            debug("--- Read iteration ", udec_(iteration), " of ", udec_(NUM_ITERATIONS), " ---")
+            sd.seekHandle(handle, 0)
+            bytesRead := sd.readHandle(handle, @readBuf, 512)
+            debug("  readHandle returned: ", sdec(bytesRead), " bytes")
+            dumpCmd13State(@"post-readHandle")
+
+        sd.closeFileHandle(handle)
+        debug(" ")
+        debug("  File handle closed")
+    else
+        debug("  !! Could not open test file, handle=", sdec(handle))
+
+    ' ======================================================================
+    ' PHASE 3: Forced CMD13 - Single Sector Writes
+    ' ======================================================================
+    debug(" ")
+    debug("=== PHASE 3: Forced CMD13 - Single Sector Writes ===")
+    debug(" ")
+
+    ' Delete old file and create fresh
+    sd.deleteFile(@testFilename)
+    handle := sd.createFileNew(@testFilename)
+    if handle >= 0
+        repeat iteration from 1 to NUM_ITERATIONS
+            debug(" ")
+            debug("--- Write iteration ", udec_(iteration), " of ", udec_(NUM_ITERATIONS), " ---")
+            bytefill(@writeBuf, iteration, 512)
+            result := sd.writeHandle(handle, @writeBuf, 512)
+            debug("  writeHandle returned: ", sdec(result))
+            dumpCmd13State(@"post-writeHandle")
+
+        sd.closeFileHandle(handle)
+        debug(" ")
+        debug("  File handle closed after writes")
+    else
+        debug("  !! Could not create test file, handle=", sdec(handle))
+
+    ' ======================================================================
+    ' PHASE 4: Forced CMD13 - Read back written data (verify path)
+    ' ======================================================================
+    debug(" ")
+    debug("=== PHASE 4: Forced CMD13 - Read Back Verification ===")
+    debug(" ")
+
+    handle := sd.openFileRead(@testFilename)
+    if handle >= 0
+        repeat iteration from 1 to NUM_ITERATIONS
+            debug(" ")
+            debug("--- Verify-read iteration ", udec_(iteration), " of ", udec_(NUM_ITERATIONS), " ---")
+            bytesRead := sd.readHandle(handle, @readBuf, 512)
+            debug("  readHandle returned: ", sdec(bytesRead), " bytes")
+            dumpCmd13State(@"post-verify-read")
+
+        sd.closeFileHandle(handle)
+    else
+        debug("  !! Could not open file for verify, handle=", sdec(handle))
+
+    ' ======================================================================
+    ' PHASE 5: Forced CMD13 - Multi-block reads (CMD18+CMD12 path)
+    ' ======================================================================
+    debug(" ")
+    debug("=== PHASE 5: Forced CMD13 - Raw Multi-Block Reads ===")
+    debug(" ")
+
+    repeat iteration from 1 to NUM_ITERATIONS
+        debug(" ")
+        debug("--- Multi-block read iteration ", udec_(iteration), " of ", udec_(NUM_ITERATIONS), " ---")
+        result := sd.readSectorsRaw(0, MULTI_SECTORS, @multiBuf)
+        debug("  readSectorsRaw(sector 0, count ", udec_(MULTI_SECTORS), ") returned: ", sdec(result), " sectors")
+
+        ' CMD18 diagnostics
+        debug("  CMD18: R1=$", uhex_byte_(sd.getLastCMD18R1()), " token=$", uhex_byte_(sd.getLastCMD18Token()), " result=", udec_(sd.getLastCMD18Result()), " failPath=", udec_(sd.getLastCMD18FailPath()), " sectorsRead=", udec_(sd.getLastCMD18SectorsRead()))
+
+        ' CMD12 diagnostics
+        debug("  CMD12: R1=$", uhex_byte_(sd.getLastCMD12R1()), " busy=", udec_(sd.getLastCMD12Result()))
+        ncrLen := sd.getLastCMD12Capture(@capBuf)
+        debug("  CMD12 capture (NCR=", udec_(ncrLen), "): [$", uhex_byte_(capBuf[0]), " $", uhex_byte_(capBuf[1]), " $", uhex_byte_(capBuf[2]), " $", uhex_byte_(capBuf[3]), " $", uhex_byte_(capBuf[4]), " $", uhex_byte_(capBuf[5]), " $", uhex_byte_(capBuf[6]), " $", uhex_byte_(capBuf[7]), "]")
+        sd.getLastCMD12PreCapture(@preCapBuf)
+        debug("  CMD12 pre-cap: [$", uhex_byte_(preCapBuf[0]), " $", uhex_byte_(preCapBuf[1]), " $", uhex_byte_(preCapBuf[2]), " $", uhex_byte_(preCapBuf[3]), " $", uhex_byte_(preCapBuf[4]), " $", uhex_byte_(preCapBuf[5]), " $", uhex_byte_(preCapBuf[6]), "]")
+
+        ' CMD13 diagnostics (from checkCardStatus after CMD12)
+        dumpCmd13State(@"post-multiblock")
+
+    ' ======================================================================
+    ' CLEANUP
+    ' ======================================================================
+    debug(" ")
+    debug("=== CLEANUP ===")
+    sd.clearTestErrors()
+    debug("  clearTestErrors() - CMD13 force disabled")
+    sd.deleteFile(@testFilename)
+    debug("  Test file deleted")
+    sd.unmount()
+    debug("  Unmounted")
+
+    debug(" ")
+    debug("##############################################")
+    debug("#  CMD13 Diagnostic Capture Complete          #")
+    debug("##############################################")
+    debug("END_SESSION")
+    repeat
+
+
+PRI dumpCmd13State(pLabel) | ncrLen, r2Val, r1Val, stVal
+' Dump current CMD13 capture state with label
+'
+' @param pLabel - pointer to label string
+' @local ncrLen - NCR gap length from capture
+' @local r2Val - combined R2 response (R1 << 8 | STATUS)
+' @local r1Val - extracted R1 byte
+' @local stVal - extracted STATUS byte
+
+    r2Val := sd.getLastCMD13()
+    r1Val := (r2Val >> 8) & $FF
+    stVal := r2Val & $FF
+    debug("  [", zstr_(pLabel), "] CMD13 R1=$", uhex_byte_(r1Val), " STATUS=$", uhex_byte_(stVal), " (R2=$", uhex_word_(r2Val), ")")
+    if sd.getLastCMD13Error() <> 0
+        debug("  [", zstr_(pLabel), "] CMD13 last error R2=$", uhex_word_(sd.getLastCMD13Error()))
+
+    sd.getLastCMD13PreCapture(@preCapBuf)
+    debug("  [", zstr_(pLabel), "] CMD13 pre-cap: [$", uhex_byte_(preCapBuf[0]), " $", uhex_byte_(preCapBuf[1]), " $", uhex_byte_(preCapBuf[2]), " $", uhex_byte_(preCapBuf[3]), " $", uhex_byte_(preCapBuf[4]), " $", uhex_byte_(preCapBuf[5]), "]")
+
+    ncrLen := sd.getLastCMD13Capture(@capBuf)
+    debug("  [", zstr_(pLabel), "] CMD13 capture (NCR=", udec_(ncrLen), "): [$", uhex_byte_(capBuf[0]), " $", uhex_byte_(capBuf[1]), " $", uhex_byte_(capBuf[2]), " $", uhex_byte_(capBuf[3]), " $", uhex_byte_(capBuf[4]), " $", uhex_byte_(capBuf[5]), " $", uhex_byte_(capBuf[6]), " $", uhex_byte_(capBuf[7]), "]")

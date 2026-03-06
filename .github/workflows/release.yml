@@ -114,6 +114,10 @@ jobs:
           cp regression-tests/SD_RT_*_tests.spin2 "${DEST}/regression-tests/"
           cp regression-tests/isp_rt_utilities.spin2 "${DEST}/regression-tests/"
 
+          # diagnostic-tests/ - temporary: CMD13 capture for user field testing (withdraw after v1.3.0)
+          mkdir -p "${DEST}/diagnostic-tests"
+          cp diagnostic-tests/SD_diag_cmd13_capture.spin2 "${DEST}/diagnostic-tests/"
+
           # Remove any macOS artifacts
           find "${DEST}" -name '.DS_Store' -delete
 

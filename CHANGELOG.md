@@ -7,9 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.3.0] - 2026-03-06
+## [1.2.9] - 2026-03-06
 
-**All 20 SD cards working — CMD12 tolerance, CMD23 probing, unified capability reporting.**
+**All 20 SD cards working — CMD12 tolerance, CMD23 probing, CMD13 diagnostics, unified capability reporting.**
 
 ### New Features
 
@@ -17,21 +17,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `cardWarnings()`: Bitmask API returning all init-time capability discoveries after mount
 - CMD23 init-time probing: automatic detection and use of SET_BLOCK_COUNT when supported in SPI mode
 - CMD12 full-duplex pre-capture: diagnostic visibility into card pipeline state during STOP_TRANSMISSION
+- CMD13 full-duplex capture: byte-level framing analysis for cards with broken SPI-mode status reporting
+- `setForceCmd13()`: Diagnostic override to re-enable CMD13 on cards flagged unreliable
+- `getLastCMD13Capture()`, `getLastCMD13PreCapture()`: Raw byte stream accessors for CMD13 analysis
 
 ### Improvements
 
 - `recoverToIdle()`: CS deassert recovery per SD spec Section 7.2.2
 - `readSectors()`: CMD23 path with auto-stop verification and fallback to CMD12
+- `probeCmd13()`: Full-duplex capture during init-time probe for baseline diagnostics
 - Silicon Power Elite 64GB: benchmarked at 967 KB/s single-sector, 2,334 KB/s multi-sector (350 MHz)
 
 ### Documentation
 
 - [CMD12-SPCE-ANALYSIS.md](DOCs/Analysis/CMD12-SPCE-ANALYSIS.md): Definitive CMD12 framing analysis
+- [DRIVER-V1.3.0-PORTING-GUIDE.md](DOCs/procedures/DRIVER-V1.3.0-PORTING-GUIDE.md): Sibling project porting reference
 - Card catalog updated: SP Elite benchmarked and ranked #2 of 10 tested cards
 
 ### Tests
 
-- All 20 regression suites pass on SP Elite and standard test cards (407+ tests)
+- All 20 regression suites pass on SP Elite and standard test cards (411 tests)
+- CMD13 diagnostic capture test included for field testing on problem cards (temporary)
 
 ## [1.2.1] - 2026-03-05
 
@@ -180,7 +186,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Initial testing release** -- driver, utilities, demo shell, and 263+ regression tests.
 
-[Unreleased]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.2.1...HEAD
+[Unreleased]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.2.9...HEAD
+[1.2.9]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.2.1...v1.2.9
 [1.2.1]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.0.0...v1.1.0

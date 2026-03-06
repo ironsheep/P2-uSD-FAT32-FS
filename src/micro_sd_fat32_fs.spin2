@@ -427,6 +427,10 @@ DAT ' ---- Singleton Control ----
   cmd13_reliable    BYTE    TRUE        ' FALSE if CMD13 probe failed at init (default: enabled)
   cmd23_supported   BYTE    FALSE       ' TRUE if card advertises CMD23 in SCR CMD_SUPPORT
   card_warning_flags BYTE   CW_NONE    ' Advisory bitmask (queried via cardWarnings())
+  cmd13_pre_capture BYTE    0[7]        ' MISO bytes received DURING CMD13 command transmission (full-duplex)
+  cmd13_capture     BYTE    0[8]        ' Raw bytes post-command: NCR gap $FFs, R1, STATUS, extra bytes
+  cmd13_capture_len BYTE    0           ' Position of first non-$FF byte in cmd13_capture (NCR gap length)
+  test_force_cmd13  BYTE    FALSE       ' Diagnostic: force CMD13 even on cards flagged unreliable
 
   ' ═══════════════════════════════════════════════════════════════════════
   ' PARAMETER BLOCK - Communication between API and worker cog
@@ -1609,6 +1613,42 @@ PUB getLastCMD13Error() : r2
   r2 := last_cmd13_error
 
 
+PUB getLastCMD13Capture(p_dest) : count
+'' Copy CMD13 raw byte stream capture to caller's buffer.
+'' Returns NCR gap length (position of first non-$FF byte).
+'' Buffer contains: NCR gap $FF bytes, R1 byte, STATUS byte, extra bytes.
+'' Caller must provide an 8-byte buffer.
+''
+'' @param p_dest - Pointer to 8-byte destination buffer
+'' @returns count - NCR gap length (position of first non-$FF byte)
+
+  bytemove(p_dest, @cmd13_capture, 8)
+  count := cmd13_capture_len
+
+
+PUB getLastCMD13PreCapture(p_dest)
+'' Copy the 7 MISO bytes received DURING CMD13 command transmission (full-duplex capture).
+'' These bytes reveal what the card was outputting while we were sending CMD13.
+'' If any byte is not $FF, the card was still active (e.g., streaming data from a
+'' previous operation that didn't fully terminate).
+'' Caller must provide a 7-byte buffer.
+''
+'' @param p_dest - Pointer to 7-byte destination buffer
+
+  bytemove(p_dest, @cmd13_pre_capture, 7)
+
+
+PUB setForceCmd13(enabled)
+'' Force CMD13 status checks even on cards flagged as unreliable.
+'' Diagnostic use only: overrides the cmd13_reliable flag so checkCardStatus()
+'' always sends CMD13. Use this to capture CMD13 byte streams on problem cards.
+'' Set to FALSE (or call clearTestErrors()) to restore normal behavior.
+''
+'' @param enabled - TRUE to force CMD13, FALSE to respect probe result
+
+  test_force_cmd13 := (enabled <> 0) ? TRUE : FALSE
+
+
 PUB getLastCMD18R1() : r1
 '' Get last CMD18 R1 response - returns the R1 byte from the most recent CMD18 (READ_MULTIPLE_BLOCK).
 '' $00 = accepted, non-zero = rejected (see R1 bit definitions).
@@ -1812,12 +1852,13 @@ PUB getTestErrorCount() : count
 
 
 PUB clearTestErrors()
-'' Reset all test error injection state. Disarms read/write hooks
-'' and zeroes the triggered error counter.
+'' Reset all test error injection state. Disarms read/write hooks,
+'' zeroes the triggered error counter, and clears diagnostic overrides.
 
   test_force_read_crc_error := 0
   test_force_write_crc_error := 0
   test_error_count := 0
+  test_force_cmd13 := FALSE
 
 
 PUB debugGetRootSec() : result
@@ -5848,54 +5889,92 @@ PRI recoverToIdle() : result
       result := E_IO_ERROR                                                        ' Card stuck - caller must handle
 
 
-PRI probeCmd13() | r1, status
+PRI probeCmd13() | r1, status, idx, resp, timeout
 ' Probe CMD13 reliability at end of initCard().
 ' Sends a single CMD13 on an idle card and checks whether the response is valid.
 ' If the response violates the SD spec (R1 bit 7 set, or 3+ simultaneous error
 ' bits in STATUS on an idle card), marks cmd13_reliable := FALSE and sets
 ' CW_CMD13_UNRELIABLE in card_warning_flags.
+' Populates cmd13_pre_capture[] and cmd13_capture[] for diagnostic inspection
+' even on cards that fail the probe (init-time baseline data).
 '
 ' @local r1 - R1 response byte from CMD13
 ' @local status - STATUS byte (second byte of R2 response)
+' @local idx - Capture buffer index
+' @local resp - Received byte
+' @local timeout - Timeout deadline
+
+  ' Initialize capture buffers
+  bytefill(@cmd13_pre_capture, $FF, 7)
+  bytefill(@cmd13_capture, $FF, 8)
+  cmd13_capture_len := 0
 
   ' Send dummy clocks with CS HIGH (card recovery time)
   pinh(cs)
   sp_transfer_8($FF)
   sp_transfer_8($FF)
 
-  ' Send CMD13
+  ' Send CMD13 with full-duplex MISO capture
   pinl(cs)
-  sp_transfer_8($40 | CMD13)
-  sp_transfer_8($00)
-  sp_transfer_8($00)
-  sp_transfer_8($00)
-  sp_transfer_8($00)
-  sp_transfer_8($FF)
+  cmd13_pre_capture[0] := sp_transfer_8($40 | CMD13)
+  cmd13_pre_capture[1] := sp_transfer_8($00)
+  cmd13_pre_capture[2] := sp_transfer_8($00)
+  cmd13_pre_capture[3] := sp_transfer_8($00)
+  cmd13_pre_capture[4] := sp_transfer_8($00)
+  cmd13_pre_capture[5] := sp_transfer_8($FF)
 
-  ' Read R1 response
-  r1 := waitR1Response()
-  if r1 < 0
-    ' Timeout — card didn't respond to CMD13 at all
-    debug("    [probeCmd13] TIMEOUT - marking CMD13 unreliable")
-    pinh(cs)
-    cmd13_reliable := FALSE
-    card_warning_flags |= CW_CMD13_UNRELIABLE
-    return
+  ' Capture raw byte stream and find R1 (same pattern as checkCardStatus)
+  timeout := getct() + clkfreq / 10                                             ' 100ms timeout
+  idx := 0
+  r1 := -1
+  repeat
+    resp := sp_transfer_8($FF)
+    if idx < 8
+      cmd13_capture[idx] := resp
+      idx++
+    if resp <> $FF
+      cmd13_capture_len := idx                                                   ' NCR gap length
+      r1 := resp
+      quit
+    if getct() - timeout > 0
+      cmd13_capture_len := idx
+      debug("    [probeCmd13] TIMEOUT - marking CMD13 unreliable")
+      pinh(cs)
+      last_cmd13_r1 := $FF
+      cmd13_reliable := FALSE
+      card_warning_flags |= CW_CMD13_UNRELIABLE
+      return
 
-  ' Read STATUS byte (second byte of R2)
-  status := sp_transfer_8($FF)
+  ' Capture remaining bytes after R1 (STATUS + extra)
+  repeat while idx < 8
+    cmd13_capture[idx] := sp_transfer_8($FF)
+    idx++
+
+  ' STATUS byte is immediately after R1
+  status := cmd13_capture[cmd13_capture_len]
   pinh(cs)
+
+  ' Stage results for diagnostic getters
+  last_cmd13_r1 := r1
+  last_cmd13_status := status
+  if r1 <> 0 or status <> 0
+    last_cmd13_error := (r1 << 8) | status
+
+  ' Log full capture for diagnostics
+  debug("    [probeCmd13] pre=[", uhex_byte_(cmd13_pre_capture[0]), " ", uhex_byte_(cmd13_pre_capture[1]), " ", uhex_byte_(cmd13_pre_capture[2]), " ", uhex_byte_(cmd13_pre_capture[3]), " ", uhex_byte_(cmd13_pre_capture[4]), " ", uhex_byte_(cmd13_pre_capture[5]), "]")
+  debug("    [probeCmd13] cap=[", uhex_byte_(cmd13_capture[0]), " ", uhex_byte_(cmd13_capture[1]), " ", uhex_byte_(cmd13_capture[2]), " ", uhex_byte_(cmd13_capture[3]), " ", uhex_byte_(cmd13_capture[4]), " ", uhex_byte_(cmd13_capture[5]), " ", uhex_byte_(cmd13_capture[6]), " ", uhex_byte_(cmd13_capture[7]), "] NCR=", udec_(cmd13_capture_len))
+  debug("    [probeCmd13] R1=$", uhex_byte_(r1), " STATUS=$", uhex_byte_(status))
 
   ' Check 1: R1 bit 7 must be 0 per SD spec
   if r1 & $80
-    debug("    [probeCmd13] R1 bit 7 set ($", uhex_byte_(r1), ") - marking CMD13 unreliable")
+    debug("    [probeCmd13] R1 bit 7 set - marking CMD13 unreliable")
     cmd13_reliable := FALSE
     card_warning_flags |= CW_CMD13_UNRELIABLE
     return
 
   ' Check 2: 3+ error bits in STATUS on an idle card = garbage data
   if ones status >= 3
-    debug("    [probeCmd13] STATUS has ", udec_(ones status), " error bits ($", uhex_byte_(status), ") - marking CMD13 unreliable")
+    debug("    [probeCmd13] STATUS has ", udec_(ones status), " error bits - marking CMD13 unreliable")
     cmd13_reliable := FALSE
     card_warning_flags |= CW_CMD13_UNRELIABLE
     return
@@ -5936,19 +6015,24 @@ PRI probeCmd23() | scr[2], cmd_support, resp
     debug("    [probeCmd23] SCR read failed - assuming CMD23 not supported")
 
 
-PRI checkCardStatus(caller) : result | r1, status
+PRI checkCardStatus(caller) : result | r1, status, idx, resp, timeout
 ' Send CMD13 to verify card status after operation - checks R2 response for errors.
 ' R2 response format: R1 byte + status byte.
 ' Call this after every write operation and after CMD12.
-' Skipped entirely on cards where CMD13 was found unreliable at init.
+' Skipped on cards where CMD13 was found unreliable at init (unless test_force_cmd13 is set).
+' Captures full-duplex MISO during CMD13 transmission and raw post-command byte stream
+' into cmd13_pre_capture[] and cmd13_capture[] for framing analysis.
 '
 ' @param caller - String identifying the calling function (for debug)
 ' @returns result - 0 on success (card OK), negative error code on error
 ' @local r1 - R1 response byte
 ' @local status - Status byte (second byte of R2)
+' @local idx - Capture buffer index
+' @local resp - Received byte
+' @local timeout - Timeout deadline
 
-  ' Skip CMD13 on cards with broken implementation (detected by probeCmd13 at init)
-  if not cmd13_reliable
+  ' Skip CMD13 on cards with broken implementation (unless diagnostic override is set)
+  if not cmd13_reliable and not test_force_cmd13
     return
 
   ' Send dummy clocks with CS HIGH to ensure card is ready
@@ -5957,60 +6041,87 @@ PRI checkCardStatus(caller) : result | r1, status
   sp_transfer_8($FF)
   sp_transfer_8($FF)
 
+  ' Initialize capture buffers
+  bytefill(@cmd13_pre_capture, $FF, 7)
+  bytefill(@cmd13_capture, $FF, 8)
+  cmd13_capture_len := 0
+
   ' CMD13 requires CS to be asserted
   pinl(cs)
 
-  ' Send CMD13 with no argument (RCA = 0x0000 for SPI mode)
-  sp_transfer_8($40 | CMD13)                                                    ' Command byte: 0x40 | 13 = 0x4D
-  sp_transfer_8($00)                                                            ' Argument bytes (RCA, unused in SPI)
-  sp_transfer_8($00)
-  sp_transfer_8($00)
-  sp_transfer_8($00)
-  sp_transfer_8($FF)                                                            ' CRC disabled after init in SPI mode
+  ' Send CMD13 with full-duplex MISO capture (card may still be outputting)
+  cmd13_pre_capture[0] := sp_transfer_8($40 | CMD13)                            ' Command byte: 0x40 | 13 = 0x4D
+  cmd13_pre_capture[1] := sp_transfer_8($00)                                    ' Argument bytes (RCA, unused in SPI)
+  cmd13_pre_capture[2] := sp_transfer_8($00)
+  cmd13_pre_capture[3] := sp_transfer_8($00)
+  cmd13_pre_capture[4] := sp_transfer_8($00)
+  cmd13_pre_capture[5] := sp_transfer_8($FF)                                    ' CRC disabled after init in SPI mode
 
-  ' Get R1 response (first byte of R2)
-  r1 := waitR1Response()
-  if r1 < 0
-    debug("  [checkCardStatus] ", zstr_(caller), ": TIMEOUT waiting for R1")
-    pinh(cs)
-    result := E_TIMEOUT
-  else
-    ' Get status byte (second byte of R2)
-    status := sp_transfer_8($FF)
+  ' Capture raw byte stream and find R1 (same pattern as CMD12 capture)
+  timeout := getct() + clkfreq / 10                                             ' 100ms timeout
+  idx := 0
+  r1 := -1
+  repeat
+    resp := sp_transfer_8($FF)
+    if idx < 8
+      cmd13_capture[idx] := resp
+      idx++
+    if resp <> $FF
+      cmd13_capture_len := idx                                                   ' NCR gap length
+      r1 := resp
+      quit
+    if getct() - timeout > 0
+      cmd13_capture_len := idx
+      debug("  [checkCardStatus] ", zstr_(caller), ": TIMEOUT waiting for R1")
+      pinh(cs)
+      last_cmd13_r1 := $FF
+      result := E_TIMEOUT
+      return
 
-    pinh(cs)                                                                    ' Deselect card
+  ' Capture remaining bytes after R1 (STATUS byte + extra for analysis)
+  repeat while idx < 8
+    cmd13_capture[idx] := sp_transfer_8($FF)
+    idx++
 
-    ' ═════════════════════════════════════════════════════════════════════
-    ' STAGE CMD13 RESULTS - Preserve for diagnostic inspection
-    ' ═════════════════════════════════════════════════════════════════════
-    last_cmd13_r1 := r1
-    last_cmd13_status := status
-    if r1 <> 0 or status <> 0
-      last_cmd13_error := (r1 << 8) | status                                   ' Preserve last error
+  ' STATUS byte is the byte immediately after R1
+  status := cmd13_capture[cmd13_capture_len]
 
-    ' Check for errors
-    if r1 <> $00
-      debug("  [checkCardStatus] ", zstr_(caller), ": R1 error=$", uhex_byte_(r1))
-      result := E_IO_ERROR
-    elseif status <> $00
-      debug("  [checkCardStatus] ", zstr_(caller), ": STATUS error=$", uhex_byte_(status))
-      if status & CSR_OUT_OF_RANGE
-        debug("    -> OUT_OF_RANGE")
-      if status & CSR_ERASE_PARAM
-        debug("    -> ERASE_PARAM")
-      if status & CSR_WP_VIOLATION
-        debug("    -> WP_VIOLATION")
-      if status & CSR_CARD_ECC_FAILED
-        debug("    -> CARD_ECC_FAILED")
-      if status & CSR_CC_ERROR
-        debug("    -> CC_ERROR")
-      if status & CSR_ERROR
-        debug("    -> ERROR")
-      if status & CSR_WP_ERASE_SKIP
-        debug("    -> WP_ERASE_SKIP")
-      if status & CSR_CARD_IS_LOCKED
-        debug("    -> CARD_IS_LOCKED")
-      result := E_IO_ERROR
+  pinh(cs)                                                                      ' Deselect card
+
+  ' ═════════════════════════════════════════════════════════════════════
+  ' STAGE CMD13 RESULTS - Preserve for diagnostic inspection
+  ' ═════════════════════════════════════════════════════════════════════
+  last_cmd13_r1 := r1
+  last_cmd13_status := status
+  if r1 <> 0 or status <> 0
+    last_cmd13_error := (r1 << 8) | status                                     ' Preserve last error
+
+  ' Log pre-capture for diagnostic visibility
+  debug("  [checkCardStatus] ", zstr_(caller), ": pre=[", uhex_byte_(cmd13_pre_capture[0]), " ", uhex_byte_(cmd13_pre_capture[1]), " ", uhex_byte_(cmd13_pre_capture[2]), " ", uhex_byte_(cmd13_pre_capture[3]), " ", uhex_byte_(cmd13_pre_capture[4]), " ", uhex_byte_(cmd13_pre_capture[5]), "] NCR=", udec_(cmd13_capture_len), " R1=$", uhex_byte_(r1), " ST=$", uhex_byte_(status))
+
+  ' Check for errors
+  if r1 <> $00
+    debug("  [checkCardStatus] ", zstr_(caller), ": R1 error=$", uhex_byte_(r1))
+    result := E_IO_ERROR
+  elseif status <> $00
+    debug("  [checkCardStatus] ", zstr_(caller), ": STATUS error=$", uhex_byte_(status))
+    if status & CSR_OUT_OF_RANGE
+      debug("    -> OUT_OF_RANGE")
+    if status & CSR_ERASE_PARAM
+      debug("    -> ERASE_PARAM")
+    if status & CSR_WP_VIOLATION
+      debug("    -> WP_VIOLATION")
+    if status & CSR_CARD_ECC_FAILED
+      debug("    -> CARD_ECC_FAILED")
+    if status & CSR_CC_ERROR
+      debug("    -> CC_ERROR")
+    if status & CSR_ERROR
+      debug("    -> ERROR")
+    if status & CSR_WP_ERASE_SKIP
+      debug("    -> WP_ERASE_SKIP")
+    if status & CSR_CARD_IS_LOCKED
+      debug("    -> CARD_IS_LOCKED")
+    result := E_IO_ERROR
 
 
 PRI transfer(data,bits) : result | _cs, _mosi, _miso, _sck, delay

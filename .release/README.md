@@ -44,6 +44,8 @@ sd-card-driver/
     │   ├── README.md                        Test infrastructure guide
     │   ├── SD_RT_*_tests.spin2              20 test suites (412 tests)
     │   └── isp_rt_utilities.spin2           Shared test framework
+    └── diagnostic-tests/                 Temporary: field diagnostic (withdraw after v1.3.0)
+        └── SD_diag_cmd13_capture.spin2      CMD13 framing analysis for problem cards
 ```
 
 ## Prerequisites
