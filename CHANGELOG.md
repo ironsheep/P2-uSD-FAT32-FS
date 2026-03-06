@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-03-05
+
+**CMD13 compatibility analysis, audit severity corrections, and regression test strengthening.**
+
+### Improvements
+
+- Audit: Partition type $0B (FAT32 CHS) accepted as valid alongside $0C (FAT32 LBA)
+- Audit: Backup FSInfo mismatch downgraded from error to warning (common on FAT32 media)
+- CMD13 compatibility analysis and probe infrastructure for cards with broken SPI-mode status reporting
+
+### Tests
+
+- 20 new tests across 7 suites (392→412 total), verified on hardware
+- Sector boundary coverage: 511-byte and 513-byte read/write round-trip tests
+- tellHandle() postconditions verified after read and write operations
+- EOF handling: exact-EOF read, pre-EOF false check, partial-read remaining bytes
+- fileSizeHandle() verified during write phase of boundary tests
+- Guard zone overflow detection on directory read buffers
+- Handle type mismatch: file operations on directory handles return E_NOT_A_DIR_HANDLE
+- Use-after-close: all 7 handle operations return E_INVALID_HANDLE on closed handles
+- Post-unmount state: APIs return E_NOT_MOUNTED, remount succeeds
+- CRC error observability: getCRCMismatchCount() verified after injected read errors
+- Handle pool recycling: mixed file and directory handles reuse freed slots
+
 ## [1.2.0] - 2026-03-02
 
 **Consistent error codes across the entire public API, card presence detection, and transport-layer diagnostics.**
@@ -130,7 +154,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Initial testing release** -- driver, utilities, demo shell, and 263+ regression tests.
 
-[Unreleased]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.2.1...HEAD
+[1.2.1]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v0.9.3...v1.0.0
