@@ -74,7 +74,7 @@ mbr_buf         BYTE    0[sd.SECTOR_SIZE]
 readBuffer      BYTE    0[64]
 readBuffer_guard BYTE   0[16]
 
-PUB go() | result, handle, h1, h2, h3, h4, h5, bytesRead, bytesWritten
+PUB go() | result, handle, h1, h2, h3, h4, h5, hDir, bytesRead, bytesWritten
 '' Main entry point for error handling regression tests
 ''
 '' Tests error conditions and edge cases for the SD card driver
@@ -302,6 +302,38 @@ PUB go() | result, handle, h1, h2, h3, h4, h5, bytesRead, bytesWritten
         ' Reading from a write handle is allowed - documents this behavior
         utils.evaluateBool(bytesRead >= 0, @"readHandle returns >= 0", true)
         sd.closeFileHandle(handle)
+
+    ' Test: tellHandle on dir handle returns E_NOT_A_DIR_HANDLE
+    utils.startTest(@"tellHandle on dir handle returns error")
+    hDir := sd.openDirectory(@".")
+    if hDir >= 0
+        result := sd.tellHandle(hDir)
+        utils.evaluateSingleValue(result, @"tellHandle(dirH)", sd.E_NOT_A_DIR_HANDLE)
+        sd.closeDirectoryHandle(hDir)
+
+    ' Test: fileSizeHandle on dir handle returns E_NOT_A_DIR_HANDLE
+    utils.startTest(@"fileSizeHandle on dir handle returns error")
+    hDir := sd.openDirectory(@".")
+    if hDir >= 0
+        result := sd.fileSizeHandle(hDir)
+        utils.evaluateSingleValue(result, @"fileSizeHandle(dirH)", sd.E_NOT_A_DIR_HANDLE)
+        sd.closeDirectoryHandle(hDir)
+
+    ' Test: eofHandle on dir handle returns E_NOT_A_DIR_HANDLE
+    utils.startTest(@"eofHandle on dir handle returns error")
+    hDir := sd.openDirectory(@".")
+    if hDir >= 0
+        result := sd.eofHandle(hDir)
+        utils.evaluateSingleValue(result, @"eofHandle(dirH)", sd.E_NOT_A_DIR_HANDLE)
+        sd.closeDirectoryHandle(hDir)
+
+    ' Test: syncHandle on dir handle returns E_NOT_A_DIR_HANDLE
+    utils.startTest(@"syncHandle on dir handle returns error")
+    hDir := sd.openDirectory(@".")
+    if hDir >= 0
+        result := sd.syncHandle(hDir)
+        utils.evaluateSingleValue(result, @"syncHandle(dirH)", sd.E_NOT_A_DIR_HANDLE)
+        sd.closeDirectoryHandle(hDir)
 
     ' ----------------------------------
     ' TEST GROUP: Rename Edge Cases

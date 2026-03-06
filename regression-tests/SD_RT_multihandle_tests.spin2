@@ -62,7 +62,7 @@ content4        BYTE    "Content for file FOUR - fourth test file", 0
 readBuffer      BYTE    0[256]
 readBuffer_guard BYTE   0[16]
 
-PUB go() | result, h1, h2, h3, h4, h5, h6, bytesRead, bytesWritten, size
+PUB go() | result, handle, h1, h2, h3, h4, h5, h6, hDir, hDir2, bytesRead, bytesWritten, size
 '' Main entry point for multi-handle regression tests
 ''
 '' Tests V3 handle-based file API with multiple simultaneous file handles
@@ -438,6 +438,87 @@ PUB go() | result, h1, h2, h3, h4, h5, h6, bytesRead, bytesWritten, size
     utils.startTest(@"eofHandle(-1) returns E_INVALID_HANDLE")
     result := sd.eofHandle(-1)
     utils.evaluateSingleValue(result, @"eofHandle(-1)", sd.E_INVALID_HANDLE)
+
+    ' ======================================================================
+    ' TEST GROUP: Use-After-Close (recently valid handle)
+    ' ======================================================================
+    utils.startTestGroup(@"Use-After-Close")
+
+    ' Create file, open, close, then test all 7 operations on stale handle
+    utils.startTest(@"All handle ops fail on closed handle")
+    utils.setCheckCountPerTest(7)
+    sd.deleteFile(@testfile1)
+    handle := sd.createFileNew(@testfile1)
+    if handle >= 0
+        sd.writeHandle(handle, @content1, strsize(@content1))
+        sd.closeFileHandle(handle)
+
+        result := sd.readHandle(handle, @readBuffer, 10)
+        utils.evaluateSubValue(result, @"readHandle(closed)", sd.E_INVALID_HANDLE)
+
+        result := sd.writeHandle(handle, @content1, 5)
+        utils.evaluateSubValue(result, @"writeHandle(closed)", sd.E_INVALID_HANDLE)
+
+        result := sd.seekHandle(handle, 0)
+        utils.evaluateSubValue(result, @"seekHandle(closed)", sd.E_INVALID_HANDLE)
+
+        result := sd.tellHandle(handle)
+        utils.evaluateSubValue(result, @"tellHandle(closed)", sd.E_INVALID_HANDLE)
+
+        result := sd.fileSizeHandle(handle)
+        utils.evaluateSubValue(result, @"fileSizeHandle(closed)", sd.E_INVALID_HANDLE)
+
+        result := sd.eofHandle(handle)
+        utils.evaluateSubValue(result, @"eofHandle(closed)", sd.E_INVALID_HANDLE)
+
+        result := sd.syncHandle(handle)
+        utils.evaluateSubValue(result, @"syncHandle(closed)", sd.E_INVALID_HANDLE)
+    utils.showSubTestResults()
+    utils.setCheckCountPerTest(1)
+
+    ' ======================================================================
+    ' TEST GROUP: Handle Pool Recycling (file + dir)
+    ' ======================================================================
+    utils.startTestGroup(@"Handle Pool Recycling")
+
+    utils.startTest(@"Mixed file and dir handles recycle")
+    utils.setCheckCountPerTest(4)
+    ' Open 4 file handles
+    h1 := sd.openFileRead(@testfile1)
+    h2 := sd.openFileRead(@testfile2)
+    h3 := sd.openFileRead(@testfile3)
+    h4 := sd.openFileRead(@testfile4)
+
+    ' Open 2 dir handles (fills pool to 6)
+    hDir := sd.openDirectory(@".")
+    utils.evaluateSubBool(hDir >= 0, @"5th handle (dir)", true)
+
+    hDir2 := sd.openDirectory(@".")
+    utils.evaluateSubBool(hDir2 >= 0, @"6th handle (dir)", true)
+
+    ' Close a dir handle and a file handle
+    sd.closeDirectoryHandle(hDir)
+    sd.closeFileHandle(h2)
+
+    ' Open new file handle - should get recycled slot
+    result := sd.openFileRead(@testfile2)
+    utils.evaluateSubBool(result >= 0, @"recycled file handle", true)
+    if result >= 0
+        sd.closeFileHandle(result)
+
+    ' Open new dir handle - should get recycled slot
+    result := sd.openDirectory(@".")
+    utils.evaluateSubBool(result >= 0, @"recycled dir handle", true)
+    if result >= 0
+        sd.closeDirectoryHandle(result)
+
+    ' Cleanup remaining handles
+    sd.closeFileHandle(h1)
+    sd.closeFileHandle(h3)
+    sd.closeFileHandle(h4)
+    sd.closeDirectoryHandle(hDir2)
+    utils.showSubTestResults()
+    utils.setCheckCountPerTest(1)
 
     ' ======================================================================
     ' Cleanup and Summary

@@ -66,6 +66,7 @@ genFileName     BYTE    0[16]
 
 ' Buffer for read-back verification
 readBuf         BYTE    0[32]
+readBuf_guard   BYTE    0[16]
 
 PUB go() | result, pEntry, pFilename, attrs, fileCount, idx, handle, bytesRead
 '' Main entry point for directory regression tests
@@ -374,7 +375,9 @@ PUB go() | result, pEntry, pFilename, attrs, fileCount, idx, handle, bytesRead
     handle := sd.openFileRead(@genFileName)
     if handle >= 0
         bytefill(@readBuf, 0, 32)
+        utils.initGuard(@readBuf_guard)
         bytesRead := sd.readHandle(handle, @readBuf, 32)
+        utils.checkGuard(@readBuf_guard, @"readBuf guard")
         sd.closeFileHandle(handle)
         utils.evaluateSubBool(bytesRead > 0, @"FILE10.TXT readable", true)
     else

@@ -58,7 +58,7 @@ testfile2       BYTE    "TEST2.BIN", 0
 sectorBuffer    BYTE    0[512]
 sectorBuffer_guard BYTE 0[16]
 
-PUB go() | result, pLabel, freeSpace, handle
+PUB go() | result, pLabel, freeSpace, handle, bytesRead
 '' Main entry point for mount/unmount regression tests
 ''
 '' Tests SD card mount, unmount, and basic card operations
@@ -210,6 +210,35 @@ PUB go() | result, pLabel, freeSpace, handle
     utils.startTest(@"Card still works after 3 mount/unmount cycles")
     freeSpace := sd.freeSpace()
     utils.evaluateRange(freeSpace, @"freeSpace()", 1, $7FFF_FFFF)
+
+    ' ----------------------------------
+    ' TEST GROUP: Post-Unmount State
+    ' ----------------------------------
+    utils.startTestGroup(@"Post-Unmount State")
+
+    ' Unmount, then verify operations fail with E_NOT_MOUNTED
+    sd.unmount()
+
+    utils.startTest(@"openFileRead() after unmount returns E_NOT_MOUNTED")
+    handle := sd.openFileRead(@testfile1)
+    utils.evaluateSingleValue(handle, @"openFileRead()", sd.E_NOT_MOUNTED)
+
+    utils.startTest(@"createFileNew() after unmount returns E_NOT_MOUNTED")
+    handle := sd.createFileNew(@testfile1)
+    utils.evaluateSingleValue(handle, @"createFileNew()", sd.E_NOT_MOUNTED)
+
+    utils.startTest(@"changeDirectory() after unmount returns E_NOT_MOUNTED")
+    result := sd.changeDirectory(@"/")
+    utils.evaluateSingleValue(result, @"changeDirectory()", sd.E_NOT_MOUNTED)
+
+    ' Remount and verify clean state
+    utils.startTest(@"Remount after unmount succeeds")
+    result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    utils.evaluateSingleValue(result, @"mount() after unmount", sd.SUCCESS)
+
+    utils.startTest(@"freeSpace() works after remount")
+    freeSpace := sd.freeSpace()
+    utils.evaluateRange(freeSpace, @"freeSpace() after remount", 1, $7FFF_FFFF)
 
 #IFDEF SD_INCLUDE_STACK_CHECK
     debug(" ")

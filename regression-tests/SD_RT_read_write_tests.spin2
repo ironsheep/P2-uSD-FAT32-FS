@@ -336,6 +336,69 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize
         utils.evaluateSingleValue(bytesRead, @"readHandle() at EOF", 10)  ' Should get 10
         sd.closeFileHandle(handle)
 
+    utils.startTest(@"tellHandle() tracks write position")
+    utils.setCheckCountPerTest(3)
+    sd.deleteFile(@testBoundary)
+    handle := sd.createFileNew(@testBoundary)
+    if handle >= 0
+        result := sd.tellHandle(handle)
+        utils.evaluateSubValue(result, @"tell after create", 0)
+        utils.fillBufferWithPattern(@writeBuffer, 256, $E0)
+        sd.writeHandle(handle, @writeBuffer, 256)
+        result := sd.tellHandle(handle)
+        utils.evaluateSubValue(result, @"tell after write 256", 256)
+        sd.writeHandle(handle, @writeBuffer, 256)
+        result := sd.tellHandle(handle)
+        utils.evaluateSubValue(result, @"tell after write 512", 512)
+        sd.closeFileHandle(handle)
+    utils.showSubTestResults()
+    utils.setCheckCountPerTest(1)
+
+    utils.startTest(@"tellHandle() tracks read position")
+    utils.setCheckCountPerTest(2)
+    handle := sd.openFileRead(@testBoundary)
+    if handle >= 0
+        result := sd.tellHandle(handle)
+        utils.evaluateSubValue(result, @"tell at start", 0)
+        sd.readHandle(handle, @readBuffer, 100)
+        result := sd.tellHandle(handle)
+        utils.evaluateSubValue(result, @"tell after read 100", 100)
+        sd.closeFileHandle(handle)
+    utils.showSubTestResults()
+    utils.setCheckCountPerTest(1)
+
+    utils.startTest(@"Read at exact EOF returns 0 bytes")
+    utils.setCheckCountPerTest(3)
+    handle := sd.openFileRead(@testBoundary)  ' 512-byte file from tellHandle test
+    if handle >= 0
+        bytesRead := sd.readHandle(handle, @readBuffer, 512)
+        utils.evaluateSubValue(bytesRead, @"read all 512", 512)
+        result := sd.eofHandle(handle)
+        utils.evaluateSubBool(result <> 0, @"eofHandle at EOF", true)
+        bytesRead := sd.readHandle(handle, @readBuffer, 1)
+        utils.evaluateSubValue(bytesRead, @"read past EOF", 0)
+        sd.closeFileHandle(handle)
+    utils.showSubTestResults()
+    utils.setCheckCountPerTest(1)
+
+    utils.startTest(@"eofHandle FALSE before EOF")
+    handle := sd.openFileRead(@testBoundary)
+    if handle >= 0
+        result := sd.eofHandle(handle)
+        utils.evaluateBool(result == 0, @"eofHandle before read", true)
+        sd.closeFileHandle(handle)
+
+    utils.startTest(@"Partial read returns remaining bytes")
+    handle := sd.openFileRead(@testBoundary)
+    if handle >= 0
+        sd.readHandle(handle, @readBuffer, 500)  ' Read most of file
+        utils.initGuard(@readBuffer_guard)
+        bytesRead := sd.readHandle(handle, @readBuffer, 100)  ' Request 100, only 12 remain
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+        utils.evaluateSingleValue(bytesRead, @"partial read", 12)
+        sd.closeFileHandle(handle)
+    sd.deleteFile(@testBoundary)
+
     ' ----------------------------------
     ' TEST GROUP: File Size Boundary Conditions
     ' ----------------------------------
@@ -366,6 +429,8 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize
     if handle >= 0
         tempByte := $42
         sd.writeHandle(handle, @tempByte, 1)
+        fileSize := sd.fileSizeHandle(handle)
+        utils.evaluateSubValue(fileSize, @"fileSize after write 1", 1)
         sd.closeFileHandle(handle)
     handle := sd.openFileRead(@testBoundary)
     if handle >= 0
@@ -378,6 +443,27 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize
         utils.evaluateSubValue(readBuffer[0], @"byte value", $42)
         sd.closeFileHandle(handle)
 
+    ' Test: Sector - 1 (511 bytes - just under sector boundary)
+    utils.startTest(@"Sector - 1 boundary - 511 bytes")
+    sd.deleteFile(@testBoundary)
+    handle := sd.createFileNew(@testBoundary)
+    if handle >= 0
+        utils.fillBufferWithPattern(@writeBuffer, 511, $A0)
+        sd.writeHandle(handle, @writeBuffer, 511)
+        sd.closeFileHandle(handle)
+    handle := sd.openFileRead(@testBoundary)
+    if handle >= 0
+        fileSize := sd.fileSizeHandle(handle)
+        utils.evaluateSubValue(fileSize, @"fileSize 511 bytes", 511)
+        bytefill(@readBuffer, 0, 512)
+        utils.initGuard(@readBuffer_guard)
+        bytesRead := sd.readHandle(handle, @readBuffer, 511)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+        utils.evaluateSubValue(bytesRead, @"read 511 bytes", 511)
+        result := utils.verifyBufferPattern(@readBuffer, 511, $A0)
+        utils.evaluateSubBool(result, @"511-byte pattern match", true)
+        sd.closeFileHandle(handle)
+
     ' Test: Exact sector boundary (512 bytes)
     utils.startTest(@"Exact sector boundary - 512 bytes")
     sd.deleteFile(@testBoundary)
@@ -385,6 +471,8 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize
     if handle >= 0
         utils.fillBufferWithPattern(@writeBuffer, 512, $B0)
         sd.writeHandle(handle, @writeBuffer, 512)
+        fileSize := sd.fileSizeHandle(handle)
+        utils.evaluateSubValue(fileSize, @"fileSize after write 512", 512)
         sd.closeFileHandle(handle)
     handle := sd.openFileRead(@testBoundary)
     if handle >= 0
@@ -407,6 +495,8 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize
         sd.writeHandle(handle, @writeBuffer, 512)
         tempByte := $C1  ' Extra byte in second sector
         sd.writeHandle(handle, @tempByte, 1)
+        fileSize := sd.fileSizeHandle(handle)
+        utils.evaluateSubValue(fileSize, @"fileSize after write 513", 513)
         sd.closeFileHandle(handle)
     handle := sd.openFileRead(@testBoundary)
     if handle >= 0

@@ -67,7 +67,7 @@ dhContent       BYTE    "Directory handle test content", 0
 readBuffer      BYTE    0[256]
 readBuffer_guard BYTE   0[16]
 
-PUB go() | result, h1, h2, h3, h4, h5, hDir, hDir2, pEntry, pName, attrs, entryCount, foundFiles, foundDirs
+PUB go() | result, h1, h2, h3, h4, h5, hDir, hDir2, pEntry, pName, attrs, entryCount, foundFiles, foundDirs, bytesRead
 '' Main entry point for directory handle regression tests
 ''
 '' Tests V3 directory handle enumeration API
@@ -289,6 +289,30 @@ PUB go() | result, h1, h2, h3, h4, h5, hDir, hDir2, pEntry, pName, attrs, entryC
     ' Close an already-closed handle - should not crash
     sd.closeDirectoryHandle(-1)
     utils.recordPass()  ' If we get here without crash, pass
+
+    ' Test: readHandle on dir handle returns E_NOT_A_DIR_HANDLE
+    utils.startTest(@"readHandle on dir handle returns E_NOT_A_DIR_HANDLE")
+    hDir := sd.openDirectory(@".")
+    if hDir >= 0
+        bytesRead := sd.readHandle(hDir, @readBuffer, 10)
+        utils.evaluateSingleValue(bytesRead, @"readHandle(dirH)", sd.E_NOT_A_DIR_HANDLE)
+        sd.closeDirectoryHandle(hDir)
+
+    ' Test: writeHandle on dir handle returns E_NOT_A_DIR_HANDLE
+    utils.startTest(@"writeHandle on dir handle returns E_NOT_A_DIR_HANDLE")
+    hDir := sd.openDirectory(@".")
+    if hDir >= 0
+        result := sd.writeHandle(hDir, @dhContent, 10)
+        utils.evaluateSingleValue(result, @"writeHandle(dirH)", sd.E_NOT_A_DIR_HANDLE)
+        sd.closeDirectoryHandle(hDir)
+
+    ' Test: seekHandle on dir handle returns E_NOT_A_DIR_HANDLE
+    utils.startTest(@"seekHandle on dir handle returns E_NOT_A_DIR_HANDLE")
+    hDir := sd.openDirectory(@".")
+    if hDir >= 0
+        result := sd.seekHandle(hDir, 0)
+        utils.evaluateSingleValue(result, @"seekHandle(dirH)", sd.E_NOT_A_DIR_HANDLE)
+        sd.closeDirectoryHandle(hDir)
 
     ' ======================================================================
     ' TEST GROUP: Handle Pool Interaction

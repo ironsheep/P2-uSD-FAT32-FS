@@ -905,9 +905,97 @@ This clears the reserved high 4 bits along with the low 28.
 
 ---
 
-## TD-009: (Reserved for next decision)
+## TD-009: CMD13 Compatibility — Probe + Advisory API
+
+**Date**: 2026-03-05
+**Status**: DECIDED — Strategy A (probe at init) + Strategy C (cardWarnings API)
+**Analysis**: [CMD13-COMPATIBILITY-ANALYSIS.md](../Analysis/CMD13-COMPATIBILITY-ANALYSIS.md)
+
+### Background
+
+A user reported that an older AData 16GB SDHC card (MID $1D, revision 0.2, manufactured 2013) blocks on mount because `checkCardStatus()` returns E_IO_ERROR after every CMD13 call. The card's CMD13 response has R1 bit 7 = 1 (spec violation) and STATUS = $3F (6/8 error bits set simultaneously — physically impossible). All data operations work perfectly when CMD13 is bypassed.
+
+Research confirms CMD13 failures in SPI mode are a known class of issue on older/budget controllers. Status-reporting commands are among the least reliably implemented parts of the SPI command set.
+
+### Alternatives Considered
+
+Six strategies were evaluated across two dimensions — detection and reporting:
+
+**Detection:**
+- **(A) Probe once at init** — send CMD13 after card init, check for spec violations. Simple, catches consistently broken cards.
+- **(F) Runtime tracking** — monitor CMD13 over time, auto-downgrade. No evidence of intermittent CMD13 failure exists. Adds overhead to every CMD13 call.
+
+**Reporting:**
+- **(B) Positive mount() return** — changes mount() contract, breaks callers checking `result == 0`.
+- **(C) New cardWarnings() API** — clean separation, mount() unchanged, extensible bitmask, opt-in for callers.
+- **(D) Overload error() channel** — semantically wrong (warning is not error), overwrites on next operation.
+
+### Decision
+
+**Use Strategy A + C:**
+
+1. **CMD13 probe at end of initCard()** — send CMD13, check R1 bit 7 and impossible error combinations. Set `cmd13_reliable` flag (DAT BYTE, default TRUE).
+
+2. **Gate all four checkCardStatus() call sites** on `cmd13_reliable`. If FALSE, skip CMD13 and return SUCCESS.
+
+3. **New `cardWarnings() : flags` PUB method** — returns `card_warning_flags` bitmask. New constant `CW_CMD13_UNRELIABLE = $01`.
+
+4. **Debug message at mount** when CMD13 is unreliable.
+
+### Rationale
+
+- **No behavior change for working cards** — the vast majority of cards implement CMD13 correctly. CMD13 remains active for them, providing post-write verification.
+- **Automatic detection** — no user configuration needed. The probe catches cards that are consistently broken.
+- **Clean reporting** — mount() contract unchanged. Callers who care check `cardWarnings()`, callers who don't are unaffected. Extensible for future advisories.
+- **Minimal implementation** — one probe, one flag, four if-checks, one new PUB method, one CON constant.
+- **Runtime tracking deferred** — Strategy F solves a problem we haven't observed. Can be added later if intermittent CMD13 behavior is ever reported.
+
+---
+
+## TD-010: Audit Severity — Downgrade Benign Metadata Mismatches to Warnings
+
+**Date**: 2026-03-05
+**Status**: DECIDED — Downgrade two checks; keep VBR backup as FAIL
+**Analysis**: [AUDIT-SEVERITY-ANALYSIS.md](../Analysis/AUDIT-SEVERITY-ANALYSIS.md)
+
+### Background
+
+The same AData card triggered two audit failures that are common, benign inconsistencies on real-world FAT32 media:
+
+1. `[FAIL] Partition type ($0C = FAT32 LBA)` — card has $0B (FAT32 CHS)
+2. `[FAIL] Backup FSInfo matches primary` — primary and backup differ
+
+Research confirms both are normal. Every mainstream OS mounts such volumes without issue.
+
+### Checks Affected
+
+| Check | Current | Proposed | Rationale |
+|-------|---------|----------|-----------|
+| **Partition type $0B** | `[FAIL]` | `[PASS]` (accept both $0B and $0C) | Both are FAT32. Driver uses LBA start field regardless. $0B is not an error. |
+| **Backup FSInfo mismatch** | `[FAIL]` | `[WARN]` | FSInfo holds performance hints only. OSes routinely don't sync the backup. Zero operational risk. |
+| **Backup VBR mismatch** | `[FAIL]` | `[FAIL]` (no change) | VBR holds irreplaceable filesystem geometry. A mismatch should be flagged so FSCK can repair it. No evidence of false positives. |
+
+### Decision
+
+1. **Partition type**: Change audit to accept both $0B and $0C as valid FAT32. This is a PASS, not a warning — $0B is a legitimate partition type.
+
+2. **Backup FSInfo mismatch**: Downgrade from `[FAIL]` to `[WARN]`. Increment `v_warningCount` instead of `v_failCount`.
+
+3. **Backup VBR mismatch**: Keep as `[FAIL]`. The VBR contains irreplaceable filesystem geometry (bytes/sector, sectors/cluster, FAT size, root cluster). Unlike FSInfo hints, this data cannot be recalculated. A mismatched backup means the disaster recovery copy is stale — exactly the kind of issue the audit should flag so FSCK can repair it. No user report or research has shown this to be a false positive.
+
+### Rationale
+
+- **$0B is not an error** — it's a valid FAT32 type code. Failing on it produces false negatives that make working cards appear defective.
+- **FSInfo backup is cosmetic** — it holds recalculable performance hints. OSes routinely don't sync the backup. Zero operational risk.
+- **VBR backup is not cosmetic** — it holds irreplaceable geometry. Failing on a mismatch is correct audit behavior that drives FSCK repair.
+- **Warning infrastructure exists** — the fsck utility already tracks `v_warningCount` and displays it in the summary. The audit side just needs to use it.
+- **No changes to FSCK behavior** — FSCK already correctly repairs both backup mismatches by copying primary to backup. That behavior is appropriate for a repair tool.
+
+---
+
+## TD-011: (Reserved for next decision)
 
 ---
 
 *Document created: 2026-01-17*
-*Last updated: 2026-02-25*
+*Last updated: 2026-03-05*

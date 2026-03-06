@@ -4,38 +4,38 @@ Automated regression test suite for the P2 SD Card Driver. All tests execute on 
 
 ## Test Summary
 
-### Core Test Suites (verified 2026-03-02)
+### Core Test Suites (verified 2026-03-05)
 
 | Test Suite | Description | Tests |
 |------------|-------------|-------|
-| **Mount Tests** | Card initialization, mounting, unmounting, pre-mount errors | 21 |
+| **Mount Tests** | Card initialization, mounting, unmounting, pre/post-mount errors | 26 |
 | **File Operations** | Create, open, close, delete, rename (V3 handle API) | 22 |
-| **Read/Write Tests** | Data integrity, sector boundaries, multi-cluster, large files | 38 |
+| **Read/Write Tests** | Data integrity, sector boundaries, tellHandle/EOF postconditions, multi-cluster, large files | 44 |
 | **Directory Tests** | Directory listing, navigation, deep nesting, boundaries, many-file stress | 29 |
 | **Seek Tests** | Random access, cross-sector seeks, seek boundaries | 37 |
 | **Multicog Tests** | Singleton pattern, concurrent access, lock serialization | 14 |
-| **Multihandle Tests** | Multiple simultaneous file handles, error boundaries | 19 |
+| **Multihandle Tests** | Multiple simultaneous file handles, use-after-close, pool recycling | 21 |
 | **Multiblock Tests** | Multi-sector streamer DMA transfers (CMD18/CMD25) | 6 |
 | **Raw Sector Tests** | Direct sector read/write, large LBA addressing | 14 |
 | **Format Tests** | FAT32 structure validation, cross-OS compatibility | 46 |
 | **Subdirectory Ops Tests** | Cross-buffer cache coherence, empty files, subdir operations | 18 |
-| **Core Total** | | **264** |
+| **Core Total** | | **277** |
 
 ### Additional Test Suites
 
 | Test Suite | Description | Tests |
 |------------|-------------|-------|
-| **Directory Handle Tests** | V3 directory handle enumeration, pool interaction, paths | 22 |
+| **Directory Handle Tests** | V3 directory handle enumeration, pool interaction, E_NOT_A_DIR_HANDLE | 25 |
 | **Volume Tests** | Volume label, VBR access, syncAll, sync, setDate | 23 |
 | **Register Tests** | CSD register access, timeout values, capacity cross-check | 10 |
 | **Speed Tests** | SPI frequency, CMD6, high-speed mode, speed boundaries | 15 |
 | **CRC Diagnostic Tests** | CRC counters, validation toggle, CMD13 diagnostics | 14 |
-| **Error Handling Tests** | Error conditions, invalid handles, handle type mismatch, rename edge cases | 10 |
+| **Error Handling Tests** | Error conditions, invalid handles, dir handle type mismatch, rename edge cases | 14 |
 | **CRC Validation Tests** | CRC error injection hooks, forced read/write CRC errors, hook state management | 6 |
-| **Recovery Tests** | Recovery after read/write errors, remount recovery, handle isolation | 7 |
+| **Recovery Tests** | Recovery after read/write errors, CRC counter verification, remount recovery, handle isolation | 7 |
 | **FIFO Tests** | String FIFO (isp_string_fifo) inter-cog communication | 21 |
-| | **Additional Total** | **128** |
-| | **Grand Total (20 suites)** | **392** |
+| | **Additional Total** | **135** |
+| | **Grand Total (20 suites)** | **412** |
 
 ## Prerequisites
 

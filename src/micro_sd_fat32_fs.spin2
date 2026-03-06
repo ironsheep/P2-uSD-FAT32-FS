@@ -168,6 +168,10 @@ CON ' error codes
   E_FILE_ALREADY_OPEN = -92     ' File is already open for writing (single-writer policy)
   E_NOT_A_DIR_HANDLE  = -93     ' Handle is not a directory handle (or vice versa)
 
+CON ' card warning flags (bitmask, returned by cardWarnings())
+  CW_NONE              = $00     ' No warnings
+  CW_CMD13_UNRELIABLE  = $01     ' CMD13 probe failed at init; status checks disabled for this card
+
 CON ' V3 multi-file handle configuration
   ' ═══════════════════════════════════════════════════════════════════════════
   ' FILE HANDLE SYSTEM - V3 supports multiple simultaneously open files
@@ -405,6 +409,8 @@ DAT ' ---- Singleton Control ----
   last_cmd13_r1     BYTE    0           ' Last R1 byte from CMD13
   last_cmd13_status BYTE    0           ' Last STATUS byte from CMD13
   last_cmd13_error  WORD    0           ' Last non-zero R2 (preserved until next error)
+  cmd13_reliable    BYTE    TRUE        ' FALSE if CMD13 probe failed at init (default: enabled)
+  card_warning_flags BYTE   CW_NONE    ' Advisory bitmask (queried via cardWarnings())
 
   ' ═══════════════════════════════════════════════════════════════════════
   ' PARAMETER BLOCK - Communication between API and worker cog
@@ -1103,6 +1109,16 @@ PUB error() : status
 '' @returns status - Error code from the most recent operation on this cog
 
   status := LONG[@last_error][COGID()]
+
+
+PUB cardWarnings() : warning_flags
+'' Get card advisory flags - returns bitmask of conditions discovered during mount.
+'' Check after mount() returns SUCCESS to detect degraded verification modes.
+'' Returns CW_NONE ($00) when no advisories are present.
+''
+'' @returns warning_flags - Bitmask of CW_* warning constants (CW_CMD13_UNRELIABLE, etc.)
+
+  warning_flags := card_warning_flags
 
 
 PUB checkStackGuard() : bIntact | idx
@@ -2642,6 +2658,8 @@ PRI do_mount() : result | reserved, pPart, pVBR, pFSI, idx, p_entry, cluster, se
 
           driver_mode := MODE_FILESYSTEM
           debug("  [do_mount] SUCCESS, mode=FILESYSTEM")
+          if card_warning_flags & CW_CMD13_UNRELIABLE
+            debug("  [do_mount] WARNING: CMD13 unreliable on this card - status checks disabled")
 
 
 PRI do_unmount() : result
@@ -3832,6 +3850,8 @@ PRI do_init_card_only() : result
     debug("  [do_init_card_only] Card initialized successfully")
     driver_mode := MODE_RAW
     debug("  [do_init_card_only] SUCCESS, mode=RAW")
+    if card_warning_flags & CW_CMD13_UNRELIABLE
+      debug("  [do_init_card_only] WARNING: CMD13 unreliable on this card - status checks disabled")
     result := SUCCESS
   else
     debug("  [do_init_card_only] FAIL: initCard() returned false")
@@ -4842,6 +4862,17 @@ PRI initCard() : result | timeout, resp, card_version, acmd41_arg, got_response
     repeat POST_INIT_DUMMY_REPS
       sp_transfer(-1, 8)                                                        '  8 dummy bytes = 64 clocks (using smart pins)
     debug("    [initCard] Dummy clocks sent, CS HIGH")
+
+    ' ============================================
+    ' STEP 9: Probe CMD13 reliability
+    ' Some older/budget controllers don't implement CMD13 in SPI mode.
+    ' Detect this now so checkCardStatus() can skip CMD13 on broken cards.
+    ' See DOCs/Analysis/CMD13-COMPATIBILITY-ANALYSIS.md
+    ' ============================================
+    cmd13_reliable := TRUE
+    card_warning_flags := CW_NONE
+    probeCmd13()
+
     debug("    [initCard] === INIT SUCCESS ===")
 
 
@@ -5595,15 +5626,75 @@ PRI recoverToIdle() : result
       result := E_IO_ERROR                                                        ' Card stuck - caller must handle
 
 
+PRI probeCmd13() | r1, status
+' Probe CMD13 reliability at end of initCard().
+' Sends a single CMD13 on an idle card and checks whether the response is valid.
+' If the response violates the SD spec (R1 bit 7 set, or 3+ simultaneous error
+' bits in STATUS on an idle card), marks cmd13_reliable := FALSE and sets
+' CW_CMD13_UNRELIABLE in card_warning_flags.
+'
+' @local r1 - R1 response byte from CMD13
+' @local status - STATUS byte (second byte of R2 response)
+
+  ' Send dummy clocks with CS HIGH (card recovery time)
+  pinh(cs)
+  sp_transfer_8($FF)
+  sp_transfer_8($FF)
+
+  ' Send CMD13
+  pinl(cs)
+  sp_transfer_8($40 | CMD13)
+  sp_transfer_8($00)
+  sp_transfer_8($00)
+  sp_transfer_8($00)
+  sp_transfer_8($00)
+  sp_transfer_8($FF)
+
+  ' Read R1 response
+  r1 := waitR1Response()
+  if r1 < 0
+    ' Timeout — card didn't respond to CMD13 at all
+    debug("    [probeCmd13] TIMEOUT - marking CMD13 unreliable")
+    pinh(cs)
+    cmd13_reliable := FALSE
+    card_warning_flags |= CW_CMD13_UNRELIABLE
+    return
+
+  ' Read STATUS byte (second byte of R2)
+  status := sp_transfer_8($FF)
+  pinh(cs)
+
+  ' Check 1: R1 bit 7 must be 0 per SD spec
+  if r1 & $80
+    debug("    [probeCmd13] R1 bit 7 set ($", uhex_byte_(r1), ") - marking CMD13 unreliable")
+    cmd13_reliable := FALSE
+    card_warning_flags |= CW_CMD13_UNRELIABLE
+    return
+
+  ' Check 2: 3+ error bits in STATUS on an idle card = garbage data
+  if ones status >= 3
+    debug("    [probeCmd13] STATUS has ", udec_(ones status), " error bits ($", uhex_byte_(status), ") - marking CMD13 unreliable")
+    cmd13_reliable := FALSE
+    card_warning_flags |= CW_CMD13_UNRELIABLE
+    return
+
+  debug("    [probeCmd13] CMD13 OK (R1=$", uhex_byte_(r1), " STATUS=$", uhex_byte_(status), ")")
+
+
 PRI checkCardStatus(caller) : result | r1, status
 ' Send CMD13 to verify card status after operation - checks R2 response for errors.
 ' R2 response format: R1 byte + status byte.
 ' Call this after every write operation and after CMD12.
+' Skipped entirely on cards where CMD13 was found unreliable at init.
 '
 ' @param caller - String identifying the calling function (for debug)
 ' @returns result - 0 on success (card OK), negative error code on error
 ' @local r1 - R1 response byte
 ' @local status - Status byte (second byte of R2)
+
+  ' Skip CMD13 on cards with broken implementation (detected by probeCmd13 at init)
+  if not cmd13_reliable
+    return
 
   ' Send dummy clocks with CS HIGH to ensure card is ready
   ' (Some cards need recovery time after previous operation)

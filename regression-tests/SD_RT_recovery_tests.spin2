@@ -76,7 +76,7 @@ readBuffer2_guard BYTE  0[16]
 beforeContent   BYTE    "BEFORE", 0
 afterContent    BYTE    "AFTER", 0
 
-PUB go() | result, handle, h0, h1, h2, bytesRead, bytesRead2
+PUB go() | result, handle, h0, h1, h2, bytesRead, bytesRead2, crcBaseline
 '' Main entry point for recovery scenario regression tests
 
     debug(" ")
@@ -157,14 +157,16 @@ PUB go() | result, handle, h0, h1, h2, bytesRead, bytesRead2
     ' Test 2: Seek and retry after exhaustive error
     ' open file -> arm(3) -> read fails -> clear -> seek(0) -> read succeeds
     utils.startTest(@"Seek and retry after exhaustive CRC error")
-    utils.setCheckCountPerTest(3)
+    utils.setCheckCountPerTest(4)
     sd.clearTestErrors()
     handle := sd.openFileRead(@recFile1)
     if handle >= 0
+        crcBaseline := sd.getCRCMismatchCount()
         sd.setTestForceReadError(MAX_READ_CRC_RETRIES)
         bytefill(@readBuffer, 0, BUFFER_SIZE)
         bytesRead := sd.readHandle(handle, @readBuffer, BUFFER_SIZE)
         utils.evaluateSubValue(bytesRead, @"read fails with 0", 0)
+        utils.evaluateSubBool(sd.getCRCMismatchCount() > crcBaseline, @"CRC mismatches counted", true)
 
         ' Clear errors and seek back to start
         sd.clearTestErrors()
