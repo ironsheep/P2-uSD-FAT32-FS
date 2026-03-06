@@ -168,9 +168,10 @@ CON ' error codes
   E_FILE_ALREADY_OPEN = -92     ' File is already open for writing (single-writer policy)
   E_NOT_A_DIR_HANDLE  = -93     ' Handle is not a directory handle (or vice versa)
 
-CON ' card warning flags (bitmask, returned by cardWarnings())
-  CW_NONE              = $00     ' No warnings
+CON ' card warning/capability flags (bitmask, returned by cardWarnings())
+  CW_NONE              = $00     ' No warnings or capabilities
   CW_CMD13_UNRELIABLE  = $01     ' CMD13 probe failed at init; status checks disabled for this card
+  CW_CMD23_SUPPORTED   = $02     ' CMD23 (SET_BLOCK_COUNT) confirmed working in SPI mode
 
 CON ' V3 multi-file handle configuration
   ' ═══════════════════════════════════════════════════════════════════════════
@@ -280,6 +281,7 @@ CON ' SD SPI command numbers (SD Physical Layer Spec)
   CMD13  = 13                   ' SEND_STATUS - get card status register (R2 response)
   CMD17  = 17                   ' READ_SINGLE_BLOCK
   CMD18  = 18                   ' READ_MULTIPLE_BLOCK - read consecutive sectors
+  CMD23  = 23                   ' SET_BLOCK_COUNT - pre-define sector count for CMD18/CMD25
   CMD24  = 24                   ' WRITE_BLOCK
   CMD25  = 25                   ' WRITE_MULTIPLE_BLOCK - write consecutive sectors
   ACMD41 = 41                   ' SD_SEND_OP_COND (requires CMD55 prefix)
@@ -409,7 +411,21 @@ DAT ' ---- Singleton Control ----
   last_cmd13_r1     BYTE    0           ' Last R1 byte from CMD13
   last_cmd13_status BYTE    0           ' Last STATUS byte from CMD13
   last_cmd13_error  WORD    0           ' Last non-zero R2 (preserved until next error)
+  last_cmd18_r1     BYTE    0           ' Last R1 byte from CMD18 (for multi-block read diagnostics)
+  last_cmd18_token  BYTE    0           ' Last data token or error token from CMD18 waitDataToken()
+  last_cmd18_result BYTE    0           ' Last waitDataToken() result: 0=ok, 1=timeout, 2=error token
+  last_cmd18_fail   BYTE    0           ' Failure path: 0=none, 1=R1 reject, 2=data token, 3=CMD12, 4=CMD13
+  last_cmd18_sread  BYTE    0           ' sectors_read at end of loop (before CMD12/CMD13)
+  last_cmd12_r1     BYTE    0           ' Last R1 from CMD12 (sendStopTransmission)
+  last_cmd12_busy   BYTE    0           ' CMD12 busy result: 0=ok, 1=timeout, 2=R1 error, 3=busy timeout
+  cmd12_capture_len BYTE    0           ' Number of bytes captured in cmd12_capture[]
+  cmd12_capture     BYTE    0[16]       ' Raw byte stream after CMD12 stuff byte (for framing analysis)
+  cmd12_pre_capture BYTE    0[7]        ' MISO bytes received DURING CMD12 command transmission (full-duplex)
+  last_cmd23_r1     BYTE    0           ' Last R1 from CMD23 (SET_BLOCK_COUNT): $00=accepted, $FF=not sent
+  last_cmd23_verify BYTE    0           ' Post-read verification byte: $FF=card stopped, other=still streaming
+  last_cmd23_used   BYTE    FALSE       ' TRUE if CMD23 path was used for the last multi-block read
   cmd13_reliable    BYTE    TRUE        ' FALSE if CMD13 probe failed at init (default: enabled)
+  cmd23_supported   BYTE    FALSE       ' TRUE if card advertises CMD23 in SCR CMD_SUPPORT
   card_warning_flags BYTE   CW_NONE    ' Advisory bitmask (queried via cardWarnings())
 
   ' ═══════════════════════════════════════════════════════════════════════
@@ -1112,11 +1128,14 @@ PUB error() : status
 
 
 PUB cardWarnings() : warning_flags
-'' Get card advisory flags - returns bitmask of conditions discovered during mount.
-'' Check after mount() returns SUCCESS to detect degraded verification modes.
-'' Returns CW_NONE ($00) when no advisories are present.
+'' Get card capability and advisory flags discovered during mount.
+'' Returns bitmask of conditions probed at init time.
+'' Check after mount() to learn what the card actually supports in SPI mode.
 ''
-'' @returns warning_flags - Bitmask of CW_* warning constants (CW_CMD13_UNRELIABLE, etc.)
+''   CW_CMD13_UNRELIABLE ($01) - CMD13 status checks disabled (broken SPI implementation)
+''   CW_CMD23_SUPPORTED  ($02) - CMD23 SET_BLOCK_COUNT confirmed working in SPI mode
+''
+'' @returns warning_flags - Bitmask of CW_* constants (CW_NONE if no flags set)
 
   warning_flags := card_warning_flags
 
@@ -1588,6 +1607,120 @@ PUB getLastCMD13Error() : r2
 '' @returns r2 - Last non-zero R2 response word
 
   r2 := last_cmd13_error
+
+
+PUB getLastCMD18R1() : r1
+'' Get last CMD18 R1 response - returns the R1 byte from the most recent CMD18 (READ_MULTIPLE_BLOCK).
+'' $00 = accepted, non-zero = rejected (see R1 bit definitions).
+''
+'' @returns r1 - R1 response byte from last CMD18
+
+  r1 := last_cmd18_r1
+
+
+PUB getLastCMD18Token() : token
+'' Get last data token from CMD18 - returns the token byte from the most recent waitDataToken().
+'' $FE = success (data start), $01-$0F = error tokens, $FF = no token received (timeout).
+''
+'' @returns token - Token byte from last CMD18 data wait
+
+  token := last_cmd18_token
+
+
+PUB getLastCMD18Result() : code
+'' Get last CMD18 outcome code - indicates which failure path was taken.
+'' 0 = success (got $FE), 1 = timeout (never got non-$FF), 2 = error token received.
+''
+'' @returns code - Outcome code (0=ok, 1=timeout, 2=error token)
+
+  code := last_cmd18_result
+
+
+PUB getLastCMD18FailPath() : path
+'' Get last CMD18 failure path - indicates where readSectors() failed.
+'' 0 = no failure, 1 = R1 reject, 2 = data token fail, 3 = CMD12 fail, 4 = CMD13 fail.
+''
+'' @returns path - Failure path code
+
+  path := last_cmd18_fail
+
+
+PUB getLastCMD18SectorsRead() : count
+'' Get sectors successfully read in last CMD18 operation before any post-read failure.
+''
+'' @returns count - Number of sectors read
+
+  count := last_cmd18_sread
+
+
+PUB getLastCMD12R1() : r1
+'' Get last CMD12 R1 response - returns the R1 byte from the most recent sendStopTransmission().
+''
+'' @returns r1 - R1 response byte (negative if timeout)
+
+  r1 := last_cmd12_r1
+
+
+PUB getLastCMD12Result() : code
+'' Get last CMD12 outcome - 0=ok, 1=R1 timeout, 2=R1 error bits, 3=busy timeout.
+''
+'' @returns code - Outcome code
+
+  code := last_cmd12_busy
+
+
+PUB getLastCMD12Capture(p_dest) : count
+'' Copy CMD12 raw byte stream capture to caller's buffer.
+'' Returns count of bytes before first non-$FF (NCR gap length).
+'' Buffer is 16 bytes: pre-R1 $FF padding, R1 byte, post-R1 bytes.
+'' Caller must provide a 16-byte buffer.
+''
+'' @param p_dest - Pointer to 16-byte destination buffer
+'' @returns count - Position of first non-$FF byte (NCR gap length)
+
+  bytemove(p_dest, @cmd12_capture, 16)
+  count := cmd12_capture_len
+
+PUB getLastCMD12PreCapture(p_dest)
+'' Copy the 7 MISO bytes received DURING CMD12 command transmission (full-duplex capture).
+'' These bytes reveal what the card was outputting while we were sending CMD12.
+'' If byte[0] is $FE, the card was already streaming the next data token.
+'' Caller must provide a 7-byte buffer.
+''
+'' @param p_dest - Pointer to 7-byte destination buffer
+
+  bytemove(p_dest, @cmd12_pre_capture, 7)
+
+PUB getLastCMD23Used() : used
+'' Get whether CMD23 path was used for the last multi-block read.
+''
+'' @returns used - TRUE if CMD23 was sent before CMD18, FALSE if CMD12 path was used
+
+  used := last_cmd23_used
+
+PUB getLastCMD23R1() : r1
+'' Get R1 response from last CMD23. Returns $FF if CMD23 was not sent.
+''
+'' @returns r1 - R1 response byte from CMD23 ($00=accepted, $FF=not sent)
+
+  r1 := last_cmd23_r1
+
+PUB getLastCMD23Verify() : verify_byte
+'' Get the post-read verification byte from CMD23 path.
+'' After reading the last sector, one extra byte is clocked.
+'' $FF means card stopped (auto-stop honored). Any other value means card was still streaming.
+''
+'' @returns verify_byte - MISO byte after last sector's CRC ($FF=stopped, other=still streaming)
+
+  verify_byte := last_cmd23_verify
+
+PUB getCmd23Supported() : supported
+'' Get whether the current card supports CMD23 (SET_BLOCK_COUNT).
+'' Determined from SCR CMD_SUPPORT field during init.
+''
+'' @returns supported - TRUE if CMD23 is available
+
+  supported := cmd23_supported
 
 
 PUB getLastReceivedCRC() : crc
@@ -4873,6 +5006,9 @@ PRI initCard() : result | timeout, resp, card_version, acmd41_arg, got_response
     card_warning_flags := CW_NONE
     probeCmd13()
 
+    ' STEP 10: Check CMD23 support from SCR CMD_SUPPORT field
+    probeCmd23()
+
     debug("    [initCard] === INIT SUCCESS ===")
 
 
@@ -5122,10 +5258,23 @@ PRI readSectors(start_sector, count, p_buffer) : sectors_read | _sck, _miso, p_b
     init_phase := $4000_0000                                                    ' Sample mid-bit for stability
     align_delay := spi_period                                                   ' Wait one half-period before streamer
 
+    ' Send CMD23 (SET_BLOCK_COUNT) if card supports it (verified at init by probeCmd23)
+    last_cmd18_fail := 0                                                        ' Clear failure path
+    last_cmd23_used := FALSE
+    last_cmd23_r1 := $FF                                                        ' Default: not sent
+    last_cmd23_verify := $FF                                                    ' Default: idle
+    if cmd23_supported
+      resp := cmd(CMD23, count)
+      last_cmd23_r1 := resp
+      last_cmd23_used := TRUE
+      debug("  [readSectors] CMD23 set block count=", udec_(count))
+
     ' Send CMD18 (READ_MULTIPLE_BLOCK) with starting sector
     ' Note: cmd() handles CS assertion and returns R1 response
     resp := cmd(CMD18, start_sector << hcs)
+    last_cmd18_r1 := resp
     if resp <> $00
+      last_cmd18_fail := 1                                                      ' Path 1: R1 reject
       debug("  [readSectors] CMD18 failed, R1=$", uhex_byte_(resp))
       pinh(cs)
     else
@@ -5136,6 +5285,7 @@ PRI readSectors(start_sector, count, p_buffer) : sectors_read | _sck, _miso, p_b
 
         ' Wait for data token ($FE) for this sector
         if waitDataToken() < 0
+          last_cmd18_fail := 2                                                  ' Path 2: data token fail
           debug("  [readSectors] No data token for sector ", udec_(start_sector + sectors_read))
           quit                                                                  ' Exit loop on error
 
@@ -5174,18 +5324,50 @@ PRI readSectors(start_sector, count, p_buffer) : sectors_read | _sck, _miso, p_b
 
         sectors_read++
 
-      ' Send CMD12 to stop transmission - card is in DATA_OUT mode, must terminate cleanly
-      if sendStopTransmission() < 0
-        debug("  [readSectors] CMD12 failed - card still in DATA_OUT, recovering")
-        recoverToIdle()                                                         ' Force card back to idle
-        sectors_read := 0                                                       ' Data can't be trusted
-      else
+      ' Capture sectors actually read before CMD12/CMD13 might zero the count
+      last_cmd18_sread := sectors_read
+
+      if last_cmd23_used
+        ' CMD23 path: card should have auto-stopped after N sectors
+        ' Verify: clock one byte — if card stopped, MISO should be $FF (idle)
+        resp := sp_transfer_8($FF)
+        last_cmd23_verify := resp
+        if resp <> $FF
+          debug("  [readSectors] CMD23 WARNING: card still outputting after count reached ($", uhex_byte_(resp), ")")
+          ' Card didn't honor CMD23 auto-stop — fall back to CMD12 for this and future reads
+          cmd23_supported := FALSE
+          last_cmd23_used := FALSE
+          sendStopTransmission()
         pinh(cs)                                                                ' Deselect card
+        debug("  [readSectors] CMD23 path: ", udec_(sectors_read), " sectors, no CMD12 needed")
 
         ' CMD13: Verify card internal state after multi-block read
         if checkCardStatus(@"readSectors") < 0
+          last_cmd18_fail := 4                                                  ' Path 4: CMD13 fail
           debug("  [readSectors] CMD13 status check FAILED")
           sectors_read := 0                                                     ' Card reports error - data can't be trusted
+      else
+        ' CMD12 path: send CMD12 to stop transmission
+        if sendStopTransmission() < 0
+          ' CMD12 failed — but if all requested sectors arrived with valid CRC,
+          ' the data is trustworthy. Some cards (SP Elite) return garbled R1 from
+          ' CMD12 while data transfer is perfect. See rpt6-cmd12-external-analysis.txt.
+          recoverToIdle()                                                       ' Force card back to idle
+          if sectors_read == count
+            last_cmd18_fail := 5                                                ' Path 5: CMD12 fail, tolerated
+            debug("  [readSectors] CMD12 R1 error (tolerated, all ", udec_(count), " sectors received)")
+          else
+            last_cmd18_fail := 3                                                ' Path 3: CMD12 fail, data incomplete
+            debug("  [readSectors] CMD12 failed - incomplete read, recovering")
+            sectors_read := 0                                                   ' Incomplete data can't be trusted
+        else
+          pinh(cs)                                                              ' Deselect card
+
+          ' CMD13: Verify card internal state after multi-block read
+          if checkCardStatus(@"readSectors") < 0
+            last_cmd18_fail := 4                                                ' Path 4: CMD13 fail
+            debug("  [readSectors] CMD13 status check FAILED")
+            sectors_read := 0                                                   ' Card reports error - data can't be trusted
 
 
 PRI writeSector(sector, buf_type) : result | _sck, _mosi, p_buf, stream_mode, clk_count, xfrq, timeout, resp, p_cache, align_delay
@@ -5516,13 +5698,19 @@ PRI waitDataToken() : result | timeout, resp
 ' @local resp - Received byte
 
   result := E_TIMEOUT                                                           '  default: timeout
+  last_cmd18_token := $FF                                                       ' Default: no token received
+  last_cmd18_result := 1                                                        ' Default: timeout
   timeout := getct() + (clkfreq / 100) * card_read_timeout_ms                   ' CSD-based timeout with 10x margin
   repeat
     resp := sp_transfer_8($FF)
     if resp == TOKEN_START_BLOCK                                                ' $FE = data coming
+      last_cmd18_token := resp
+      last_cmd18_result := 0                                                    ' Success
       result := 0                                                               ' Success
       quit
     if resp <> $FF                                                              ' Error token (not $FF, not $FE)
+      last_cmd18_token := resp
+      last_cmd18_result := 2                                                    ' Error token
       debug("  [waitDataToken] ERROR token: $", uhex_byte_(resp))
       result := E_BAD_RESPONSE
       quit
@@ -5576,31 +5764,65 @@ PRI waitBusyComplete() : result | timeout, resp
       quit
 
 
-PRI sendStopTransmission() : result | resp
+PRI sendStopTransmission() : result | resp, idx, timeout
 ' Send CMD12 to stop multi-block operation - terminates multi-block read/write.
 ' Note: CMD12 has a "stuff byte" before the response - we handle this by polling.
+' Captures the first 16 bytes after the stuff byte into cmd12_capture[] for framing analysis.
 '
 ' @returns result - 0 on success, negative error code on error
 ' @local resp - Response byte
+' @local idx - Capture buffer index
+' @local timeout - Timeout deadline
 
-  sp_transfer_8($40 | CMD12)                                                    ' Command byte: 0x40 | 12 = 0x4C
-  sp_transfer_8($00)                                                            ' Argument bytes (ignored for CMD12)
-  sp_transfer_8($00)
-  sp_transfer_8($00)
-  sp_transfer_8($00)
-  sp_transfer_8(CRC_CMD12)                                                      ' CRC7 + stop bit for CMD12
-  sp_transfer_8($FF)                                                            ' Stuff byte (required by spec)
+  ' Capture MISO bytes during CMD12 transmission (full-duplex: card outputs while we send)
+  cmd12_pre_capture[0] := sp_transfer_8($40 | CMD12)                            ' Command byte: 0x40 | 12 = 0x4C
+  cmd12_pre_capture[1] := sp_transfer_8($00)                                    ' Argument bytes (ignored for CMD12)
+  cmd12_pre_capture[2] := sp_transfer_8($00)
+  cmd12_pre_capture[3] := sp_transfer_8($00)
+  cmd12_pre_capture[4] := sp_transfer_8($00)
+  cmd12_pre_capture[5] := sp_transfer_8(CRC_CMD12)                              ' CRC7 + stop bit for CMD12
+  cmd12_pre_capture[6] := sp_transfer_8($FF)                                    ' Stuff byte (required by spec)
 
-  ' Wait for R1b response (R1 followed by busy)
-  resp := waitR1Response()
-  if resp < 0
-    result := E_TIMEOUT
-  elseif resp <> $00
-    debug("  [sendStopTransmission] R1 error: $", uhex_byte_(resp))
+  ' Capture raw byte stream for framing analysis, then find R1
+  bytefill(@cmd12_capture, $FF, 16)
+  cmd12_capture_len := 0
+  last_cmd12_r1 := -1                                                          ' Default: no response
+  last_cmd12_busy := 1                                                         ' Default: timeout
+
+  timeout := getct() + clkfreq / 10                                            ' 100ms timeout
+  idx := 0
+  repeat
+    resp := sp_transfer_8($FF)
+    if idx < 16
+      cmd12_capture[idx] := resp
+      idx++
+    if resp <> $FF
+      cmd12_capture_len := idx                                                 ' Record position of first non-$FF
+      last_cmd12_r1 := resp
+      quit
+    if getct() - timeout > 0
+      cmd12_capture_len := idx
+      debug("  [sendStopTransmission] TIMEOUT waiting for R1")
+      result := E_TIMEOUT
+      return
+
+  ' Capture remaining bytes after R1 (for post-R1 framing analysis)
+  repeat while idx < 16
+    cmd12_capture[idx] := sp_transfer_8($FF)
+    idx++
+
+  ' Evaluate R1 response
+  if last_cmd12_r1 <> $00
+    last_cmd12_busy := 2                                                       ' R1 error
+    debug("  [sendStopTransmission] R1 error: $", uhex_byte_(last_cmd12_r1))
     result := E_IO_ERROR
   else
     ' Wait for busy to complete (card may still be finishing last block)
     result := waitBusyComplete()
+    if result < 0
+      last_cmd12_busy := 3                                                     ' Busy timeout
+    else
+      last_cmd12_busy := 0                                                     ' Success
 
 
 PRI recoverToIdle() : result
@@ -5679,6 +5901,39 @@ PRI probeCmd13() | r1, status
     return
 
   debug("    [probeCmd13] CMD13 OK (R1=$", uhex_byte_(r1), " STATUS=$", uhex_byte_(status), ")")
+
+
+PRI probeCmd23() | scr[2], cmd_support, resp
+' Probe CMD23 support at init time.
+' First checks SCR CMD_SUPPORT field (bit 1 = CMD23 advertised).
+' If advertised, sends a real CMD23 to verify the card accepts it in SPI mode.
+' Some cards advertise CMD23 in SCR but reject it in SPI mode (R1=$04 Illegal Command).
+' Sets cmd23_supported := TRUE only if the card actually accepts CMD23.
+'
+' @local scr - SCR register data (2 longs = 8 bytes)
+' @local cmd_support - CMD_SUPPORT field from SCR
+' @local resp - R1 response from CMD23 probe
+
+  cmd23_supported := FALSE
+
+  ' Step 1: Check SCR CMD_SUPPORT field (pre-filter)
+  if readSCR(@scr)
+    cmd_support := scr.byte[3] & $03
+    if cmd_support & $02
+      debug("    [probeCmd23] SCR advertises CMD23 (CMD_SUPPORT=$", uhex_byte_(cmd_support), ") - verifying...")
+
+      ' Step 2: Send real CMD23 with count=1 to verify SPI mode support
+      resp := cmd(CMD23, 1)
+      if resp == $00
+        cmd23_supported := TRUE
+        card_warning_flags |= CW_CMD23_SUPPORTED
+        debug("    [probeCmd23] CMD23 CONFIRMED - card accepts SET_BLOCK_COUNT in SPI mode")
+      else
+        debug("    [probeCmd23] CMD23 REJECTED R1=$", uhex_byte_(resp), " - not supported in SPI mode")
+    else
+      debug("    [probeCmd23] CMD23 not advertised (CMD_SUPPORT=$", uhex_byte_(cmd_support), ")")
+  else
+    debug("    [probeCmd23] SCR read failed - assuming CMD23 not supported")
 
 
 PRI checkCardStatus(caller) : result | r1, status

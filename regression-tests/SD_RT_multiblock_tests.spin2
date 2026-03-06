@@ -76,6 +76,8 @@ VAR
 
     LONG    pass_count
     LONG    fail_count
+    BYTE    cmd12_buf[16]
+    BYTE    cmd12_pre_buf[7]
 
 PUB go() | result
 '' Main entry point for multi-block data integrity tests
@@ -100,6 +102,16 @@ PUB go() | result
         return
 
     debug("Card mounted successfully")
+    result := sd.cardWarnings()
+    debug("Card capabilities: $", uhex_byte_(result))
+    if result & sd.CW_CMD13_UNRELIABLE
+      debug("  CMD13: UNRELIABLE (status checks disabled)")
+    else
+      debug("  CMD13: OK")
+    if result & sd.CW_CMD23_SUPPORTED
+      debug("  CMD23: SUPPORTED (pre-defined block count)")
+    else
+      debug("  CMD23: not supported in SPI mode")
     debug(" ")
 
     ' ========================================
@@ -175,6 +187,7 @@ PRI testRoundTripMultiBlock() | sector, idx, written, readCt, errors
     utils.checkGuard(@read_buf_guard, @"read_buf guard")
     if readCt <> SMALL_COUNT
         debug("  FAIL: readSectorsRaw returned ", udec_(readCt), " (expected ", udec_(SMALL_COUNT), ")")
+        dumpCMD18Diag()
         recordFail()
         return
 
@@ -188,6 +201,9 @@ PRI testRoundTripMultiBlock() | sector, idx, written, readCt, errors
 
     if errors == 0
         debug("  -> PASS: All ", udec_(SMALL_COUNT * sd.SECTOR_SIZE), " bytes verified")
+        if sd.getLastCMD18FailPath() == 5
+            debug("  NOTE: CMD12 error was tolerated (path=5)")
+            dumpCMD18Diag()
         recordPass()
     else
         debug("  -> FAIL: ", udec_(errors), " byte mismatches")
@@ -288,6 +304,7 @@ PRI testSingleWriteMultiRead() | sector, idx, jdx, readCt, errors, expected, act
     utils.checkGuard(@read_buf_guard, @"read_buf guard")
     if readCt <> SMALL_COUNT
         debug("  FAIL: readSectorsRaw returned ", udec_(readCt))
+        dumpCMD18Diag()
         recordFail()
         return
 
@@ -342,6 +359,8 @@ PRI testEdgeCases() | sector, idx, written, readCt, errors
         utils.checkGuard(@read_buf_guard, @"read_buf guard")
         if readCt <> 1
             debug("  FAIL: count=1 read returned ", udec_(readCt))
+            debug("  DIAG: R1=$", uhex_byte_(sd.getLastCMD18R1()), " tok=$", uhex_byte_(sd.getLastCMD18Token()), " path=", udec_(sd.getLastCMD18FailPath()), " sread=", udec_(sd.getLastCMD18SectorsRead()))
+            debug("  CMD12: R1=$", uhex_byte_(sd.getLastCMD12R1()), " result=", udec_(sd.getLastCMD12Result()))
             recordFail()
         else
             errors := 0
@@ -405,6 +424,7 @@ PRI testLargeMultiBlock() | sector, idx, written, readCt, errors
     utils.checkGuard(@large_read_buf_guard, @"large_read_buf guard")
     if readCt <> LARGE_COUNT
         debug("  FAIL: readSectorsRaw returned ", udec_(readCt), " (expected ", udec_(LARGE_COUNT), ")")
+        dumpCMD18Diag()
         recordFail()
         return
 
@@ -434,6 +454,23 @@ PRI recordFail()
 ' Record a failing test
 
     fail_count++
+
+
+PRI dumpCMD18Diag() | ncr_len
+' Dump CMD18 diagnostic info: CMD23 status, R1, token, failure path, sectors read, and CMD12 details
+'
+' @local ncr_len - NCR gap length (bytes before first non-$FF in CMD12 capture)
+
+    debug("  DIAG: R1=$", uhex_byte_(sd.getLastCMD18R1()), " tok=$", uhex_byte_(sd.getLastCMD18Token()), " path=", udec_(sd.getLastCMD18FailPath()), " sread=", udec_(sd.getLastCMD18SectorsRead()))
+    debug("  CMD23: supported=", udec_(sd.getCmd23Supported()), " used=", udec_(sd.getLastCMD23Used()), " R1=$", uhex_byte_(sd.getLastCMD23R1()), " verify=$", uhex_byte_(sd.getLastCMD23Verify()))
+    if not sd.getLastCMD23Used()
+      debug("  CMD12: R1=$", uhex_byte_(sd.getLastCMD12R1()), " result=", udec_(sd.getLastCMD12Result()))
+      sd.getLastCMD12PreCapture(@cmd12_pre_buf)
+      debug("  CMD12 MISO during send: $", uhex_byte_(cmd12_pre_buf[0]), " $", uhex_byte_(cmd12_pre_buf[1]), " $", uhex_byte_(cmd12_pre_buf[2]), " $", uhex_byte_(cmd12_pre_buf[3]), " $", uhex_byte_(cmd12_pre_buf[4]), " $", uhex_byte_(cmd12_pre_buf[5]), " $", uhex_byte_(cmd12_pre_buf[6]))
+      ncr_len := sd.getLastCMD12Capture(@cmd12_buf)
+      debug("  CMD12 stream (NCR=", udec_(ncr_len), "): $", uhex_byte_(cmd12_buf[0]), " $", uhex_byte_(cmd12_buf[1]), " $", uhex_byte_(cmd12_buf[2]), " $", uhex_byte_(cmd12_buf[3]), " $", uhex_byte_(cmd12_buf[4]), " $", uhex_byte_(cmd12_buf[5]), " $", uhex_byte_(cmd12_buf[6]), " $", uhex_byte_(cmd12_buf[7]))
+      debug("                       $", uhex_byte_(cmd12_buf[8]), " $", uhex_byte_(cmd12_buf[9]), " $", uhex_byte_(cmd12_buf[10]), " $", uhex_byte_(cmd12_buf[11]), " $", uhex_byte_(cmd12_buf[12]), " $", uhex_byte_(cmd12_buf[13]), " $", uhex_byte_(cmd12_buf[14]), " $", uhex_byte_(cmd12_buf[15]))
+
 
 con { license }
 

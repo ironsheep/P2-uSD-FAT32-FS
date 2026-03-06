@@ -102,7 +102,7 @@ SCR: $02 $45 $84 $87 $33 $33 $30 $39
 | EX_SECURITY | [46:43] | 0 | No extended security | [INFO] |
 | SD_SPEC4 | [42] | 1 | SD 4.0 support: Yes | [INFO] |
 | SD_SPECX | [41:38] | 2 | SD 5.x/6.x/7.x indicator | [INFO] |
-| CMD_SUPPORT | [33:32] | $03 | CMD20+CMD23 supported | [INFO] |
+| CMD_SUPPORT | [33:32] | $03 | CMD20+CMD23 advertised (CMD23 rejected in SPI mode) | [INFO] |
 
 **SD Version:** 6.x (SD_SPEC=2, SD_SPEC3=1, SD_SPEC4=1, SD_SPECX=2)
 
@@ -153,7 +153,7 @@ SCR: $02 $45 $84 $87 $33 $33 $30 $39
 - **100 MB/s*** = Maximum read speed (asterisk indicates "up to")
 - **SD 6.x** spec compliant (SD_SPEC4=1, SD_SPECX=2) — newest spec generation
 - **A2** = Application Performance Class 2 (confirmed by ACMD13 SD Status register)
-- **CMD23 supported** - Set Block Count for multi-block operations
+- **CMD23 advertised but rejected in SPI mode** - SCR CMD_SUPPORT=$03 advertises CMD23 (SET_BLOCK_COUNT), but CMD23 returns R1=$04 (Illegal Command) in SPI mode. The CMD_SUPPORT field applies to the SD 4-bit bus interface, not SPI. Verified 2026-03-06
 - Factory formatted with exFAT — reformatted to FAT32 with P2FMTER
 - Very recent manufacture (November 2024)
 - DATA_STAT_AFTER_ERASE=0 (erased data reads as 0s)

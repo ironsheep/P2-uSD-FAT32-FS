@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-03-06
+
+**All 20 SD cards working — CMD12 tolerance, CMD23 probing, unified capability reporting.**
+
+### New Features
+
+- CMD12 tolerance: multi-block reads recover gracefully on cards with aggressive read-ahead pipelines
+- `cardWarnings()`: Bitmask API returning all init-time capability discoveries after mount
+- CMD23 init-time probing: automatic detection and use of SET_BLOCK_COUNT when supported in SPI mode
+- CMD12 full-duplex pre-capture: diagnostic visibility into card pipeline state during STOP_TRANSMISSION
+
+### Improvements
+
+- `recoverToIdle()`: CS deassert recovery per SD spec Section 7.2.2
+- `readSectors()`: CMD23 path with auto-stop verification and fallback to CMD12
+- Silicon Power Elite 64GB: benchmarked at 967 KB/s single-sector, 2,334 KB/s multi-sector (350 MHz)
+
+### Documentation
+
+- [CMD12-SPCE-ANALYSIS.md](DOCs/Analysis/CMD12-SPCE-ANALYSIS.md): Definitive CMD12 framing analysis
+- Card catalog updated: SP Elite benchmarked and ranked #2 of 10 tested cards
+
+### Tests
+
+- All 20 regression suites pass on SP Elite and standard test cards (407+ tests)
+
 ## [1.2.1] - 2026-03-05
 
 **CMD13 compatibility analysis, audit severity corrections, and regression test strengthening.**

@@ -144,7 +144,7 @@ This section documents ALL fields available from SD card registers and indicates
 | SanDisk_SU08G_8.0_0AA81F11_201010 | Unknown (claims SanDisk $03) - Chinese #1 | SU08G | 8 GB | **C** | PASS |
 | Samsung_00000_1.0_D9FB539C_201408 | Samsung ($1B) - Chinese #2 | 00000 | 8 GB | **C** | PASS |
 | SanDisk_SS08G_3.0_DAAEE8AD_201509 | SanDisk ($03) - Taiwan | SS08G | 8 GB | **C** | PASS |
-| SharedOEM_SPCC_0.7_00940105_202507 | Silicon Power (Shared OEM $9F) | SPCC | 64 GB | **B** | **BLOCKED** |
+| SharedOEM_SPCC_0.7_00940105_202507 | Silicon Power (Shared OEM $9F) | SPCC | 64 GB | **A** | PASS |
 | Longsys/Lexar_USD00_2.0_35841E2E_202507 | Amazon Basics (Longsys $AD) | USD00 | 64 GB | **A** | PASS |
 | SanDisk_SH32G_8.0_5BFECCD8_202508 | SanDisk ($03) | SH32G | 32 GB | **A** | PASS |
 | SanDisk_WX64G_8.0_EEBAD6C0_202403 | SanDisk ($03) — WD subsidiary | WX64G | 64 GB | **A** | PASS |
@@ -184,23 +184,24 @@ Cards tested with `SD_speed_characterize.spin2` have measured internal throughpu
 | SanDisk_SU08G | Chinese #1 ($03) | 8 GB | — | — | — | not yet tested |
 | Samsung_00000 | Chinese #2 ($1B) | 8 GB | — | — | — | not yet tested |
 | SanDisk_SS08G | SanDisk Taiwan ($03) | 8 GB | — | — | — | not yet tested |
-| SharedOEM_SPCC | Silicon Power ($9F) | 64 GB | — | — | — | CMD18 blocked (see punch list) |
+| SharedOEM_SPCC | Silicon Power ($9F) | 64 GB | **967 KB/s** | 0.53 ms | HIGH | 25 MHz |
 | SanDisk_SH32G | SanDisk ($03) | 32 GB | **~951 KB/s** | 0.54 ms | HIGH | 25 MHz |
 | SanDisk_WX64G | WD Purple ($03) | 64 GB | — | — | — | not yet tested |
 | Phison_SD16G | PNY ($27) | 16 GB | **31.3 KB/s** | 16.0 ms | LOW | 25 MHz |
 
-**Tested: 9 of 22 cards** (1 blocked)
+**Tested: 10 of 22 cards**
 
 **Key Observations:**
-1. **Lexar V30 U3 64GB** - **Fastest card tested** (1,059 KB/s), 12% faster than Gigastone
-2. **Gigastone Camera Plus 64GB** - Very fast (944 KB/s), excellent value
-3. **SanDisk Extreme PRO 64GB** - High performance (866 KB/s), professional line
-4. **SanDisk Industrial 16GB** - High performance (824 KB/s), industrial/embedded grade
-5. **Samsung EVO Select 128GB** - High performance (783 KB/s), nearly identical to SanDisk
-6. **SanDisk Nintendo Switch 128GB** - High performance (780 KB/s), designed for gaming
-7. **Gigastone High Endurance 16GB** - Medium performance (368 KB/s), MLC flash endurance focus
-8. **PNY 16GB** - Slow internal controller (31 KB/s); runs reliably at 25 MHz SPI but throughput limited by internal latency
-9. All tested cards max out at 25 MHz SPI (CMD6 High Speed switch fails on all)
+1. **Lexar V30 U3 64GB** - **Fastest card tested** (1,059 KB/s), 12% faster than SP Elite
+2. **Silicon Power Elite 64GB** - Very fast (967 KB/s), CMD12 anomaly handled by driver tolerance
+3. **Gigastone Camera Plus 64GB** - Very fast (944 KB/s), excellent value
+4. **SanDisk Extreme PRO 64GB** - High performance (866 KB/s), professional line
+5. **SanDisk Industrial 16GB** - High performance (824 KB/s), industrial/embedded grade
+6. **Samsung EVO Select 128GB** - High performance (783 KB/s), nearly identical to SanDisk
+7. **SanDisk Nintendo Switch 128GB** - High performance (780 KB/s), designed for gaming
+8. **Gigastone High Endurance 16GB** - Medium performance (368 KB/s), MLC flash endurance focus
+9. **PNY 16GB** - Slow internal controller (31 KB/s); runs reliably at 25 MHz SPI but throughput limited by internal latency
+10. All tested cards max out at 25 MHz SPI (CMD6 High Speed switch fails on all)
 
 ---
 
@@ -260,7 +261,7 @@ Class 10, U1, A2, V10, SPI 25 MHz  [P2FMTER]
 
 **Rating B** - Fast:
 
-**Silicon Power Elite 64GB SDXC** — [siliconpower-spcc-64gb.md](cards/siliconpower-spcc-64gb.md) **[BLOCKED — CMD18 investigation required]**
+**Silicon Power Elite 64GB SDXC** — [siliconpower-spcc-64gb.md](cards/siliconpower-spcc-64gb.md)
 ```
 SharedOEM SPCC SDXC 57GB [FAT32] SD 6.x rev0.7 SN:00940105 2025/07
 Class 10, U3, A1, V30, SPI 25 MHz  [P2FMTER]

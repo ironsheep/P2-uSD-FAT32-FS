@@ -2,7 +2,7 @@
 
 **Label:** SP Elite microSD XC UHS-I U1 (10)
 **Unique ID:** `SharedOEM_SPCC_0.7_00940105_202507`
-**Test Date:** 2026-02-17 (characterization)
+**Test Date:** 2026-03-06 (benchmark + CMD12/CMD23 analysis)
 
 ### Card Designator
 
@@ -102,7 +102,7 @@ SCR: $02 $45 $84 $8F $33 $33 $30 $39
 | EX_SECURITY | [46:43] | 0 | No extended security | [INFO] |
 | SD_SPEC4 | [42] | 1 | SD 4.0 support: Yes | [INFO] |
 | SD_SPECX | [41:38] | 2 | SD 5.x/6.x/7.x indicator | [INFO] |
-| CMD_SUPPORT | [33:32] | $03 | CMD20 + CMD23 supported | [INFO] |
+| CMD_SUPPORT | [33:32] | $03 | CMD20+CMD23 advertised (CMD23 rejected in SPI mode) | [INFO] |
 
 **SD Version:** 6.x (SD_SPEC=2, SD_SPEC3=1, SD_SPEC4=1, SD_SPECX=2)
 
@@ -139,50 +139,90 @@ SCR: $02 $45 $84 $8F $33 $33 $30 $39
 | SD Status | PASS | ACMD13 (64 bytes) |
 | MBR Read | PASS | exFAT partition detected (factory) |
 | Format | PASS | FAT32 formatted with P2FMTER |
-| Mount | **FAIL** | E_IO_ERROR (-7) — CMD18 warmup read times out (see below) |
-| Benchmark | **BLOCKED** | Cannot mount — characterization incomplete |
-| Regression | **BLOCKED** | Cannot mount — characterization incomplete |
+| Mount | PASS | CMD18 warmup removed; CMD12 tolerance added |
+| Regression | PASS | 20/20 suites, 407+ tests (2026-03-05) |
 
-### SPI Speed Characterization
+**CMD12 Anomaly (RESOLVED):** This card exhibits a CMD12 framing anomaly — the card's read-ahead pipeline starts streaming the next sector before CMD12 can stop it, producing an invalid R1 response ($E0). The driver handles this with CMD12 tolerance + CS deassert recovery. Data integrity is 100% — all sectors arrive with valid CRC-16. Full analysis: [CMD12-SPCE-ANALYSIS.md](../Analysis/CMD12-SPCE-ANALYSIS.md).
 
-**Test Date:** 2026-02-17
-**Test Configuration:**
-- SYSCLK: 200 MHz
-- Phase 1: 1,000 single-sector reads (quick check)
-- Phase 2: 10,000 single-sector reads (statistical confidence)
-- Phase 3: 100 x 8-sector multi-block reads (800 sectors, sustained transfer)
-- Total reads per speed level: 11,800 sector reads
-- Test sectors: 1,000,000 to 1,010,000 (safe area away from FAT)
-- CRC-16 verification on every read
+### Benchmark Results (Smart Pin SPI + Multi-Sector)
 
-**Results:**
+**Test Program**: SD_performance_benchmark.spin2 v2.0
 
-| Target | Half Period | Actual | Delta | Phase 1 | Phase 2 | Phase 3 | Status |
-|--------|-------------|--------|-------|---------|---------|---------|--------|
-| 18 MHz | 6 clocks | 16.6 MHz | -7.4% | 1,000 OK | 10,000 OK | 0/800 (timeout) | **FAIL** |
+#### 350 MHz Run (2026-03-06)
 
-**Summary:**
-- **Single-sector reads (CMD17): 100% reliable** at 16.6 MHz (11,000 reads, 0 CRC errors)
-- **Multi-block reads (CMD18): 100% timeout** — all 800 sectors timed out waiting for data token ($FE)
-- Characterizer stopped at 18 MHz because Phase 3 failed
+**SysClk**: 350 MHz | **SPI**: 25,000 kHz | **Mount**: 213.1 ms
 
-### Outstanding Issue: CMD18 Multi-Block Read Timeout
+| Test | Min (us) | Avg (us) | Max (us) | KB/s |
+|------|----------|----------|----------|------|
+| **Raw Single-Sector** | | | | |
+| Read 1x512B | 485 | 529 | 909 | **967** |
+| Write 1x512B | 690 | 697 | 761 | **734** |
+| **Raw Multi-Sector** | | | | |
+| Read 8 sectors (4 KB) | 2,020 | 2,044 | 2,260 | **2,003** |
+| Read 32 sectors (16 KB) | 7,167 | 7,190 | 7,403 | **2,278** |
+| Read 64 sectors (32 KB) | 14,012 | 14,037 | 14,267 | **2,334** |
+| Write 8 sectors (4 KB) | 2,230 | 2,235 | 2,243 | **1,832** |
+| Write 32 sectors (16 KB) | 7,526 | 7,531 | 7,544 | **2,175** |
+| Write 64 sectors (32 KB) | 14,665 | 14,677 | 14,696 | **2,232** |
+| **File-Level** | | | | |
+| File Write 512B | 5,029 | 5,629 | 5,709 | **90** |
+| File Write 4 KB | 10,590 | 10,603 | 10,613 | **386** |
+| File Write 32 KB | 49,852 | 50,291 | 53,427 | **651** |
+| File Read 4 KB | 3,152 | 3,229 | 3,844 | **1,268** |
+| File Read 32 KB | 23,767 | 23,950 | 24,623 | **1,368** |
+| File Read 128 KB | 93,995 | 94,242 | 95,890 | **1,390** |
+| File Read 256 KB | 186,871 | 187,166 | 188,830 | **1,400** |
+| **Overhead** | | | | |
+| File Open | 148 | 212 | 791 | — |
+| File Close | 35 | 35 | 36 | — |
+| Mount | — | 213,100 | — | — |
 
-**Status:** OPEN — investigation required before characterization can continue
+Multi-sector improvement: 64x single reads = 31,694 us vs 1x CMD18 = 14,013 us (**55% faster**)
 
-**Symptom:** CMD18 (READ_MULTIPLE_BLOCK) times out on this card. The card never sends the $FE data token after CMD18 is issued. Single-sector CMD17 reads work perfectly (11,000 consecutive reads, 0 errors). CMD18 fails 100% of the time.
+#### 250 MHz Run (2026-03-06)
 
-**Register contradiction:** The card's CCC register ($DB5) includes Class 2 (block read commands), which explicitly covers CMD18. The card advertises CMD18 support. The SCR CMD_SUPPORT field ($03) also indicates CMD23 (SET_BLOCK_COUNT) support — a command specifically designed for defined-length multi-block transfers.
+**SysClk**: 250 MHz | **SPI**: 25,000 kHz | **Mount**: 215.4 ms
 
-**Mount failure chain:** The driver's `do_mount()` function (micro_sd_fat32_fs.spin2:1173) issues a CMD18 warmup read after successfully reading MBR, VBR, and FSInfo. Because CMD18 times out, mount returns E_IO_ERROR (-7) even though all single-sector reads succeeded. The mount test confirmed: volumeLabel() returns "P2-BENCH" (VBR was cached before the warmup), but mount() returns failure.
+| Test | Min (us) | Avg (us) | Max (us) | KB/s |
+|------|----------|----------|----------|------|
+| **Raw Single-Sector** | | | | |
+| Read 1x512B | 581 | 624 | 996 | **820** |
+| Write 1x512B | 760 | 766 | 821 | **668** |
+| **Raw Multi-Sector** | | | | |
+| Read 8 sectors (4 KB) | 2,253 | 2,277 | 2,493 | **1,798** |
+| Read 32 sectors (16 KB) | 7,874 | 7,898 | 8,114 | **2,074** |
+| Read 64 sectors (32 KB) | 15,349 | 15,380 | 15,609 | **2,130** |
+| Write 8 sectors (4 KB) | 2,464 | 2,470 | 2,477 | **1,658** |
+| Write 32 sectors (16 KB) | 8,296 | 8,303 | 8,315 | **1,973** |
+| Write 64 sectors (32 KB) | 16,176 | 16,187 | 16,206 | **2,024** |
+| **File-Level** | | | | |
+| File Write 512B | 5,504 | 6,129 | 6,208 | **83** |
+| File Write 4 KB | 11,444 | 11,862 | 15,013 | **345** |
+| File Write 32 KB | 53,816 | 53,887 | 54,104 | **608** |
+| File Read 4 KB | 3,710 | 3,787 | 4,445 | **1,081** |
+| File Read 32 KB | 27,576 | 27,734 | 28,368 | **1,181** |
+| File Read 128 KB | 109,220 | 109,475 | 111,221 | **1,197** |
+| File Read 256 KB | 218,181 | 218,435 | 220,066 | **1,200** |
+| **Overhead** | | | | |
+| File Open | 207 | 276 | 902 | — |
+| File Close | 50 | 50 | 50 | — |
+| Mount | — | 215,400 | — | — |
 
-**Investigation leads:**
-1. Does this card require CMD23 (SET_BLOCK_COUNT) before CMD18? Some cards that advertise CMD23 support may require it.
-2. Is there a difference in how the card responds to CMD18 in SPI mode vs SD mode?
-3. Does CMD25 (multi-block write) also fail, or is it CMD18-specific?
-4. Is the CMD18 R1 response $00 (accepted) before the data token timeout?
+Multi-sector improvement: 64x single reads = 38,158 us vs 1x CMD18 = 15,357 us (**59% faster**)
 
-**Impact:** Characterization incomplete — benchmark and regression testing blocked until mount works. This card cannot be fully evaluated until the CMD18 issue is resolved.
+#### Sysclk Effect (350 MHz vs 250 MHz)
+
+SPI clock is identical (25,000 kHz) at both speeds. Differences show Spin2 inter-transfer overhead.
+
+| Metric | 350 MHz | 250 MHz | Overhead (us) | Overhead % |
+|--------|---------|---------|---------------|------------|
+| Raw Read 1x512B | 529 us | 624 us | +95 | +18% |
+| Raw Write 1x512B | 697 us | 766 us | +69 | +10% |
+| Raw Read 64x (32 KB) | 14,037 us | 15,380 us | +1,343 | +10% |
+| Raw Write 64x (32 KB) | 14,677 us | 16,187 us | +1,510 | +10% |
+| File Read 256 KB | 187,166 us | 218,435 us | +31,269 | +17% |
+| File Write 32 KB | 50,291 us | 53,887 us | +3,596 | +7% |
+| File Open | 212 us | 276 us | +64 | +30% |
 
 ### Notes
 
@@ -191,7 +231,7 @@ SCR: $02 $45 $84 $8F $33 $33 $30 $39
 - **PNM "SPCC"** — Silicon Power Computer Communications Corporation
 - **Label discrepancy**: Physical label says "UHS-I U1 (10)" but ACMD13 SD Status reports U3, A1, V30. The card may be marketed conservatively or the label may be for a different SKU in the same product line.
 - **CCC $DB5** includes Class 11 (video speed class) — consistent with V30 rating
-- **CMD_SUPPORT $03** — supports both CMD20 (speed class control) and CMD23 (set block count). CMD23 can improve multi-sector write setup.
+- **CMD23 advertised but rejected in SPI mode** — SCR CMD_SUPPORT=$03 advertises CMD23 (SET_BLOCK_COUNT), but CMD23 returns R1=$04 (Illegal Command) in SPI mode. The CMD_SUPPORT field applies to the SD 4-bit bus interface, not SPI. Verified 2026-03-06
 - **SD 6.x** spec compliant (SD_SPEC4=1, SD_SPECX=2) — newest spec version we've seen
 - **DATA_STAT_AFTER_ERASE=0** (erased data reads as 0s)
 - Very recent manufacture (July 2025)
