@@ -31,7 +31,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Documentation
 
 - [CMD12-SPCE-ANALYSIS.md](DOCs/Analysis/CMD12-SPCE-ANALYSIS.md): Definitive CMD12 framing analysis
-- [DRIVER-V1.3.0-PORTING-GUIDE.md](DOCs/procedures/DRIVER-V1.3.0-PORTING-GUIDE.md): Sibling project porting reference
 - Card catalog updated: SP Elite benchmarked and ranked #2 of 10 tested cards
 
 ### Tests
