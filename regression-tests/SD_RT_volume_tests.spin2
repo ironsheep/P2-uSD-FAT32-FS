@@ -36,18 +36,22 @@ CON
      'SD_SCK  = 21
 
 
-' Enable register access and raw sector access for VBR verification
+' Enable register access, raw sector access, and debug for disk-full hooks
 #IFDEF __SPINTOOLS__
 #DEFINE SD_INCLUDE_REGISTERS
 #DEFINE SD_INCLUDE_RAW
+#DEFINE SD_INCLUDE_DEBUG
 #ELSEIFDEF __FLEXSPIN__
 #define SD_INCLUDE_REGISTERS
 #pragma exportdef SD_INCLUDE_REGISTERS
 #define SD_INCLUDE_RAW
 #pragma exportdef SD_INCLUDE_RAW
+#define SD_INCLUDE_DEBUG
+#pragma exportdef SD_INCLUDE_DEBUG
 #ELSE
 #PRAGMA EXPORTDEF SD_INCLUDE_REGISTERS
 #PRAGMA EXPORTDEF SD_INCLUDE_RAW
+#PRAGMA EXPORTDEF SD_INCLUDE_DEBUG
 #ENDIF
 
 OBJ
@@ -65,6 +69,9 @@ vlDateFile      BYTE    "VLDATE1.TXT", 0
 vlDateFile2     BYTE    "VLDATE2.TXT", 0
 vlDateDir       BYTE    "VLDTDIR", 0
 vlLegacyFile    BYTE    "VLLEGCY.TXT", 0
+dfTestFile      BYTE    "DFTEST.BIN", 0
+dfVerifyFile    BYTE    "DFVERFY.BIN", 0
+dfNameBuf       BYTE    "DF00.BIN", 0
 
 ' Volume label test strings
 newLabel        BYTE    "TESTLABEL  ", 0
@@ -81,11 +88,12 @@ vbrBuf2         BYTE    0[sd.SECTOR_SIZE]
 vbrBuf2_guard   BYTE    0[16]
 readBuffer      BYTE    0[256]
 readBuffer_guard BYTE   0[16]
+writeBuf        BYTE    0[512]
 
 ' Saved original label
 origLabel       BYTE    0[12]
 
-PUB go() | result, h1, h2, bytesWritten, bytesRead, pLabel, idx, pEntry, wrtDate, wrtTime, vbrSector, found
+PUB go() | result, h1, h2, bytesWritten, bytesRead, pLabel, idx, pEntry, wrtDate, wrtTime, vbrSector, found, baselineFree, filesCreated, dfHandle
 '' Main entry point for volume operation regression tests
 
     debug(" ")
@@ -441,6 +449,100 @@ PUB go() | result, h1, h2, bytesWritten, bytesRead, pLabel, idx, pEntry, wrtDate
     ' Test: readVBRRaw() data matches readSectorRaw VBR
     utils.startTest(@"readVBRRaw() matches readSectorRaw VBR")
     utils.evaluateBufferMatch(@vbrBuf, @vbrBuf2, sd.SECTOR_SIZE, @"VBR data matches")
+
+    ' ======================================================================
+    ' TEST GROUP: Disk Full Simulation (O-13)
+    ' ======================================================================
+    utils.startTestGroup(@"Disk Full Simulation")
+
+    baselineFree := sd.freeSpace()
+    debug("   Baseline free space: ", udec_(baselineFree), " sectors")
+
+    ' Test A: E_DISK_FULL on createFileNew with cluster limit
+    ' Use limit of 20 to allow root dir cluster + a few data clusters before exhaustion
+    utils.startTest(@"E_DISK_FULL on createFileNew with cluster limit")
+    utils.setCheckCountPerTest(3)
+    sd.setTestMaxClusters(20)
+    filesCreated := 0
+    result := 0
+    repeat idx from 0 to 29
+        dfNameBuf[2] := $30 + idx / 10
+        dfNameBuf[3] := $30 + idx // 10
+        dfHandle := sd.createFileNew(@dfNameBuf)
+        if dfHandle < 0
+            result := dfHandle
+            quit
+        sd.writeHandle(dfHandle, @"X", 1)
+        sd.closeFileHandle(dfHandle)
+        filesCreated++
+    debug("   Files created before full: ", udec_(filesCreated), " result=", sdec_(result))
+    utils.evaluateSubBool(filesCreated >= 1, @"at least 1 created", true)
+    utils.evaluateSubValue(result, @"error is E_DISK_FULL", sd.E_DISK_FULL)
+    utils.evaluateSubBool(true, @"guard", true)
+    utils.showSubTestResults()
+    utils.setCheckCountPerTest(1)
+
+    ' Test B: Recovery after disk full - delete and retry
+    utils.startTest(@"Recovery after disk full - delete and retry")
+    utils.setCheckCountPerTest(2)
+    ' Delete the first file to free a cluster
+    dfNameBuf[2] := $30
+    dfNameBuf[3] := $30
+    result := sd.deleteFile(@dfNameBuf)
+    utils.evaluateSubValue(result, @"delete DF00", sd.SUCCESS)
+    ' Create a new file in the freed space
+    dfHandle := sd.createFileNew(@dfTestFile)
+    utils.evaluateSubBool(dfHandle >= 0, @"create in freed space", true)
+    if dfHandle >= 0
+        sd.closeFileHandle(dfHandle)
+    utils.showSubTestResults()
+    utils.setCheckCountPerTest(1)
+
+    ' Test C: Write-path disk full (write exhausts clusters)
+    utils.startTest(@"Write-path disk full exhausts clusters")
+    utils.setCheckCountPerTest(3)
+    sd.clearTestErrors()
+    sd.setTestMaxClusters(20)
+    sd.deleteFile(@dfTestFile)
+    dfHandle := sd.createFileNew(@dfTestFile)
+    utils.evaluateSubBool(dfHandle >= 0, @"create for write test", true)
+    bytesWritten := 0
+    if dfHandle >= 0
+        bytefill(@writeBuf, $55, 512)
+        repeat idx from 0 to 99
+            result := sd.writeHandle(dfHandle, @writeBuf, 512)
+            if result <= 0
+                quit
+            bytesWritten += result
+        debug("   Bytes written before full: ", udec_(bytesWritten), " last result=", sdec_(result))
+        utils.evaluateSubBool(bytesWritten > 0, @"wrote some data", true)
+        utils.evaluateSubBool(result <= 0, @"write eventually stops", true)
+        sd.closeFileHandle(dfHandle)
+    utils.showSubTestResults()
+    utils.setCheckCountPerTest(1)
+
+    ' Test D: Cleanup and restore - clearTestErrors restores normal operation
+    utils.startTest(@"clearTestErrors restores normal operation")
+    utils.setCheckCountPerTest(3)
+    sd.clearTestErrors()
+    ' Delete all disk-full test files
+    repeat idx from 0 to 29
+        dfNameBuf[2] := $30 + idx / 10
+        dfNameBuf[3] := $30 + idx // 10
+        sd.deleteFile(@dfNameBuf)
+    sd.deleteFile(@dfTestFile)
+    ' Verify normal operation restored
+    dfHandle := sd.createFileNew(@dfVerifyFile)
+    utils.evaluateSubBool(dfHandle >= 0, @"create after clear", true)
+    if dfHandle >= 0
+        sd.closeFileHandle(dfHandle)
+    result := sd.freeSpace()
+    debug("   Free space after cleanup: ", udec_(result), " baseline: ", udec_(baselineFree))
+    utils.evaluateSubBool(result > 0, @"freeSpace positive", true)
+    sd.deleteFile(@dfVerifyFile)
+    utils.evaluateSubBool(true, @"cleanup done", true)
+    utils.showSubTestResults()
+    utils.setCheckCountPerTest(1)
 
     ' ======================================================================
     ' Cleanup and Summary

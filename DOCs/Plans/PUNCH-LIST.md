@@ -4,7 +4,7 @@ Items to investigate when time permits.
 
 ---
 
-### Silicon Power SPCC 64GB -- CMD18 multi-block read times out
+### ~~Silicon Power SPCC 64GB -- CMD18 multi-block read times out~~ RESOLVED v1.2.9
 
 **Card:** siliconpower-spcc-64gb
 **Unique ID:** `SharedOEM_SPCC_0.7_00940105_202507`
@@ -14,16 +14,9 @@ Items to investigate when time permits.
 
 **Register contradiction:** CCC=$DB5 includes Class 2 (CMD18 supported). SCR CMD_SUPPORT=$03 includes CMD23 (SET_BLOCK_COUNT). The card explicitly advertises multi-block support. The timeout is NOT a documented card limitation.
 
-**Investigation leads:**
-1. Does this card require CMD23 before CMD18? Some cards that support CMD23 may expect a pre-defined block count rather than CMD12 termination.
-2. Check whether CMD18 R1 response is $00 (accepted) -- confirm the command is reaching the card.
-3. Test CMD25 (multi-block write) separately -- is it CMD18-specific or all multi-block?
-4. Check if other Shared OEM ($9F) cards exhibit the same behavior.
-5. This is the first SD 6.x spec card in the catalog -- could be a spec-version-specific behavior.
+**Resolution:** CMD12 tolerance fix in v1.2.9 — card has aggressive read-ahead pipeline that streams next sector's data token ($FE) before CMD12 arrives. CS deassert recovery (80 clocks per SD spec Section 7.2.2) is the definitive fix. Card now benchmarks at 967 KB/s single-sector, 2,334 KB/s multi-sector (350 MHz).
 
-**Impact:** Mount fails because `do_mount()` has a CMD18 warmup read. Benchmark and regression testing blocked. Card cannot be fully characterized.
-
-*Noted: 2026-02-17*
+*Noted: 2026-02-17 — Resolved: 2026-03-06*
 
 ---
 

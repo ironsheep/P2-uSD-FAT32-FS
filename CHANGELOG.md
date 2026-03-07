@@ -7,9 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.2.9] - 2026-03-06
+## [1.3.0] - 2026-03-06
 
-**All 20 SD cards working — CMD12 tolerance, CMD23 probing, CMD13 diagnostics, unified capability reporting.**
+**All 20 SD cards working — CMD12 tolerance, CMD23 probing, Tier 3 test strengthening, unified regression runner.**
 
 ### New Features
 
@@ -20,22 +20,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CMD13 full-duplex capture: byte-level framing analysis for cards with broken SPI-mode status reporting
 - `setForceCmd13()`: Diagnostic override to re-enable CMD13 on cards flagged unreliable
 - `getLastCMD13Capture()`, `getLastCMD13PreCapture()`: Raw byte stream accessors for CMD13 analysis
+- `setTestMaxClusters()`: Artificial cluster limit hook for disk-full simulation in tests
 
 ### Improvements
 
 - `recoverToIdle()`: CS deassert recovery per SD spec Section 7.2.2
 - `readSectors()`: CMD23 path with auto-stop verification and fallback to CMD12
 - `probeCmd13()`: Full-duplex capture during init-time probe for baseline diagnostics
+- `clearTestErrors()`: Resets disk-full simulation hook alongside CRC injection hooks
 - Silicon Power Elite 64GB: benchmarked at 967 KB/s single-sector, 2,334 KB/s multi-sector (350 MHz)
 
 ### Documentation
 
 - [CMD12-SPCE-ANALYSIS.md](DOCs/Analysis/CMD12-SPCE-ANALYSIS.md): Definitive CMD12 framing analysis
 - Card catalog updated: SP Elite benchmarked and ranked #2 of 10 tested cards
+- Memory sizing guide updated with current compiler output
 
 ### Tests
 
-- All 20 regression suites pass on SP Elite and standard test cards (411 tests)
+- Tier 3 test strengthening: 16 new tests across 4 suites (411→427 total)
+- Cluster boundary crossing: write/read verification at cluster transitions with seek-across-boundary data continuity
+- Disk full simulation: E_DISK_FULL on create, recovery after delete, write-path exhaustion, hook reset verification
+- Constant data patterns: all-$00 and all-$FF round-trip through filesystem API (512 and 1024 bytes)
+- Double-mount idempotency: SUCCESS return, open handle preservation, working directory preservation
+- Filename edge cases: minimum-length, maximum 8.3, lowercase-to-uppercase conversion, extension-less names
+- Unified regression runner (`run_regression.sh`): layered dependency ordering, `--from` resume, `--compile-only` mode
 - CMD13 diagnostic capture test included for field testing on problem cards (temporary)
 
 ## [1.2.1] - 2026-03-05
@@ -185,8 +194,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Initial testing release** -- driver, utilities, demo shell, and 263+ regression tests.
 
-[Unreleased]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.2.9...HEAD
-[1.2.9]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.2.1...v1.2.9
+[Unreleased]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.0.0...v1.1.0

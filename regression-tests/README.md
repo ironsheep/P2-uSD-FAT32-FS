@@ -4,13 +4,13 @@ Automated regression test suite for the P2 SD Card Driver. All tests execute on 
 
 ## Test Summary
 
-### Core Test Suites (verified 2026-03-05)
+### Core Test Suites (verified 2026-03-06)
 
 | Test Suite | Description | Tests |
 |------------|-------------|-------|
-| **Mount Tests** | Card initialization, mounting, unmounting, pre/post-mount errors | 26 |
-| **File Operations** | Create, open, close, delete, rename (V3 handle API) | 22 |
-| **Read/Write Tests** | Data integrity, sector boundaries, tellHandle/EOF postconditions, multi-cluster, large files | 44 |
+| **Mount Tests** | Card initialization, mounting, unmounting, pre/post-mount errors, double-mount | 29 |
+| **File Operations** | Create, open, close, delete, rename, filename edge cases (V3 handle API) | 26 |
+| **Read/Write Tests** | Data integrity, sector/cluster boundaries, constant patterns, tellHandle/EOF, multi-cluster, large files | 48 |
 | **Directory Tests** | Directory listing, navigation, deep nesting, boundaries, many-file stress | 29 |
 | **Seek Tests** | Random access, cross-sector seeks, seek boundaries | 37 |
 | **Multicog Tests** | Singleton pattern, concurrent access, lock serialization | 14 |
@@ -19,14 +19,14 @@ Automated regression test suite for the P2 SD Card Driver. All tests execute on 
 | **Raw Sector Tests** | Direct sector read/write, large LBA addressing | 14 |
 | **Format Tests** | FAT32 structure validation, cross-OS compatibility | 46 |
 | **Subdirectory Ops Tests** | Cross-buffer cache coherence, empty files, subdir operations | 18 |
-| **Core Total** | | **277** |
+| **Core Total** | | **288** |
 
 ### Additional Test Suites
 
 | Test Suite | Description | Tests |
 |------------|-------------|-------|
 | **Directory Handle Tests** | V3 directory handle enumeration, pool interaction, E_NOT_A_DIR_HANDLE | 25 |
-| **Volume Tests** | Volume label, VBR access, syncAll, sync, setDate | 23 |
+| **Volume Tests** | Volume label, VBR access, syncAll, sync, setDate, disk full simulation | 27 |
 | **Register Tests** | CSD register access, timeout values, capacity cross-check | 10 |
 | **Speed Tests** | SPI frequency, CMD6, high-speed mode, speed boundaries | 15 |
 | **CRC Diagnostic Tests** | CRC counters, validation toggle, CMD13 diagnostics | 14 |
@@ -34,8 +34,8 @@ Automated regression test suite for the P2 SD Card Driver. All tests execute on 
 | **CRC Validation Tests** | CRC error injection hooks, forced read/write CRC errors, hook state management | 6 |
 | **Recovery Tests** | Recovery after read/write errors, CRC counter verification, remount recovery, handle isolation | 7 |
 | **FIFO Tests** | String FIFO (isp_string_fifo) inter-cog communication | 21 |
-| | **Additional Total** | **135** |
-| | **Grand Total (20 suites)** | **412** |
+| | **Additional Total** | **139** |
+| | **Grand Total (20 suites)** | **427** |
 
 ## Prerequisites
 

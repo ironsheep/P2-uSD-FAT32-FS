@@ -240,6 +240,65 @@ PUB go() | result, pLabel, freeSpace, handle, bytesRead
     freeSpace := sd.freeSpace()
     utils.evaluateRange(freeSpace, @"freeSpace() after remount", 1, $7FFF_FFFF)
 
+    ' ----------------------------------
+    ' TEST GROUP: Double-Mount Behavior
+    ' ----------------------------------
+    utils.startTestGroup(@"Double-Mount Behavior")
+
+    utils.startTest(@"Double mount returns SUCCESS")
+    utils.setCheckCountPerTest(2)
+    result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    utils.evaluateSubValue(result, @"mount() again", sd.SUCCESS)
+    freeSpace := sd.freeSpace()
+    utils.evaluateSubBool(freeSpace > 0, @"freeSpace() valid", true)
+    utils.showSubTestResults()
+    utils.setCheckCountPerTest(1)
+
+    utils.startTest(@"Double mount preserves open file handle")
+    utils.setCheckCountPerTest(4)
+    sd.deleteFile(@testfile1)
+    handle := sd.createFileNew(@testfile1)
+    if handle >= 0
+        sd.writeHandle(handle, @"ABCDEFGHIJ", 10)
+        result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+        utils.evaluateSubValue(result, @"mount() during write", sd.SUCCESS)
+        bytesRead := sd.writeHandle(handle, @"KLMNOPQRST", 10)
+        utils.evaluateSubBool(bytesRead > 0, @"write after mount", true)
+        sd.closeFileHandle(handle)
+        handle := sd.openFileRead(@testfile1)
+        if handle >= 0
+            bytesRead := sd.readHandle(handle, @sectorBuffer, 20)
+            utils.evaluateSubValue(bytesRead, @"read 20 bytes", 20)
+            utils.evaluateSubBool(sectorBuffer[0] == $41 and sectorBuffer[10] == $4B, @"data intact", true)
+            sd.closeFileHandle(handle)
+    utils.showSubTestResults()
+    utils.setCheckCountPerTest(1)
+
+    utils.startTest(@"Double mount preserves working directory")
+    utils.setCheckCountPerTest(2)
+    sd.deleteFile(@"DMTDIR")
+    sd.newDirectory(@"DMTDIR")
+    sd.changeDirectory(@"DMTDIR")
+    result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    utils.evaluateSubValue(result, @"mount() in subdir", sd.SUCCESS)
+    sd.deleteFile(@"DMTFILE.TXT")
+    handle := sd.createFileNew(@"DMTFILE.TXT")
+    if handle >= 0
+        sd.writeHandle(handle, @"test", 4)
+        sd.closeFileHandle(handle)
+    handle := sd.openFileRead(@"DMTFILE.TXT")
+    utils.evaluateSubBool(handle >= 0, @"file in subdir", true)
+    if handle >= 0
+        sd.closeFileHandle(handle)
+    utils.showSubTestResults()
+    utils.setCheckCountPerTest(1)
+
+    ' Cleanup double-mount tests
+    sd.deleteFile(@"DMTFILE.TXT")
+    sd.changeDirectory(@"/")
+    sd.deleteFile(@"DMTDIR")
+    sd.deleteFile(@testfile1)
+
 #IFDEF SD_INCLUDE_STACK_CHECK
     debug(" ")
     debug("* Worker cog stack: ", udec_(sd.reportStackDepth()), " of ", udec_(sd.STACK_SIZE), " longs used")

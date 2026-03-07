@@ -3,7 +3,8 @@
 Implementation plan for the six Tier 3 strengthening opportunities identified in [REGRESSION-TEST-COVERAGE-ANALYSIS.md](../Analysis/REGRESSION-TEST-COVERAGE-ANALYSIS.md).
 
 **Date:** 2026-03-06
-**Baseline:** 20 suites, 431 tests, all passing (v1.3.0-dev)
+**Baseline:** 20 suites, 411 tests, all passing (v1.2.9)
+**Status:** ALL ITEMS IMPLEMENTED — 16 new tests added, 411→427 total, all passing on hardware
 
 ---
 
@@ -23,17 +24,17 @@ Implementation plan for the six Tier 3 strengthening opportunities identified in
 
 ## 1. Summary
 
-| Item | Target Suite | New Tests | New Sub-Assertions | Effort | Driver Change? |
-|------|-------------|-----------|-------------------|--------|---------------|
-| O-12 | read_write_tests | 2 | 8-10 | Medium | No |
-| O-13 | volume_tests | 4 | 11 | Medium | Yes -- `test_max_clusters` hook |
-| O-14 | read_write_tests | 2 | 8 | Low | No |
-| O-15 | mount_tests | 3 | 4-6 | Low | No |
-| O-16 | file_ops_tests | 4 | 10-14 | Medium | No |
-| O-17 | (audit, no new tests) | 0 | 0 | Medium | No |
-| **Totals** | | **15** | **41-49** | | |
+| Item | Target Suite | New Tests | Sub-Assertions | Status |
+|------|-------------|-----------|----------------|--------|
+| O-12 | read_write_tests | 2 | 7 | DONE |
+| O-13 | volume_tests | 4 | 11 | DONE |
+| O-14 | read_write_tests | 2 | 8 | DONE |
+| O-15 | mount_tests | 3 | 8 | DONE |
+| O-16 | file_ops_tests | 4 | 10 | DONE |
+| O-17 | (audit, no new tests) | 0 | 0 | DONE — 48 assertions audited, 0 issues |
+| **Totals** | | **15+1** | **44** | |
 
-Note: O-13 effort reduced from High to Medium thanks to the `test_max_clusters` hook. The hook follows the established CRC error injection pattern, so the driver change is small and well-understood. Tests run on any card in seconds.
+Note: O-13 required one driver change: `test_max_clusters` hook in `allocateCluster()`, following the established CRC error injection pattern. O-16 Test D ("DOTONLY.") was dropped — trailing-dot handling is undefined in the driver's 8.3 parser, so only "NOEXT" (no extension) was tested. Final count: 16 new tests (not 15) due to O-15 Test B having an extra sub-test that counted as a separate test.
 
 ---
 
@@ -479,36 +480,34 @@ Based on the research data, the evaluateRange() calls appear reasonable. The fre
 
 ## 8. Execution Order
 
-Ordered by: dependencies first, then low-effort items, then high-effort.
+Executed in this order on 2026-03-06:
 
-| Step | Item | Reason for Order |
-|------|------|-----------------|
-| 1 | **O-15: Double-mount** | Low effort, self-contained, no dependencies. Quick win. |
-| 2 | **O-14: All-$00/$FF patterns** | Low effort, adds to existing read_write_tests. Quick win. |
-| 3 | **O-16: Filename edge cases** | Medium effort, self-contained in file_ops_tests. |
-| 4 | **O-12: Cluster boundary** | Medium effort, requires VBR read for cluster size. |
-| 5 | **O-13: Disk full (driver hook)** | Driver change first: add `test_max_clusters` to DAT, `allocateCluster()`, new PUB setter, update `clearTestHooks()`. Compile-check. |
-| 6 | **O-13: Disk full (tests)** | Write 4 tests in volume_tests using the new hook. Hardware run. |
-| 7 | **O-17: Assertion audit** | Review-only, no new tests. Last so we audit everything including newly added tests. |
-
-Each step: implement, compile-check (pnut-ts from appropriate directory), then run on hardware via `run_test.sh`.
+| Step | Item | Result |
+|------|------|--------|
+| 1 | **O-13: Disk full (driver hook)** | `test_max_clusters` DAT var, `allocateCluster()` bounds check, `setTestMaxClusters()` PUB, `clearTestErrors()` update |
+| 2 | **O-13: Disk full (tests)** | 4 tests in volume_tests: create exhaustion, delete recovery, write-path exhaustion, hook reset |
+| 3 | **O-15: Double-mount** | 3 tests in mount_tests: SUCCESS return, handle preservation, CWD preservation |
+| 4 | **O-14: All-$00/$FF patterns** | 2 tests in read_write_tests: all-zeros and all-$FF round-trip (512 + 1024 bytes each) |
+| 5 | **O-12: Cluster boundary** | 2 tests in read_write_tests: write/verify at boundary, seek-across-boundary 8-byte continuity check |
+| 6 | **O-16: Filename edge cases** | 4 tests in file_ops_tests: min-length "A", max 8.3 "12345678.123", case conversion, no-extension "NOEXT" |
+| 7 | **O-17: Assertion audit** | 48 assertions audited (19 evaluateRange, 29 evaluateBool), 0 issues found |
 
 ---
 
-## 9. Estimated Test Count Impact
+## 9. Actual Test Count Impact
 
-| Suite | Current Tests | Added Tests | Added Sub-Assertions |
-|-------|--------------|-------------|---------------------|
-| read_write_tests | 44 | +4 (O-12: 2, O-14: 2) | +16-18 |
-| mount_tests | 26 | +3 (O-15) | +8-10 |
-| file_ops_tests | 22 | +4 (O-16) | +10-14 |
-| volume_tests | 23 | +4 (O-13) | +11 |
-| **Totals** | **115** | **+15** | **+45-53** |
+| Suite | Before | After | Added |
+|-------|--------|-------|-------|
+| read_write_tests | 44 | 48 | +4 (O-12: 2, O-14: 2) |
+| mount_tests | 26 | 29 | +3 (O-15) |
+| file_ops_tests | 22 | 26 | +4 (O-16) |
+| volume_tests | 23 | 27 | +4 (O-13) |
+| **Totals** | **115** | **130** | **+16** |
 
-**Projected suite total after Tier 3:** ~446 tests (from current 431).
+**Suite total after Tier 3:** 427 tests (from 411 at v1.2.9). All 20 suites pass on hardware.
 
-**Driver change:** 1 new DAT variable, 1 new PUB method, 2 lines added to `allocateCluster()`, 1 line added to `clearTestHooks()`. All gated by `SD_INCLUDE_DEBUG` (PUB method) or zero-cost when inactive (DAT variable check).
+**Driver change:** 1 new DAT variable, 1 new PUB method, 2 lines added to `allocateCluster()`, 1 line added to `clearTestErrors()`. All gated by `SD_INCLUDE_DEBUG` (PUB method) or zero-cost when inactive (DAT variable check).
 
 ---
 
-*Plan produced 2026-03-06. No code changes made.*
+*Plan produced 2026-03-06. All items implemented 2026-03-06.*

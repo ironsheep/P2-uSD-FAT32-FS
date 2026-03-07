@@ -554,6 +554,7 @@ DAT ' ---- Singleton Control ----
   test_force_read_crc_error   BYTE    0  ' Counter: force N read CRC mismatches
   test_force_write_crc_error  BYTE    0  ' Flag: corrupt next write CRC (one-shot)
   test_error_count            LONG    0  ' Count of injected errors triggered
+  test_max_clusters           LONG    0  ' Limit: max allocatable cluster number (0 = no limit)
 
   ' ═══════════════════════════════════════════════════════════════════════
   ' BUFFERS (must be in DAT for worker cog access)
@@ -1851,6 +1852,16 @@ PUB getTestErrorCount() : count
   count := test_error_count
 
 
+PUB setTestMaxClusters(maxClusters)
+'' Set artificial cluster limit for disk-full testing. When non-zero,
+'' allocateCluster() will fail once the cluster number reaches this limit.
+'' Set to 0 to disable (normal operation).
+''
+'' @param maxClusters - Maximum cluster number (0 = no limit)
+
+  test_max_clusters := maxClusters
+
+
 PUB clearTestErrors()
 '' Reset all test error injection state. Disarms read/write hooks,
 '' zeroes the triggered error counter, and clears diagnostic overrides.
@@ -1859,6 +1870,7 @@ PUB clearTestErrors()
   test_force_write_crc_error := 0
   test_error_count := 0
   test_force_cmd13 := FALSE
+  test_max_clusters := 0
 
 
 PUB debugGetRootSec() : result
@@ -4378,6 +4390,9 @@ PRI allocateCluster(cluster) : result | fat_idx, buf_idx, high_bits
           result := E_IO_ERROR
           quit
       buf_idx := fat_idx & SECTOR_OFFSET_MASK
+      if test_max_clusters > 0 and (fat_idx >> 2) >= test_max_clusters           '  test hook: artificial cluster limit
+        result := E_IO_ERROR
+        quit
       result := long[@fat_buf + buf_idx]                                        '  read a cluster cell
       if (result & FAT32_ENTRY_MASK) == $0000_0000                               '  if cluster cell is empty (check only low 28 bits)
         high_bits := result & FAT32_RESERVED_MASK                                        '  preserve high 4 bits

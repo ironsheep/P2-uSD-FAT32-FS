@@ -36,10 +36,15 @@ CON
      BUFFER_SIZE = 512
      LARGE_BUFFER_SIZE = 2048
 
+' Enable raw sector access for cluster boundary tests (VBR read)
 ' Uncomment SD_INCLUDE_STACK_CHECK to measure worker cog stack depth
 #IFDEF __SPINTOOLS__
+#DEFINE SD_INCLUDE_RAW
 #ELSEIFDEF __FLEXSPIN__
+#define SD_INCLUDE_RAW
+#pragma exportdef SD_INCLUDE_RAW
 #ELSE
+#PRAGMA EXPORTDEF SD_INCLUDE_RAW
 #DEFINE SD_INCLUDE_STACK_CHECK
 #PRAGMA EXPORTDEF SD_INCLUDE_STACK_CHECK
 #ENDIF
@@ -59,6 +64,9 @@ testPattern     BYTE    "RTPATTRN.BIN", 0
 testBoundary    BYTE    "RTBOUND.BIN", 0
 testLarge128    BYTE    "RTLG128.BIN", 0
 testLarge256    BYTE    "RTLG256.BIN", 0
+testZeros       BYTE    "RTZEROS.BIN", 0
+testOnes        BYTE    "RTONES.BIN", 0
+testCluster     BYTE    "RTCLUST.BIN", 0
 
 ' Buffers
 writeBuffer     BYTE    0[BUFFER_SIZE]
@@ -67,6 +75,7 @@ readBuffer_guard BYTE   0[16]
 largeWriteBuf   BYTE    0[LARGE_BUFFER_SIZE]
 largeReadBuf    BYTE    0[LARGE_BUFFER_SIZE]
 largeReadBuf_guard BYTE 0[16]
+vbrBuf          BYTE    0[512]
 
 ' Test strings
 testStr1        BYTE    "Hello, World!", 0
@@ -76,7 +85,7 @@ testStr3        BYTE    "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", 0
 ' Temp byte for single-byte writes
 tempByte        BYTE    0
 
-PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize
+PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize, secPerClus, clusterBytes, writeLen, chunkIdx, seekPos, straddle[2], vbrSector
 '' Main entry point for read/write regression tests
 ''
 '' Tests various data patterns and file sizes using V3 handle API
@@ -711,6 +720,142 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize
 
     ' Clean up remaining large file
     sd.deleteFile(@testLarge128)
+
+    ' ----------------------------------
+    ' TEST GROUP: Constant Data Pattern Verification (O-14)
+    ' ----------------------------------
+    utils.startTestGroup(@"Constant Data Pattern Verification")
+
+    ' Test A: All-$00 write/read round-trip
+    utils.startTest(@"All-$00 write/read round-trip (512 + 1024 bytes)")
+    utils.setCheckCountPerTest(4)
+    sd.deleteFile(@testZeros)
+    handle := sd.createFileNew(@testZeros)
+    utils.evaluateSubBool(handle >= 0, @"create zeros file", true)
+    if handle >= 0
+        utils.fillBufferWithValue(@writeBuffer, 512, $00)
+        sd.writeHandle(handle, @writeBuffer, 512)
+        utils.fillBufferWithValue(@largeWriteBuf, 1024, $00)
+        sd.writeHandle(handle, @largeWriteBuf, 1024)
+        sd.closeFileHandle(handle)
+    handle := sd.openFileRead(@testZeros)
+    if handle >= 0
+        utils.initGuard(@readBuffer_guard)
+        bytesRead := sd.readHandle(handle, @readBuffer, 512)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+        result := utils.verifyBufferValue(@readBuffer, 512, $00)
+        utils.evaluateSubBool(result, @"512-byte zeros match", true)
+        utils.initGuard(@largeReadBuf_guard)
+        bytesRead := sd.readHandle(handle, @largeReadBuf, 1024)
+        utils.checkGuard(@largeReadBuf_guard, @"largeReadBuf guard")
+        result := utils.verifyBufferValue(@largeReadBuf, 1024, $00)
+        utils.evaluateSubBool(result, @"1024-byte zeros match", true)
+        sd.closeFileHandle(handle)
+    utils.showSubTestResults()
+    utils.setCheckCountPerTest(1)
+
+    ' Test B: All-$FF write/read round-trip
+    utils.startTest(@"All-$FF write/read round-trip (512 + 1024 bytes)")
+    utils.setCheckCountPerTest(4)
+    sd.deleteFile(@testOnes)
+    handle := sd.createFileNew(@testOnes)
+    utils.evaluateSubBool(handle >= 0, @"create ones file", true)
+    if handle >= 0
+        utils.fillBufferWithValue(@writeBuffer, 512, $FF)
+        sd.writeHandle(handle, @writeBuffer, 512)
+        utils.fillBufferWithValue(@largeWriteBuf, 1024, $FF)
+        sd.writeHandle(handle, @largeWriteBuf, 1024)
+        sd.closeFileHandle(handle)
+    handle := sd.openFileRead(@testOnes)
+    if handle >= 0
+        utils.initGuard(@readBuffer_guard)
+        bytesRead := sd.readHandle(handle, @readBuffer, 512)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+        result := utils.verifyBufferValue(@readBuffer, 512, $FF)
+        utils.evaluateSubBool(result, @"512-byte $FF match", true)
+        utils.initGuard(@largeReadBuf_guard)
+        bytesRead := sd.readHandle(handle, @largeReadBuf, 1024)
+        utils.checkGuard(@largeReadBuf_guard, @"largeReadBuf guard")
+        result := utils.verifyBufferValue(@largeReadBuf, 1024, $FF)
+        utils.evaluateSubBool(result, @"1024-byte $FF match", true)
+        sd.closeFileHandle(handle)
+    utils.showSubTestResults()
+    utils.setCheckCountPerTest(1)
+
+    sd.deleteFile(@testZeros)
+    sd.deleteFile(@testOnes)
+
+    ' ----------------------------------
+    ' TEST GROUP: Cluster Boundary Verification (O-12)
+    ' ----------------------------------
+    utils.startTestGroup(@"Cluster Boundary Verification")
+
+    ' Determine cluster size from VBR
+    result := sd.readVBRRaw(@vbrBuf)
+    secPerClus := vbrBuf[$0D]
+    clusterBytes := secPerClus * 512
+    writeLen := clusterBytes + 512
+    debug("   sec_per_clus=", udec_(secPerClus), " cluster_bytes=", udec_(clusterBytes), " writeLen=", udec_(writeLen))
+
+    ' Test A: Write and verify bytes straddling cluster boundary
+    utils.startTest(@"Write file spanning cluster boundary")
+    utils.setCheckCountPerTest(4)
+    sd.deleteFile(@testCluster)
+    handle := sd.createFileNew(@testCluster)
+    utils.evaluateSubBool(handle >= 0, @"create cluster file", true)
+    if handle >= 0
+        ' Write in 512-byte chunks with incrementing pattern starting at $37
+        chunkIdx := 0
+        repeat while chunkIdx * 512 < writeLen
+            utils.fillBufferWithPattern(@writeBuffer, 512, ($37 + chunkIdx * 512) & $FF)
+            sd.writeHandle(handle, @writeBuffer, 512)
+            chunkIdx++
+        sd.closeFileHandle(handle)
+    handle := sd.openFileRead(@testCluster)
+    if handle >= 0
+        fileSize := sd.fileSizeHandle(handle)
+        utils.evaluateSubValue(fileSize, @"file size", writeLen)
+        ' Read and verify last sector of cluster 1
+        sd.seekHandle(handle, clusterBytes - 512)
+        utils.initGuard(@readBuffer_guard)
+        bytesRead := sd.readHandle(handle, @readBuffer, 512)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+        result := utils.verifyBufferPattern(@readBuffer, 512, ($37 + clusterBytes - 512) & $FF)
+        utils.evaluateSubBool(result, @"last sector cluster 1", true)
+        ' Read and verify first sector of cluster 2
+        utils.initGuard(@readBuffer_guard)
+        bytesRead := sd.readHandle(handle, @readBuffer, 512)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+        result := utils.verifyBufferPattern(@readBuffer, 512, ($37 + clusterBytes) & $FF)
+        utils.evaluateSubBool(result, @"first sector cluster 2", true)
+        sd.closeFileHandle(handle)
+    utils.showSubTestResults()
+    utils.setCheckCountPerTest(1)
+
+    ' Test B: Seek across cluster boundary and verify data continuity
+    utils.startTest(@"Seek across cluster boundary verifies continuity")
+    utils.setCheckCountPerTest(3)
+    handle := sd.openFileRead(@testCluster)
+    if handle >= 0
+        seekPos := clusterBytes - 4
+        result := sd.seekHandle(handle, seekPos)
+        utils.evaluateSubValue(result, @"seek near boundary", sd.SUCCESS)
+        utils.initGuard(@readBuffer_guard)
+        bytesRead := sd.readHandle(handle, @readBuffer, 8)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+        ' Verify 8 straddling bytes match expected pattern
+        result := true
+        repeat idx from 0 to 7
+            if readBuffer[idx] <> (($37 + seekPos + idx) & $FF)
+                result := false
+                debug("  MISMATCH at idx=", udec_(idx), ": got=$", uhex_byte_(readBuffer[idx]), " exp=$", uhex_byte_(($37 + seekPos + idx) & $FF))
+                quit
+        utils.evaluateSubBool(result, @"8 straddling bytes", true)
+        sd.closeFileHandle(handle)
+    utils.showSubTestResults()
+    utils.setCheckCountPerTest(1)
+
+    sd.deleteFile(@testCluster)
 
     ' ----------------------------------
     ' Cleanup

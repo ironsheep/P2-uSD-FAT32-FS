@@ -432,6 +432,97 @@ PUB go() | result, handle, h1, h2, h3, fileSize, bytesWritten, bytesRead, root_s
     sd.deleteFile(@testdir1)
 
     ' ----------------------------------
+    ' TEST GROUP: Filename Edge Cases (O-16)
+    ' ----------------------------------
+    utils.startTestGroup(@"Filename Edge Cases")
+
+    ' Test A: Minimum-length filename (1 char, no extension)
+    utils.startTest(@"Minimum-length filename (1 char)")
+    utils.setCheckCountPerTest(3)
+    sd.deleteFile(@"A")
+    handle := sd.createFileNew(@"A")
+    utils.evaluateSubBool(handle >= 0, @"create 'A'", true)
+    if handle >= 0
+        sd.writeHandle(handle, @"1234567890", 10)
+        sd.closeFileHandle(handle)
+    handle := sd.openFileRead(@"A")
+    if handle >= 0
+        bytefill(@readBuffer, 0, 128)
+        utils.initGuard(@readBuffer_guard)
+        bytesRead := sd.readHandle(handle, @readBuffer, 10)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+        utils.evaluateSubValue(bytesRead, @"read 10 bytes", 10)
+        sd.closeFileHandle(handle)
+    result := sd.deleteFile(@"A")
+    utils.evaluateSubValue(result, @"delete 'A'", sd.SUCCESS)
+    utils.showSubTestResults()
+    utils.setCheckCountPerTest(1)
+
+    ' Test B: Maximum 8.3 filename
+    utils.startTest(@"Maximum 8.3 filename (12345678.123)")
+    utils.setCheckCountPerTest(3)
+    sd.deleteFile(@"12345678.123")
+    handle := sd.createFileNew(@"12345678.123")
+    utils.evaluateSubBool(handle >= 0, @"create max name", true)
+    if handle >= 0
+        sd.writeHandle(handle, @"1234567890", 10)
+        sd.closeFileHandle(handle)
+    handle := sd.openFileRead(@"12345678.123")
+    if handle >= 0
+        bytefill(@readBuffer, 0, 128)
+        utils.initGuard(@readBuffer_guard)
+        bytesRead := sd.readHandle(handle, @readBuffer, 10)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+        utils.evaluateSubValue(bytesRead, @"read 10 bytes", 10)
+        sd.closeFileHandle(handle)
+    result := sd.deleteFile(@"12345678.123")
+    utils.evaluateSubValue(result, @"delete max name", sd.SUCCESS)
+    utils.showSubTestResults()
+    utils.setCheckCountPerTest(1)
+
+    ' Test C: Lowercase to uppercase conversion
+    utils.startTest(@"Lowercase to uppercase conversion")
+    utils.setCheckCountPerTest(3)
+    sd.deleteFile(@"LOWER.TXT")
+    handle := sd.createFileNew(@"lower.txt")
+    utils.evaluateSubBool(handle >= 0, @"create lowercase", true)
+    if handle >= 0
+        sd.closeFileHandle(handle)
+    handle := sd.openFileRead(@"LOWER.TXT")
+    utils.evaluateSubBool(handle >= 0, @"open uppercase", true)
+    if handle >= 0
+        sd.closeFileHandle(handle)
+    handle := sd.openFileRead(@"Lower.Txt")
+    utils.evaluateSubBool(handle >= 0, @"open mixed case", true)
+    if handle >= 0
+        sd.closeFileHandle(handle)
+    sd.deleteFile(@"LOWER.TXT")
+    utils.showSubTestResults()
+    utils.setCheckCountPerTest(1)
+
+    ' Test D: Name without extension
+    utils.startTest(@"Name without extension")
+    utils.setCheckCountPerTest(3)
+    sd.deleteFile(@"NOEXT")
+    handle := sd.createFileNew(@"NOEXT")
+    utils.evaluateSubBool(handle >= 0, @"create NOEXT", true)
+    if handle >= 0
+        sd.writeHandle(handle, @"1234567890", 10)
+        sd.closeFileHandle(handle)
+    handle := sd.openFileRead(@"NOEXT")
+    if handle >= 0
+        bytefill(@readBuffer, 0, 128)
+        utils.initGuard(@readBuffer_guard)
+        bytesRead := sd.readHandle(handle, @readBuffer, 10)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+        utils.evaluateSubValue(bytesRead, @"read 10 bytes", 10)
+        sd.closeFileHandle(handle)
+    result := sd.deleteFile(@"NOEXT")
+    utils.evaluateSubValue(result, @"delete NOEXT", sd.SUCCESS)
+    utils.showSubTestResults()
+    utils.setCheckCountPerTest(1)
+
+    ' ----------------------------------
     ' Cleanup: Delete test files
     ' ----------------------------------
     debug(" ")
