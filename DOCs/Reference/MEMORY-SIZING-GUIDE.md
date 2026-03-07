@@ -468,7 +468,7 @@ If the object supports conditional compilation, compile each configuration and t
 
 ### Step 6: Automate for Repeatability
 
-For projects with many programs, create a benchmark script that compiles all top-level files and records size, checksum, and compile time. See `tools/archive/compiler_benchmark.sh` in this project for a working example that benchmarks 34 programs across 5 categories.
+For projects with many programs, create a benchmark script that compiles all top-level files and records size, checksum, and compile time.
 
 The script pattern:
 
@@ -485,11 +485,6 @@ This produces a repeatable baseline. When you upgrade the compiler or refactor c
 
 | Artifact | Location | Purpose |
 |---|---|---|
-| Memory footprint analysis | `DOCs/Plans/DRIVER-MEMORY-FOOTPRINT.md` | Complete driver sizing: regions, DAT breakdown, real-world programs |
-| Compiler benchmark script | `tools/archive/compiler_benchmark.sh` | Automated sizing of all 34 project programs |
-| Benchmark results (v1.52.2) | `tools/archive/compiler_benchmark_v1.52.2_260227-154237.txt` | Size + checksum + time for every program |
-| Benchmark results (v1.52.1) | `tools/archive/compiler_benchmark_v1.52.1_260227-153636.txt` | Prior baseline for comparison |
-| Compiler validation | `DOCs/Plans/COMPILER-BENCHMARK-VALIDATION.md` | Proof that v1.52.2 produces identical binaries 2x faster |
 | Handle design exploration | `DOCs/Analysis/DESIGN-EXPLORATION-FILE-HANDLES.md` | Memory trade-off analysis for handle architecture |
 
 ---

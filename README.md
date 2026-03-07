@@ -159,7 +159,6 @@ P2-uSD-FAT32-FS/
 │   ├── SD-CARD-PERFORMANCE.md       # Card selection and performance rankings
 │   ├── SD-CARD-UTILITIES.md            # Utility program documentation
 │   ├── Analysis/                    # Design explorations and studies
-│   ├── Archive/                     # Superseded documents
 │   ├── cards/                       # Per-card data sheets and catalog
 │   ├── Decisions/                   # Architecture decision records
 │   ├── Plans/                       # Active plans and punch list
