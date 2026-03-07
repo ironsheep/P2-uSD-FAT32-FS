@@ -1,5 +1,7 @@
 # CMD13 Compatibility Analysis: Broken Status Reporting on Older SD Cards
 
+> **SUPERSEDED (2026-03-06):** This document's root cause diagnosis is incorrect. The CMD13 failure is not a card-specific defect — it is a driver-side R1 response parsing error. Our code accepted the first non-$FF byte as R1, but the SD spec requires bit 7 = 0 for a valid R1. Pre-response bytes with bit 7 set (like $C1) are bus noise, not responses. See **[CMD13-ROOT-CAUSE-ANALYSIS.md](../CMD13-ROOT-CAUSE-ANALYSIS.md)** for the corrected analysis. The symptom descriptions and card data below remain accurate; only the diagnosis and mitigation strategy are superseded.
+
 A comprehensive analysis of the CMD13 (SEND_STATUS) failure observed on an AData SDHC 16GB card, the underlying cause, impact on the driver, and mitigation strategies.
 
 **Date:** 2026-03-05

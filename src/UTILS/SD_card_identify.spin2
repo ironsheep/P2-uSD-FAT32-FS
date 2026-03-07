@@ -1,0 +1,289 @@
+{Spin2_v49}
+'' =================================================================================================
+''
+''   File....... SD_card_identify.spin2
+''   Purpose.... Two-line SD card identification for catalog and benchmarking
+''   Author..... Stephen M Moraco
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... MAR 2026
+''   Updated.... 06 MAR 2026
+''
+'' =================================================================================================
+''
+''   Mounts the SD card and prints a two-line identification summary via debug():
+''
+''     L1: Samsung SE16G SDHC 14GB [FAT32] SD 3.x rev1.0 SN:4E3300C4 2018/07
+''     L2: Class 6, U0, V0, SPI 25 MHz  [MSWIN4.1]
+''
+''   Usage: ./run_test.sh ../src/UTILS/SD_card_identify.spin2
+''
+'' =================================================================================================
+
+CON
+
+    _CLKFREQ        = 350_000_000
+
+    ' P2 Edge module SD slot pins
+    SD_CS   = 60
+    SD_MOSI = 59
+    SD_MISO = 58
+    SD_SCK  = 61
+
+    MBR_SIGNATURE = $AA55
+
+' Enable register access for CID/SCR/SD Status reads
+#IFDEF __SPINTOOLS__
+#DEFINE SD_INCLUDE_REGISTERS
+#DEFINE SD_INCLUDE_RAW
+#ELSEIFDEF __FLEXSPIN__
+#define SD_INCLUDE_REGISTERS
+#define SD_INCLUDE_RAW
+#pragma exportdef SD_INCLUDE_REGISTERS
+#pragma exportdef SD_INCLUDE_RAW
+#ELSE
+#PRAGMA EXPORTDEF SD_INCLUDE_REGISTERS
+#PRAGMA EXPORTDEF SD_INCLUDE_RAW
+#ENDIF
+
+OBJ
+    sd    : "micro_sd_fat32_fs"
+
+DAT
+
+    ' Sector buffer for MBR/VBR reads
+    sect_buf      BYTE    0[512]
+
+    ' SD Status buffer (ACMD13 - 64 bytes)
+    sdst_buf      BYTE    0[64]
+
+    ' Parsed field buffers
+    oemBuf        BYTE    0[9]         ' OEM name (8 chars + null)
+
+    ' Manufacturer lookup table (MID byte, then name string, null-terminated)
+    midTable      BYTE    $00, "Gigastone", 0
+                  BYTE    $01, "Panasonic", 0
+                  BYTE    $02, "Toshiba", 0
+                  BYTE    $03, "SanDisk", 0
+                  BYTE    $1B, "Samsung", 0
+                  BYTE    $1D, "AData", 0
+                  BYTE    $27, "Phison", 0
+                  BYTE    $28, "Lexar", 0
+                  BYTE    $41, "Kingston", 0
+                  BYTE    $74, "Transcend", 0
+                  BYTE    $82, "Sony", 0
+                  BYTE    $9F, "SharedOEM", 0
+                  BYTE    $AD, "Longsys/Lexar", 0
+                  BYTE    $FE, "PNY OEM", 0
+                  BYTE    $FF             ' end sentinel
+
+    ' Card type strings
+    ctSDSC        BYTE    "SDSC", 0
+    ctSDHC        BYTE    "SDHC", 0
+    ctSDXC        BYTE    "SDXC", 0
+
+    ' Filesystem type strings
+    fsFAT12       BYTE    "FAT12", 0
+    fsFAT16       BYTE    "FAT16", 0
+    fsFAT32       BYTE    "FAT32", 0
+    fsExFAT       BYTE    "exFAT", 0
+    fsLinux       BYTE    "Linux", 0
+    fsGPT         BYTE    "GPT", 0
+    fsEmpty       BYTE    "Empty", 0
+    fsUnknown     BYTE    "???", 0
+
+
+PUB go() | result
+'' Mount SD card and display two-line identification summary.
+
+    result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    if result < 0
+        debug("mount() failed: error ", sdec_(result))
+        debug("END_SESSION")
+        return
+
+    displayCardID()
+
+    sd.unmount()
+    debug("END_SESSION")
+
+
+PRI displayCardID() | sd.cid_t cid, sd.scr_t scr, ...
+                       ocr, sizeMB, spiHz, psn, mdtYear, mdtMonth, ...
+                       pnm[2], p_mfr, p_type, p_spec, p_fs, ...
+                       sdstOk, speedClass, uhsGrade, videoClass
+' Read card registers and display two-line identification summary.
+
+    sd.readCIDRaw(@cid)
+    sd.readSCRRaw(@scr)
+    ocr := sd.getOCR()
+    sizeMB := sd.cardSizeSectors() / 2048
+    spiHz := sd.getSPIFrequency()
+
+    ' Parse CID fields
+    bytemove(@pnm, @cid.pnm, 5)
+    BYTE[@pnm + 5] := 0
+
+    psn := (cid.psn[0] << 24) | (cid.psn[1] << 16) | (cid.psn[2] << 8) | cid.psn[3]
+
+    mdtYear := 2000 + ((cid.mdt[0] & $0F) << 4) + ((cid.mdt[1] >> 4) & $0F)
+    mdtMonth := cid.mdt[1] & $0F
+
+    ' Look up display strings
+    p_mfr := lookupMID(cid.mid)
+    p_type := getCardType(ocr, sizeMB)
+    p_spec := getSDSpecVersion(@scr)
+    p_fs := detectFilesystem()
+    readOEMName()
+
+    ' Read SD Status (ACMD13) for speed class info
+    sdstOk := sd.readSDStatusRaw(@sdst_buf)
+    if sdstOk == sd.SUCCESS
+        speedClass := decodeSpeedClass(sdst_buf[8])
+        uhsGrade := sdst_buf[14] >> 4
+        videoClass := sdst_buf[15]
+    else
+        speedClass := 0
+        uhsGrade := 0
+        videoClass := 0
+
+    ' Line 1: identity
+    if sizeMB < 1024
+        debug("L1: ", zstr_(p_mfr), " ", zstr_(@pnm), " ", zstr_(p_type), " ", udec_(sizeMB), "MB [", zstr_(p_fs), "] ", zstr_(p_spec), " rev", udec_(cid.prv >> 4), ".", udec_(cid.prv & $0F), " SN:", uhex_long_(psn), " ", udec_(mdtYear), "/", udec_(mdtMonth))
+    else
+        debug("L1: ", zstr_(p_mfr), " ", zstr_(@pnm), " ", zstr_(p_type), " ", udec_(sizeMB / 1024), "GB [", zstr_(p_fs), "] ", zstr_(p_spec), " rev", udec_(cid.prv >> 4), ".", udec_(cid.prv & $0F), " SN:", uhex_long_(psn), " ", udec_(mdtYear), "/", udec_(mdtMonth))
+
+    ' Line 2: performance + OEM
+    if sdstOk == sd.SUCCESS
+        debug("L2: Class ", udec_(speedClass), ", U", udec_(uhsGrade), ", V", udec_(videoClass), ", SPI ", udec_(spiHz / 1_000_000), " MHz  [", zstr_(@oemBuf), "]")
+    else
+        debug("L2: SPI ", udec_(spiHz / 1_000_000), " MHz  [", zstr_(@oemBuf), "]  (ACMD13 unavailable)")
+
+
+PRI getSDSpecVersion(^sd.scr_t p_scr) : p_version | sdSpec, spec3, spec4, specX
+' Decode SD spec version from SCR register.
+
+    sdSpec := p_scr.sdSpec & $0F
+    spec3 := (p_scr.sdSpec3Ext >> 7) & 1
+    spec4 := (p_scr.sdSpec3Ext >> 2) & 1
+    specX := ((p_scr.sdSpec3Ext & $03) << 2) | ((p_scr.sdSpecXLo >> 6) & $03)
+
+    if sdSpec < 2
+        return @"SD 1.x"
+    if spec3 == 0
+        return @"SD 2.0"
+    if spec4 == 0
+        return @"SD 3.x"
+    if specX == 0
+        return @"SD 4.x"
+    if specX == 1
+        return @"SD 5.x"
+    if specX == 2
+        return @"SD 6.x"
+    return @"SD >6.x"
+
+
+PRI lookupMID(mid) : p_name | pCursor, entryMID
+' Look up manufacturer name for a CID Manufacturer ID byte.
+
+    pCursor := @midTable
+    repeat
+        entryMID := BYTE[pCursor]
+        if entryMID == $FF
+            return @"Unknown"
+        if entryMID == mid
+            return pCursor + 1
+        pCursor++
+        repeat while BYTE[pCursor] <> 0
+            pCursor++
+        pCursor++
+
+
+PRI getCardType(ocr, sizeMB) : p_type
+' Classify card as SDSC, SDHC, or SDXC based on OCR CCS bit and capacity.
+
+    if (ocr & (1 << 30)) == 0
+        return @ctSDSC
+    if sizeMB > 32768
+        return @ctSDXC
+    return @ctSDHC
+
+
+PRI detectFilesystem() : p_fsName | pType
+' Detect filesystem type from MBR partition type byte.
+
+    sd.readSectorRaw(0, @sect_buf)
+    if WORD[@sect_buf + $1FE] <> MBR_SIGNATURE
+        return @fsUnknown
+
+    pType := sect_buf[$1C2]
+    case pType
+        $00 : return @fsEmpty
+        $01 : return @fsFAT12
+        $04, $06, $0E : return @fsFAT16
+        $0B, $0C : return @fsFAT32
+        $07 : return @fsExFAT
+        $83 : return @fsLinux
+        $EE : return @fsGPT
+        other : return @fsUnknown
+
+
+PRI readOEMName() | partStart, idx
+' Read OEM name from VBR of first partition. Result stored in oemBuf.
+
+    sd.readSectorRaw(0, @sect_buf)
+    if WORD[@sect_buf + $1FE] == MBR_SIGNATURE
+        partStart := LONG[@sect_buf + $1C6]
+        if partStart > 0
+            sd.readSectorRaw(partStart, @sect_buf)
+            bytemove(@oemBuf, @sect_buf + 3, 8)
+            oemBuf[8] := 0
+            idx := 7
+            repeat while idx >= 0 and oemBuf[idx] == " "
+                oemBuf[idx] := 0
+                idx--
+        else
+            bytemove(@oemBuf, @"n/a", 4)
+    else
+        bytemove(@oemBuf, @"n/a", 4)
+
+
+PRI decodeSpeedClass(classByte) : speedClass
+' Decode SD Status SPEED_CLASS byte to integer speed class.
+
+    case classByte
+        $00 : return 0
+        $01 : return 2
+        $02 : return 4
+        $03 : return 6
+        $04 : return 10
+        other : return 0
+
+con { license }
+
+{{
+  =================================================================================================
+
+  Terms of Use: MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this
+  software and associated documentation files (the "Software"), to deal in the Software
+  without restriction, including without limitation the rights to use, copy, modify,
+  merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies
+  or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+  INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+  HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+  CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+  OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+  =================================================================================================
+}}

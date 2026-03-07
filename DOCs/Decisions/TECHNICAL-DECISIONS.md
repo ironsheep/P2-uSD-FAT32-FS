@@ -907,15 +907,19 @@ This clears the reserved high 4 bits along with the low 28.
 
 ## TD-009: CMD13 Compatibility — Probe + Advisory API
 
+> **Updated (2026-03-06):** Root cause corrected — driver R1 parsing error, not card defect. See **[CMD13-ROOT-CAUSE-ANALYSIS.md](../Analysis/CMD13-ROOT-CAUSE-ANALYSIS.md)**. Bypass infrastructure retained pending user validation.
+
 **Date**: 2026-03-05
-**Status**: DECIDED — Strategy A (probe at init) + Strategy C (cardWarnings API)
-**Analysis**: [CMD13-COMPATIBILITY-ANALYSIS.md](../Analysis/CMD13-COMPATIBILITY-ANALYSIS.md)
+**Status**: DECIDED — Strategy A (probe at init) + Strategy C (cardWarnings API). **Under review** pending bit-7 R1 fix validation.
+**Analysis**: ~~[CMD13-COMPATIBILITY-ANALYSIS.md](../Analysis/superseded/CMD13-COMPATIBILITY-ANALYSIS.md)~~ → [CMD13-ROOT-CAUSE-ANALYSIS.md](../Analysis/CMD13-ROOT-CAUSE-ANALYSIS.md)
 
 ### Background
 
 A user reported that an older AData 16GB SDHC card (MID $1D, revision 0.2, manufactured 2013) blocks on mount because `checkCardStatus()` returns E_IO_ERROR after every CMD13 call. The card's CMD13 response has R1 bit 7 = 1 (spec violation) and STATUS = $3F (6/8 error bits set simultaneously — physically impossible). All data operations work perfectly when CMD13 is bypassed.
 
-Research confirms CMD13 failures in SPI mode are a known class of issue on older/budget controllers. Status-reporting commands are among the least reliably implemented parts of the SPI command set.
+~~Research confirms CMD13 failures in SPI mode are a known class of issue on older/budget controllers. Status-reporting commands are among the least reliably implemented parts of the SPI command set.~~
+
+**Corrected understanding (2026-03-06):** The card is not broken. Our R1 detection loop (`if resp <> $FF`) accepts the first non-$FF byte as R1, but pre-response bytes (bus artifacts, stale tokens) frequently have bit 7 set. The SD spec (Section 7.3.2.1) states R1 bit 7 is always 0 — this is the framing mechanism for finding R1 on the bus. The correct check is `if (resp & $80) == 0`. The canonical FatFs/ChaN sdmm.c driver uses this pattern: `while ((buf[6] & 0x80) && --n)`.
 
 ### Alternatives Considered
 
@@ -949,6 +953,13 @@ Six strategies were evaluated across two dimensions — detection and reporting:
 - **Clean reporting** — mount() contract unchanged. Callers who care check `cardWarnings()`, callers who don't are unaffected. Extensible for future advisories.
 - **Minimal implementation** — one probe, one flag, four if-checks, one new PUB method, one CON constant.
 - **Runtime tracking deferred** — Strategy F solves a problem we haven't observed. Can be added later if intermittent CMD13 behavior is ever reported.
+
+### Pending Re-evaluation
+
+Once the bit-7 R1 fix (`(resp & $80) == 0`) is implemented in `cmd()` and `checkCardStatus()` and validated on the user's AData card:
+- If CMD13 works correctly on all cards → remove `cmd13_reliable` flag, probe, bypass, and `CW_CMD13_UNRELIABLE` warning
+- If edge cases remain → keep the probe infrastructure as a secondary safety net
+- CS deassert recovery for CMD12 is a separate mechanism and is unaffected — see [CMD12-SPCE-ANALYSIS.md](../Analysis/CMD12-SPCE-ANALYSIS.md)
 
 ---
 

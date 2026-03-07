@@ -9,43 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.3.0] - 2026-03-06
 
-**All 20 SD cards working — CMD12 tolerance, CMD23 probing, Tier 3 test strengthening, unified regression runner.**
+**R1 response parsing fix, CMD12 tolerance, CMD23 probing, 427 regression tests across 20 suites.**
+
+### Bug Fixes
+
+- R1 response parsing: skip bytes with bit 7 set per SD spec Section 7.3.2.1 (fixes CMD13 false errors on cards with bus artifacts)
+- CMD12 tolerance: multi-block reads recover via CS deassert on cards with aggressive read-ahead pipelines
 
 ### New Features
 
-- CMD12 tolerance: multi-block reads recover gracefully on cards with aggressive read-ahead pipelines
-- `cardWarnings()`: Bitmask API returning all init-time capability discoveries after mount
-- CMD23 init-time probing: automatic detection and use of SET_BLOCK_COUNT when supported in SPI mode
-- CMD12 full-duplex pre-capture: diagnostic visibility into card pipeline state during STOP_TRANSMISSION
-- CMD13 full-duplex capture: byte-level framing analysis for cards with broken SPI-mode status reporting
-- `setForceCmd13()`: Diagnostic override to re-enable CMD13 on cards flagged unreliable
-- `getLastCMD13Capture()`, `getLastCMD13PreCapture()`: Raw byte stream accessors for CMD13 analysis
-- `setTestMaxClusters()`: Artificial cluster limit hook for disk-full simulation in tests
+- `cardWarnings()`: Bitmask API for init-time capability discoveries
+- CMD23 probing: automatic SET_BLOCK_COUNT detection and use when supported in SPI mode
 
 ### Improvements
 
 - `recoverToIdle()`: CS deassert recovery per SD spec Section 7.2.2
 - `readSectors()`: CMD23 path with auto-stop verification and fallback to CMD12
-- `probeCmd13()`: Full-duplex capture during init-time probe for baseline diagnostics
-- `clearTestErrors()`: Resets disk-full simulation hook alongside CRC injection hooks
-- Silicon Power Elite 64GB: benchmarked at 967 KB/s single-sector, 2,334 KB/s multi-sector (350 MHz)
-
-### Documentation
-
-- [CMD12-SPCE-ANALYSIS.md](DOCs/Analysis/CMD12-SPCE-ANALYSIS.md): Definitive CMD12 framing analysis
-- Card catalog updated: SP Elite benchmarked and ranked #2 of 10 tested cards
-- Memory sizing guide updated with current compiler output
 
 ### Tests
 
-- Tier 3 test strengthening: 16 new tests across 4 suites (411→427 total)
-- Cluster boundary crossing: write/read verification at cluster transitions with seek-across-boundary data continuity
-- Disk full simulation: E_DISK_FULL on create, recovery after delete, write-path exhaustion, hook reset verification
-- Constant data patterns: all-$00 and all-$FF round-trip through filesystem API (512 and 1024 bytes)
-- Double-mount idempotency: SUCCESS return, open handle preservation, working directory preservation
-- Filename edge cases: minimum-length, maximum 8.3, lowercase-to-uppercase conversion, extension-less names
-- Unified regression runner (`run_regression.sh`): layered dependency ordering, `--from` resume, `--compile-only` mode
-- CMD13 diagnostic capture test included for field testing on problem cards (temporary)
+- 427 tests across 20 suites, verified on SP Elite 64GB + Transcend 32GB
+- Cluster boundary crossing, disk-full simulation, constant data patterns ($00/$FF round-trip)
+- Double-mount idempotency, filename edge cases (min/max 8.3, case conversion)
+- Unified regression runner with layered dependency ordering
+- `setTestMaxClusters()`, `setForceCmd13()`, `clearTestErrors()`: Test hooks for disk-full simulation, CMD13 override, and hook reset
+- `getLastCMD13Capture()`, `getLastCMD13PreCapture()`: Diagnostic byte stream accessors
 
 ## [1.2.1] - 2026-03-05
 

@@ -5096,7 +5096,7 @@ PRI cmd(op,parm) : result | timeout, timed_out
   timeout := getct() + clkfreq
   repeat
     result := sp_transfer(-1,8)                                                 '  read 1st byte of reply
-    if result <> $FF
+    if (result & $80) == 0                                                      '  valid R1 has bit 7 = 0 (SD spec 7.3.2.1)
       quit
     if getct() - timeout > 0                                                    '  check timeout
       pinh(cs)                                                                  '  CS HIGH = deselected (standard active-LOW)
@@ -5736,7 +5736,7 @@ PRI waitR1Response() : result | timeout, resp
   timeout := getct() + clkfreq / 10                                             ' 100ms timeout
   repeat
     resp := sp_transfer_8($FF)
-    if resp <> $FF
+    if (resp & $80) == 0                                                        ' Valid R1 has bit 7 = 0 (SD spec 7.3.2.1)
       result := resp                                                            ' Got response
       quit
     if getct() - timeout > 0
@@ -5938,7 +5938,7 @@ PRI probeCmd13() | r1, status, idx, resp, timeout
   cmd13_pre_capture[4] := sp_transfer_8($00)
   cmd13_pre_capture[5] := sp_transfer_8($FF)
 
-  ' Capture raw byte stream and find R1 (same pattern as checkCardStatus)
+  ' Capture raw byte stream and find R1 — skip bytes with bit 7 set (SD spec 7.3.2.1)
   timeout := getct() + clkfreq / 10                                             ' 100ms timeout
   idx := 0
   r1 := -1
@@ -5947,7 +5947,7 @@ PRI probeCmd13() | r1, status, idx, resp, timeout
     if idx < 8
       cmd13_capture[idx] := resp
       idx++
-    if resp <> $FF
+    if (resp & $80) == 0                                                         ' Valid R1 has bit 7 = 0
       cmd13_capture_len := idx                                                   ' NCR gap length
       r1 := resp
       quit
@@ -6072,7 +6072,7 @@ PRI checkCardStatus(caller) : result | r1, status, idx, resp, timeout
   cmd13_pre_capture[4] := sp_transfer_8($00)
   cmd13_pre_capture[5] := sp_transfer_8($FF)                                    ' CRC disabled after init in SPI mode
 
-  ' Capture raw byte stream and find R1 (same pattern as CMD12 capture)
+  ' Capture raw byte stream and find R1 — skip bytes with bit 7 set (SD spec 7.3.2.1)
   timeout := getct() + clkfreq / 10                                             ' 100ms timeout
   idx := 0
   r1 := -1
@@ -6081,7 +6081,7 @@ PRI checkCardStatus(caller) : result | r1, status, idx, resp, timeout
     if idx < 8
       cmd13_capture[idx] := resp
       idx++
-    if resp <> $FF
+    if (resp & $80) == 0                                                         ' Valid R1 has bit 7 = 0
       cmd13_capture_len := idx                                                   ' NCR gap length
       r1 := resp
       quit
@@ -6188,11 +6188,11 @@ PRI readCSD(p_csd) : result | timeout, idx, resp
   sp_transfer(0, 32)                                                            '  argument = 0
   sp_transfer_8($AF)                                                            '  CRC (approximate)
 
-  ' Wait for response
+  ' Wait for R1 response — skip bytes with bit 7 set (SD spec 7.3.2.1)
   timeout := getct() + clkfreq
   repeat
     resp := sp_transfer_8($FF)
-    if resp <> $FF
+    if (resp & $80) == 0                                                        '  valid R1 has bit 7 = 0
       quit
     if getct() - timeout > 0
       pinh(cs)
@@ -6241,11 +6241,11 @@ PRI readCID(p_cid) : result | timeout, idx, resp
   sp_transfer(0, 32)                                                            '  argument = 0
   sp_transfer_8($1B)                                                            '  CRC for CMD10
 
-  ' Wait for response
+  ' Wait for R1 response — skip bytes with bit 7 set (SD spec 7.3.2.1)
   timeout := getct() + clkfreq
   repeat
     resp := sp_transfer_8($FF)
-    if resp <> $FF
+    if (resp & $80) == 0                                                        '  valid R1 has bit 7 = 0
       quit
     if getct() - timeout > 0
       pinh(cs)
@@ -6482,11 +6482,11 @@ PRI sendCMD6(arg, p_status) : result | timeout, idx, resp
   sp_transfer(arg, 32)                                                          '  argument
   sp_transfer_8($FF)                                                            '  CRC (not checked in SPI mode)
 
-  ' Wait for R1 response
+  ' Wait for R1 response — skip bytes with bit 7 set (SD spec 7.3.2.1)
   timeout := getct() + clkfreq
   repeat
     resp := sp_transfer_8($FF)
-    if resp <> $FF
+    if (resp & $80) == 0                                                        '  valid R1 has bit 7 = 0
       quit
     if getct() - timeout > 0
       debug("  [sendCMD6] Timeout waiting for R1")
@@ -6601,12 +6601,12 @@ PRI readSCR(p_scr) : result | timeout, idx, resp
   sp_transfer(0, 32)                                                            '  argument = 0
   sp_transfer_8(CRC_CMD55)                                                      '  CRC for CMD55
 
-  ' Wait for R1 response
+  ' Wait for R1 response — skip bytes with bit 7 set (SD spec 7.3.2.1)
   resp := $FF
   timeout := getct() + clkfreq
   repeat
     resp := sp_transfer_8($FF)
-    if resp <> $FF
+    if (resp & $80) == 0                                                        '  valid R1 has bit 7 = 0
       quit
     if getct() - timeout > 0
       debug("  [readSCR] CMD55 timeout - no response")
@@ -6627,12 +6627,12 @@ PRI readSCR(p_scr) : result | timeout, idx, resp
     sp_transfer(0, 32)                                                           '  argument = 0
     sp_transfer_8($55)                                                           '  CRC (approximate)
 
-    ' Wait for R1 response
+    ' Wait for R1 response — skip bytes with bit 7 set (SD spec 7.3.2.1)
     resp := $FF
     timeout := getct() + clkfreq
     repeat
       resp := sp_transfer_8($FF)
-      if resp <> $FF
+      if (resp & $80) == 0                                                      '  valid R1 has bit 7 = 0
         quit
       if getct() - timeout > 0
         debug("  [readSCR] ACMD51 timeout - no response")
@@ -6692,12 +6692,12 @@ PRI readSDStatus(p_buf) : result | timeout, idx, resp
   sp_transfer(0, 32)                                                            '  argument = 0
   sp_transfer_8(CRC_CMD55)                                                      '  CRC for CMD55
 
-  ' Wait for R1 response
+  ' Wait for R1 response — skip bytes with bit 7 set (SD spec 7.3.2.1)
   resp := $FF
   timeout := getct() + clkfreq
   repeat
     resp := sp_transfer_8($FF)
-    if resp <> $FF
+    if (resp & $80) == 0                                                        '  valid R1 has bit 7 = 0
       quit
     if getct() - timeout > 0
       debug("  [readSDStatus] CMD55 timeout - no response")
@@ -6718,12 +6718,12 @@ PRI readSDStatus(p_buf) : result | timeout, idx, resp
     sp_transfer(0, 32)                                                           '  argument = 0
     sp_transfer_8($FF)                                                           '  CRC (don't care in SPI mode)
 
-    ' Wait for R1 response
+    ' Wait for R1 response — skip bytes with bit 7 set (SD spec 7.3.2.1)
     resp := $FF
     timeout := getct() + clkfreq
     repeat
       resp := sp_transfer_8($FF)
-      if resp <> $FF
+      if (resp & $80) == 0                                                      '  valid R1 has bit 7 = 0
         quit
       if getct() - timeout > 0
         debug("  [readSDStatus] ACMD13 timeout - no response")

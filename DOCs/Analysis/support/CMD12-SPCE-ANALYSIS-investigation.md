@@ -1,6 +1,6 @@
 # CMD12 Response Anomaly on Silicon Power Elite 64GB: Root Cause Analysis
 
-An investigation of the CMD12 (STOP_TRANSMISSION) response failure observed on the Silicon Power Elite 64GB SDXC card during multi-block reads, and its relationship to the CMD13 anomaly documented in [CMD13-COMPATIBILITY-ANALYSIS.md](CMD13-COMPATIBILITY-ANALYSIS.md).
+An investigation of the CMD12 (STOP_TRANSMISSION) response failure observed on the Silicon Power Elite 64GB SDXC card during multi-block reads, and its relationship to the CMD13 anomaly documented in [CMD13-COMPATIBILITY-ANALYSIS.md](../superseded/CMD13-COMPATIBILITY-ANALYSIS.md).
 
 **Date:** 2026-03-05
 
@@ -303,4 +303,4 @@ This combination has only been observed on the SP Elite card.
 
 ---
 
-*Analysis by Iron Sheep Productions. See also: [CMD13-COMPATIBILITY-ANALYSIS.md](CMD13-COMPATIBILITY-ANALYSIS.md) for the CMD13 anomaly on AData cards.*
+*Analysis by Iron Sheep Productions. See also: [CMD13-COMPATIBILITY-ANALYSIS.md](../superseded/CMD13-COMPATIBILITY-ANALYSIS.md) for the CMD13 anomaly on AData cards (superseded).*

@@ -117,7 +117,7 @@ Update the card catalog file with the FAT32 filesystem section.
 
 ## Step 4: SPI Frequency Sweep (New Cards Only)
 
-**Utility:** `src/UTILS/SD_speed_characterize.spin2`
+**Utility:** `diagnostic-tests/SD_speed_characterize.spin2`
 **Purpose:** Find maximum reliable SPI clock frequency
 **Sysclk:** 200 MHz (default - provides clean SPI clock divisions)
 
@@ -125,7 +125,7 @@ Update the card catalog file with the FAT32 filesystem section.
 
 ```bash
 cd tools/
-./run_test.sh ../src/UTILS/SD_speed_characterize.spin2 -t 300
+./run_test.sh ../diagnostic-tests/SD_speed_characterize.spin2 -t 300
 ```
 
 **Test structure (per SPI speed level):**

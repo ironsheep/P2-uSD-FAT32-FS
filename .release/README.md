@@ -34,18 +34,17 @@ sd-card-driver/
     │   ├── README.md                         Full utility documentation
     │   ├── SD_format_card.spin2              FAT32 card formatter
     │   ├── isp_format_utility.spin2          FAT32 format library
+    │   ├── SD_card_identify.spin2             Two-line card identification
     │   ├── SD_card_characterize.spin2        Card register reader
     │   ├── SD_performance_benchmark.spin2    Throughput measurement
     │   ├── SD_FAT32_audit.spin2              Filesystem validator (read-only)
     │   ├── SD_FAT32_fsck.spin2               Filesystem check & repair
     │   ├── isp_fsck_utility.spin2            Combined FSCK + Audit library (runs in temp cog)
     │   └── isp_string_fifo.spin2             Lock-free inter-cog string FIFO
-    ├── regression-tests/                 Regression test suite
-    │   ├── README.md                        Test infrastructure guide
-    │   ├── SD_RT_*_tests.spin2              20 test suites (427 tests)
-    │   └── isp_rt_utilities.spin2           Shared test framework
-    └── diagnostic-tests/                 Temporary: field diagnostic (withdraw after v1.3.0)
-        └── SD_diag_cmd13_capture.spin2      CMD13 framing analysis for problem cards
+    └── regression-tests/                 Regression test suite
+        ├── README.md                        Test infrastructure guide
+        ├── SD_RT_*_tests.spin2              20 test suites (427 tests)
+        └── isp_rt_utilities.spin2           Shared test framework
 ```
 
 ## Prerequisites

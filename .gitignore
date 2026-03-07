@@ -31,7 +31,9 @@ src/HARDWARE_AUDIT/
 
 # Archived development documents (local only)
 DOCs/Plans/archive/
+DOCs/Plans/ext-agents/
 DOCs/Analysis/Archive/
+DOCs/Decisions/archive/
 DOCs/Research/Archive/
 
 # Process documentation (local only)

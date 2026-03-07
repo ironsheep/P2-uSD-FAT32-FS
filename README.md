@@ -120,12 +120,11 @@ P2-uSD-FAT32-FS/
 │   ├── micro_sd_fat32_fs.spin2     # The SD card driver
 │   ├── UTILS/                      # Standalone utility programs
 │   │   ├── SD_format_card.spin2           # FAT32 card formatter
+│   │   ├── SD_card_identify.spin2         # Two-line card identification
 │   │   ├── SD_card_characterize.spin2     # Card register reader (CID/CSD/SCR)
-│   │   ├── SD_speed_characterize.spin2    # Maximum SPI speed tester
-│   │   ├── SD_frequency_characterize.spin2 # Sysclk frequency tester
+│   │   ├── SD_performance_benchmark.spin2 # Read/write throughput bench
 │   │   ├── SD_FAT32_audit.spin2           # Filesystem validator (read-only)
 │   │   ├── SD_FAT32_fsck.spin2            # Filesystem check & repair
-│   │   ├── SD_performance_benchmark.spin2 # Read/write throughput bench
 │   │   ├── isp_format_utility.spin2       # FAT32 format library
 │   │   ├── isp_fsck_utility.spin2         # Combined FSCK + Audit library
 │   │   └── isp_string_fifo.spin2          # Inter-cog string FIFO

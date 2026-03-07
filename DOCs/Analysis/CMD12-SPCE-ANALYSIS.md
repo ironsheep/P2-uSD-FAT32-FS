@@ -1,5 +1,7 @@
 # CMD12 Response Anomaly on Silicon Power Elite 64GB: Final Analysis
 
+> **Updated (2026-03-06):** The CMD12 analysis and CS deassert recovery remain correct. A related but distinct issue was discovered: the driver's R1 response parsing accepts the first non-$FF byte as R1, but the SD spec requires bit 7 = 0 for valid R1. This caused false errors in CMD13 (see **[CMD13-ROOT-CAUSE-ANALYSIS.md](CMD13-ROOT-CAUSE-ANALYSIS.md)**). For CMD12 during multi-block reads, the bit-7 check alone is **not sufficient** because streaming file data can have any bit pattern — CS deassert recovery remains the correct solution.
+
 The definitive analysis of the CMD12 (STOP_TRANSMISSION) framing issue on the Silicon Power Elite 64GB SDXC card, with proven root cause, verified fix, and CMD23 experiment results.
 
 **Date:** 2026-03-06
@@ -225,7 +227,7 @@ Both follow the same pattern: register says X, send the actual command to verify
 
 - **[support/CMD12-SPCE-ANALYSIS-investigation.md](support/CMD12-SPCE-ANALYSIS-investigation.md)** — Original investigation log showing the systematic debugging process (three rounds of instrumentation, two competing theories)
 - **[support/CMD12-SPI-FRAMING-DEEP-DIVE.md](support/CMD12-SPI-FRAMING-DEEP-DIVE.md)** — Working document with full Q&A history, engineering tradeoff discussions, and experimental details
-- **[CMD13-COMPATIBILITY-ANALYSIS.md](CMD13-COMPATIBILITY-ANALYSIS.md)** — Separate CMD13 anomaly on AData cards (different failure mechanism)
+- **[CMD13-COMPATIBILITY-ANALYSIS.md](superseded/CMD13-COMPATIBILITY-ANALYSIS.md)** — CMD13 anomaly on AData cards (superseded — see [CMD13-ROOT-CAUSE-ANALYSIS.md](CMD13-ROOT-CAUSE-ANALYSIS.md))
 - **[../cards/siliconpower-spcc-64gb.md](../cards/siliconpower-spcc-64gb.md)** — Card data sheet with register dumps and test results
 
 ---

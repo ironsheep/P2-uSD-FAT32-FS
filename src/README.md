@@ -81,9 +81,8 @@ Standalone utility programs for preparing SD cards for embedded use, diagnosing 
 | **SD_format_card.spin2** | FAT32 card formatter | Yes |
 | **SD_FAT32_audit.spin2** | Filesystem validator (read-only) | No |
 | **SD_FAT32_fsck.spin2** | Filesystem check and repair | Yes |
+| **SD_card_identify.spin2** | Two-line card identification | No |
 | **SD_card_characterize.spin2** | Card register reader (CID/CSD/SCR/OCR) | No |
-| **SD_speed_characterize.spin2** | Maximum SPI speed tester | No |
-| **SD_frequency_characterize.spin2** | Sysclk frequency tester | No |
 | **SD_performance_benchmark.spin2** | Read/write throughput measurement | Yes* |
 
 *Creates temporary test files that are deleted after testing.

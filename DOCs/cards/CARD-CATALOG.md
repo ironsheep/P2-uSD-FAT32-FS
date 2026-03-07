@@ -154,7 +154,7 @@ This section documents ALL fields available from SD card registers and indicates
 
 ## Internal Throughput Summary
 
-Cards tested with `SD_speed_characterize.spin2` have measured internal throughput data. This reflects the card's internal flash/controller performance, NOT the SPI bus speed.
+Cards tested with `diagnostic-tests/SD_speed_characterize.spin2` have measured internal throughput data. This reflects the card's internal flash/controller performance, NOT the SPI bus speed.
 
 **Test Methodology:**
 - 10,000 random single-sector reads at 25 MHz SPI

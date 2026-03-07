@@ -15,6 +15,7 @@ The characterization and benchmark utilities are for **evaluating untested cards
 | **SD_format_card.spin2** | FAT32 card formatter | Yes |
 | **SD_FAT32_audit.spin2** | Filesystem validator (read-only) | No |
 | **SD_FAT32_fsck.spin2** | Filesystem check & repair | Yes |
+| **SD_card_identify.spin2** | Two-line card identification | No |
 | **SD_card_characterize.spin2** | Card register reader | No |
 | **SD_performance_benchmark.spin2** | Throughput measurement | Yes* |
 
@@ -92,7 +93,32 @@ END_SESSION
 
 ---
 
-### 2. SD_card_characterize.spin2
+### 2. SD_card_identify.spin2
+
+**Purpose:** Quick two-line card identification for catalog entries and benchmarking.
+
+**Compile and Run:**
+```bash
+pnut-ts -d -I .. SD_card_identify.spin2
+pnut-term-ts -r SD_card_identify.bin
+```
+
+**Output Format:**
+```
+L1: Samsung SE16G SDHC 14GB [FAT32] SD 3.x rev1.0 SN:4E3300C4 2018/07
+L2: Class 6, U0, V0, SPI 25 MHz  [MSWIN4.1]
+```
+
+Line 1 contains identity: manufacturer, product name, card type, capacity, filesystem, SD spec version, firmware revision, serial number, and manufacturing date. Line 2 contains performance class and OEM formatter name.
+
+**Use Cases:**
+- Generate card catalog entries
+- Identify unknown cards before benchmarking
+- Quick card verification during testing
+
+---
+
+### 3. SD_card_characterize.spin2
 
 **Purpose:** Extract and display all card register information.
 
@@ -149,7 +175,7 @@ pnut-term-ts -r SD_card_characterize.bin
 
 ---
 
-### 3. SD_performance_benchmark.spin2
+### 4. SD_performance_benchmark.spin2
 
 **Purpose:** Measure read/write throughput for real-world performance data.
 
@@ -213,7 +239,7 @@ Filesystem Performance:
 
 ---
 
-### 4. SD_FAT32_audit.spin2
+### 5. SD_FAT32_audit.spin2
 
 **Purpose:** Verify FAT32 filesystem integrity without modifying the card.
 
@@ -279,7 +305,7 @@ END_SESSION
 
 ---
 
-### 5. SD_FAT32_fsck.spin2
+### 6. SD_FAT32_fsck.spin2
 
 **Purpose:** Check and repair FAT32 filesystem corruption.
 
@@ -391,6 +417,7 @@ END_SESSION
 ```
 UTILS/
 ├── SD_format_card.spin2            # FAT32 card formatter
+├── SD_card_identify.spin2          # Two-line card identification
 ├── SD_card_characterize.spin2      # Card register reader
 ├── SD_performance_benchmark.spin2  # Throughput measurement
 ├── SD_FAT32_audit.spin2            # Filesystem validator
@@ -437,15 +464,21 @@ pnut-term-ts -r SD_FAT32_fsck.bin
 
 ### Characterizing an Untested Card
 
-If you're working with a card model that hasn't been used with this driver before, run the characterization and benchmark utilities to identify the card and establish a performance baseline:
+If you're working with a card model that hasn't been used with this driver before, identify it, then optionally run detailed characterization and benchmarking:
 
-1. **Characterize** - Read card registers (manufacturer, capacity, speed class)
+1. **Identify** - Quick two-line card summary for catalog
+   ```bash
+   pnut-ts -d -I .. SD_card_identify.spin2
+   pnut-term-ts -r SD_card_identify.bin
+   ```
+
+2. **Characterize** - Full register dump (manufacturer, capacity, speed class)
    ```bash
    pnut-ts -d -I .. SD_card_characterize.spin2
    pnut-term-ts -r SD_card_characterize.bin
    ```
 
-2. **Benchmark** - Measure read/write throughput
+3. **Benchmark** - Measure read/write throughput
    ```bash
    pnut-ts -d -I .. SD_performance_benchmark.spin2
    pnut-term-ts -r SD_performance_benchmark.bin

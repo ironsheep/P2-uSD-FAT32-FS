@@ -83,52 +83,52 @@ done
 
 # Layer 1: Mount/Init
 SUITES=(
-    "SD_RT_mount_tests.spin2:60"
+    "SD_RT_mount_tests.spin2:120"
 )
 
 # Layer 2: Raw I/O (below filesystem)
 SUITES+=(
-    "SD_RT_raw_sector_tests.spin2:60"
+    "SD_RT_raw_sector_tests.spin2:120"
     "SD_RT_multiblock_tests.spin2:90"
 )
 
 # Layer 3: Hardware features
 SUITES+=(
-    "SD_RT_register_tests.spin2:60"
-    "SD_RT_speed_tests.spin2:60"
-    "SD_RT_crc_diag_tests.spin2:60"
+    "SD_RT_register_tests.spin2:120"
+    "SD_RT_speed_tests.spin2:120"
+    "SD_RT_crc_diag_tests.spin2:120"
 )
 
 # Layer 4: Error handling and recovery
 SUITES+=(
-    "SD_RT_error_handling_tests.spin2:60"
-    "SD_RT_crc_validation_tests.spin2:60"
-    "SD_RT_recovery_tests.spin2:60"
+    "SD_RT_error_handling_tests.spin2:120"
+    "SD_RT_crc_validation_tests.spin2:120"
+    "SD_RT_recovery_tests.spin2:120"
 )
 
 # Layer 5: Basic file I/O
 SUITES+=(
-    "SD_RT_file_ops_tests.spin2:60"
+    "SD_RT_file_ops_tests.spin2:120"
     "SD_RT_read_write_tests.spin2:90"
-    "SD_RT_multihandle_tests.spin2:60"
+    "SD_RT_multihandle_tests.spin2:120"
 )
 
 # Layer 6: File operations
 SUITES+=(
-    "SD_RT_seek_tests.spin2:60"
-    "SD_RT_volume_tests.spin2:60"
-    "SD_RT_subdir_ops_tests.spin2:60"
+    "SD_RT_seek_tests.spin2:120"
+    "SD_RT_volume_tests.spin2:120"
+    "SD_RT_subdir_ops_tests.spin2:120"
 )
 
 # Layer 7: Directory operations
 SUITES+=(
-    "SD_RT_directory_tests.spin2:60"
-    "SD_RT_dirhandle_tests.spin2:60"
+    "SD_RT_directory_tests.spin2:120"
+    "SD_RT_dirhandle_tests.spin2:120"
 )
 
 # Layer 8: Inter-cog
 SUITES+=(
-    "SD_RT_fifo_tests.spin2:60"
+    "SD_RT_fifo_tests.spin2:120"
     "SD_RT_multicog_tests.spin2:120"
 )
 

@@ -9,9 +9,8 @@ Standalone utility programs for card formatting, characterization, performance t
 | Utility | Purpose | Destructive? |
 |---------|---------|:------------:|
 | **SD_format_card.spin2** | FAT32 card formatter (standalone) | Yes |
+| **SD_card_identify.spin2** | Two-line card identification | No |
 | **SD_card_characterize.spin2** | Card register reader | No |
-| **SD_speed_characterize.spin2** | SPI speed tester | No |
-| **SD_frequency_characterize.spin2** | Sysclk frequency tester | No |
 | **SD_performance_benchmark.spin2** | Throughput measurement | Yes* |
 | **SD_FAT32_audit.spin2** | Filesystem validator | No |
 | **SD_FAT32_fsck.spin2** | Filesystem check & repair | Yes |
@@ -157,101 +156,7 @@ pnut-term-ts -r SD_card_characterize.bin
 
 ---
 
-### 3. SD_speed_characterize.spin2
-
-**Purpose:** Find maximum reliable SPI clock speed for a specific card.
-
-**Compile and Run:**
-```bash
-pnut-ts -d -I .. SD_speed_characterize.spin2
-pnut-term-ts -r SD_speed_characterize.bin
-```
-
-**Test Strategy:**
-
-| Phase | Test | Purpose |
-|-------|------|---------|
-| **Phase 1** | 1,000 single-sector reads | Quick reliability check |
-| **Phase 2** | 10,000 single-sector reads | Statistical confidence |
-| **Phase 3** | 100 × 8-sector reads | Sustained transfer test |
-
-Testing proceeds from lowest to highest speed. If any phase fails, testing stops for that speed and higher speeds are skipped.
-
-**Speed Levels Tested:**
-- 18 MHz, 20 MHz, 22 MHz, 25 MHz, 28 MHz
-- 30 MHz, 33 MHz, 37 MHz, 40 MHz, 45 MHz, 50 MHz
-
-**Output Includes:**
-- Target frequency vs actual achievable frequency
-- Delta percentage from ideal (due to P2 clock division)
-- Pass/fail status for each phase
-- CRC error counts and timeout counts
-- Maximum reliable speed recommendation
-
-**Sample Output:**
-```
-SD Card SPI Speed Characterization
-==================================
-Card: SanDisk Extreme 64GB
-
-Speed Tests:
-  18 MHz: Phase 1 PASS, Phase 2 PASS, Phase 3 PASS
-  20 MHz: Phase 1 PASS, Phase 2 PASS, Phase 3 PASS
-  25 MHz: Phase 1 PASS, Phase 2 PASS, Phase 3 PASS
-  30 MHz: Phase 1 PASS, Phase 2 PASS, Phase 3 PASS
-  33 MHz: Phase 1 PASS, Phase 2 FAIL (3 CRC errors)
-
-Recommended Maximum Speed: 30 MHz
-```
-
-**Use Cases:**
-- Determine safe operating speed for production
-- Compare cards for speed capability
-- Identify marginal cards with reliability issues
-- Optimize driver configuration per card type
-
----
-
-### 4. SD_frequency_characterize.spin2
-
-**Purpose:** Find sysclk frequency boundaries for reliable streamer timing.
-
-**Compile and Run:**
-```bash
-pnut-ts -d -I .. SD_frequency_characterize.spin2
-pnut-term-ts -r SD_frequency_characterize.bin
-```
-
-**Test Method:**
-This utility dynamically changes the P2 sysclk frequency using `clkset()` to identify exactly where multi-block operations fail. It helps find timing-sensitive frequency ranges and quantization boundaries.
-
-**Test Frequencies:**
-- 320 MHz (baseline)
-- 310 MHz, 305 MHz, 300 MHz
-- 295 MHz, 290 MHz, 280 MHz, 270 MHz
-- 260 MHz, 255 MHz, 250 MHz, 240 MHz
-- 220 MHz, 200 MHz
-
-At each frequency, the test performs:
-1. `writeSectorsRaw(8)` - Write 8 sectors (4KB)
-2. `readSectorsRaw(8)` - Read 8 sectors back
-3. Data integrity verification
-
-**Output Includes:**
-- Half-period value at each frequency
-- Pass/fail status for multi-block operations
-- Data integrity verification results
-- Identification of working vs failing frequencies
-
-**Use Cases:**
-- Determine safe sysclk frequencies for production
-- Identify timing boundaries for streamer operations
-- Debug frequency-related failures
-- Validate driver timing across frequency ranges
-
----
-
-### 5. SD_performance_benchmark.spin2
+### 3. SD_performance_benchmark.spin2
 
 **Purpose:** Measure read/write throughput for real-world performance data.
 
@@ -315,7 +220,7 @@ Filesystem Performance:
 
 ---
 
-### 6. SD_FAT32_audit.spin2
+### 4. SD_FAT32_audit.spin2
 
 **Purpose:** Verify FAT32 filesystem integrity without modifying the card.
 
@@ -381,7 +286,7 @@ END_SESSION
 
 ---
 
-### 7. SD_FAT32_fsck.spin2
+### 5. SD_FAT32_fsck.spin2
 
 **Purpose:** Check and repair FAT32 filesystem corruption.
 
@@ -493,9 +398,8 @@ END_SESSION
 ```
 UTILS/
 ├── SD_format_card.spin2            # FAT32 card formatter
+├── SD_card_identify.spin2          # Two-line card identification
 ├── SD_card_characterize.spin2      # Card register reader
-├── SD_speed_characterize.spin2     # SPI speed tester
-├── SD_frequency_characterize.spin2 # Sysclk frequency tester
 ├── SD_performance_benchmark.spin2  # Throughput measurement
 ├── SD_FAT32_audit.spin2            # Filesystem validator
 ├── SD_FAT32_fsck.spin2             # Filesystem check & repair
@@ -512,14 +416,14 @@ UTILS/
 
 From the `tools/` directory:
 
-1. **Characterize** - Read card registers to identify the card
+1. **Identify** - Quick two-line card summary
    ```bash
-   ./run_test.sh ../src/UTILS/SD_card_characterize.spin2 -t 60
+   ./run_test.sh ../src/UTILS/SD_card_identify.spin2
    ```
 
-2. **Speed Test** - Find maximum reliable SPI speed
+2. **Characterize** - Full register dump
    ```bash
-   ./run_test.sh ../src/UTILS/SD_speed_characterize.spin2 -t 300
+   ./run_test.sh ../src/UTILS/SD_card_characterize.spin2 -t 60
    ```
 
 3. **Format** - Create clean FAT32 filesystem

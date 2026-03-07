@@ -13,35 +13,74 @@ How should multiple cogs safely access the SD card?
 1. **Lock-based sharing**: Any cog acquires lock, does SPI, releases lock
 2. **Dedicated worker cog**: One cog owns SPI; others send commands via hub memory
 
-### The P2 Constraint That Decides This
+### The P2 Constraints That Decide This
 
-**P2 pins are controlled by per-cog registers.** Each cog has its own private DIR and OUT registers at addresses `$1FA-$1FF`. When Cog 0 executes `PINH(pin)`, it sets bits in Cog 0's DIR/OUT registers. Cog 1's registers are unaffected.
+There are two independent hardware constraints that both point to the same answer. The SD card uses four pins: CS (basic I/O), and SCK, MOSI, MISO (smart pins). Each pin type has its own sharing problem.
 
-This means:
+#### Constraint 1: Direct I/O — Per-Cog DIR/OUT Registers
+
+**Basic I/O pins (like CS) are controlled by per-cog registers.** Each cog has its own private DIR and OUT registers at addresses `$1FA-$1FF`. When Cog 0 executes `PINH(pin)`, it sets bits in Cog 0's DIR/OUT registers. Cog 1's registers are unaffected.
+
+For the CS pin this means every cog that wants to assert chip select must independently set its own DIR/OUT bits — and must tri-state them before releasing the lock, or multiple cogs end up driving the same pin simultaneously.
 
 ```
-Lock-Based Approach (PROBLEMATIC):
+Lock-Based CS Sharing (PROBLEMATIC):
 ─────────────────────────────────────
 Cog 0 acquires lock
-  → PINH(cs), PINH(mosi), PINL(sck)     ← Sets Cog 0's DIR/OUT
+  → PINH(cs)                             ← Sets Cog 0's DIR/OUT
   → Do SPI transfer
-  → PINFLOAT(cs), PINFLOAT(mosi)...     ← MUST tri-state before release!
+  → PINFLOAT(cs)                         ← MUST tri-state before release!
   → Release lock
 
 Cog 1 acquires lock
-  → PINH(cs), PINH(mosi), PINL(sck)     ← Sets Cog 1's DIR/OUT (again!)
+  → PINH(cs)                             ← Sets Cog 1's DIR/OUT (again!)
   → Do SPI transfer
-  → PINFLOAT all pins
+  → PINFLOAT(cs)
   → Release lock
 ```
 
-**Every operation requires full pin re-initialization.** If any cog forgets to tri-state before releasing the lock, multiple cogs have `DIR=1` on the same pin, causing undefined behavior.
+If any cog forgets to tri-state before releasing the lock, multiple cogs have `DIR=1` on the same pin, causing undefined behavior.
+
+#### Constraint 2: Smart Pins — Global Configuration, Per-Cog Enable
+
+**Smart pin configuration is global hardware state, not per-cog.** The `WRPIN`, `WXPIN`, and `WYPIN` instructions write to the pin's shared smart pin registers — configuring mode, clock routing, bit count, etc. These settings are visible to all cogs. Any cog that executes `WRPIN` on a smart pin reconfigures it for everyone.
+
+The SPI data pins (SCK, MOSI, MISO) use smart pin modes:
+- **SCK**: `P_TRANSITION` — autonomous clock generation
+- **MOSI**: `P_SYNC_TX` — synchronous serial transmit, clocked by SCK
+- **MISO**: `P_SYNC_RX` — synchronous serial receive, clocked by SCK
+
+Smart pins must be reset (`DIR=0`) before configuration and enabled (`DIR=1`) after — but DIR is per-cog. This creates two problems for lock-based sharing:
+
+1. **Configuration conflict**: If Cog 1 calls `WRPIN` while Cog 0's smart pin is active, it destroys the mode settings mid-transfer
+2. **Enable conflict**: Smart pins use DIR for enable/disable. Multiple cogs with `DIR=1` on the same smart pin creates the same undefined behavior as basic I/O — but with the added risk of corrupting an autonomous hardware state machine
+
+```
+Lock-Based Smart Pin Sharing (WORSE THAN BASIC I/O):
+─────────────────────────────────────────────────────
+Cog 0 acquires lock
+  → WRPIN(P_SYNC_TX), WXPIN(8-bit), DIRH(mosi)  ← Configures + enables
+  → WRPIN(P_TRANSITION), DIRH(sck)               ← Clock running
+  → Do SPI transfer
+  → DIRL(mosi), DIRL(sck)                        ← Must disable smart pins!
+  → Release lock
+
+Cog 1 acquires lock
+  → Must reconfigure WRPIN/WXPIN from scratch     ← Full smart pin setup
+  → DIRH to re-enable
+  → ...
+```
+
+Every operation requires full smart pin teardown and re-initialization — not just toggling direction bits, but reprogramming the mode, clock routing, bit count, and start-stop parameters.
+
+#### Both Constraints Eliminated by Dedicated Cog
 
 ```
 Dedicated Cog Approach (CORRECT):
 ─────────────────────────────────────
 Worker Cog (at startup, once):
-  → PINH(cs), PINH(mosi), PINL(sck)     ← Done ONCE, never changes
+  → PINH(cs)                             ← CS: set DIR/OUT once
+  → WRPIN/WXPIN/DIRH(sck, mosi, miso)   ← Smart pins: configure once
 
   repeat forever:
     → Wait for command in hub memory
@@ -51,11 +90,11 @@ Worker Cog (at startup, once):
 Other cogs:
   → Write command to hub memory
   → Wait for completion
-  → Never touch pins
+  → Never touch pins (direct I/O or smart pins)
 ```
 
 ### Decision
-**Use a dedicated worker cog.** It eliminates per-operation pin overhead and removes the risk of pin conflicts entirely.
+**Use a dedicated worker cog.** It eliminates per-operation pin setup for both direct I/O and smart pins, and removes the risk of configuration conflicts entirely. No other cog touches the SPI pins — not DIR/OUT for CS, not WRPIN/WXPIN for smart pins.
 
 ---
 
@@ -68,18 +107,27 @@ Should the worker cog be pure PASM2 (started with `COGINIT`) or Spin2 (started w
 
 | Factor | Pure PASM2 | Spin2 + Inline PASM2 |
 |--------|------------|---------------------|
-| SPI bit-bang timing | Native | Inline PASM2 (same) |
+| Smart pin SPI transfers | Native | Inline PASM2 (same) |
+| Streamer DMA bulk I/O | Native | Inline PASM2 (same) |
 | FAT32 logic (cluster chains, directories) | Complex, error-prone | Natural, readable |
-| Code space | 496 longs max (cog RAM) | Unlimited (hub) |
-| Maintainability | Difficult | Easy |
+| Handle system (6 concurrent file/dir handles) | Very difficult | Straightforward |
+| Maintainability | Difficult at this scale | Natural for complex logic |
 | SD card latency | ~1-10ms per operation | ~1-10ms per operation |
 
 **The bottleneck is the SD card, not the P2.** SD card operations take milliseconds. Whether the FAT logic runs in 2µs (PASM2) or 20µs (Spin2) is irrelevant when the card takes 5,000µs to respond.
 
-The existing inline PASM2 for SPI bit-banging is kept—that's the only timing-critical code. Everything else (FAT parsing, directory traversal, cluster allocation) benefits from Spin2's readability.
+The driver uses inline PASM2 for three hardware-interface layers, each requiring precise timing or access to P2 special instructions:
+
+| Layer | Hardware Feature | What It Does |
+|-------|-----------------|--------------|
+| **Card init** | Bit-bang (`DRVC`/`TESTP`) | 400 kHz slow SPI before smart pins are configured |
+| **Byte transfers** | Smart pins (`WYPIN`/`RDPIN`) | 8-bit SPI via `P_SYNC_TX`/`P_SYNC_RX` at 25 MHz |
+| **Sector transfers** | Streamer DMA (`XINIT`/`XCONT`/`WAITXFI`) | 512-byte bulk reads/writes with hardware CRC-16 (`GETCRC`) |
+
+Everything above the SPI layer — FAT32 parsing, directory traversal, cluster allocation, the handle system with per-handle 512-byte sector buffers, per-cog working directories — is Spin2. This is where the code complexity lives (~6,000 lines), and Spin2's structured control flow, named variables, and method abstraction make this volume of filesystem logic significantly easier to write, debug, and maintain than equivalent PASM2.
 
 ### Decision
-**Use Spin2 worker via COGSPIN.** Keep inline PASM2 only for SPI transfers. This matches the P2-FLASH-FileSystem pattern.
+**Use Spin2 worker via COGSPIN.** Inline PASM2 for hardware-accelerated SPI (smart pins + streamer DMA). Spin2 for everything above the SPI layer. This matches the P2-FLASH-FileSystem pattern.
 
 ---
 
@@ -171,96 +219,73 @@ Caller Cog                              Worker Cog
 
 ---
 
-## Decision 5: Smart Pin SPI Implementation (Revised 2026-01-21)
+## Decision 5: Smart Pin SPI for Byte Transfers
 
 ### The Question
-Should we use SmartPins (P_SYNC_TX, P_SYNC_RX, P_TRANSITION) for SPI, or keep the existing bit-bang PASM2?
+How should the driver implement SPI byte transfers?
 
-### Original Analysis (2026-01-17)
+### Why Smart Pins
 
-We initially evaluated SmartPins and concluded "keep bit-bang" because:
-- No multi-event blocking wait (must poll anyway)
-- Proven reliability of existing code
-- SD card is the bottleneck, not P2 SPI speed
-
-### Revised Decision (2026-01-21)
-
-After establishing baseline benchmarks and completing card characterization, we're now implementing Smart Pins. The key factors that changed our decision:
-
-| Factor | Original Assessment | New Assessment |
-|--------|---------------------|----------------|
-| **Performance headroom** | "Card is bottleneck" | Benchmarks show 60% efficiency - room for improvement |
-| **Sysclk independence** | "Both need clkfreq calc" | Smart Pins make speed changes trivial |
-| **Baseline established** | None | 1.5 MB/s read, 425 KB/s write measured |
-| **Implementation risk** | High | Mitigated by keeping bit-bang fallback |
-
-### Decision: Implement Smart Pin SPI
-
-**Architecture** (from Phase 1 plan):
+The P2 smart pins provide autonomous SPI byte transfers with sysclk-independent timing. The driver configures three pins at startup:
 
 | Pin | Smart Pin Mode | Purpose |
 |-----|----------------|---------|
-| SCK | P_TRANSITION | Clock generation with precise frequency control |
-| MOSI | P_SYNC_TX | Data output synchronized to SCK |
-| MISO | P_SYNC_RX | Data input synchronized to SCK |
-| CS | GPIO | Unchanged (manual control) |
+| SCK | `P_TRANSITION` | Clock generation with precise frequency control |
+| MOSI | `P_SYNC_TX` | Data output synchronized to SCK |
+| MISO | `P_SYNC_RX` | Data input synchronized to SCK |
+| CS | GPIO | Manual control (basic I/O, not a smart pin) |
 
-**MSB-First Handling**: SD cards use MSB-first, but smart pins are LSB-first. Solution: Use `REV` instruction (single-cycle) before TX and after RX.
+Smart pins replaced an initial bit-bang implementation after benchmarking showed significant room for improvement. The key advantages:
 
-**Implementation Plan**: See `DOCs/Plans/PHASE1-SMARTPIN-SPI.md` for detailed implementation.
+- **Sysclk-independent timing** — changing SPI speed is a single `WXPIN` update to SCK's period, no recalculation needed
+- **Autonomous operation** — smart pins shift data in hardware; the cog loads/reads values and waits
+- **Precise clock generation** — `P_TRANSITION` produces exact, jitter-free clock edges
 
-### Performance Targets
+**MSB-First Handling**: SD cards use MSB-first, but smart pins are LSB-first. Solution: `REV` instruction (2 cycles) before TX and after RX.
 
-| Metric | Baseline (bit-bang) | Target (Smart Pin + Multi-Block) |
-|--------|---------------------|----------------------------------|
-| Read 256KB | 1,467 KB/s | 4,000+ KB/s |
-| Write 32KB | 425 KB/s | 1,200+ KB/s |
-| SPI Clock | ~20 MHz | 25-50 MHz |
+**Speed**: 400 kHz during card initialization (bit-bang, before smart pins are configured), then 25 MHz for normal operation.
 
-### Risk Mitigation
-
-- Keep bit-banged `transfer()` as fallback during development
-- Test with all characterized cards (Gigastone, PNY, SanDisk)
-- Use conservative timing initially (pre-edge sampling)
+### Decision
+**Use smart pins for SPI byte transfers.** Configure once at startup, use for all command/response exchanges with the card.
 
 ---
 
-## Decision 6: Streamer for SPI Bulk Transfers (REVISED 2026-01-23)
+## Decision 6: Streamer DMA for Sector Transfers
 
 ### The Question
-Can the P2 Streamer (DMA-like engine) improve SD card transfers?
+How should the driver transfer 512-byte sectors to and from the SD card?
 
-### Previous Assessment (INCORRECT)
+### Why the Streamer
 
-We initially concluded "Streamer Not Applicable for SPI" based on the assumption that the streamer only handles parallel transfers. This was wrong.
+The P2 streamer operates in serial mode, handling 1-bit input or output with its internal NCO providing precise timing. Combined with the smart pin clock generator from Decision 5, this creates a hardware SPI engine for bulk transfers with zero CPU involvement during the 512-byte payload.
 
-### Revised Assessment: Streamer IS Applicable
-
-**The P2 streamer CAN operate in serial mode**, handling 1-bit input or output with its internal NCO providing precise timing. Combined with a smart pin clock generator, this creates a **hardware SPI engine** capable of bulk transfers with zero CPU involvement.
-
-**Reference Implementation**: `flash_loader.spin2` by Chip Gracey demonstrates this pattern successfully for SPI flash programming and reading.
+Reference implementation: `flash_loader.spin2` by Chip Gracey demonstrates this pattern for SPI flash programming.
 
 ### How It Works
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│                   Streamer + Smart Pin for SPI                    │
+│                   Streamer + Smart Pin for SPI                   │
 ├──────────────────────────────────────────────────────────────────┤
 │                                                                  │
-│  Smart Pin (P_TRANSITION mode)                                   │
+│  Smart Pin (P_TRANSITION mode on SCK)                            │
 │    - Generates SPI clock at programmed frequency                 │
-│    - wxpin sets period, wypin sets transition count              │
+│    - wxpin sets period, wypin sets transition count               │
 │                                                                  │
-│  Streamer (X_1P_1DAC1_WFBYTE or X_RFBYTE_1P_1DAC1)               │
+│  Streamer (XINIT/XCONT/WAITXFI)                                  │
 │    - Operates at NCO-controlled rate (setxfrq)                   │
 │    - Reads MISO pin bit-by-bit, assembles bytes to hub           │
 │    - Or reads hub bytes, outputs to MOSI pin bit-by-bit          │
 │                                                                  │
 │  Synchronization                                                 │
 │    - NCO rate matches SPI bit rate                               │
-│    - Small alignment delay positions samples correctly           │
-│    - READ: wypin → waitx → xinit (clock before data)             │
-│    - WRITE: xinit → wypin (data before clock)                    │
+│    - Alignment delay positions samples on correct clock edge     │
+│    - READ: clock starts first, then streamer                     │
+│    - WRITE: streamer starts first, then clock                    │
+│                                                                  │
+│  CRC-16                                                          │
+│    - Hardware-accelerated via GETCRC with polynomial $8408       │
+│    - Validated on every sector read and write                    │
 │                                                                  │
 └──────────────────────────────────────────────────────────────────┘
 ```
@@ -276,18 +301,15 @@ We initially concluded "Streamer Not Applicable for SPI" based on the assumption
 ' wxpin #7 → NCO = $4000_0000 / 7 = $0924_9249
 ```
 
-### Decision (Revised)
+### Critical Implementation Notes
 
-**USE the Streamer for sector read/write operations.** This provides:
+- For READS: Disable MISO smart pin before streamer capture (streamer reads the pin directly; smart pin would interfere)
+- For READS: Clock starts first, then streamer (`wypin` → `waitx` → `xinit`)
+- For WRITES: Streamer starts first, then clock (`xinit` → `wypin`)
+- SCK base-period counter is reset (`dirl`/`drvl`) before each transfer for deterministic clock phase alignment
 
-1. **Zero CPU involvement** during 512-byte transfers
-2. **Maximum throughput** - limited only by SPI clock speed
-3. **DMA-like operation** - data streams directly to/from hub
-
-**Critical Implementation Notes:**
-- For READS: Disable MISO smart pin before streamer capture (avoids interference)
-- For READS: Clock starts first, then streamer (wypin → waitx → xinit)
-- For WRITES: Streamer starts first, then clock (xinit → wypin)
+### Decision
+**Use the streamer for all 512-byte sector transfers.** This provides zero CPU involvement during bulk data movement, maximum throughput limited only by SPI clock speed, and hardware CRC-16 validation on every transfer.
 
 **Full Details**: See `DOCs/Decisions/STREAMER-SPI-TIMING.md` for complete timing analysis, NCO calculations, and implementation patterns.
 
@@ -722,26 +744,14 @@ These decisions work together to create a driver that is:
 
 ---
 
-## Decision 12: CRC Validation for Data Integrity (2026-01-30)
+## Decision 12: Hardware CRC-16 Validation on All Sector Transfers
 
 ### The Question
-Should the driver validate CRC-16 checksums on sector transfers, or continue accepting data without verification?
+Should the driver validate CRC-16 checksums on sector transfers?
 
-### Current Behavior (PROBLEMATIC)
+### Why CRC Matters
 
-The SD SPI protocol includes CRC-16 checksums on all data transfers:
-- **Reads:** Card sends 512 bytes + 2-byte CRC-16
-- **Writes:** Host sends 512 bytes + 2-byte CRC-16
-
-Currently, the driver:
-1. **Reads:** Receives CRC bytes but discards them without validation
-2. **Writes:** Sends dummy `$FF $FF` instead of calculated CRC
-
-This works because **CRC checking is disabled by default in SPI mode** after card initialization. The card accepts any CRC value on writes and sends valid CRC on reads (which we ignore).
-
-### The Risk: Silent Data Corruption
-
-**The SPI bus is the vulnerable link in the data path:**
+The SPI bus is the unprotected link in the data path. The card's internal ECC protects flash memory, but data in transit over SPI is only protected by CRC-16 — if the host doesn't validate it, corruption is silent.
 
 ```
 ┌─────────┐     SPI Bus      ┌─────────┐     Internal     ┌───────┐
@@ -750,211 +760,38 @@ This works because **CRC checking is disabled by default in SPI mode** after car
 └─────────┘   THIS segment   └─────────┘   THIS segment   └───────┘
 ```
 
-- **SD card internal ECC:** Protects flash memory from bit rot - always active
-- **SPI CRC-16:** Protects data in transit - currently NOT validated
+Without CRC validation, SPI timing issues or electrical noise produce silent data corruption — FAT table damage, directory corruption, or file data errors that only become visible when the card is read on another system.
 
-**Without CRC validation, corruption goes undetected:**
+### P2 Hardware CRC via GETCRC
 
-| Scenario | Consequence |
-|----------|-------------|
-| 270 MHz timing issues | Silent byte mismatches (documented: 3,472+ bytes in tests) |
-| Electrical noise | Random bit flips accepted as valid data |
-| FAT table corruption | Lost files, cross-linked clusters |
-| Directory corruption | Files disappear, wrong metadata |
-| File data corruption | Documents/code silently damaged |
+The P2's `GETCRC` instruction provides hardware-accelerated CRC calculation. For a 512-byte sector: ~1,032 clocks (~3.2 µs at 320 MHz), adding only 1.6% overhead to a 25 MHz SPI sector transfer.
 
-**Cross-platform impact:** When the card is moved to Windows/macOS/Linux, filesystem damage becomes visible. The OS may attempt "repair" that deletes files.
-
-### What Other Systems Do
-
-| System | CRC Handling |
-|--------|--------------|
-| Linux SD driver | CRC enabled, validated |
-| Windows SD driver | CRC enabled, validated |
-| Commercial firmware | CRC enabled for reliability |
-| Hobby/simple drivers | Often disabled for simplicity |
-
-### P2 Hardware CRC Support
-
-The P2 has hardware-accelerated CRC calculation:
-
-```spin2
-' Calculate CRC-16-CCITT over 512 bytes
-crc := GETCRC(@buffer, $1021, 512)
-```
-
-**Performance:** ~8 + (512 × 2) = ~1032 clocks = ~3.2 µs at 320 MHz
-
-**Comparison to transfer time:** Sector transfer at 25 MHz SPI takes ~200 µs. CRC calculation adds only 1.6% overhead.
-
-### CRC-16-CCITT Specification
-
-SD cards use CRC-16-CCITT:
-- **Polynomial:** x^16 + x^12 + x^5 + 1 = `$1021`
-- **Initial value:** `$0000`
-- **Bit order:** MSB-first (matches SD card SPI mode)
-
-### Implementation Plan
-
-**Phase 1: Read-side CRC validation (detect corruption)**
-```spin2
-' After streamer receives 512 bytes:
-calculated_crc := GETCRC(@buf, $1021, 512) & $FFFF
-received_crc := (crc_hi << 8) | crc_lo
-
-if calculated_crc <> received_crc
-  debug("CRC MISMATCH: calc=$", uhex_(calculated_crc), " recv=$", uhex_(received_crc))
-  return E_CRC_ERROR
-```
-
-**Phase 2: Write-side CRC generation (enable card-side validation)**
-```spin2
-' Before sending CRC bytes:
-calculated_crc := GETCRC(@buf, $1021, 512)
-sp_transfer_8(calculated_crc >> 8)    ' CRC high byte
-sp_transfer_8(calculated_crc & $FF)   ' CRC low byte
-```
-
-**Phase 3: Enable card CRC checking**
-```spin2
-' During card init, after ACMD41:
-cmd(59, 1)    ' CMD59: CRC_ON_OFF, arg=1 enables CRC checking
-```
-
-### Decision
-
-**IMPLEMENT full CRC-16 validation for all sector transfers:**
-
-1. **Calculate and validate CRC on reads** - Detect SPI transfer corruption
-2. **Calculate and send valid CRC on writes** - Enable card-side validation
-3. **Enable card CRC checking via CMD59** - Card rejects corrupted writes
-
-**Rationale:**
-- P2 hardware CRC adds negligible overhead (~1.6%)
-- Detects timing-related corruption (270 MHz issues would be caught)
-- Matches production-quality drivers (Linux, Windows)
-- Essential for reliable cross-platform SD card interchange
-- Debugging value: CRC errors pinpoint SPI transfer problems vs. software bugs
-
-**Implementation sequence:**
-1. Add CRC validation to driver
-2. Verify all existing tests pass at 320 MHz
-3. Then explore lower clock frequencies with CRC as a diagnostic tool
-
-### Implementation Notes (2026-01-31)
-
-**Status: SOLVED** - The P2 GETCRC algorithm has been deciphered and validated.
-
-#### The Problem (Previous Attempt)
-
-Initial attempts using `GETCRC(@data, $1021, 512)` failed because:
-- P2's GETCRC processes data LSB-first (reflected algorithm)
-- P2's GETCRC has a non-zero "base value" for zero data
-- Simple polynomial choices ($1021, $8408) didn't produce matching CRCs
-
-#### The Solution: Discovered 2026-01-31
-
-Through exhaustive testing of single-byte and multi-byte patterns, the exact relationship was determined:
+SD cards use CRC-16-CCITT (polynomial x^16 + x^12 + x^5 + 1). P2's `GETCRC` uses a reflected (LSB-first) algorithm internally, so matching the SD spec requires a transformation:
 
 ```spin2
 CON
-    CRC_POLY_REFLECTED = $8408       ' CRC-16-CCITT reflected polynomial
-    CRC_BASE_512       = $2C68       ' GETCRC of 512 zero bytes
+    CRC_POLY_REFLECTED = $8408       ' CRC-16-CCITT in LSB-first form (REV16 of $1021)
+    CRC_BASE_512       = $2C68       ' GETCRC of 512 zero bytes (P2's internal offset)
 
-PRI calcCRC16(pData, len) : crc | raw
-    '' Calculate CRC-16-CCITT using P2's GETCRC instruction
-    '' Matches the standard lookup table algorithm
-    raw := GETCRC(pData, CRC_POLY_REFLECTED, len)
+PRI calcSectorCRC(pBuf) : crc | raw
+    raw := GETCRC(pBuf, CRC_POLY_REFLECTED, 512)
     crc := ((raw ^ CRC_BASE_512) REV 31) >> 16
 ```
 
-**Key Constants:**
-| Constant | Value | Meaning |
-|----------|-------|---------|
-| `CRC_POLY_REFLECTED` | `$8408` | CRC-16-CCITT polynomial in LSB-first form |
-| `CRC_BASE_512` | `$2C68` | GETCRC(@zeros, $8408, 512) - the "base" offset |
-
-**The Algorithm:**
-1. **GETCRC** with reflected polynomial `$8408` on the raw data
-2. **XOR** the result with the precomputed base value (`$2C68` for 512 bytes)
-3. **REV 31** reverses all 32 bits (converts LSB-first to MSB-first)
-4. **>> 16** extracts the 16-bit CRC from the upper half
-
-#### Why This Works
-
-P2's GETCRC uses a LSB-first (reflected) algorithm with internal quirks:
-1. It produces non-zero output for zero input (the "base value")
-2. It processes bits in LSB-first order
-3. The polynomial must be in reflected form ($8408 = REV16($1021))
-
 The transformation:
-- XOR with base removes P2's internal offset
-- REV 31 + >>16 converts from LSB-first 32-bit to MSB-first 16-bit
+1. `GETCRC` with reflected polynomial `$8408`
+2. XOR with `$2C68` removes P2's non-zero base offset
+3. `REV 31` converts LSB-first 32-bit result to MSB-first
+4. `>> 16` extracts the 16-bit CRC
 
-#### Validation Results
+### How the Driver Uses It
 
-Tested 10 different 512-byte patterns (all zeros, all $FF, sequential, random, etc.):
-```
-Pattern 1:  Table=$0000 GETCRC=$0000 MATCH!
-Pattern 2:  Table=$7FA1 GETCRC=$7FA1 MATCH!
-Pattern 3:  Table=$40DA GETCRC=$40DA MATCH!
-Pattern 4:  Table=$0BA4 GETCRC=$0BA4 MATCH!
-Pattern 5:  Table=$A521 GETCRC=$A521 MATCH!
-Pattern 6:  Table=$DA80 GETCRC=$DA80 MATCH!
-Pattern 7:  Table=$7EF5 GETCRC=$7EF5 MATCH!
-Pattern 8:  Table=$BEB3 GETCRC=$BEB3 MATCH!
-Pattern 9:  Table=$3515 GETCRC=$3515 MATCH!
-Pattern 10: Table=$D1EE GETCRC=$D1EE MATCH!
-```
+- **Reads**: Card sends 512 bytes + 2-byte CRC. Driver calculates CRC over received data and validates against the card's CRC. Mismatch returns `E_CRC_ERROR`
+- **Writes**: Driver calculates CRC over outgoing data and sends valid CRC bytes. Card-side CRC checking is enabled via CMD59 during initialization. Card rejects corrupted writes with Data Response `$0B`
+- **Caller decides**: retry, abort, or report on `E_CRC_ERROR`
 
-**Result: 100% match with lookup table across all test patterns.**
-
-#### Benefits
-
-1. **Eliminates 512-byte lookup table** - Saves code space
-2. **Uses hardware acceleration** - GETCRC is ~1032 cycles for 512 bytes (~3.2µs at 320MHz)
-3. **Minimal overhead** - Only 1.6% of sector transfer time
-4. **Single formula** - Two lines of code replaces 256-entry table
-
-#### Implementation for Driver
-
-```spin2
-DAT
-    crc_base_512    LONG    $2C68    ' Precomputed: GETCRC(@zeros, $8408, 512)
-
-PRI calcSectorCRC(pBuf) : crc | raw
-    '' Calculate CRC-16-CCITT for a 512-byte sector
-    '' Uses P2 hardware GETCRC with transformation
-    raw := GETCRC(pBuf, $8408, 512)
-    crc := ((raw ^ crc_base_512) REV 31) >> 16
-
-PRI validateReadCRC(pBuf, received_crc) : valid
-    '' Validate CRC on received sector data
-    valid := calcSectorCRC(pBuf) == received_crc
-
-PRI generateWriteCRC(pBuf) : crc_hi, crc_lo | crc
-    '' Generate CRC bytes for sector write
-    crc := calcSectorCRC(pBuf)
-    crc_hi := crc >> 8
-    crc_lo := crc & $FF
-```
-
-#### Test File Location
-
-The solution test file is: `TestCard/SD_CRC_solution_test.spin2`
-
-Run with: `./run_test.sh ../TestCard/SD_CRC_solution_test.spin2`
-
-### Error Handling
-
-When CRC mismatch is detected:
-```spin2
-E_CRC_ERROR = -4    ' Already defined in error codes
-```
-
-- **Reads:** Return `E_CRC_ERROR`, do not use buffer data
-- **Writes:** Card returns Data Response `$0B` (CRC error), return `E_CRC_ERROR`
-- **Caller decides:** Retry, abort, or report to user
+### Decision
+**Validate CRC-16 on every sector transfer using P2 hardware GETCRC.** The 1.6% overhead is negligible, and it catches SPI transfer corruption that would otherwise be silent. This matches production-quality drivers (Linux, Windows).
 
 ---
 

@@ -1,5 +1,7 @@
 # User Report Analysis: AData 16GB Card Blocking on CMD13
 
+> **SUPERSEDED (2026-03-06):** The root cause diagnosis in this document (card-specific CMD13 defect) is incorrect. The actual cause is a driver-side R1 response parsing error — our code accepted pre-response bytes with bit 7 set as R1. See **[CMD13-ROOT-CAUSE-ANALYSIS.md](../CMD13-ROOT-CAUSE-ANALYSIS.md)** for the corrected analysis. The card data, symptom descriptions, and user report transcripts below remain accurate.
+
 **Date:** 2026-03-05
 **Source:** DOCs/User-Reports/rpt1.txt through rpt4.txt
 **Card:** AData SDHC 16GB, manufactured March 2013
