@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-03-07
+
+**CMD13 STATUS byte fix, reduced driver footprint, updated memory sizing reference.**
+
+### Bug Fixes
+
+- `checkCardStatus()`: STATUS byte errors now detected correctly (was checking uninitialized return variable instead of R2 response)
+- `last_cmd13_status`: Diagnostic field now captures the actual STATUS byte from CMD13
+
+### Improvements
+
+- Driver hub footprint reduced through SPI transaction consolidation
+
+### Documentation
+
+- Memory sizing guide updated with current v1.3.x footprint data across all configurations
+- DEBUG_MASK channel plan: 10 selective debug channels mapped for all 402 debug statements
+
 ## [1.3.0] - 2026-03-06
 
 **R1 response parsing fix, CMD12 tolerance, CMD23 probing, 427 regression tests across 20 suites.**
@@ -182,7 +200,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Initial testing release** -- driver, utilities, demo shell, and 263+ regression tests.
 
-[Unreleased]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.3.1...HEAD
+[1.3.1]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.1.0...v1.2.0

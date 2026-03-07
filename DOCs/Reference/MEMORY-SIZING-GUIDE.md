@@ -2,6 +2,8 @@
 
 A practical guide to determining how much hub RAM your Spin2 program and its component objects consume -- code space, data space, variable space, and total runtime footprint -- using the pnut-ts compiler's `-m` (map) and `-l` (listing) output files.
 
+This document also serves as the **current shipping memory footprint reference** for the P2-uSD-FAT32-FS driver. All example numbers reflect the driver as of v1.3.x (2026-03-07).
+
 - **Compiler**: pnut-ts v1.52.2+
 - **Author**: Stephen M. Moraco, Iron Sheep Productions, LLC
 
@@ -17,7 +19,8 @@ A practical guide to determining how much hub RAM your Spin2 program and its com
 6. [Comparing Build Configurations](#6-comparing-build-configurations)
 7. [Analyzing a Multi-Object Program](#7-analyzing-a-multi-object-program)
 8. [Sizing Audit Methodology](#8-sizing-audit-methodology)
-9. [Quick Reference](#9-quick-reference)
+9. [Current Driver Memory Footprint](#9-current-driver-memory-footprint)
+10. [Quick Reference](#10-quick-reference)
 
 ---
 
@@ -90,9 +93,11 @@ To measure a library object's footprint without any consumer program, compile it
 ```bash
 # Driver alone -- minimal build (no optional features)
 pnut-ts -m src/micro_sd_fat32_fs.spin2
+# => 19,948 bytes (19,944 code/data + 4 var), 150 methods
 
 # Driver alone -- full build (all optional features)
 pnut-ts -m -D SD_INCLUDE_ALL src/micro_sd_fat32_fs.spin2
+# => 22,912 bytes (22,908 code/data + 4 var), 224 methods
 ```
 
 This tells you the object's intrinsic size before any consumer adds its own code.
@@ -108,9 +113,9 @@ The map file (`.map`) is the primary tool for memory analysis. It has five secti
 ```
 === PROGRAM SUMMARY ===
 
-  Total Size:    28068 bytes (27896 code/data + 172 var bytes)
+  Total Size:    27076 bytes (26904 code/data + 172 var bytes)
   Objects:       4
-  Methods:       246
+  Methods:       248
 ```
 
 This is your top-level answer: **total hub RAM consumed** = code/data + VAR. The binary file will be larger than the code/data value because it includes the P2 loader stub (~6 KB).
@@ -133,18 +138,18 @@ This shows the tree of objects, their instance names, and how many methods each 
 ```
 === MEMORY LAYOUT ===
 
-  Start   End      Size  Object           Instance         Overrides
-  ------  ------  -----  ---------------  ---------------  ---------
+  Start   End      Size  Object             Instance         Overrides
+  ------  ------  -----  -----------------  ---------------  ---------
   $00000  $00D69   3434  SD_RT_mount_tests  (entry)
-  $00D6C  $06817  23212  micro_sd_fat32_fs  SD
-  $06818  $0693A    291  isp_stack_check  UTILS
-  $0693C  $06CF7    956  isp_rt_utilities  STACKUTILS
+  $00D6C  $06436  22219  micro_sd_fat32_fs  SD
+  $06438  $0655A    291  isp_stack_check    UTILS
+  $0655C  $06917    956  isp_rt_utilities   STACKUTILS
 
-    CODE/DATA TOTAL:   27896 bytes
+    CODE/DATA TOTAL:   26904 bytes
 
-  $06CF8  $06DA3    172  VAR SPACE        (runtime)
+  $06918  $069C3    172  VAR SPACE          (runtime)
 
-    PROGRAM TOTAL:     28068 bytes
+    PROGRAM TOTAL:     27076 bytes
 ```
 
 This is the key table. It shows:
@@ -152,7 +157,7 @@ This is the key table. It shows:
 - **Size** of each object in bytes (code + DAT combined)
 - The **VAR SPACE** line shows total runtime variable allocation across all objects
 
-From this table you can immediately answer: "How much space does object X add to my program?" For example, the SD driver adds 23,212 bytes of code/data.
+From this table you can immediately answer: "How much space does object X add to my program?" For example, the SD driver adds 22,219 bytes of code/data.
 
 ### 3.4 Object Details
 
@@ -162,8 +167,8 @@ Each object gets a detailed breakdown:
 
 ```
 --- SD : micro_sd_fat32_fs ---
-    Location: $00D6C-$06817 (23212 bytes)
-    VAR Base: $06CFC
+    Location: $00D6C-$06436 (22219 bytes)
+    VAR Base: $06918
     Source:   micro_sd_fat32_fs.spin2
 
     Methods:
@@ -312,19 +317,19 @@ LONG      COG_STACK_GUARD       +$005A8  ($00E70)
 
 ### Complete Accounting Example
 
-For a program like `SD_format_card`:
+For the SD demo shell program:
 
 ```
-Code/Data:           30,904 bytes   (from map: CODE/DATA TOTAL)
-VAR:                 33,876 bytes   (from map: VAR SPACE size)
+Code/Data:           55,308 bytes   (from map: CODE/DATA TOTAL)
+VAR:                331,876 bytes   (from map: VAR SPACE size)
                     ---------
-Program Total:       64,780 bytes
+Program Total:      387,184 bytes
 
 P2 Hub RAM:         524,288 bytes   (512 KB)
-Available:          459,508 bytes   (for main COG stack + other uses)
+Available:          137,104 bytes   (for main COG stack + other uses)
 ```
 
-The large VAR here comes from the format utility's 32 KB zero-fill buffer. This is why VAR analysis matters -- a single large buffer in VAR can dominate your memory budget.
+The large VAR here comes from the demo shell's string buffers and fsck utility's working memory. This is why VAR analysis matters -- a single large buffer in VAR can dominate your memory budget.
 
 ---
 
@@ -335,19 +340,19 @@ To measure the cost of optional features, generate map files for each configurat
 ```bash
 # Minimal build
 pnut-ts -m src/micro_sd_fat32_fs.spin2
-# => Total Size: 20,816 bytes (20,812 code/data + 4 var bytes), 148 methods
+# => Total Size: 19,948 bytes (19,944 code/data + 4 var bytes), 150 methods
 
 # Full build
 pnut-ts -m -D SD_INCLUDE_ALL src/micro_sd_fat32_fs.spin2
-# => Total Size: 24,060 bytes (24,056 code/data + 4 var bytes), 222 methods
+# => Total Size: 22,912 bytes (22,908 code/data + 4 var bytes), 224 methods
 ```
 
 Comparison:
 
 | | Minimal | Full | Delta |
 |---|---|---|---|
-| Methods | 148 | 222 | +74 |
-| Code/Data | 20,812 B | 24,056 B | +3,244 B |
+| Methods | 150 | 224 | +74 |
+| Code/Data | 19,944 B | 22,908 B | +2,964 B |
 | VAR | 4 B | 4 B | +0 B |
 
 The DAT section is identical in both builds (data doesn't change). Only method table entries and bytecodes are added by optional features. This tells you the conditional compilation gates affect only code, not static data.
@@ -364,15 +369,15 @@ Real programs include multiple objects. The map file shows each object's contrib
   Start   End      Size  Object             Instance
   ------  ------  -----  -----------------  ---------
   $00000  $00D69   3434  SD_RT_mount_tests  (entry)
-  $00D6C  $06817  23212  micro_sd_fat32_fs  SD
-  $06818  $0693A    291  isp_stack_check    UTILS
-  $0693C  $06CF7    956  isp_rt_utilities   STACKUTILS
+  $00D6C  $06436  22219  micro_sd_fat32_fs  SD
+  $06438  $0655A    291  isp_stack_check    UTILS
+  $0655C  $06917    956  isp_rt_utilities   STACKUTILS
 
-    CODE/DATA TOTAL:   27896 bytes
+    CODE/DATA TOTAL:   26904 bytes
 
-  $06CF8  $06DA3    172  VAR SPACE          (runtime)
+  $06918  $069C3    172  VAR SPACE          (runtime)
 
-    PROGRAM TOTAL:     28068 bytes
+    PROGRAM TOTAL:     27076 bytes
 ```
 
 ### Per-Object Breakdown
@@ -381,11 +386,11 @@ To understand where your memory is going, extract each object's contribution:
 
 | Object | Code/Data | % of Total |
 |---|---|---|
-| SD_RT_mount_tests (top-level) | 3,434 B | 12.3% |
-| micro_sd_fat32_fs (driver) | 23,212 B | 83.2% |
-| isp_stack_check (stack checker) | 291 B | 1.0% |
-| isp_rt_utilities (test framework) | 956 B | 3.4% |
-| **Total** | **27,896 B** | **100%** |
+| SD_RT_mount_tests (top-level) | 3,434 B | 12.8% |
+| micro_sd_fat32_fs (driver) | 22,219 B | 82.6% |
+| isp_stack_check (stack checker) | 291 B | 1.1% |
+| isp_rt_utilities (test framework) | 956 B | 3.6% |
+| **Total** | **26,904 B** | **100%** |
 
 This immediately shows that the driver dominates the code/data budget. If you need to reduce program size, the driver is where to look (or use a minimal build configuration).
 
@@ -394,11 +399,11 @@ This immediately shows that the driver dominates the code/data budget. If you ne
 The Object Details section shows each object's VAR variables. To find which object owns the most VAR space, check the VAR Base addresses:
 
 ```
-SD_RT_mount_tests:   VAR Base: $06CF8
-micro_sd_fat32_fs:   VAR Base: $06CFC   (= $06CF8 + 4 bytes for top-level)
-isp_stack_check:     VAR Base: $06D04   (= $06CFC + 8 bytes for driver)
-isp_rt_utilities:    VAR Base: $06D04   (= $06D04 + 0 bytes for stack checker)
-                     VAR End:  $06DA3   (= $06D04 + 160 bytes for utilities)
+SD_RT_mount_tests:   VAR Base: $06918
+micro_sd_fat32_fs:   VAR Base: $0691C   (= $06918 + 4 bytes for top-level)
+isp_stack_check:     VAR Base: $06924   (= $0691C + 8 bytes for driver)
+isp_rt_utilities:    VAR Base: $06924   (= $06924 + 0 bytes for stack checker)
+                     VAR End:  $069C3   (= $06924 + 160 bytes for utilities)
 ```
 
 So: top-level = 4 B, driver = 8 B, stack checker = 0 B, utilities = 160 B of VAR.
@@ -489,7 +494,60 @@ This produces a repeatable baseline. When you upgrade the compiler or refactor c
 
 ---
 
-## 9. Quick Reference
+## 9. Current Driver Memory Footprint
+
+This section documents the shipping memory footprint of `micro_sd_fat32_fs.spin2` as of v1.3.x (2026-03-07), compiled with pnut-ts v1.52.2.
+
+### 9.1 Driver Standalone — By Feature Configuration
+
+The driver supports conditional compilation via `#PRAGMA EXPORTDEF` flags. Each configuration adds methods and code but does not change static data (DAT/VAR):
+
+| Configuration | Code/Data | VAR | Methods | Binary (.bin) |
+|---|---|---|---|---|
+| **Core** (no flags) | 19,944 B | 4 B | 150 | 26,156 B |
+| + `SD_INCLUDE_RAW` | 20,864 B | 4 B | 161 | 27,076 B |
+| + `SD_INCLUDE_REGISTERS` | 20,356 B | 4 B | 159 | 26,568 B |
+| + `SD_INCLUDE_DEBUG` | 21,344 B | 4 B | 195 | 27,556 B |
+| + `SD_INCLUDE_SPEED` + `REGISTERS` | 20,868 B | 4 B | 168 | 27,080 B |
+| **`SD_INCLUDE_ALL`** (all flags) | **22,908 B** | **4 B** | **224** | **29,120 B** |
+
+**Incremental cost of each feature flag** (over core):
+
+| Flag | Code Added | Methods Added |
+|---|---|---|
+| `SD_INCLUDE_RAW` | +920 B | +11 |
+| `SD_INCLUDE_REGISTERS` | +412 B | +9 |
+| `SD_INCLUDE_DEBUG` | +1,400 B | +45 |
+| `SD_INCLUDE_SPEED` | +512 B | +9 |
+
+Note: `SD_INCLUDE_SPEED` requires `SD_INCLUDE_REGISTERS` (SCR read needed for capability detection). `SD_INCLUDE_ALL` enables all four flags. The combined total is less than the sum of individual deltas because some methods are shared across features.
+
+### 9.2 Driver in Context — Representative Programs
+
+| Program | Driver Config | Code/Data | VAR | Total | Binary |
+|---|---|---|---|---|---|
+| SD_RT_mount_tests | ALL | 26,904 B | 172 B | 27,076 B | 33,116 B |
+| SD_card_identify | REGISTERS+SPEED | 22,740 B | 8 B | 22,748 B | 28,952 B |
+| SD_demo_shell | ALL | 55,308 B | 331,876 B | 387,184 B | 61,520 B |
+
+The demo shell's large VAR (324 KB) comes from string buffers and the fsck utility's working memory, not from the driver itself (driver VAR is 4-8 B).
+
+### 9.3 Driver's Share of Typical Programs
+
+In the mount test program (a typical single-purpose consumer):
+
+| Object | Code/Data | % |
+|---|---|---|
+| SD_RT_mount_tests (top-level) | 3,434 B | 12.8% |
+| **micro_sd_fat32_fs** (driver) | **22,219 B** | **82.6%** |
+| isp_stack_check | 291 B | 1.1% |
+| isp_rt_utilities | 956 B | 3.6% |
+
+The driver dominates code/data in any program that includes it. For memory-constrained applications, use the minimal (core-only) configuration to save ~3 KB.
+
+---
+
+## 10. Quick Reference
 
 ### Generate Files
 
