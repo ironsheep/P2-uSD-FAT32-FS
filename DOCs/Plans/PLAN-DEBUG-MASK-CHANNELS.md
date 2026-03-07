@@ -375,6 +375,10 @@ The `DEBUG_MASK` and channel constants are internal to the driver object. Consum
 - The driver's `DEBUG_DISABLE = 1` continues to suppress all driver debug output in production
 - To debug the driver from a consumer, set `DEBUG_DISABLE = 0` in the driver source and configure `DEBUG_MASK`
 
+## 10. Documentation Updates
+
+- Update `DOCs/CONDITIONAL-COMPILATION-GUIDE.md` to document `DEBUG_MASK`, channel constants, and `debug[N]()` usage for developers who want to enable selective driver debug output
+
 ---
 
 *Plan produced 2026-03-07 — Iron Sheep Productions*
