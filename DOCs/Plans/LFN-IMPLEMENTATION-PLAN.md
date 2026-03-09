@@ -905,14 +905,14 @@ Add `SD_INCLUDE_LFN` as a new conditional compilation flag:
 
 ```spin2
 ' In the consumer's top-level file:
-#IFDEF __SPINTOOLS__
-#DEFINE SD_INCLUDE_LFN
-#ELSEIFDEF __FLEXSPIN__
+#ifdef __SPINTOOLS__
+#define SD_INCLUDE_LFN
+#elseifdef __FLEXSPIN__
 #define SD_INCLUDE_LFN
 #pragma exportdef SD_INCLUDE_LFN
-#ELSE
-#PRAGMA EXPORTDEF SD_INCLUDE_LFN
-#ENDIF
+#else
+#pragma exportdef SD_INCLUDE_LFN
+#endif
 ```
 
 ### 13.2 Driver Gating
@@ -920,20 +920,20 @@ Add `SD_INCLUDE_LFN` as a new conditional compilation flag:
 In `micro_sd_fat32_fs.spin2`, gate LFN code with:
 
 ```spin2
-#IFDEF SD_INCLUDE_LFN
+#ifdef SD_INCLUDE_LFN
 ' ... LFN-specific DAT buffers ...
 ' ... LFN-specific methods ...
-#ENDIF
+#endif
 ```
 
 For methods like `searchDirectory()` that have both 8.3 and LFN paths, use inline conditionals:
 
 ```spin2
 PRI searchDirectory(name_ptr) : found
-    #IFDEF SD_INCLUDE_LFN
+    #ifdef SD_INCLUDE_LFN
     if lfn_needs_lfn(name_ptr)
         return searchDirectoryLFN(name_ptr)
-    #ENDIF
+    #endif
     ' ... existing 8.3 search code ...
 ```
 
@@ -942,12 +942,12 @@ PRI searchDirectory(name_ptr) : found
 Update the `SD_INCLUDE_ALL` expansion (lines 41-54 of the driver) to also define `SD_INCLUDE_LFN`:
 
 ```spin2
-#IFDEF SD_INCLUDE_ALL
-#IFNDEF SD_INCLUDE_LFN
-#DEFINE SD_INCLUDE_LFN
-#ENDIF
+#ifdef SD_INCLUDE_ALL
+#ifndef SD_INCLUDE_LFN
+#define SD_INCLUDE_LFN
+#endif
 ' ... existing SD_INCLUDE_RAW, SD_INCLUDE_REGISTERS, etc. ...
-#ENDIF
+#endif
 ```
 
 ### 13.4 Compile Size Impact

@@ -61,7 +61,7 @@ The CMD13 card is old with immature firmware. The SP Elite is new with current f
 
 ### Methodology
 
-The driver's `readSectors()` function has four failure paths. Rather than speculate, we instrumented the driver with diagnostic DAT variables and PUB getters (gated by `#IFDEF SD_INCLUDE_DEBUG`) to capture exactly which path was taken on every call.
+The driver's `readSectors()` function has four failure paths. Rather than speculate, we instrumented the driver with diagnostic DAT variables and PUB getters (gated by `#ifdef SD_INCLUDE_DEBUG`) to capture exactly which path was taken on every call.
 
 ### Instrumentation Added
 

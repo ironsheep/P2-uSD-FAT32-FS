@@ -29,23 +29,23 @@ CON
 
 ' Enable raw sector access and debug diagnostics
 ' Uncomment SD_INCLUDE_STACK_CHECK to measure worker cog stack depth
-#IFDEF __SPINTOOLS__
-#DEFINE SD_INCLUDE_RAW
-#DEFINE SD_INCLUDE_DEBUG
-#DEFINE SD_INCLUDE_STACK_CHECK
-#ELSEIFDEF __FLEXSPIN__
+#ifdef __SPINTOOLS__
+#define SD_INCLUDE_RAW
+#define SD_INCLUDE_DEBUG
+#define SD_INCLUDE_STACK_CHECK
+#elseifdef __FLEXSPIN__
 #define SD_INCLUDE_RAW
 #pragma exportdef SD_INCLUDE_RAW
 #define SD_INCLUDE_DEBUG
 #pragma exportdef SD_INCLUDE_DEBUG
 #define SD_INCLUDE_STACK_CHECK
 #pragma exportdef SD_INCLUDE_STACK_CHECK
-#ELSE
-#DEFINE SD_INCLUDE_STACK_CHECK
-#PRAGMA EXPORTDEF SD_INCLUDE_RAW
-#PRAGMA EXPORTDEF SD_INCLUDE_DEBUG
-#PRAGMA EXPORTDEF SD_INCLUDE_STACK_CHECK
-#ENDIF
+#else
+#define SD_INCLUDE_STACK_CHECK
+#pragma exportdef SD_INCLUDE_RAW
+#pragma exportdef SD_INCLUDE_DEBUG
+#pragma exportdef SD_INCLUDE_STACK_CHECK
+#endif
 
 OBJ
     sd    : "micro_sd_fat32_fs"
@@ -299,10 +299,10 @@ PUB go() | result, pLabel, freeSpace, handle, bytesRead
     sd.deleteFile(@"DMTDIR")
     sd.deleteFile(@testfile1)
 
-#IFDEF SD_INCLUDE_STACK_CHECK
+#ifdef SD_INCLUDE_STACK_CHECK
     debug(" ")
     debug("* Worker cog stack: ", udec_(sd.reportStackDepth()), " of ", udec_(sd.STACK_SIZE), " longs used")
-#ENDIF
+#endif
 
     ' Final unmount
     sd.unmount()

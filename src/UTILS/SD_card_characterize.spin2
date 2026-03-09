@@ -37,14 +37,14 @@ CON
   VBR_SIZE = 512
 
 ' Enable full driver features for this utility
-#IFDEF __SPINTOOLS__
-#DEFINE SD_INCLUDE_ALL
-#ELSEIFDEF __FLEXSPIN__
+#ifdef __SPINTOOLS__
+#define SD_INCLUDE_ALL
+#elseifdef __FLEXSPIN__
 #define SD_INCLUDE_ALL
 #pragma exportdef SD_INCLUDE_ALL
-#ELSE
-#PRAGMA EXPORTDEF SD_INCLUDE_ALL
-#ENDIF
+#else
+#pragma exportdef SD_INCLUDE_ALL
+#endif
 
 OBJ
   sd : "micro_sd_fat32_fs"

@@ -33,18 +33,18 @@ CON
     MBR_SIGNATURE = $AA55
 
 ' Enable register access for CID/SCR/SD Status reads
-#IFDEF __SPINTOOLS__
-#DEFINE SD_INCLUDE_REGISTERS
-#DEFINE SD_INCLUDE_RAW
-#ELSEIFDEF __FLEXSPIN__
+#ifdef __SPINTOOLS__
+#define SD_INCLUDE_REGISTERS
+#define SD_INCLUDE_RAW
+#elseifdef __FLEXSPIN__
 #define SD_INCLUDE_REGISTERS
 #define SD_INCLUDE_RAW
 #pragma exportdef SD_INCLUDE_REGISTERS
 #pragma exportdef SD_INCLUDE_RAW
-#ELSE
-#PRAGMA EXPORTDEF SD_INCLUDE_REGISTERS
-#PRAGMA EXPORTDEF SD_INCLUDE_RAW
-#ENDIF
+#else
+#pragma exportdef SD_INCLUDE_REGISTERS
+#pragma exportdef SD_INCLUDE_RAW
+#endif
 
 OBJ
     sd    : "micro_sd_fat32_fs"

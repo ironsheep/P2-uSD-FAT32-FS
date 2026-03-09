@@ -45,16 +45,16 @@ CON
 
 ' Enable full driver features for format testing
 ' Uncomment SD_INCLUDE_STACK_CHECK to measure worker cog stack depth
-#IFDEF __SPINTOOLS__
-#DEFINE SD_INCLUDE_ALL
-#ELSEIFDEF __FLEXSPIN__
+#ifdef __SPINTOOLS__
+#define SD_INCLUDE_ALL
+#elseifdef __FLEXSPIN__
 #define SD_INCLUDE_ALL
 #pragma exportdef SD_INCLUDE_ALL
-#ELSE
-#PRAGMA EXPORTDEF SD_INCLUDE_ALL
-#DEFINE SD_INCLUDE_STACK_CHECK
-#PRAGMA EXPORTDEF SD_INCLUDE_STACK_CHECK
-#ENDIF
+#else
+#pragma exportdef SD_INCLUDE_ALL
+#define SD_INCLUDE_STACK_CHECK
+#pragma exportdef SD_INCLUDE_STACK_CHECK
+#endif
 
 OBJ
 
@@ -418,10 +418,10 @@ PUB go() | result, dataStart, fat1Start, fat2Start, idx, mismatch, cardSectors
     debug("  Free space: ", udec(result), " sectors")
 
     ' Report stack depth while worker cog is still running
-#IFDEF SD_INCLUDE_STACK_CHECK
+#ifdef SD_INCLUDE_STACK_CHECK
     debug(" ")
     debug("* Worker cog stack: ", udec_(sd.reportStackDepth()), " of ", udec_(sd.STACK_SIZE), " longs used")
-#ENDIF
+#endif
 
     sd.unmount()
 

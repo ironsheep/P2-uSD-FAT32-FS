@@ -279,11 +279,11 @@ PRI fs_worker() | ...
   ...
   debug[CH_API]("[fs_worker] Received command ", udec_(cur_cmd))
   ...
-#IFDEF SD_INCLUDE_RAW
+#ifdef SD_INCLUDE_RAW
       CMD_WRITE_SECTOR_RAW:
         ...
         debug[CH_SECTOR]("[WRITE_RAW] after bytemove: ...")
-#ENDIF
+#endif
   ...
   debug[CH_API]("[fs_worker] Unknown command: ", udec_(cur_cmd))
 ```
@@ -298,11 +298,11 @@ PRI fs_worker() | ...
 
 For production: keep `DEBUG_DISABLE = 1`. For debugging: set `DEBUG_DISABLE = 0` and configure `DEBUG_MASK` to enable only the channels you need.
 
-### 5.5 Interaction with #IFDEF Feature Gates
+### 5.5 Interaction with #ifdef Feature Gates
 
-Methods inside `#IFDEF SD_INCLUDE_RAW` (etc.) are already conditionally compiled. Adding `debug[N]()` channels inside these blocks means the debug statement must pass both gates:
+Methods inside `#ifdef SD_INCLUDE_RAW` (etc.) are already conditionally compiled. Adding `debug[N]()` channels inside these blocks means the debug statement must pass both gates:
 
-1. The `#IFDEF` flag must be defined (method exists)
+1. The `#ifdef` flag must be defined (method exists)
 2. The channel's bit must be set in `DEBUG_MASK` (debug statement compiles)
 
 This gives finer control — you can have `SD_INCLUDE_RAW` enabled (raw API available) but CH_SECTOR disabled (raw sector debug output suppressed).
@@ -325,7 +325,7 @@ Convert all methods belonging to each channel, in this order:
 | 2b | CH_RECOVER (9) | Wait methods, CMD12, recovery | Small set, isolated |
 | 2c | CH_STATUS (5) | CMD13/CMD23 probe and check | Recently refactored, well understood |
 | 2d | CH_IDENT (6) | Card identity, register parsing | Init-time only, low risk |
-| 2e | CH_HSPEED (7) | High-speed mode | Already behind `#IFDEF`, isolated |
+| 2e | CH_HSPEED (7) | High-speed mode | Already behind `#ifdef`, isolated |
 | 2f | CH_INIT (0) | Card init, pin setup | Largest channel, core init path |
 | 2g | CH_MOUNT (1) | Mount/unmount, FSInfo | Depends on init working |
 | 2h | CH_SECTOR (4) | Sector I/O, FAT, clusters | Data path — test carefully |

@@ -16,39 +16,39 @@
 ' CONDITIONAL COMPILATION - Optional Feature Modules
 ' ═══════════════════════════════════════════════════════════════════════════════
 ' Default: MINIMAL driver (core file operations only)
-' To enable optional features, use #PRAGMA EXPORTDEF in your top-level file:
+' To enable optional features, use #pragma exportdef in your top-level file:
 '
-'   #PRAGMA EXPORTDEF SD_INCLUDE_RAW        ' Raw sector access
-'   #PRAGMA EXPORTDEF SD_INCLUDE_REGISTERS  ' Card register access (CID/CSD/SCR)
-'   #PRAGMA EXPORTDEF SD_INCLUDE_SPEED      ' High-speed mode control (requires SD_INCLUDE_REGISTERS)
-'   #PRAGMA EXPORTDEF SD_INCLUDE_DEBUG      ' Debug/diagnostic methods & CRC getters
+'   #pragma exportdef SD_INCLUDE_RAW        ' Raw sector access
+'   #pragma exportdef SD_INCLUDE_REGISTERS  ' Card register access (CID/CSD/SCR)
+'   #pragma exportdef SD_INCLUDE_SPEED      ' High-speed mode control (requires SD_INCLUDE_REGISTERS)
+'   #pragma exportdef SD_INCLUDE_DEBUG      ' Debug/diagnostic methods & CRC getters
 '
 '   OBJ
 '       sd : "micro_sd_fat32_fs"
 '
 ' Or define SD_INCLUDE_ALL to include everything:
-'   #PRAGMA EXPORTDEF SD_INCLUDE_ALL
+'   #pragma exportdef SD_INCLUDE_ALL
 ' ═══════════════════════════════════════════════════════════════════════════════
 
-#IFDEF SD_INCLUDE_ALL
-#IFNDEF SD_INCLUDE_RAW
-#DEFINE SD_INCLUDE_RAW
-#ENDIF
-#IFNDEF SD_INCLUDE_REGISTERS
-#DEFINE SD_INCLUDE_REGISTERS
-#ENDIF
-#IFNDEF SD_INCLUDE_SPEED
-#DEFINE SD_INCLUDE_SPEED
-#ENDIF
-#IFNDEF SD_INCLUDE_DEBUG
-#DEFINE SD_INCLUDE_DEBUG
-#ENDIF
-#ENDIF
+#ifdef SD_INCLUDE_ALL
+#ifndef SD_INCLUDE_RAW
+#define SD_INCLUDE_RAW
+#endif
+#ifndef SD_INCLUDE_REGISTERS
+#define SD_INCLUDE_REGISTERS
+#endif
+#ifndef SD_INCLUDE_SPEED
+#define SD_INCLUDE_SPEED
+#endif
+#ifndef SD_INCLUDE_DEBUG
+#define SD_INCLUDE_DEBUG
+#endif
+#endif
 
-#IFDEF SD_INCLUDE_STACK_CHECK
+#ifdef SD_INCLUDE_STACK_CHECK
 OBJ
     stackUtils : "isp_stack_check"
-#ENDIF
+#endif
 
 CON  ' flags
   F_NEWDIR  = decod 1
@@ -94,40 +94,40 @@ CON ' command codes for worker cog
   CMD_FREESPACE = 15        ' Get free space
   CMD_SYNC      = 16        ' Flush buffers
   CMD_MOVEFILE  = 17        ' Move file: param0=name, param1=dest folder
-#IFDEF SD_INCLUDE_DEBUG
+#ifdef SD_INCLUDE_DEBUG
   CMD_DEBUG_SLOW_READ  = 25 ' DEBUG: Byte-by-byte sector read (no streamer)
   CMD_DEBUG_CLEAR_ROOT = 26 ' DEBUG: Clear root directory (fixes corruption)
-#ENDIF
-#IFDEF SD_INCLUDE_STACK_CHECK
+#endif
+#ifdef SD_INCLUDE_STACK_CHECK
   CMD_STACK_DEPTH      = 50 ' DIAG: Report stack depth used
-#ENDIF
+#endif
 
   CMD_READ_SECTOR_RAW  = 20 ' Raw single sector read: param0=sector, param1=buffer ptr (infrastructure - used across multiple feature flags)
 
-#IFDEF SD_INCLUDE_RAW
+#ifdef SD_INCLUDE_RAW
   CMD_INIT_CARD_ONLY = 22   ' Initialize card without filesystem (raw mode)
   CMD_GET_CARD_SIZE  = 23   ' Get card size in sectors: returns in data0
   CMD_READ_SECTORS  = 18    ' Raw multi-block read: param0=start_sector, param1=count, param2=buffer ptr
   CMD_WRITE_SECTORS = 19    ' Raw multi-block write: param0=start_sector, param1=count, param2=buffer ptr
   CMD_WRITE_SECTOR_RAW = 21 ' Raw single sector write: param0=sector, param1=buffer ptr
   CMD_TEST_CMD13     = 82   ' Test CMD13: returns R2 response in data0
-#ENDIF
+#endif
 
-#IFDEF SD_INCLUDE_REGISTERS
+#ifdef SD_INCLUDE_REGISTERS
   CMD_READ_SCR       = 24   ' Read SCR register: param0=buffer ptr
   CMD_READ_CID         = 27 ' Read CID register: param0=buffer ptr
   CMD_READ_CSD         = 28 ' Read CSD register: param0=buffer ptr
   CMD_READ_SD_STATUS   = 29 ' Read SD Status (ACMD13): 64-byte register via CMD55+CMD13
-#ENDIF
+#endif
 
-#IFDEF SD_INCLUDE_SPEED
-#IFNDEF SD_INCLUDE_REGISTERS
+#ifdef SD_INCLUDE_SPEED
+#ifndef SD_INCLUDE_REGISTERS
   SD_INCLUDE_SPEED_REQUIRES_SD_INCLUDE_REGISTERS
-#ENDIF
+#endif
   CMD_ATTEMPT_HIGH_SPEED = 83  ' Attempt 50 MHz high-speed: returns data0=boolean
   CMD_CHECK_HS_CAPABILITY = 84 ' Check CMD6 high-speed support: returns data0=boolean
   CMD_SET_SPI_SPEED = 85       ' Set SPI clock frequency: param0=target Hz, returns data0=actual Hz
-#ENDIF
+#endif
 
   ' ═══════════════════════════════════════════════════════════════════════════
   ' V3 Handle-Based File Commands (multi-file support)
@@ -652,10 +652,10 @@ PUB start(_cs, _mosi, _miso, _sck) : result
 
       ' Initialize stack guard zone before launching worker
       bytefill(@cog_stack_guard, STACK_GUARD_BYTE, STACK_GUARD_LONGS * 4)
-#IFDEF SD_INCLUDE_STACK_CHECK
+#ifdef SD_INCLUDE_STACK_CHECK
       ' Prepare stack for depth measurement (fills with sentinel pattern)
       stackUtils.prepStackForCheck(@cog_stack, STACK_SIZE)
-#ENDIF
+#endif
 
       ' Launch worker cog
       cog_id := cogspin(NEWCOG, fs_worker(), @cog_stack)
@@ -1181,7 +1181,7 @@ PUB checkStackGuard() : bIntact | idx
       quit
 
 
-#IFDEF SD_INCLUDE_STACK_CHECK
+#ifdef SD_INCLUDE_STACK_CHECK
 
 PUB reportStackDepth() : depth
 '' DIAG: Ask worker cog to report stack depth used (high-water mark).
@@ -1195,13 +1195,13 @@ PUB reportStackDepth() : depth
   else
     depth := -1
 
-#ENDIF
+#endif
 
 CON ' ═══════════════════════════════════════════════════════════════════════════
     ' SECTION 8: RAW SECTOR ACCESS [SD_INCLUDE_RAW]
     ' ═══════════════════════════════════════════════════════════════════════════
 
-#IFDEF SD_INCLUDE_RAW
+#ifdef SD_INCLUDE_RAW
 
 PUB initCardOnly(_cs, _mosi, _miso, _sck) : result
 '' Initialize SD card without mounting filesystem - for raw sector access.
@@ -1397,14 +1397,14 @@ PUB readVBRRaw(p_buf) : result
     if result <> SUCCESS
       set_error(result)
 
-#ENDIF
+#endif
 
 
 CON ' ═══════════════════════════════════════════════════════════════════════════
     ' SECTION 9: CARD REGISTERS [SD_INCLUDE_REGISTERS]
     ' ═══════════════════════════════════════════════════════════════════════════
 
-#IFDEF SD_INCLUDE_REGISTERS
+#ifdef SD_INCLUDE_REGISTERS
 
 PUB readCIDRaw(p_buf) : result
 '' Read CID register (16 bytes) into buffer.
@@ -1478,14 +1478,14 @@ PUB getOCR() : ocr
   ocr := ocr_value
   debug[CH_IDENT]("  [getOCR] OCR = $", uhex_long(ocr))
 
-#ENDIF
+#endif
 
 
 CON ' ═══════════════════════════════════════════════════════════════════════════
     ' SECTION 10: SPEED CONTROL [SD_INCLUDE_SPEED] + CARD INFO
     ' ═══════════════════════════════════════════════════════════════════════════
 
-#IFDEF SD_INCLUDE_SPEED
+#ifdef SD_INCLUDE_SPEED
 
 PUB attemptHighSpeed() : hs_ok
 '' Attempt to enable 50 MHz high-speed mode with verification.
@@ -1540,7 +1540,7 @@ PUB setSPISpeed(freq) : actual_hz
     send_command(CMD_SET_SPI_SPEED, freq, 0, 0, 0)
     actual_hz := pb_data0
 
-#ENDIF
+#endif
 
 
 PUB getSPIFrequency() : hz
@@ -1598,7 +1598,7 @@ CON ' ════════════════════════�
     ' SECTION 11: DEBUG / DIAGNOSTICS [SD_INCLUDE_DEBUG]
     ' ═══════════════════════════════════════════════════════════════════════════
 
-#IFDEF SD_INCLUDE_DEBUG
+#ifdef SD_INCLUDE_DEBUG
 
 PUB getWriteDiag() : result_code, r1_resp, data_resp, sector_num
 '' Get diagnostic info from last writeSector call.
@@ -2089,7 +2089,7 @@ PUB displayFAT(cluster) | fat_sector, local_buf[128]
     bytemove(@buf, @local_buf, SECTOR_SIZE)                                      ' Copy to buf for displaySector()
     displaySector()
 
-#ENDIF
+#endif
 
 
 CON ' ═══════════════════════════════════════════════════════════════════════════
@@ -2125,9 +2125,9 @@ PRI fs_worker() | cur_cmd
   repeat
     ' Wait for command (polling - will optimize to WAITATN later)
     repeat until (cur_cmd := pb_cmd) <> CMD_NONE
-#IFDEF SD_INCLUDE_STACK_CHECK
+#ifdef SD_INCLUDE_STACK_CHECK
     stackUtils.checkStack(@cog_stack, STACK_SIZE)
-#ENDIF
+#endif
 
     debug[CH_API]("  [fs_worker] Received command ", udec_(cur_cmd))
 
@@ -2185,7 +2185,7 @@ PRI fs_worker() | cur_cmd
       CMD_READDIR:
         pb_status := do_readdir(pb_param0)
 
-#IFDEF SD_INCLUDE_DEBUG
+#ifdef SD_INCLUDE_DEBUG
       CMD_DEBUG_SLOW_READ:
         ' DEBUG: Read sector byte-by-byte without streamer for comparison
         pb_status := readSectorSlow(pb_param0, pb_param1)
@@ -2198,7 +2198,7 @@ PRI fs_worker() | cur_cmd
           pb_status := SUCCESS
         else
           pb_status := E_IO_ERROR
-#ENDIF
+#endif
 
       CMD_READ_SECTOR_RAW:
         sec_in_buf := -1                                                        ' Force re-read
@@ -2208,7 +2208,7 @@ PRI fs_worker() | cur_cmd
         else
           pb_status := E_IO_ERROR
 
-#IFDEF SD_INCLUDE_RAW
+#ifdef SD_INCLUDE_RAW
       CMD_READ_SECTORS:
         pb_data0 := readSectors(pb_param0, pb_param1, pb_param2)
         pb_status := SUCCESS
@@ -2235,9 +2235,9 @@ PRI fs_worker() | cur_cmd
       CMD_TEST_CMD13:
         pb_data0 := do_test_cmd13()
         pb_status := SUCCESS
-#ENDIF
+#endif
 
-#IFDEF SD_INCLUDE_SPEED
+#ifdef SD_INCLUDE_SPEED
       CMD_ATTEMPT_HIGH_SPEED:
         pb_data0 := do_attempt_high_speed()
         pb_status := SUCCESS
@@ -2250,9 +2250,9 @@ PRI fs_worker() | cur_cmd
         applySPISpeed(pb_param0)
         pb_data0 := spi_freq
         pb_status := SUCCESS
-#ENDIF
+#endif
 
-#IFDEF SD_INCLUDE_REGISTERS
+#ifdef SD_INCLUDE_REGISTERS
       CMD_READ_SCR:
         pb_status := do_read_scr(pb_param0)
 
@@ -2264,7 +2264,7 @@ PRI fs_worker() | cur_cmd
 
       CMD_READ_SD_STATUS:
         pb_status := do_read_sd_status(pb_param0)
-#ENDIF
+#endif
 
       ' ═══════════════════════════════════════════════════════════════════════
       ' V3 Handle-Based File Commands
@@ -2349,11 +2349,11 @@ PRI fs_worker() | cur_cmd
       CMD_SET_VOL_LABEL:
         pb_status := do_set_vol_label(pb_param0)
 
-#IFDEF SD_INCLUDE_STACK_CHECK
+#ifdef SD_INCLUDE_STACK_CHECK
       CMD_STACK_DEPTH:
         pb_data0 := stackUtils.getStackDepth(@cog_stack, STACK_SIZE)
         pb_status := SUCCESS
-#ENDIF
+#endif
 
       other:
         debug[CH_API]("  [fs_worker] Unknown command: ", udec_(cur_cmd))
@@ -4041,7 +4041,7 @@ PRI do_readdir(entry_num) : result | idx, char, attrib
         readNextSector(BUF_DIR)
 
 
-#IFDEF SD_INCLUDE_RAW
+#ifdef SD_INCLUDE_RAW
 
 PRI do_init_card_only() : result
 ' Internal card-only init (raw mode) - initialize card for raw sector access.
@@ -4115,9 +4115,9 @@ PRI do_test_cmd13() : r2_response | r1, status
   else
     r2_response := (r1 << 8) | status
 
-#ENDIF
+#endif
 
-#IFDEF SD_INCLUDE_REGISTERS
+#ifdef SD_INCLUDE_REGISTERS
 
 PRI do_read_scr(p_buf) : result
 ' Internal read SCR operation - reads the 8-byte SCR register into buffer.
@@ -4177,9 +4177,9 @@ PRI do_read_sd_status(p_buf) : result
     debug[CH_IDENT]("  [do_read_sd_status] SD Status read failed")
     result := E_IO_ERROR
 
-#ENDIF
+#endif
 
-#IFDEF SD_INCLUDE_SPEED
+#ifdef SD_INCLUDE_SPEED
 
 PRI do_attempt_high_speed() : hs_ok | idx, mismatch
 ' Internal attempt high-speed mode - queries, switches, and verifies at 50 MHz.
@@ -4251,7 +4251,7 @@ PRI do_check_hs_capability() : capable | status[16]
   else
     capable := (status.byte[13] & $02) <> 0
 
-#ENDIF
+#endif
 
 
 CON ' ═══════════════════════════════════════════════════════════════════════════
@@ -6344,7 +6344,7 @@ PRI setOptimalSpeed()
     debug[CH_IDENT]("  [setOptimalSpeed] Set to card's max speed (up to 25 MHz)")
 
 
-#IFDEF SD_INCLUDE_SPEED
+#ifdef SD_INCLUDE_SPEED
 
 PRI sendCMD6(arg, p_status) : result
 ' Send CMD6 (SWITCH_FUNC) and receive 64-byte status structure.
@@ -6413,7 +6413,7 @@ PRI switchToHighSpeed() : result | status[16]
       debug[CH_HSPEED]("  [switchToHighSpeed] Successfully switched to high-speed mode")
       result := true
 
-#ENDIF
+#endif
 
 
 PRI sendAppCmdPrefix() : resp
@@ -6456,7 +6456,7 @@ PRI readSDStatus(p_buf) : result | resp
     result := readDataRegister(CMD13, 0, CRC_NONE, p_buf, 64)
 
 
-#IFDEF SD_INCLUDE_DEBUG
+#ifdef SD_INCLUDE_DEBUG
 
 PRI readSectorSlow(sector, p_buffer) : result | data, idx, timeout
 ' DEBUG: Read sector byte-by-byte (no streamer) - for streamer debugging.
@@ -6506,7 +6506,7 @@ PRI readSectorSlow(sector, p_buffer) : result | data, idx, timeout
 
   pinh(cs)                                                                       '  Deselect card
 
-#ENDIF
+#endif
 
 
 ' ---- FAT32 file system ----

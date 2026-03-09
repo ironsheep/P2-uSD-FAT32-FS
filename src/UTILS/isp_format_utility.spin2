@@ -86,14 +86,14 @@ CON
     DEFAULT_LABEL_2     = $00_20_20_20    ' "   " + null (spaces to pad to 11)
 
 ' Enable full driver features for this utility
-#IFDEF __SPINTOOLS__
-#DEFINE SD_INCLUDE_ALL
-#ELSEIFDEF __FLEXSPIN__
+#ifdef __SPINTOOLS__
+#define SD_INCLUDE_ALL
+#elseifdef __FLEXSPIN__
 #define SD_INCLUDE_ALL
 #pragma exportdef SD_INCLUDE_ALL
-#ELSE
-#PRAGMA EXPORTDEF SD_INCLUDE_ALL
-#ENDIF
+#else
+#pragma exportdef SD_INCLUDE_ALL
+#endif
 
     ' Cog stack for async format
     FMT_STACK_LONGS   = 256
@@ -479,10 +479,10 @@ PRI doFormat() : result | ok
     if ok
         ' Verify MBR read-back
         sd.readSectorRaw(0, @verifyBuf)
-#IFDEF __FLEXSPIN__
+#ifdef __FLEXSPIN__
         debug("  MBR readback: sig=$", uhex_word_(WORD[@verifyBuf + sd.BOOT_SIG_OFFSET]), " type=$", uhex_byte_(verifyBuf[MBR_PART_TYPE_OFF]), " start=", udec_(LONG[@verifyBuf + MBR_PART_LBA_START]))
         debug("  MBR read[0..7]: $", uhex_byte_(verifyBuf[0]), " $", uhex_byte_(verifyBuf[1]), " $", uhex_byte_(verifyBuf[2]), " $", uhex_byte_(verifyBuf[3]), " $", uhex_byte_(verifyBuf[4]), " $", uhex_byte_(verifyBuf[5]), " $", uhex_byte_(verifyBuf[6]), " $", uhex_byte_(verifyBuf[7]))
-#ELSE
+#else
         debug("  MBR readback: sig=$", uhex_word_(WORD[@verifyBuf + sd.BOOT_SIG_OFFSET]), ...
           " type=$", uhex_byte_(verifyBuf[MBR_PART_TYPE_OFF]), ...
           " start=", udec_(LONG[@verifyBuf + MBR_PART_LBA_START]))
@@ -490,7 +490,7 @@ PRI doFormat() : result | ok
           " $", uhex_byte_(verifyBuf[2]), " $", uhex_byte_(verifyBuf[3]), ...
           " $", uhex_byte_(verifyBuf[4]), " $", uhex_byte_(verifyBuf[5]), ...
           " $", uhex_byte_(verifyBuf[6]), " $", uhex_byte_(verifyBuf[7]))
-#ENDIF
+#endif
         debug("  verify buf addr: $", uhex_long_(@verifyBuf))
         if WORD[@verifyBuf + sd.BOOT_SIG_OFFSET] <> sd.BOOT_SIGNATURE
             debug("  *** MBR READBACK MISMATCH! Written data not on card ***")
@@ -505,15 +505,15 @@ PRI doFormat() : result | ok
     if ok
         ' Verify VBR read-back
         sd.readSectorRaw(partitionStart, @verifyBuf)
-#IFDEF __FLEXSPIN__
+#ifdef __FLEXSPIN__
         debug("  VBR readback: jump=$", uhex_byte_(verifyBuf[0]), " OEM=$", uhex_byte_(verifyBuf[BPB_OEM_NAME]), uhex_byte_(verifyBuf[BPB_OEM_NAME + 1]), " bps=", udec_(WORD[@verifyBuf + BPB_BYTES_PER_SEC]), " spc=", udec_(verifyBuf[BPB_SEC_PER_CLUS]), " sig=$", uhex_word_(WORD[@verifyBuf + sd.BOOT_SIG_OFFSET]))
-#ELSE
+#else
         debug("  VBR readback: jump=$", uhex_byte_(verifyBuf[0]), ...
           " OEM=$", uhex_byte_(verifyBuf[BPB_OEM_NAME]), uhex_byte_(verifyBuf[BPB_OEM_NAME + 1]), ...
           " bps=", udec_(WORD[@verifyBuf + BPB_BYTES_PER_SEC]), ...
           " spc=", udec_(verifyBuf[BPB_SEC_PER_CLUS]), ...
           " sig=$", uhex_word_(WORD[@verifyBuf + sd.BOOT_SIG_OFFSET]))
-#ENDIF
+#endif
         if verifyBuf[0] <> VBR_JUMP_BYTE0
             debug("  *** VBR READBACK MISMATCH! Expected $EB got $", uhex_byte_(verifyBuf[0]), " ***")
 
@@ -638,10 +638,10 @@ PRI writeMBR() : success | partitionSectors
     WORD[@buf + sd.BOOT_SIG_OFFSET] := sd.BOOT_SIGNATURE
 
     ' Diagnostic: dump write buffer before writing
-#IFDEF __FLEXSPIN__
+#ifdef __FLEXSPIN__
     debug("  MBR write buf: sig=$", uhex_word_(WORD[@buf + sd.BOOT_SIG_OFFSET]), " type=$", uhex_byte_(buf[MBR_PART_TYPE_OFF]), " start=", udec_(LONG[@buf + MBR_PART_LBA_START]))
     debug("  MBR buf[0..7]: $", uhex_byte_(buf[0]), " $", uhex_byte_(buf[1]), " $", uhex_byte_(buf[2]), " $", uhex_byte_(buf[3]), " $", uhex_byte_(buf[4]), " $", uhex_byte_(buf[5]), " $", uhex_byte_(buf[6]), " $", uhex_byte_(buf[7]))
-#ELSE
+#else
     debug("  MBR write buf: sig=$", uhex_word_(WORD[@buf + sd.BOOT_SIG_OFFSET]), ...
       " type=$", uhex_byte_(buf[MBR_PART_TYPE_OFF]), ...
       " start=", udec_(LONG[@buf + MBR_PART_LBA_START]))
@@ -649,7 +649,7 @@ PRI writeMBR() : success | partitionSectors
       " $", uhex_byte_(buf[2]), " $", uhex_byte_(buf[3]), ...
       " $", uhex_byte_(buf[4]), " $", uhex_byte_(buf[5]), ...
       " $", uhex_byte_(buf[6]), " $", uhex_byte_(buf[7]))
-#ENDIF
+#endif
     debug("  MBR buf addr: $", uhex_long_(@buf))
 
     ' Write MBR to sector 0

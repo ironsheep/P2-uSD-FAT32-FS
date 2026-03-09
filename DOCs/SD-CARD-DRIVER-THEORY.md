@@ -101,7 +101,7 @@ For full electrical analysis and SD specification research, see `DOCs/Reference/
 
 ## Conditional Compilation
 
-The driver uses `#IFDEF` / `#ENDIF` blocks to exclude optional features from minimal builds. The core driver compiles to ~24 KB with no flags defined.
+The driver uses `#ifdef` / `#endif` blocks to exclude optional features from minimal builds. The core driver compiles to ~24 KB with no flags defined.
 
 ### Feature Flags
 
@@ -115,11 +115,11 @@ The driver uses `#IFDEF` / `#ENDIF` blocks to exclude optional features from min
 
 ### Enabling Flags
 
-Flags are exported from the top-level file using `#PRAGMA EXPORTDEF` before the `OBJ` declaration:
+Flags are exported from the top-level file using `#pragma exportdef` before the `OBJ` declaration:
 
 ```spin2
-#PRAGMA EXPORTDEF SD_INCLUDE_RAW
-#PRAGMA EXPORTDEF SD_INCLUDE_REGISTERS
+#pragma exportdef SD_INCLUDE_RAW
+#pragma exportdef SD_INCLUDE_REGISTERS
 
 OBJ
   sd : "micro_sd_fat32_fs"
@@ -128,7 +128,7 @@ OBJ
 Or enable everything:
 
 ```spin2
-#PRAGMA EXPORTDEF SD_INCLUDE_ALL
+#pragma exportdef SD_INCLUDE_ALL
 
 OBJ
   sd : "micro_sd_fat32_fs"

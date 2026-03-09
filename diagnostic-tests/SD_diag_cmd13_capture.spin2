@@ -45,13 +45,13 @@ CON
     MULTI_SECTORS   = 8             ' sectors per multi-block read test
 
 ' Enable full driver features
-#IFDEF __SPINTOOLS__
-#DEFINE SD_INCLUDE_ALL
-#PRAGMA EXPORTDEF SD_INCLUDE_ALL
-#ELSE
-#DEFINE SD_INCLUDE_ALL
-#PRAGMA EXPORTDEF SD_INCLUDE_ALL
-#ENDIF
+#ifdef __SPINTOOLS__
+#define SD_INCLUDE_ALL
+#pragma exportdef SD_INCLUDE_ALL
+#else
+#define SD_INCLUDE_ALL
+#pragma exportdef SD_INCLUDE_ALL
+#endif
 
 OBJ
     sd    : "micro_sd_fat32_fs"

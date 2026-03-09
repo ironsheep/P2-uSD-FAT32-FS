@@ -27,12 +27,12 @@ CON
      'SD_SCK  = 21
 
 ' Uncomment SD_INCLUDE_STACK_CHECK to measure worker cog stack depth
-#IFDEF __SPINTOOLS__
-#ELSEIFDEF __FLEXSPIN__
-#ELSE
-#DEFINE SD_INCLUDE_STACK_CHECK
-#PRAGMA EXPORTDEF SD_INCLUDE_STACK_CHECK
-#ENDIF
+#ifdef __SPINTOOLS__
+#elseifdef __FLEXSPIN__
+#else
+#define SD_INCLUDE_STACK_CHECK
+#pragma exportdef SD_INCLUDE_STACK_CHECK
+#endif
 
 OBJ
     sd    : "micro_sd_fat32_fs"
@@ -422,10 +422,10 @@ PUB go() | result, pEntry, pFilename, attrs, fileCount, idx, handle, bytesRead
     cleanupTestItems()
 
     ' Report stack depth while worker cog is still running
-#IFDEF SD_INCLUDE_STACK_CHECK
+#ifdef SD_INCLUDE_STACK_CHECK
     debug(" ")
     debug("* Worker cog stack: ", udec_(sd.reportStackDepth()), " of ", udec_(sd.STACK_SIZE), " longs used")
-#ENDIF
+#endif
 
     ' Unmount
     sd.unmount()

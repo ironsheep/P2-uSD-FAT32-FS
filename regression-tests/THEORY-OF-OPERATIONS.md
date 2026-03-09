@@ -725,7 +725,7 @@ Creates a test directory structure:
 
 **Why we test this:** These APIs affect the filesystem metadata layer. `setVolumeLabel()` modifies both the BPB and root directory label entry. `readVBRRaw()` exposes the boot sector for diagnostics. `syncAllHandles()` is used for safety checkpoints. `setDate()` controls file/directory timestamps. Bugs here cause cross-platform incompatibility or data loss.
 
-**Pragma:** `#PRAGMA EXPORTDEF SD_INCLUDE_REGISTERS` (for readVBRRaw)
+**Pragma:** `#pragma exportdef SD_INCLUDE_REGISTERS` (for readVBRRaw)
 
 #### Test Groups
 
@@ -855,7 +855,7 @@ Creates a test directory structure:
 
 **Why we test this:** CRC validation is the primary data integrity mechanism for SD SPI communication. The diagnostic counters allow detection of marginal cards (high mismatch rates), flaky connections, or timing issues. The `setCRCValidation()` toggle allows disabling CRC for performance testing. These APIs must work correctly for the driver's self-healing retry mechanism.
 
-**Pragma:** `#PRAGMA EXPORTDEF SD_INCLUDE_DEBUG`
+**Pragma:** `#pragma exportdef SD_INCLUDE_DEBUG`
 
 #### Test Groups
 

@@ -1161,13 +1161,13 @@ These methods are always available in the core driver (no feature flags required
 
 ## Conditional API Modules
 
-The driver supports optional feature modules enabled via `#PRAGMA EXPORTDEF` in your top-level file. This keeps the core driver small (24 KB) for applications that only need standard file operations.
+The driver supports optional feature modules enabled via `#pragma exportdef` in your top-level file. This keeps the core driver small (24 KB) for applications that only need standard file operations.
 
 To enable a module, add the pragma **before** the OBJ declaration:
 
 ```spin2
-#PRAGMA EXPORTDEF SD_INCLUDE_RAW
-#PRAGMA EXPORTDEF SD_INCLUDE_REGISTERS
+#pragma exportdef SD_INCLUDE_RAW
+#pragma exportdef SD_INCLUDE_REGISTERS
 
 OBJ
   sd : "micro_sd_fat32_fs"
@@ -1176,7 +1176,7 @@ OBJ
 To enable all modules at once:
 
 ```spin2
-#PRAGMA EXPORTDEF SD_INCLUDE_ALL
+#pragma exportdef SD_INCLUDE_ALL
 
 OBJ
   sd : "micro_sd_fat32_fs"

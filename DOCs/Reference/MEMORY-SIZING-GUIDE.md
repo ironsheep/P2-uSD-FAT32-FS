@@ -500,7 +500,7 @@ This section documents the shipping memory footprint of `micro_sd_fat32_fs.spin2
 
 ### 9.1 Driver Standalone — By Feature Configuration
 
-The driver supports conditional compilation via `#PRAGMA EXPORTDEF` flags. Each configuration adds methods and code but does not change static data (DAT/VAR):
+The driver supports conditional compilation via `#pragma exportdef` flags. Each configuration adds methods and code but does not change static data (DAT/VAR):
 
 | Configuration | Code/Data | VAR | Methods | Binary (.bin) |
 |---|---|---|---|---|

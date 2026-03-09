@@ -25,18 +25,18 @@ CON
      SECTOR_SIZE = 512
 
 ' Enable all features plus stack checking
-#IFDEF __SPINTOOLS__
-#DEFINE SD_INCLUDE_ALL
-#DEFINE SD_INCLUDE_STACK_CHECK
-#ELSEIFDEF __FLEXSPIN__
+#ifdef __SPINTOOLS__
+#define SD_INCLUDE_ALL
+#define SD_INCLUDE_STACK_CHECK
+#elseifdef __FLEXSPIN__
 #define SD_INCLUDE_ALL
 #pragma exportdef SD_INCLUDE_ALL
 #define SD_INCLUDE_STACK_CHECK
 #pragma exportdef SD_INCLUDE_STACK_CHECK
-#ELSE
-#PRAGMA EXPORTDEF SD_INCLUDE_ALL
-#PRAGMA EXPORTDEF SD_INCLUDE_STACK_CHECK
-#ENDIF
+#else
+#pragma exportdef SD_INCLUDE_ALL
+#pragma exportdef SD_INCLUDE_STACK_CHECK
+#endif
 
 OBJ
     sd : "micro_sd_fat32_fs"

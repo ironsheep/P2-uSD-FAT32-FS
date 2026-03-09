@@ -39,18 +39,18 @@ CON
 
 
 ' Enable raw sector access and debug methods for diagnostic tests
-#IFDEF __SPINTOOLS__
-#DEFINE SD_INCLUDE_RAW
-#DEFINE SD_INCLUDE_DEBUG
-#ELSEIFDEF __FLEXSPIN__
+#ifdef __SPINTOOLS__
+#define SD_INCLUDE_RAW
+#define SD_INCLUDE_DEBUG
+#elseifdef __FLEXSPIN__
 #define SD_INCLUDE_RAW
 #pragma exportdef SD_INCLUDE_RAW
 #define SD_INCLUDE_DEBUG
 #pragma exportdef SD_INCLUDE_DEBUG
-#ELSE
-#PRAGMA EXPORTDEF SD_INCLUDE_RAW
-#PRAGMA EXPORTDEF SD_INCLUDE_DEBUG
-#ENDIF
+#else
+#pragma exportdef SD_INCLUDE_RAW
+#pragma exportdef SD_INCLUDE_DEBUG
+#endif
 
 OBJ
     sd    : "micro_sd_fat32_fs"

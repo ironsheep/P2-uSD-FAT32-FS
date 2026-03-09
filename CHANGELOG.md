@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.3.2] - 2026-03-09
 
-**Selective debug output via DEBUG_MASK channels.**
+**Selective debug output via DEBUG_MASK channels, preprocessor directives standardized to lowercase.**
 
 ### Improvements
 
@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `DEBUG_MASK = 0` for production; set channel bits to enable selective debug output
 - Channels: INIT, MOUNT, FILE, DIR, SECTOR, STATUS, IDENT, HSPEED, API, RECOVER
 - Version directive upgraded to `{Spin2_v46}` for channel support
+- All preprocessor directives standardized to lowercase (`#ifdef`, `#define`, `#pragma exportdef`)
 
 ## [1.3.1] - 2026-03-07
 
