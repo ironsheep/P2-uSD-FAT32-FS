@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.2] - 2026-03-09
+
+**Selective debug output via DEBUG_MASK channels.**
+
+### Improvements
+
+- All 402 `debug()` statements converted to `debug[CH_xxx]()` across 10 named channels
+- `DEBUG_MASK` replaces `DEBUG_DISABLE` as the single debug control knob
+- `DEBUG_MASK = 0` for production; set channel bits to enable selective debug output
+- Channels: INIT, MOUNT, FILE, DIR, SECTOR, STATUS, IDENT, HSPEED, API, RECOVER
+- Version directive upgraded to `{Spin2_v46}` for channel support
+
 ## [1.3.1] - 2026-03-07
 
 **CMD13 STATUS byte fix, reduced driver footprint, updated memory sizing reference.**

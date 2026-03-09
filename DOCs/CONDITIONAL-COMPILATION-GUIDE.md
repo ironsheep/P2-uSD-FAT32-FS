@@ -299,17 +299,14 @@ The P2-uSD-FAT32-FS driver and its associated files use the Spin2 `DEBUG_DISABLE
 
 ### Driver Debug Is Disabled by Default
 
-The driver sets `DEBUG_DISABLE = 1` on line 57:
+The driver uses `DEBUG_MASK = 0` for production:
 
 ```spin2
-CON  ' flags
-  ' NOTE: V3 driver exceeds 255 debug record limit when debug is fully enabled
-  ' pnut-ts error: "DEBUG data is too long: too many records: max 255"
-  ' Set to 1 to disable debug in driver and avoid compilation errors
-  DEBUG_DISABLE = 1
+CON ' debug channel assignments for selective debug output
+  DEBUG_MASK = 0              ' Production: all debug suppressed
 ```
 
-This is **intentional and necessary**. The driver has hundreds of `debug()` statements spread across ~6100 lines of code. The pnut-ts compiler enforces a limit of 255 debug records per compilation unit. With debug enabled, the driver exceeds this limit and fails to compile.
+With `DEBUG_MASK = 0`, no `debug[CH_xxx]()` statements compile — zero debug code in the binary. To enable debug, set `DEBUG_MASK` to include the channels you need (see "Selective Debug Output with DEBUG_MASK" below).
 
 ### Debug in Your Application Code
 
@@ -335,46 +332,78 @@ Each `.spin2` file controls its own debug output independently. Setting `DEBUG_D
 
 The project files use these settings:
 
-| File | `DEBUG_DISABLE` | Reason |
-|------|----------------|--------|
-| `micro_sd_fat32_fs.spin2` (driver) | `1` | Exceeds 255 debug record limit |
-| `SD_example_*.spin2` (examples) | `0` | Show progress/results to user |
-| `SD_demo_shell.spin2` (demo) | `1` | Uses serial terminal instead of debug |
-| `isp_fsck_utility.spin2` | `1` | Uses FIFO strings instead of debug |
-| `isp_serial_singleton.spin2` | `1` | Owns pin 62 for serial TX (conflicts with debug) |
-| `SD_RT_*_tests.spin2` (tests) | `0` (default) | Tests don't set it, so debug is enabled |
+| File | Debug Control | Reason |
+|------|--------------|--------|
+| `micro_sd_fat32_fs.spin2` (driver) | `DEBUG_MASK = 0` | Channel-based; set non-zero to debug specific subsystems |
+| `SD_example_*.spin2` (examples) | `DEBUG_DISABLE = 0` | Show progress/results to user |
+| `SD_demo_shell.spin2` (demo) | `DEBUG_DISABLE = 1` | Uses serial terminal instead of debug |
+| `isp_fsck_utility.spin2` | `DEBUG_DISABLE = 1` | Uses FIFO strings instead of debug |
+| `isp_serial_singleton.spin2` | `DEBUG_DISABLE = 1` | Owns pin 62 for serial TX (conflicts with debug) |
+| `SD_RT_*_tests.spin2` (tests) | `DEBUG_DISABLE = 0` (default) | Tests don't set it, so debug is enabled |
 
 ### How to See Driver-Internal Debug Output
 
-If you need to see what the driver is doing internally (for deep debugging), you can temporarily change the driver's `DEBUG_DISABLE` to `0`:
+If you need to see what the driver is doing internally (for deep debugging), set `DEBUG_MASK` to enable the channels you need:
 
 ```spin2
-' In micro_sd_fat32_fs.spin2, line 57:
-  DEBUG_DISABLE = 0    ' TEMPORARILY enable for debugging
+' In micro_sd_fat32_fs.spin2:
+  DEBUG_MASK = (1 << CH_FILE) | (1 << CH_SECTOR)   ' Debug file I/O
 ```
 
 **Important caveats:**
 
-1. The pnut-ts compiler will likely fail with "too many records: max 255." To work around this, you must comment out most of the driver's `debug()` calls and leave only the ones in the area you are investigating.
+1. Enable at most 2-3 channels at a time. Any 3 channels combined stay under the 255 debug record compiler limit.
 
-2. This is a **temporary diagnostic change** -- revert it before committing. The driver cannot ship with `DEBUG_DISABLE = 0`.
+2. This is a **temporary diagnostic change** -- restore `DEBUG_MASK = 0` before committing.
 
 3. An alternative approach: use the `SD_INCLUDE_DEBUG` feature flag to access the driver's diagnostic getters (`getReadDiag()`, `getWriteDiag()`, `getCRCDiag()`). These methods return internal diagnostic state through the normal API, without needing to enable the driver's debug output. This is the recommended approach for production debugging.
 
-### SD_INCLUDE_DEBUG vs DEBUG_DISABLE
+### SD_INCLUDE_DEBUG vs DEBUG_MASK
 
 These are two different mechanisms that are easily confused:
 
 | Mechanism | What It Controls | Scope |
 |-----------|-----------------|-------|
 | `SD_INCLUDE_DEBUG` | Whether debug **API methods** are compiled into the driver | Feature flag (compile-time) |
-| `DEBUG_DISABLE` | Whether `debug()` **print statements** produce output | Per-file constant |
+| `DEBUG_MASK` | Which `debug[CH_xxx]()` **print statements** compile | Driver-internal constant |
 
-You can (and typically do) enable `SD_INCLUDE_DEBUG` while leaving `DEBUG_DISABLE = 1` in the driver. This gives you access to the debug API (diagnostic getters, CRC error injection hooks) without enabling the driver's hundreds of internal `debug()` print statements.
+You can (and typically do) enable `SD_INCLUDE_DEBUG` while leaving `DEBUG_MASK = 0` in the driver. This gives you access to the debug API (diagnostic getters, CRC error injection hooks) without enabling the driver's hundreds of internal debug print statements.
 
-### Future Direction: Debug Mask
+### Selective Debug Output with DEBUG_MASK (v1.3.2+)
 
-A planned improvement is to add debug mask support to the driver. Instead of the current all-or-nothing `DEBUG_DISABLE` switch, the driver will assign each `debug()` call to a category (e.g., SPI transactions, FAT operations, directory walks, handle management). A bitmask will control which categories are active, allowing you to enable debug output for just the subsystem you are investigating without exceeding the 255 debug record limit. This will eliminate the need to manually comment out `debug()` calls when troubleshooting specific areas of the driver.
+The driver assigns each `debug()` call to one of 10 named channels using `debug[CH_xxx]()` syntax. The `DEBUG_MASK` constant controls which channels compile, allowing you to enable debug output for just the subsystem you are investigating without exceeding the 255 debug record limit.
+
+To enable driver-internal debug, set `DEBUG_MASK` to the channels you need:
+
+```spin2
+' In micro_sd_fat32_fs.spin2:
+  DEBUG_MASK = (1 << CH_INIT) | (1 << CH_MOUNT)    ' Debug mount failures (~103 records)
+```
+
+Available channels:
+
+| Channel | Records | What It Shows |
+|---------|---------|---------------|
+| `CH_INIT` (0) | 64 | Card initialization, SPI pin setup, speed config |
+| `CH_MOUNT` (1) | 39 | Mount/unmount, VBR parsing, FSInfo |
+| `CH_FILE` (2) | 59 | File open/close/read/write/seek/sync |
+| `CH_DIR` (3) | 49 | Directory search, create, rename, move |
+| `CH_SECTOR` (4) | 45 | Sector I/O, FAT chain, cluster allocation |
+| `CH_STATUS` (5) | 44 | CMD13/CMD23 probes, card status |
+| `CH_IDENT` (6) | 34 | CID/CSD/SCR parsing, card identity |
+| `CH_HSPEED` (7) | 24 | CMD6 high-speed mode negotiation |
+| `CH_API` (8) | 35 | Public API entry points, worker dispatch |
+| `CH_RECOVER` (9) | 9 | Error recovery, CMD12, bus recovery |
+
+Common debug scenarios:
+
+```spin2
+  DEBUG_MASK = (1 << CH_FILE) | (1 << CH_SECTOR)   ' File read/write issues (~104 records)
+  DEBUG_MASK = (1 << CH_STATUS)                     ' CMD13 investigation (~44 records)
+  DEBUG_MASK = (1 << CH_INIT) | (1 << CH_MOUNT) | (1 << CH_IDENT)  ' Full init debug (~137 records)
+```
+
+Any 3 channels combined stay under the 255-record limit. Remember to restore `DEBUG_MASK = 0` before committing.
 
 ---
 
