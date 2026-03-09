@@ -5,7 +5,7 @@
 # Usage: ./run_test.sh <test-file> [-t timeout]
 #
 # Examples:
-#   ./run_test.sh ../regression-tests/SD_RT_mount_tests.spin2
+#   ./run_test.sh ../src/regression-tests/SD_RT_mount_tests.spin2
 #   ./run_test.sh ../TestCard/SD_RT_testcard_validation.spin2 -t 120
 #   ./run_test.sh ../TestCard/SD_Test_Suite.spin2
 #
@@ -51,7 +51,7 @@ usage() {
     echo "Usage: $0 <test-file> [-t timeout]"
     echo ""
     echo "Examples:"
-    echo "  $0 ../regression-tests/SD_RT_mount_tests.spin2"
+    echo "  $0 ../src/regression-tests/SD_RT_mount_tests.spin2"
     echo "  $0 ../TestCard/SD_RT_testcard_validation.spin2 -t 120"
     echo ""
     echo "Arguments:"
@@ -138,7 +138,7 @@ echo -e "${GREEN}=== Compiling $BASENAME.spin2 ===${NC}"
 
 cd "$TEST_DIR"
 
-# Include paths: src/ for driver, src/UTILS/ for utilities, regression-tests/ for test utilities
+# Include paths: src/ for driver, src/UTILS/ for utilities, src/regression-tests/ for test utilities
 # pnut-ts requires relative paths (does not support absolute -I paths)
 # Compute relative paths from TEST_DIR to project directories
 _relpath() {
@@ -147,7 +147,7 @@ _relpath() {
 SRC_PATH="$(_relpath "$PROJECT_ROOT/src" "$TEST_DIR")/"
 UTILS_PATH="$(_relpath "$PROJECT_ROOT/src/UTILS" "$TEST_DIR")/"
 DEMO_PATH="$(_relpath "$PROJECT_ROOT/src/DEMO" "$TEST_DIR")/"
-REGTEST_PATH="$(_relpath "$PROJECT_ROOT/regression-tests" "$TEST_DIR")/"
+REGTEST_PATH="$(_relpath "$PROJECT_ROOT/src/regression-tests" "$TEST_DIR")/"
 COMPILE_CMD="pnut-ts -d -I $SRC_PATH -I $UTILS_PATH -I $DEMO_PATH -I $REGTEST_PATH $BASENAME.spin2"
 echo "  Command: $COMPILE_CMD"
 

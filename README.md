@@ -37,7 +37,7 @@ This project provides a robust, high-performance SD card driver for the P2 micro
 | **[FAT32 API Concepts](DOCs/Reference/FAT32-API-CONCEPTS-REFERENCE.md)** | FAT32 background for embedded developers |
 | **[Utilities Guide](DOCs/SD-CARD-UTILITIES.md)** | Standalone utility programs (format, audit, fsck, benchmark) |
 | **[Utility Internals](DOCs/Utils/)** | Theory of operations for each utility |
-| **[Regression Testing](regression-tests/README.md)** | Test infrastructure, 427 tests across 20 suites |
+| **[Regression Testing](src/regression-tests/README.md)** | Test infrastructure, 427 tests across 20 suites |
 | **[Example Programs](src/EXAMPLES/README.md)** | Compilable examples: read/write, data logger, directory walk, multi-cog |
 | **[Demo Shell](src/DEMO/README.md)** | Full-featured terminal shell with card formatting, filesystem repair, file management, and benchmarking |
 
@@ -139,10 +139,10 @@ P2-uSD-FAT32-FS/
 │       ├── isp_mem_strings.spin2       # String formatting utilities
 │       └── isp_stack_check.spin2       # Stack usage diagnostic
 │
-├── regression-tests/           # Regression test suite (427 tests)
-│   ├── SD_RT_*_tests.spin2        # 20 test files (mount, file ops, seek, etc.)
-│   ├── isp_rt_utilities.spin2     # Shared test framework
-│   └── TestCard/                  # Test card setup and validation
+│   ├── regression-tests/          # Regression test suite (427 tests)
+│   │   ├── SD_RT_*_tests.spin2        # 20 test files (mount, file ops, seek, etc.)
+│   │   ├── isp_rt_utilities.spin2     # Shared test framework
+│   │   └── TestCard/                  # Test card setup and validation
 │
 ├── diagnostic-tests/           # Characterization & diagnostic tests
 │   ├── SD_card_info_tests.spin2         # Struct-based register access

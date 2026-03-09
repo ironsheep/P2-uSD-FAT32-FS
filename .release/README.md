@@ -41,7 +41,7 @@ sd-card-driver/
     │   ├── SD_FAT32_fsck.spin2               Filesystem check & repair
     │   ├── isp_fsck_utility.spin2            Combined FSCK + Audit library (runs in temp cog)
     │   └── isp_string_fifo.spin2             Lock-free inter-cog string FIFO
-    └── regression-tests/                 Regression test suite
+    ├── regression-tests/                 Regression test suite
         ├── README.md                        Test infrastructure guide
         ├── SD_RT_*_tests.spin2              20 test suites (427 tests)
         └── isp_rt_utilities.spin2           Shared test framework
@@ -133,7 +133,7 @@ The default configuration uses base pin 56 (P2 Edge Module), giving pins P58-P61
 
 ## Regression Tests
 
-The regression test suite (427 tests across 20 test files) is included in `regression-tests/`. Each test compiles with pnut-ts and runs on P2 hardware, producing pass/fail results via debug output.
+The regression test suite (427 tests across 20 test files) is included in `src/regression-tests/`. Each test compiles with pnut-ts and runs on P2 hardware, producing pass/fail results via debug output.
 
 ## License
 

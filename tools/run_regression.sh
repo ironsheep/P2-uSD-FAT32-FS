@@ -38,7 +38,7 @@ if [[ "$TOOLS_DIR_NAME" != "tools" ]]; then
 fi
 
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-REGTEST_DIR="$PROJECT_ROOT/regression-tests"
+REGTEST_DIR="$PROJECT_ROOT/src/regression-tests"
 LOG_DIR="$SCRIPT_DIR/logs"
 
 # --- Parse Arguments ---
@@ -282,7 +282,7 @@ for i in "${!SUITES[@]}"; do
 
     # Run the test via run_test.sh
     set +e
-    ./run_test.sh "../regression-tests/$FILE" -t "$TIMEOUT" > /dev/null 2>&1
+    ./run_test.sh "../src/regression-tests/$FILE" -t "$TIMEOUT" > /dev/null 2>&1
     RUN_EXIT=$?
     set -e
 

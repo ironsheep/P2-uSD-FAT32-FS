@@ -990,7 +990,7 @@ Update the `SD_INCLUDE_ALL` expansion (lines 41-54 of the driver) to also define
 
 ### 14.4 Test Infrastructure
 
-- `regression-tests/isp_rt_utilities.spin2` — test framework with assertions
+- `src/regression-tests/isp_rt_utilities.spin2` — test framework with assertions
   - `evaluateStringMatch()` — string comparison (critical for LFN name verification)
   - `evaluateBufferMatch()` — buffer comparison (for raw entry verification)
   - `evaluateSingleValue()` — value assertions

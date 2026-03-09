@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Channels: INIT, MOUNT, FILE, DIR, SECTOR, STATUS, IDENT, HSPEED, API, RECOVER
 - Version directive upgraded to `{Spin2_v46}` for channel support
 - All preprocessor directives standardized to lowercase (`#ifdef`, `#define`, `#pragma exportdef`)
+- Regression tests consolidated under `src/regression-tests/`
 
 ## [1.3.1] - 2026-03-07
 

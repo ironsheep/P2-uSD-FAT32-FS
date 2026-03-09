@@ -49,7 +49,7 @@ All tests are run from the `tools/` directory using the test runner script:
 
 ```bash
 cd tools/
-./run_test.sh ../regression-tests/SD_RT_mount_tests.spin2
+./run_test.sh ../src/regression-tests/SD_RT_mount_tests.spin2
 ```
 
 The test runner compiles with `pnut-ts`, downloads to P2 hardware, captures debug output in headless mode, and saves logs to `tools/logs/`.
@@ -60,32 +60,32 @@ The test runner compiles with `pnut-ts`, downloads to P2 hardware, captures debu
 cd tools/
 
 # Core functionality tests
-./run_test.sh ../regression-tests/SD_RT_mount_tests.spin2
-./run_test.sh ../regression-tests/SD_RT_file_ops_tests.spin2
-./run_test.sh ../regression-tests/SD_RT_read_write_tests.spin2
-./run_test.sh ../regression-tests/SD_RT_directory_tests.spin2
-./run_test.sh ../regression-tests/SD_RT_seek_tests.spin2
+./run_test.sh ../src/regression-tests/SD_RT_mount_tests.spin2
+./run_test.sh ../src/regression-tests/SD_RT_file_ops_tests.spin2
+./run_test.sh ../src/regression-tests/SD_RT_read_write_tests.spin2
+./run_test.sh ../src/regression-tests/SD_RT_directory_tests.spin2
+./run_test.sh ../src/regression-tests/SD_RT_seek_tests.spin2
 
 # Multi-cog and multi-handle tests
-./run_test.sh ../regression-tests/SD_RT_multicog_tests.spin2 -t 120
-./run_test.sh ../regression-tests/SD_RT_multihandle_tests.spin2
+./run_test.sh ../src/regression-tests/SD_RT_multicog_tests.spin2 -t 120
+./run_test.sh ../src/regression-tests/SD_RT_multihandle_tests.spin2
 
 # Low-level transfer tests
-./run_test.sh ../regression-tests/SD_RT_multiblock_tests.spin2
-./run_test.sh ../regression-tests/SD_RT_raw_sector_tests.spin2
+./run_test.sh ../src/regression-tests/SD_RT_multiblock_tests.spin2
+./run_test.sh ../src/regression-tests/SD_RT_raw_sector_tests.spin2
 
 # Subdirectory and cache coherence tests
-./run_test.sh ../regression-tests/SD_RT_subdir_ops_tests.spin2
+./run_test.sh ../src/regression-tests/SD_RT_subdir_ops_tests.spin2
 
 # CRC error injection and recovery tests
-./run_test.sh ../regression-tests/SD_RT_crc_validation_tests.spin2
-./run_test.sh ../regression-tests/SD_RT_recovery_tests.spin2
+./run_test.sh ../src/regression-tests/SD_RT_crc_validation_tests.spin2
+./run_test.sh ../src/regression-tests/SD_RT_recovery_tests.spin2
 
 # Error handling tests
-./run_test.sh ../regression-tests/SD_RT_error_handling_tests.spin2
+./run_test.sh ../src/regression-tests/SD_RT_error_handling_tests.spin2
 
 # Format test (WARNING: erases card!)
-./run_test.sh ../regression-tests/SD_RT_format_tests.spin2 -t 300
+./run_test.sh ../src/regression-tests/SD_RT_format_tests.spin2 -t 300
 ```
 
 **Note:** Format tests will **erase all data** on the card. The `-t` flag sets timeout in seconds (default 60).

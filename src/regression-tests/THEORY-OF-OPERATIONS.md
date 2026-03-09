@@ -1186,34 +1186,34 @@ All tests run from the `tools/` directory:
 cd /path/to/P2-uSD-FAT32-FS/tools
 
 # Core filesystem tests
-./run_test.sh ../regression-tests/SD_RT_mount_tests.spin2
-./run_test.sh ../regression-tests/SD_RT_file_ops_tests.spin2
-./run_test.sh ../regression-tests/SD_RT_read_write_tests.spin2
-./run_test.sh ../regression-tests/SD_RT_directory_tests.spin2
-./run_test.sh ../regression-tests/SD_RT_seek_tests.spin2
-./run_test.sh ../regression-tests/SD_RT_multicog_tests.spin2 -t 120
-./run_test.sh ../regression-tests/SD_RT_multihandle_tests.spin2
-./run_test.sh ../regression-tests/SD_RT_multiblock_tests.spin2
-./run_test.sh ../regression-tests/SD_RT_raw_sector_tests.spin2
-./run_test.sh ../regression-tests/SD_RT_subdir_ops_tests.spin2
+./run_test.sh ../src/regression-tests/SD_RT_mount_tests.spin2
+./run_test.sh ../src/regression-tests/SD_RT_file_ops_tests.spin2
+./run_test.sh ../src/regression-tests/SD_RT_read_write_tests.spin2
+./run_test.sh ../src/regression-tests/SD_RT_directory_tests.spin2
+./run_test.sh ../src/regression-tests/SD_RT_seek_tests.spin2
+./run_test.sh ../src/regression-tests/SD_RT_multicog_tests.spin2 -t 120
+./run_test.sh ../src/regression-tests/SD_RT_multihandle_tests.spin2
+./run_test.sh ../src/regression-tests/SD_RT_multiblock_tests.spin2
+./run_test.sh ../src/regression-tests/SD_RT_raw_sector_tests.spin2
+./run_test.sh ../src/regression-tests/SD_RT_subdir_ops_tests.spin2
 
 # Extended coverage tests
-./run_test.sh ../regression-tests/SD_RT_dirhandle_tests.spin2
-./run_test.sh ../regression-tests/SD_RT_volume_tests.spin2 -t 180
-./run_test.sh ../regression-tests/SD_RT_register_tests.spin2
-./run_test.sh ../regression-tests/SD_RT_speed_tests.spin2
-./run_test.sh ../regression-tests/SD_RT_crc_diag_tests.spin2
-./run_test.sh ../regression-tests/SD_RT_error_handling_tests.spin2
+./run_test.sh ../src/regression-tests/SD_RT_dirhandle_tests.spin2
+./run_test.sh ../src/regression-tests/SD_RT_volume_tests.spin2 -t 180
+./run_test.sh ../src/regression-tests/SD_RT_register_tests.spin2
+./run_test.sh ../src/regression-tests/SD_RT_speed_tests.spin2
+./run_test.sh ../src/regression-tests/SD_RT_crc_diag_tests.spin2
+./run_test.sh ../src/regression-tests/SD_RT_error_handling_tests.spin2
 
 # CRC error injection and recovery tests
-./run_test.sh ../regression-tests/SD_RT_crc_validation_tests.spin2
-./run_test.sh ../regression-tests/SD_RT_recovery_tests.spin2
+./run_test.sh ../src/regression-tests/SD_RT_crc_validation_tests.spin2
+./run_test.sh ../src/regression-tests/SD_RT_recovery_tests.spin2
 
 # Infrastructure tests
-./run_test.sh ../regression-tests/SD_RT_fifo_tests.spin2
+./run_test.sh ../src/regression-tests/SD_RT_fifo_tests.spin2
 
 # Format test (WARNING: erases card!)
-./run_test.sh ../regression-tests/SD_RT_format_tests.spin2 -t 300
+./run_test.sh ../src/regression-tests/SD_RT_format_tests.spin2 -t 300
 
 # Diagnostic tests (in diagnostic-tests/, not part of regression suite)
 ./run_test.sh ../diagnostic-tests/SD_card_info_tests.spin2
