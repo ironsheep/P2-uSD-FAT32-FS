@@ -517,7 +517,6 @@ DAT ' ---- Singleton Control ----
   ' ═══════════════════════════════════════════════════════════════════════
   card_mfr_id   LONG    0               ' Manufacturer ID from CID (byte 0)
   card_max_speed_hz LONG 0              ' Maximum speed from CSD TRAN_SPEED (Hz)
-  card_is_slow  LONG    0               ' Flag: 1 = card requires conservative timing (e.g., PNY)
   card_read_timeout_ms  LONG  100       ' Read timeout in ms (from CSD or spec default)
   card_write_timeout_ms LONG  500       ' Write timeout in ms (from CSD or spec default)
 
@@ -4172,10 +4171,7 @@ PRI do_attempt_high_speed() : hs_ok | idx, mismatch
 
   debug[CH_HSPEED]("  [do_attempt_high_speed] Attempting high-speed mode...")
 
-  ' Skip if card is known to be slow (e.g., PNY)
-  if card_is_slow
-    debug[CH_HSPEED]("  [do_attempt_high_speed] Skipped - card flagged as slow")
-  elseif not queryHighSpeedSupport()
+  if not queryHighSpeedSupport()
     ' Check if card supports high-speed
     debug[CH_HSPEED]("  [do_attempt_high_speed] Card does not support high-speed")
   elseif not switchToHighSpeed()
@@ -4981,7 +4977,6 @@ PRI initCard() : result | timeout, resp, card_version, acmd41_arg, got_response
     ' ============================================
     ' STEP 8: Identify card and set optimal SPI speed
     ' Reads CID for manufacturer ID, CSD for TRAN_SPEED
-    ' PNY cards ($1D) limited to 20 MHz due to timing sensitivity
     ' ============================================
     pinh(cs)                                                                    '  ensure CS HIGH before CID/CSD read
     debug[CH_INIT]("    [initCard] Step 8: Card identification and speed selection...")
@@ -5447,6 +5442,8 @@ PRI writeSector(sector, buf_type) : result | _sck, _mosi, p_buf, stream_mode, cl
     ' Calculate streamer NCO frequency to match SPI clock
     ' Same formula as readSector: one bit per full clock period
     xfrq := $4000_0000 / spi_period                                             ' One output per full clock period
+    if ($4000_0000 // spi_period) == 0                                          ' Exact division (power-of-2 hp)?
+      xfrq -= 1                                                                ' Ensure 1-cycle late rollover like truncated values
     align_delay := spi_period - 2                                                ' NCO ramp delay minus 2 instruction cycles
 
     pinclear(_mosi)                                                             ' Clear smart pin mode (WRPIN=0, DIR=0)
@@ -5570,6 +5567,8 @@ PRI writeSectors(start_sector, count, p_buffer) : sectors_written | _sck, _mosi,
     stream_mode := STREAM_TX_BASE | (_mosi << 17) | (SECTOR_SIZE * 8)            ' TX mode + MOSI pin + 4096 bits
     clk_count := SECTOR_SIZE * 8 * 2                                             ' 8192 clock transitions
     xfrq := $4000_0000 / spi_period                                             ' One output per full clock period
+    if ($4000_0000 // spi_period) == 0                                          ' Exact division (power-of-2 hp)?
+      xfrq -= 1                                                                ' Ensure 1-cycle late rollover like truncated values
     align_delay := spi_period - 2                                                ' NCO ramp delay minus 2 instruction cycles
 
     ' Send CMD25 (WRITE_MULTIPLE_BLOCK) with starting sector
@@ -6241,23 +6240,10 @@ PRI identifyCard() | cid[4], csd[4]
   ' Read CID to identify manufacturer
   if readCID(@cid)
     card_mfr_id := parseMfrId(@cid)
-    case card_mfr_id
-      $1D:                                                                      ' AData/PNY
-        card_is_slow := true
-        debug[CH_IDENT]("  [identifyCard] Detected PNY/AData card - using conservative timing")
-      $03:                                                                      ' SanDisk
-        card_is_slow := false
-        debug[CH_IDENT]("  [identifyCard] Detected SanDisk card - using standard timing")
-      $27:                                                                      ' Samsung
-        card_is_slow := false
-        debug[CH_IDENT]("  [identifyCard] Detected Samsung card - using standard timing")
-      other:
-        card_is_slow := false
-        debug[CH_IDENT]("  [identifyCard] Unknown manufacturer - using standard timing")
+    debug[CH_IDENT]("  [identifyCard] Manufacturer ID: $", uhex_byte_(card_mfr_id))
   else
     debug[CH_IDENT]("  [identifyCard] WARNING: Could not read CID")
     card_mfr_id := 0
-    card_is_slow := false
 
   ' Read CSD to get maximum speed and timeouts
   if readCSD(@csd)
@@ -6273,18 +6259,13 @@ PRI identifyCard() | cid[4], csd[4]
 PRI setOptimalSpeed()
 ' Set SPI speed based on card identification.
 ' Called after identifyCard() to configure optimal SPI clock.
-' PNY cards limited to 20 MHz, others use max speed (up to 25 MHz).
+' Uses card's reported max speed, capped at 25 MHz for SPI mode.
 
-  if card_is_slow
-    applySPISpeed(20_000_000)                                                   ' 20 MHz for PNY cards
-    debug[CH_IDENT]("  [setOptimalSpeed] Limited to 20 MHz for slow card")
+  if card_max_speed_hz > 25_000_000
+    applySPISpeed(25_000_000)
   else
-    ' Use card's reported max speed, capped at 25 MHz for SPI mode
-    if card_max_speed_hz > 25_000_000
-      applySPISpeed(25_000_000)
-    else
-      applySPISpeed(card_max_speed_hz)
-    debug[CH_IDENT]("  [setOptimalSpeed] Set to card's max speed (up to 25 MHz)")
+    applySPISpeed(card_max_speed_hz)
+  debug[CH_IDENT]("  [setOptimalSpeed] Set to card's max speed (up to 25 MHz)")
 
 
 #ifdef SD_INCLUDE_SPEED

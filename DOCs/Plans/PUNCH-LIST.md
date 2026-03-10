@@ -83,22 +83,15 @@ However, immediately re-reading the card shows the **original factory values are
 
 ---
 
-### Remove card_is_slow manufacturer override (PNY 20 MHz cap)
+### ~~Remove card_is_slow manufacturer override (PNY 20 MHz cap)~~ RESOLVED v1.3.2
 
 **Code:** `identifyCard()` and `setOptimalSpeed()` in `src/micro_sd_fat32_fs.spin2`
 
-The driver flags PNY/AData cards (manufacturer ID $1D) as `card_is_slow := true`, which caps SPI at 20 MHz instead of 25 MHz and skips high-speed mode attempts. This was a theorized need based on early timing sensitivity concerns, but testing proved it unnecessary -- PNY cards work fine at 25 MHz.
+The driver flagged PNY/AData cards (manufacturer ID $1D) as `card_is_slow := true`, capping SPI at 20 MHz. Investigation revealed: (1) the flag checked the wrong MID ($1D instead of the PNY card's actual $27), so it never applied; (2) the real issue was an NCO write alignment bug at power-of-2 half-period values, not card speed sensitivity.
 
-**Steps:**
-1. Verify: run full regression suite with a PNY card at 25 MHz (temporarily disable the `card_is_slow` path)
-2. If all tests pass: remove `card_is_slow` DAT variable and all references
-3. Simplify `setOptimalSpeed()` to always use `card_max_speed_hz` (capped at 25 MHz)
-4. Simplify `do_attempt_high_speed()` to remove the `card_is_slow` skip
-5. Remove manufacturer case statement from `identifyCard()` (keep CID read for `card_mfr_id`)
+**Resolution:** Removed `card_is_slow` DAT variable and all 4 references (identifyCard, setOptimalSpeed, do_attempt_high_speed, stale comment in initCard). Fixed the actual bug with `xfrq -= 1` for exact NCO division. No driver logic now branches on manufacturer ID. See [NCO-WRITE-ALIGNMENT-ANALYSIS](../Analysis/NCO-WRITE-ALIGNMENT-ANALYSIS.md) and [NCO-WRITE-FIX-ENGINEERING-GUIDE](ext-agents/NCO-WRITE-FIX-ENGINEERING-GUIDE.md).
 
-**Files:** `src/micro_sd_fat32_fs.spin2` (DAT line 480, lines 3995, 5948-5964, 5982-5984)
-
-*Noted: 2026-03-02*
+*Noted: 2026-03-02 — Resolved: 2026-03-09*
 
 ---
 
