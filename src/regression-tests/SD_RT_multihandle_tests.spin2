@@ -36,9 +36,6 @@ CON
      'SD_MISO = 18
      'SD_SCK  = 21
 
-' Maximum handles to test (must match driver's MAX_OPEN_FILES)
-     MAX_TEST_HANDLES = 6
-
 OBJ
     sd    : "micro_sd_fat32_fs"
     utils : "isp_rt_utilities"

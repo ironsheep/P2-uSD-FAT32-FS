@@ -20,8 +20,6 @@
 CON { timing }
 
   CLK_FREQ = 350_000_000                                        ' system freq as a constant
-  MS_001   = CLK_FREQ / 1_000                                   ' ticks in 1ms
-  US_001   = CLK_FREQ / 1_000_000                               ' ticks in 1us
 
   _clkfreq = CLK_FREQ                                           ' set system clock
 
@@ -988,11 +986,9 @@ PUB do_rmdir() | p_name, p_leaf, has_path, dh, result, p_entry, is_empty
         nav_back(p_name)
 
 
-PUB do_demo() | handle, idx
+PUB do_demo()
 '' Create a set of demo files (HELLO.TXT, README.TXT, NUMBERS.TXT) in the current directory.
 ''
-' @local handle - File write handle (reserved for future use)
-' @local idx - Loop index (reserved for future use)
 
   if (ntokens <> 1)
     bad_syntax()
@@ -1200,7 +1196,7 @@ PUB do_fsck() | pStr, proceed
           do_mount()
 
 
-PUB do_bench() | wasMounted, card_ok, tStart, tElapsed, sector, idx, rate, nSectors, readResult, msPerTick
+PUB do_bench() | wasMounted, card_ok, tStart, tElapsed, sector, rate, readResult, msPerTick
 '' Run read-only throughput benchmark using raw sector reads at multiple batch sizes.
 '' Works mounted or unmounted - no files are created or deleted.
 ''
@@ -1209,9 +1205,7 @@ PUB do_bench() | wasMounted, card_ok, tStart, tElapsed, sector, idx, rate, nSect
 ' @local tStart - System counter at start of timed section
 ' @local tElapsed - Elapsed ticks for timed section
 ' @local sector - Current sector number for reads
-' @local idx - Loop index (reserved for future use)
 ' @local rate - Calculated throughput in KB/s
-' @local nSectors - Number of sectors per multi-read (reserved)
 ' @local readResult - Return value from readSectorsRaw
 ' @local msPerTick - Clock ticks per millisecond
 
@@ -1486,7 +1480,7 @@ PRI nav_back(p_parent) | depth, idx
     sd.changeDirectory(@"..")
 
 
-PRI tree_walk(p_path, depth) | dh, result, p_name, attrib, idx, name_buf[4], reopen_ok
+PRI tree_walk(p_path, depth) | dh, result, p_name, attrib, name_buf[4], reopen_ok
 ' Recursively display a directory tree.
 ' Enumerates entries, prints files, and recurses into subdirectories.
 ' Max depth 8 to protect stack.
@@ -1560,12 +1554,10 @@ PRI tree_walk(p_path, depth) | dh, result, p_name, attrib, idx, name_buf[4], reo
         sd.closeDirectoryHandle(dh)
 
 
-PRI tree_indent(depth) | idx
+PRI tree_indent(depth)
 ' Print tree indentation spaces for the given depth level.
 '
 ' @param depth - Number of indentation levels to print
-' @local idx - Loop index (reserved for future use)
-
   repeat depth
     serial.fstr0(@"  ")
 

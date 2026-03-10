@@ -755,14 +755,11 @@ PUB memDump(pBytes, lenBytes, pMessage) | rowCount, rowLen, pCurrByte, lastRowBy
         ' emit last line
         memDumpRow(pCurrByte, lastRowByteCount)
 
-PRI memDumpRow(pBytes, lenBytes) | rowCount, rowLen, pCurrByte, bytIndex
+PRI memDumpRow(pBytes, lenBytes) | bytIndex
 ' Emit a single row of hex dump with address prefix
 '
 ' @param pBytes - pointer to bytes for this row
 ' @param lenBytes - number of bytes to dump in this row
-' @local rowCount - unused
-' @local rowLen - unused
-' @local pCurrByte - unused
 ' @local bytIndex - byte index counter
 
     ' emit address

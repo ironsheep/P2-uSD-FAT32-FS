@@ -17,17 +17,6 @@ CON
   GUARD_SIZE    = 16          ' Guard bytes after each buffer
   GUARD_BYTE    = $CC         ' Sentinel value (distinct from $00, $FF, $AA, $55)
 
-  ' P2 Edge module SD slot pins
-  SD_CS   = 60
-  SD_MOSI = 59
-  SD_MISO = 58
-  SD_SCK  = 61
-
-  ' External SD header (base pin 16)
-  'SD_CS   = 20
-  'SD_MOSI = 19
-  'SD_MISO = 18
-  'SD_SCK  = 21
 
 VAR { test stats vars }
 
@@ -39,8 +28,6 @@ VAR { test stats vars }
   LONG    failCountSub      ' Running count of failed sub-checks within a test
 
   LONG    varSignature      ' Sentinel value for detecting uninitialized state
-
-  byte    filename[128]     ' Buffer for constructing test filenames
 
 PUB null()
 '' This is not an application
@@ -75,7 +62,7 @@ PUB startTestGroup(pDescription)
     debug(" ------------------------------------------------------------")
     debug("* Test Group: ", zstr_(pDescription))
 
-PUB startTest(pDescription) | ecGot, ecExpected, passScaled, failScaled, total
+PUB startTest(pDescription)
 '' Start a new test with description
 ''
 '' @param pDescription - pointer to test description string

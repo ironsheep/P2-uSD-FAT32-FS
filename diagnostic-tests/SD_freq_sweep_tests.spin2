@@ -274,7 +274,7 @@ PRI runMultiReads(speedIdx) : passed | idx, sector, multiResult, readErrors
     return 1
 
 
-PRI runWriteVerify(speedIdx) : passed | iter, idx, jdx, sector, written, readCt, errors, bufOffset
+PRI runWriteVerify(speedIdx) : passed | iter, idx, sector, written, readCt, errors
 ' Phase 3: Write-read-verify round-trips (CMD25 write + CMD18 read + compare).
 ' This is the most demanding test - writes known patterns, reads back, verifies.
 '

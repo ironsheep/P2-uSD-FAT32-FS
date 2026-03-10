@@ -46,14 +46,12 @@ CON
     'SD_SCK  = 21
 
     ' Test sector numbers (in free space area, safe for 64GB+ cards)
-    TEST_SECTOR_BASE = 100_000
     TEST_SECTOR_A   = 100_000   ' Sequential pattern
     TEST_SECTOR_B   = 100_001   ' Alternating AA/55
     TEST_SECTOR_C   = 100_002   ' All FF
     TEST_SECTOR_D   = 100_003   ' All 00
     TEST_SECTOR_E   = 100_004   ' Incrementing with offset
 
-    NUM_TEST_SECTORS = 5
 
 ' Enable full driver features for raw sector testing
 ' Uncomment SD_INCLUDE_STACK_CHECK to measure worker cog stack depth

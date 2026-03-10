@@ -64,7 +64,7 @@ DAT
     preCapBuf       BYTE    0[7]
     capBuf          BYTE    0[8]
 
-PUB go() | handle, result, warnings, iteration, idx, ncrLen, bytesRead
+PUB go() | handle, result, warnings, iteration, ncrLen, bytesRead
 
     debug("##############################################")
     debug("#  CMD13 Diagnostic Capture                  #")

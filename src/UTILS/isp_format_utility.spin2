@@ -560,7 +560,7 @@ PRI doFormat() : result | ok
         debug("==============================================")
         result := true
 
-PRI calculateParameters() : success | clusterSize
+PRI calculateParameters() : success
 ' Calculate filesystem parameters based on card size.
 '
 ' @returns success - TRUE if card large enough for FAT32, FALSE otherwise

@@ -383,12 +383,6 @@ CON ' struct types - SD card register and FAT32 on-disk data structures
   STRUCT cid_t(BYTE mid, BYTE oid[2], BYTE pnm[5], BYTE prv, BYTE psn[4], BYTE mdt[2], BYTE crc)
   '  CID register: 1+2+5+1+4+2+1 = 16 bytes (big-endian from card)
 
-  STRUCT csd_t(BYTE csdStruct, BYTE taac, BYTE nsac, BYTE tranSpeed, ...
-    BYTE ccc_hi, BYTE ccc_lo_bllen, BYTE csize_hi, BYTE csize_mid, ...
-    BYTE csize_lo_vdd, BYTE currMinMax, BYTE eraseBlk, BYTE eraseSecSize, ...
-    BYTE wpGrpSize, BYTE wpFlags, BYTE wrSpeed, BYTE crc)
-  '  CSD register: 16 bytes (big-endian from card, bit fields within bytes)
-
   STRUCT scr_t(BYTE sdSpec, BYTE sdSecurity, BYTE sdSpec3Ext, BYTE sdSpecXLo, BYTE reserved[4])
   '  SCR register: 4+4 = 8 bytes (big-endian from card)
 
@@ -491,7 +485,6 @@ DAT ' ---- Singleton Control ----
   spi_period    LONG    0               ' Current SPI half-period (for sysclk-independent timing)
   spi_freq      LONG    0               ' Actual achieved SPI frequency (Hz)
   spi_event     LONG    0               ' Event config for waitse1 (%01_000000 | sck)
-  use_smartpin  LONG    0               ' 0 = bit-bang (fallback), 1 = smart pin mode
   sp_debug_ctr  LONG    0               ' Debug counter for sp_transfer_8
 
   ' ═══════════════════════════════════════════════════════════════════════
@@ -1945,7 +1938,7 @@ PUB debugClearRootDir() : result
   result := send_command(CMD_DEBUG_CLEAR_ROOT, 0, 0, 0, 0)
 
 
-PUB debugReadSectorSlow(sector, p_buffer) : result | data, idx, timeout
+PUB debugReadSectorSlow(sector, p_buffer) : result
 '' DEBUG: Read sector byte-by-byte (no streamer) - for comparison with streamer.
 '' This is SLOW but useful for debugging streamer issues.
 '' Requires worker cog to be running (SPI pins configured).
@@ -1957,10 +1950,6 @@ PUB debugReadSectorSlow(sector, p_buffer) : result | data, idx, timeout
 '' @param sector - Sector number to read
 '' @param p_buffer - Pointer to 512-byte destination buffer
 '' @returns result - 0 on success, -1 on timeout/error
-' @local data - (unused in wrapper)
-' @local idx - (unused in wrapper)
-' @local timeout - (unused in wrapper)
-
   result := send_command(CMD_DEBUG_SLOW_READ, sector, p_buffer, 0, 0)
 
 
@@ -2688,15 +2677,6 @@ PRI dirEntSetFileSize(^dir_entry_t pEntry, value)
   pEntry.fileSize := value
 
 
-PRI dirEntAddFileSize(^dir_entry_t pEntry, delta)
-' Add delta to file size in directory entry.
-'
-' @param pEntry - Pointer to directory entry
-' @param delta - Byte count to add to current size
-
-  pEntry.fileSize += delta
-
-
 PRI dirEntSetCreateStamp(^dir_entry_t pEntry, stamp)
 ' Set creation timestamp in directory entry.
 '
@@ -3248,7 +3228,7 @@ PRI do_read_h(handle, p_buffer, count) : bytes_read | p_hbuf, available, offset,
     debug[CH_FILE]("  [do_read_h] Read ", udec_(bytes_read), " bytes, pos now ", udec_(h_position[handle]))
 
 
-PRI do_write_h(handle, p_buffer, count) : bytes_written | p_hbuf, offset, to_write, new_cluster, fat_addr
+PRI do_write_h(handle, p_buffer, count) : bytes_written | p_hbuf, offset, to_write, new_cluster
 ' Handle-based write (V3) - writes data from user buffer to file handle.
 ' Uses per-handle buffer with dirty tracking. File grows as needed.
 ' Clusters allocated when extending past current allocation.
@@ -3261,7 +3241,6 @@ PRI do_write_h(handle, p_buffer, count) : bytes_written | p_hbuf, offset, to_wri
 ' @local offset - Offset within current sector
 ' @local to_write - Bytes to write to current sector
 ' @local new_cluster - Newly allocated cluster
-' @local fat_addr - Address of FAT entry
 
   ' Validate handle
   if not validateHandle(handle)
@@ -4348,13 +4327,11 @@ PRI firstCluster() : result
   result := dirEntStartClus(@entry_buffer)
 
 
-PRI readFat(cluster) : result | contents, p_contents
+PRI readFat(cluster) : result
 ' Read a FAT location and return a pointer to the location of that entry.
 '
 ' @param cluster - Cluster number to look up
 ' @returns result - Pointer to FAT entry in fat_buf
-' @local contents - (unused)
-' @local p_contents - (unused)
 
   if readSector((cluster >> 7 + fat_sec), BUF_FAT) < 0                          '  128 entries in each FAT sector
     debug[CH_SECTOR]("  [readFat] FAT read FAILED for cluster ", udec_(cluster))
@@ -4424,14 +4401,13 @@ PRI clearCluster(cluster)
   dir_sec_in_buf := n_sec - 1
 
 
-PRI readNextSector(buf_type) | cluster, address, contents, p_buf
+PRI readNextSector(buf_type) | cluster, address, contents
 ' Load the next sector into buffer - follows FAT chain at cluster boundaries.
 '
 ' @param buf_type - Buffer type: BUF_DIR, BUF_FAT, or BUF_DATA
 ' @local cluster - Current cluster number
 ' @local address - FAT entry address
 ' @local contents - FAT entry contents
-' @local p_buf - Pointer to buffer (unused)
 
   n_sec++
   if ((n_sec - cluster_offset) & (sec_per_clus - 1)) == 0                       '  if next sector is in a different cluster
@@ -4457,27 +4433,6 @@ PRI readNextSector(buf_type) | cluster, address, contents, p_buf
   else
     if readSector(n_sec, buf_type) < 0
       debug[CH_SECTOR]("  [readNextSector] Sector read FAILED for sector ", udec_(n_sec))
-
-
-PRI followFatChain() | cluster, address, contents
-' Follow FAT chain to next cluster - for multi-sector reads.
-' Called after multi-sector read lands exactly on cluster boundary.
-' Updates n_sec to first sector of next cluster in the chain.
-' n_sec is already pointing at the first sector of the NEW cluster boundary.
-'
-' @local cluster - Current cluster number
-' @local address - FAT entry address
-' @local contents - FAT entry contents (next cluster or end marker)
-
-  cluster := sec2clus(n_sec - 1)                                                '  find cluster number of the sector we just finished reading
-  if readSector(cluster >> 7 + fat_sec, BUF_FAT) < 0                            '  read sector of FAT containing cluster number
-    debug[CH_SECTOR]("  [followFatChain] FAT read FAILED for cluster ", udec_(cluster))
-  else
-    address := @fat_buf + ((cluster << 2) & SECTOR_OFFSET_MASK)                                '  find long within FAT buffer for current cluster
-    contents := long[address]                                                   '  read contents to determine next cluster number
-    if contents +< FAT32_EOC_MIN                                                   '  if not end-of-chain marker
-      n_sec := clus2sec(contents)                                               '   convert next cluster number into sector number
-    ' else: end-of-chain - n_sec stays invalid (caller should check position against fileSize)
 
 
 PRI updateFSInfo() : result | pFSI
@@ -4554,15 +4509,6 @@ PRI sec2clus(sector) : result
 ' @returns result - Cluster number containing that sector
 
   result := (sector - root_sec) / sec_per_clus + ROOT_CLUSTER
-
-
-PRI clus2byte(cluster) : result
-' Convert cluster number to byte address.
-'
-' @param cluster - Cluster number to convert
-' @returns result - Byte address of first byte in that cluster
-
-  result := clus2sec(cluster) << SECTOR_SHIFT
 
 
 PRI clus2sec(cluster) : result
@@ -4658,8 +4604,6 @@ PRI initSPIPins()
   configureEvent(spi_event)
   debug[CH_INIT]("    [initSPIPins]   Event SE1 configured for SCK pin ", udec_(sck))
 
-  ' Mark smart pin mode as active
-  use_smartpin := 1
   debug[CH_INIT]("    [initSPIPins] Smart pins configured and enabled")
 
 
@@ -5276,7 +5220,7 @@ PRI readSector(sector, buf_type) : result | _sck, _miso, data, loop_ctr, timeout
   ' else: cache hit - result stays 0 (success)
 
 
-PRI readSectors(start_sector, count, p_buffer) : sectors_read | _sck, _miso, p_buf, stream_mode, clk_count, xfrq, init_phase, align_delay, idx, resp
+PRI readSectors(start_sector, count, p_buffer) : sectors_read | _sck, _miso, p_buf, stream_mode, clk_count, xfrq, init_phase, align_delay, resp
 ' Read multiple consecutive sectors using CMD18 (READ_MULTIPLE_BLOCK).
 ' More efficient than individual readSector() calls because:
 ' - Only one CMD18 command instead of N CMD17 commands
@@ -5297,7 +5241,6 @@ PRI readSectors(start_sector, count, p_buffer) : sectors_read | _sck, _miso, p_b
 ' @local xfrq - Streamer NCO frequency
 ' @local init_phase - Streamer initial phase
 ' @local align_delay - Alignment delay before streamer
-' @local idx - Loop counter (unused)
 ' @local resp - Command response
 
   if count > 0

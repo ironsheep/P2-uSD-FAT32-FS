@@ -85,7 +85,7 @@ testStr3        BYTE    "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", 0
 ' Temp byte for single-byte writes
 tempByte        BYTE    0
 
-PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize, secPerClus, clusterBytes, writeLen, chunkIdx, seekPos, straddle[2], vbrSector
+PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize, secPerClus, clusterBytes, writeLen, chunkIdx, seekPos
 '' Main entry point for read/write regression tests
 ''
 '' Tests various data patterns and file sizes using V3 handle API

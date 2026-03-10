@@ -54,7 +54,6 @@ OBJ
 DAT
 
 testfile1       BYTE    "TEST1.TXT", 0
-testfile2       BYTE    "TEST2.BIN", 0
 sectorBuffer    BYTE    0[512]
 sectorBuffer_guard BYTE 0[16]
 
