@@ -7,9 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.3.2] - 2026-03-09
+## [1.3.2] - 2026-03-10
 
-**Selective debug output via DEBUG_MASK channels, preprocessor directives standardized to lowercase.**
+**NCO write alignment fix, selective debug channels, controller-specific code removed.**
+
+### Bug Fixes
+
+- `writeSector()`, `writeSectors()`: Streamer write timing corrected for power-of-2 SPI half-period values (hp=4, hp=8) via NCO frequency adjustment
+- Controller-specific SPI speed limiting removed; all cards use reported max speed capped at 25 MHz
 
 ### Improvements
 

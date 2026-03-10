@@ -145,18 +145,18 @@ The driver previously had a `card_is_slow` flag that limited certain cards to 20
 
 ---
 
-## 6. Impact on Default Configuration
+## 6. When Users Hit This
 
-| _CLKFREQ | hp for 25 MHz SPI | Status |
-|-----------|-------------------|--------|
-| 200 MHz | 4 | Fixed by xfrq -= 1 |
-| 250 MHz | 5 | Always worked |
-| 270 MHz | 6 | Always worked |
-| 300 MHz | 6 | Always worked |
-| 350 MHz | 7 | Always worked |
-| 400 MHz | 8 | Fixed by xfrq -= 1 |
+At any sysclk, intermediate SPI targets can land on hp=4 or hp=8. Confirmed failure cases from our sweep tests:
 
-Users at 400 MHz sysclk with the default 25 MHz SPI would have hit this bug. The fix makes all sysclk/SPI combinations safe.
+| SYSCLK | SPI targets that produce hp=8 | SPI targets that produce hp=4 |
+|--------|------------------------------|------------------------------|
+| 180 MHz | — | 23, 24, 25 MHz |
+| 250 MHz | 16, 17 MHz | — |
+| 270 MHz | 17, 18, 19 MHz | — |
+| 350 MHz | 22, 23, 24 MHz | — |
+
+At the default 25 MHz SPI target, tested sysclk values (250, 270, 350 MHz) produce non-power-of-2 hp and were never affected. But users calling `setSPISpeed()` with values in the 16-24 MHz range routinely hit hp=8 depending on their sysclk. The fix makes all sysclk/SPI combinations safe.
 
 ---
 
