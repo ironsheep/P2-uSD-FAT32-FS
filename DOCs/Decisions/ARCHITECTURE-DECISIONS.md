@@ -195,6 +195,8 @@ How do caller cogs communicate with the worker cog?
 
 **COGATN is a hardware interrupt mechanism.** The caller cog truly sleeps—no instructions execute, no hub bandwidth consumed—until the worker sends attention.
 
+**Important nuance**: WAITATN is zero-*resource*-cost (no hub bandwidth, no power) but 100%-*opportunity*-cost. The sleeping cog is a fully independent 350 MHz processor doing absolutely nothing. For a 5ms SD write, that's 1.75 million wasted cycles on the calling cog. This is acceptable when the caller has nothing else to do. When the caller needs to keep running (sensor polling, control loops, display updates), the non-blocking file I/O API (see `PLAN-NONBLOCKING-FILE-IO`) provides an alternative that lets the caller cog continue at full speed while the worker handles the SD operation.
+
 ### The Protocol
 
 ```
@@ -398,9 +400,11 @@ The driver cannot know if a retry is safe:
 
 Only the caller has context to make these decisions.
 
-### Critical Bug Fix Required
+### Critical Bug Fix (RESOLVED)
 
-The current `readSector()` has an infinite loop waiting for the start token:
+The original `readSector()` had an infinite loop waiting for the start token. **This has been fixed** — `waitDataToken()` (line 5649) now uses a CSD-based timeout with 10x safety factor. The cog independence principle makes this especially critical: a timeout-less loop in the worker hangs not just the worker cog, but every caller cog blocked on `api_lock` or `WAITATN`. One missing card would brick all filesystem access across all cogs permanently.
+
+Original bug for reference:
 
 ```pasm2
 ' CURRENT (BUG - hangs forever):
@@ -940,6 +944,341 @@ These decisions work together to create a driver that is:
 
 ---
 
+## Decision 14: Post-Write Busy Wait Stays in Worker Cog (Not Deferred) (2026-03-12)
+
+### The Question
+Should the driver defer the post-write card-busy wait to the start of the next command, rather than blocking at the end of each write?
+
+### The Optimization Pattern (From Single-Threaded Drivers)
+
+A well-known optimization for single-threaded SD drivers moves the busy check from the end of a write to the beginning of the next command:
+
+```
+SINGLE-THREADED DRIVER (typical Arduino/STM32):
+────────────────────────────────────────────────
+Traditional:
+  writeSector()
+    → send data
+    → wait busy (card programming)     ← BLOCKS the application here
+    → return
+  [application does work]
+  writeSector()
+    → send data
+    → wait busy
+    → return
+
+Deferred busy:
+  writeSector()
+    → send data
+    → return immediately               ← Application resumes NOW
+  [application does work]              ← FREE parallelism
+  writeSector()
+    → wait busy (from PREVIOUS write)  ← Only blocks if card still busy
+    → send data
+    → return immediately
+```
+
+The benefit: the application gets to run useful code while the card programs flash. The busy period (typically 2-10ms, up to 250ms for slow cards) overlaps with application computation. For a single-threaded driver, this is a meaningful optimization — it's the only way to achieve parallelism between CPU work and card programming.
+
+This also enables a significant code size reduction in single-threaded drivers by consolidating duplicate busy-check sequences into one location at command entry.
+
+### Honest Throughput Analysis
+
+Our driver uses a **dedicated worker cog** (Decision 1) with **COGATN signaling** (Decision 4). The calling cog sleeps via `WAITATN` while the worker executes. Let's trace the exact timeline for a write operation:
+
+```
+CURRENT DESIGN — Busy-wait at end of write:
+──────────────────────────────────────────────────────────────────────────────
+Time(ms):   0         0.5        5.5    6.0    6.1              8.1
+            │          │          │      │      │                │
+Worker:     [SPI data ][wait busy ][CMD13][COGATN][poll pb_cmd...]
+Caller:     [WAITATN - sleeping - - - - - - - - ][wake][compute ][pb_cmd→]
+                                                        2ms work
+```
+
+The caller is sleeping for the ENTIRE duration: SPI transfer (0.5ms) + card busy (5ms) + CMD13 (0.5ms) = **6ms blocked**. That's **2.1 million wasted cycles** on the calling cog at 350 MHz — a fully independent processor doing absolutely nothing while the worker waits for the card to finish programming. Only after the worker signals COGATN does the caller wake and do its 2ms of computation. Then it issues the next command.
+
+**Total cycle time: 8.1ms** (6ms blocked + 2ms compute + 0.1ms lock/param overhead)
+
+For a data logger doing 100 writes/second, the current design wastes **210 million cycles/second** on the calling cog — 60% of its capacity — just sleeping during card-busy periods.
+
+Now consider the deferred model:
+
+```
+HYPOTHETICAL DEFERRED — Busy-wait at start of NEXT command:
+──────────────────────────────────────────────────────────────────────────────
+Time(ms):   0         0.5  0.6              2.6     5.5    6.0    6.1
+            │          │    │                │       │      │      │
+Worker:     [SPI data ][COGATN][poll pb_cmd...][wait busy][CMD13][SPI data→]
+Caller:     [WAITATN -][wake ][compute 2ms  ][pb_cmd→][WAITATN...]
+                              ↑                      ↑
+                              Caller works here      Next command starts
+                              Card still busy!       remaining busy: 3ms
+```
+
+The worker signals COGATN immediately after the SPI data transfer, BEFORE waiting for the card to finish programming. The caller wakes after just 0.5ms (instead of 6ms), does its 2ms of computation, then issues the next command. The worker receives the next command and first checks if the card is still busy from the previous write. The card has been programming for 2.6ms of the 5ms busy period — only 2.4ms of busy-wait remains.
+
+**Total cycle time: 6.1ms** (0.5ms blocked + 2ms compute + 0.1ms overhead + 2.4ms remaining busy + 0.5ms CMD13 + 0.1ms overhead + SPI starts)
+
+### The Throughput Difference Is Real
+
+| Scenario | Current | Deferred | Savings |
+|----------|---------|----------|---------|
+| Caller compute = 0ms, busy = 5ms | 5.6ms/cycle | 5.6ms/cycle | **0%** (no overlap possible) |
+| Caller compute = 2ms, busy = 5ms | 8.1ms/cycle | 6.1ms/cycle | **25%** |
+| Caller compute = 5ms, busy = 5ms | 11.1ms/cycle | 6.1ms/cycle | **45%** |
+| Caller compute = 10ms, busy = 5ms | 16.1ms/cycle | 11.1ms/cycle | **31%** |
+| Caller compute >= busy time | compute+6.1ms | compute+1.1ms | **busy period hidden** |
+
+**The deferred approach IS faster when the caller does meaningful work between writes.** The card-busy period overlaps with the caller's computation instead of serializing with it. The caller sleeps during the busy period in our current design — those are wasted cycles on the calling cog.
+
+For a data logger writing continuous 512-byte blocks with 2ms of sensor/formatting work between writes, the deferred approach would deliver ~25% higher throughput.
+
+### Multi-Cog Impact
+
+With multiple cogs issuing commands through the shared lock:
+
+**Current**: Cog A writes → worker busy-waits 5ms → signals A → A wakes → A releases lock → Cog B acquires lock → B's command executes
+
+**Deferred**: Cog A writes → worker signals A immediately → A wakes → A releases lock → Cog B acquires lock → worker checks busy (maybe 0-5ms remaining) → B's command executes
+
+In the deferred model, Cog A releases the lock sooner (after 0.5ms instead of 6ms). If Cog B is waiting on the lock, it acquires it sooner. But B's command then absorbs any remaining busy-wait. Net effect: the lock is held for less time by A, but the total card-busy time doesn't change. B's command latency depends on how much of the busy period was consumed by A's post-wake work.
+
+**System throughput improves** when multiple cogs interleave computation with SD access, because the lock is released sooner and other cogs can queue their commands earlier.
+
+### Why We Accept the Throughput Cost and Keep Current Design
+
+Despite the real throughput difference, we choose to keep the busy-wait at the end of write operations for four reasons that outweigh the performance gain:
+
+**1. Data integrity: CMD13 must verify the correct write**
+
+The driver validates every write with CMD13 (SEND_STATUS) immediately after `waitBusyComplete()`:
+
+```spin2
+' In writeSector():
+if waitBusyComplete() < 0
+  result := E_CARD_BUSY
+
+if result == SUCCESS
+  if checkCardStatus(@"writeSector") < 0
+    result := E_IO_ERROR
+```
+
+CMD13 checks the card's internal status register for programming errors that the data-response token cannot detect (internal ECC failure, write-protect violation, out-of-range address). If busy-wait is deferred, CMD13 must also be deferred. When the *next* command discovers a write failure:
+
+- The error is reported against the **wrong operation** — the next command's caller receives an error they didn't cause
+- The write that failed has already returned `SUCCESS` to its caller
+- That caller may have **acted on the false success**: advanced file position, freed its source buffer, updated metadata, or reported success to its own callers
+- **Data corruption becomes silent** — the caller believes 512 bytes were written, but they weren't
+
+This is not a theoretical concern. Cards do occasionally report write errors via CMD13 that were accepted at the data-response level. The SP Elite cards in our test catalog have been observed to return CMD13 errors under stress. Deferring CMD13 turns a caught error into silent data loss.
+
+**2. Multi-block writes cannot defer inter-block busy waits**
+
+The SD spec requires the host to wait for the card to finish programming each block before sending the next during CMD25 (WRITE_MULTIPLE_BLOCK):
+
+```
+Protocol: CMD25 → ($FC + 512 bytes + CRC + wait busy) × N → $FD → wait busy
+                                            ^^^^^^^^^^^^
+                                            Required per spec
+```
+
+`writeSectors()` calls `waitBusyComplete()` after each block in the multi-block sequence (line 5625). Deferring this to the next command is not possible — the next data block must wait for the current one to finish programming. The deferral optimization only applies to the LAST block's busy-wait, and `writeSectors()` already sends multiple blocks in a single command with minimal overhead between them.
+
+**3. Code size savings do not apply to our architecture**
+
+In a single-threaded driver, the "deferred busy" pattern eliminates duplicate busy-check code at the end of every write function by consolidating into one check at command entry. Our driver has exactly **one** `waitBusyComplete()` implementation (line 5704) called from three locations:
+- `writeSector()` — after single-block data response (line 5522)
+- `writeSectors()` — after each multi-block data response (line 5625) and after stop token (line 5636)
+
+There is no code duplication to consolidate.
+
+**4. Error recovery becomes ambiguous**
+
+If the deferred busy check discovers a timeout or error, the worker must decide how to handle it before executing the new command. Should it attempt recovery? Return the error to the *new* caller (who didn't cause it)? Silently retry? Each option adds complexity and creates surprising behavior for the caller. The current approach — detect the error at the point of the write, return it to the correct caller, let that caller decide — is simpler and correct.
+
+### The Tradeoff Stated Clearly
+
+| Factor | Current Design | Deferred Design |
+|--------|---------------|-----------------|
+| **Throughput** | Caller blocked during busy period | **Caller works during busy period** |
+| **Write-heavy data logger** | ~25% slower when caller has work to do | **~25% faster** |
+| **Error attribution** | **Correct (same caller)** | Wrong (next caller) |
+| **CMD13 verification** | **Immediate and accurate** | Deferred and misattributed |
+| **Silent data corruption** | **Impossible (caught by CMD13)** | Possible (false success) |
+| **Multi-block writes** | **Natural** | Only last block can defer |
+| **Code complexity** | **Simple** | Adds deferred-error state machine |
+
+**We choose data integrity over throughput.** A 25% write throughput gain is meaningful, but silent data corruption in a filesystem driver is catastrophic. Files with silently missing data, corrupted FAT chains, or damaged directory entries are the worst failure mode — they're discovered long after the fact, often on a different system, with no way to trace the cause.
+
+### Mitigation: Non-Blocking File I/O (Separate Plan)
+
+For callers that need to overlap computation with SD I/O, the planned non-blocking API (PLAN-NONBLOCKING-FILE-IO) provides an explicit opt-in mechanism:
+
+```spin2
+sd.startWriteHandle(handle, @buffer, 512)    ' Returns immediately
+repeat
+  do_sensor_work()                           ' Caller does useful work
+  if sd.isComplete()
+    result := sd.getResult()                 ' Get verified result
+    quit
+```
+
+This gives the caller the same throughput benefit as deferred busy — the caller works while the card programs — but without sacrificing CMD13 verification. The worker still waits for busy-complete and CMD13 before signaling completion. The difference is that the caller opted in to checking later, with full awareness that the result isn't available yet.
+
+This is strictly better than deferred busy because:
+- CMD13 still validates the correct write
+- Errors are reported to the correct caller (via `getResult()`)
+- The caller explicitly knows it's in an async state
+- No hidden state machine in the worker
+
+### Decision
+
+**Keep `waitBusyComplete()` at the end of write operations in the worker cog. Do not defer busy checks to the start of the next command.**
+
+There IS a real throughput cost: ~25% for write-heavy workloads where the caller has computation to do between writes. We accept this cost because:
+
+1. **Data integrity is non-negotiable** — CMD13 must verify the write that just happened, not a previous one
+2. **Silent data corruption is the worst failure mode** for a filesystem driver
+3. **The non-blocking API** (planned) provides an explicit, safe way for callers to achieve the same throughput benefit without sacrificing error integrity
+4. **Multi-block writes** already minimize the overhead (only one busy-wait at the end of the entire sequence)
+
+The deferred-busy optimization is a sound technique for single-threaded drivers where error attribution isn't a concern. For a multi-cog filesystem driver with CMD13 verification, the data integrity tradeoff is not acceptable.
+
+---
+
+## Decision 15: No Early-Signal Optimization on Read or Write Paths (2026-03-12)
+
+### The Question
+Can any read or write operations signal the caller earlier — before all post-transfer work completes — to reduce caller blocking time?
+
+### Write Path Audit: All ~25 Call Sites
+
+Every `writeSector()` call in the driver was audited. The write sites fall into compound operations:
+
+| Operation | Writes per Call | Pattern |
+|-----------|----------------|---------|
+| `allocateCluster()` | 2-4 | FAT sector + FSInfo (×2 copies) |
+| `clearCluster()` | N | N zeroed sectors (N = sectors_per_cluster) |
+| `do_close_h()` | 1-3 | Flush data + dir entry + possibly FAT |
+| `do_sync_h()` | 1-3 | Same as close without releasing handle |
+| `do_newdir()` | 2-3 | Clear cluster + dir entries + parent update |
+| `updateFSInfo()` | 2 | Primary + backup FSInfo sectors |
+| `do_write_h()` | 1-2 | Data sector + possibly allocate next cluster |
+| `do_rename()` | 2 | Old dir entry + new dir entry |
+| `do_delete()` | 2-4 | Dir entry + FAT chain walk |
+
+**Three constraints make early-signal impossible for writes:**
+
+1. **SPI protocol**: The card cannot accept a new command while its internal flash is programming. `waitBusyComplete()` between sequential writes is mandatory — the card will reject the next command.
+
+2. **CMD13 is too cheap to skip**: ~50µs per call vs 2-50ms busy-wait = less than 1% of write time. Skipping it saves almost nothing while losing the only way to detect flash programming failures.
+
+3. **Skipping CMD13 on intermediate writes risks FAT inconsistency**: Example — `allocateCluster()` writes a FAT sector then writes FSInfo. If the FAT write silently fails but CMD13 is skipped, the FSInfo update succeeds. The free cluster count now disagrees with the actual FAT. Recovery requires fsck.
+
+### Read Path Audit: All readSector()/readSectors() Call Sites
+
+Every read path was audited for the same question: can the worker signal the caller before post-read work completes?
+
+**`readSector()` post-transfer work** (lines 5182-5214):
+```
+1. Read 2 CRC bytes from card
+2. CRC-16 validation (calcDataCRC) with retry loop on mismatch
+3. CMD13 status check for card-internal state (ECC, addressing)
+```
+
+Early signal is impossible — CRC validation must complete before data can be trusted. If the worker signals before CRC check, corrupted data could be consumed by the caller while the worker retries.
+
+**`readSectors()` (CMD18 multi-block)** post-transfer work (lines 5303-5360):
+```
+1. Per-sector CRC validation
+2. CMD12 stop transmission
+3. CMD13 card status
+```
+
+Same constraint — all data must be validated before signaling.
+
+**`do_read_h()` compound read pattern** (lines 3129-3227):
+```
+1. readSector() → data to shared buf
+2. bytemove() → data to per-handle buffer
+3. Copy data to caller's buffer
+4. Cluster boundary check → FAT read for next cluster
+```
+
+The only theoretical opportunity: signal after step 3 (caller has its data) and do the FAT chain follow (step 4) in parallel. But:
+- The FAT read updates `h_sector` and `h_cluster` — handle state the next `readHandle()` depends on
+- If the caller issues another command before FAT chain following completes, handle state is corrupt
+- Gain: ~1-2 microseconds (one `bytemove` time). Not worth the state machine complexity.
+
+**`do_mount()` compound reads** (lines 2736-2835): Sequential data-dependent reads (MBR → VBR → root dir → FAT). Each read's result drives the next. Cannot signal early.
+
+### The Worker's Time Is Not Wasted
+
+A critical observation: the worker cog has **nothing else to do** during busy-wait, CRC validation, or CMD13 checks. These are operations that must happen, and the worker is the only cog that can do them (it owns the SPI pins). The worker isn't "wasting cycles" — it's doing necessary work.
+
+The waste is on the **caller side**: the caller sleeps via WAITATN for the entire duration of work it has no part in. That's the problem the non-blocking API (Decision 14 mitigation, PLAN-NONBLOCKING-FILE-IO) solves — not by making the worker faster, but by freeing the caller to do computation while the worker completes its necessary post-transfer verification.
+
+### Decision
+
+**No read or write operation can safely signal the caller before post-transfer work completes.** Every post-transfer step is mandatory:
+
+- **Busy-wait**: SPI protocol requirement (writes)
+- **CRC-16**: Data integrity verification (reads)
+- **CMD13**: Card-internal error detection (reads and writes)
+- **FAT chain following**: Navigation state for next operation (reads)
+
+The correct optimization is not to make the worker signal earlier, but to let the caller opt out of blocking — which is exactly what the non-blocking API provides. The worker does the same work in the same time; the caller simply doesn't sleep through it.
+
+---
+
+## Summary: Why This Architecture
+
+| Component | Decision | P2-Specific Reason |
+|-----------|----------|-------------------|
+| Cog model | Dedicated worker | Per-cog DIR/OUT registers |
+| Worker language | Spin2 + inline PASM2 | SD card is bottleneck, not P2 |
+| State sharing | DAT block singleton | Spin2 memory model |
+| Signaling | COGATN | Zero-cost waiting, instant wake |
+| SPI method | Smart Pins (revised) | Sysclk independence, higher throughput |
+| Multi-block | CMD18/CMD25 | Reduced command overhead |
+| Streamer | Hub DMA for sectors | Zero-CPU bulk transfers |
+| Buffers | 3× hub RAM | Spin2 occupies cog/LUT; streamer needs hub |
+| Errors | Negative codes, per-cog | Thread-safe multi-cog access |
+| Failures | Timeouts, not retries | Caller has context to decide |
+| CRC validation | GETCRC formula discovered | `((GETCRC ^ $2C68) REV 31) >> 16` replaces 512-byte table |
+| Card detection | P_HIGH_15K pull-up + CMD0 probe | P2 built-in pull resistors eliminate external hardware |
+| **Write busy** | **Immediate, not deferred** | **Data integrity over throughput; non-blocking API recovers the lost cycles** |
+| **Early signal** | **No early signal on reads or writes** | **CRC, CMD13, FAT chain all mandatory before caller can use results** |
+
+### Overarching Principle: P2 Architecture Mental Model
+
+The P2 is **eight independent 32-bit processors (COGs) on a single chip**. Not threads sharing a scheduler. Not cores sharing a cache hierarchy. Eight fully independent processors, each with its own pipeline, 2 KB private RAM, LUT RAM, hardware stack, interrupt levels, and streaming DMA engine. There is no shared instruction bus, no time-slicing, and no preemption between COGs.
+
+The only shared contention is hub RAM access via the "egg beater" round-robin (2-9 clocks per access, deterministic). Everything else — COG RAM, LUT RAM, pipeline execution, streamer — is completely private.
+
+**Every decision in this document should be evaluated against these truths:**
+
+1. **Each COG runs at full speed unless it voluntarily waits.** Every cycle a cog spends sleeping on WAITATN or spinning on locktry is a cycle of a full-speed processor doing nothing. At 350 MHz, a 5ms SD write wastes 1.75 million cycles on the calling cog.
+
+2. **Smart pins first.** Each I/O pin has an autonomous processor with 32 operating modes. SPI protocols should run in smart pin hardware, not bit-banged in a COG. This is why our SPI uses `P_SYNC_TX`/`P_SYNC_RX`/`P_TRANSITION` and why regression to byte loops is forbidden.
+
+3. **Spin2 + PASM2 is the intended pattern.** Spin2 for filesystem logic, inline PASM2 for streamer DMA and SPI transfers. This isn't a compromise — it's the optimal P2 usage pattern.
+
+4. **Bare metal, no OS.** No scheduler, no MMU, no cache. All coordination between COGs is explicit in code — hub mailboxes, hardware locks, COGATN signaling. Nothing happens implicitly.
+
+The blocking API (Decisions 1, 4) is correct for the simple case. But the planned non-blocking file I/O API and idle task execution give embedded designers the ability to keep all cogs running at full speed — synchronizing with the SD subsystem only when results are actually needed. This is how a multi-cog system should work.
+
+These decisions work together to create a driver that is:
+- **Safe**: Multiple cogs can call APIs without conflicts
+- **Efficient**: Smart pin SPI, streamer DMA, COGATN signaling, non-blocking API for full cog utilization
+- **Reliable**: Timeout protection prevents hangs; card presence reliably detected
+- **Maintainable**: Spin2 for logic, inline PASM2 only where hardware demands it
+
+**P2KB Reference**: `p2kbArchP2ArchitectureMentalModel` — the definitive architectural orientation for agents working on P2 code.
+
+---
+
 *Document created: 2026-01-17*
-*Last updated: 2026-03-02 (Decision 13: Card presence detection via P2 internal pull-up)*
+*Last updated: 2026-03-12 (Decision 15: No early-signal optimization on reads or writes)*
 *For use by: Implementation agents, code reviewers*
