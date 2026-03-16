@@ -234,7 +234,87 @@ Not all operations benefit from async:
 | closeFileHandle | 5-50ms | **Yes** — flush + dir update |
 | mount/unmount | 50-500ms | **Yes** — but only done once |
 
-**v1 recommendation**: Start with `startReadHandle` and `startWriteHandle` only. These are the hot-path operations where async matters most. Add others if demand arises.
+### v1 Scope: Async Read and Write Only
+
+**Decision**: v1 implements `startReadHandle` and `startWriteHandle` only.
+
+**Rationale — where the wasted cycles actually live**: The embedded use case that motivates this feature is the steady-state loop — a sensor cog sampling at 1 kHz, a control loop maintaining a PID, a data logger streaming readings:
+
+```
+open file           ← once, at startup
+repeat forever:
+  acquire data      ← time-critical, can't miss
+  write to file     ← 5-50ms blocking = disaster
+  maybe read config ← periodic
+close file          ← once, at shutdown (or never)
+```
+
+Read and write calls execute **thousands of times** inside the hot loop. Each blocking write wastes 1.75M+ cycles on the caller. Async read/write buys back those cycles on every single iteration. This is where essentially 100% of the reclaimed value lives.
+
+**Why open doesn't need async**: Open is a transition operation — it happens once per file session. A 20ms blocking open at startup is irrelevant to a cog that's about to run a loop for hours. Furthermore, the caller usually can't do anything useful until it has the handle — you need the handle to start reading or writing. So the caller would start an async open, do some unrelated work, then retrieve the handle. Possible, but the use case is narrow and the payoff is a one-time savings rather than a recurring one.
+
+**Why close doesn't need async (and the footgun it creates)**: Close is also a one-time transition cost — a 50ms blocking close at shutdown doesn't matter because the cog is done with its work. But beyond the low payoff, async close creates a dangerous anti-pattern: the caller typically **doesn't care about the close result** (the file is done), yet the two-phase protocol requires `getResult()` to release the api_lock. This creates a strong temptation to skip the `getResult()` call, which deadlocks the entire SD subsystem. For read/write, the `getResult()` contract is natural — the caller genuinely wants the byte count and error status. For close, it's pure ceremony to release the lock, and ceremony that users forget is a footgun.
+
+If async close ever becomes needed in a future version, the right answer is likely a different pattern — something like `closeAsync()` that handles the lock release internally after the worker finishes, rather than forcing the caller through the two-phase start/getResult protocol. But that's a v2 concern.
+
+**Summary**: v1 with just `startReadHandle` and `startWriteHandle` captures the hot-path wins where real cycles are being wasted, avoids adding async versions of operations that don't need them, and avoids the close footgun entirely.
+
+---
+
+## Why Auto-Lock-Release Does Not Work for Read/Write
+
+The v1 scope discussion above proposes that a future async close could use auto-lock-release — the worker releases the lock internally after completing the close, so the caller never needs to call `getResult()`. A natural question is: why not use the same pattern for async read and write? If auto-release eliminates the "forgot to call getResult()" footgun for close, shouldn't it eliminate it for read/write too?
+
+**The answer is no.** The lock in the two-phase protocol serves two distinct purposes, and auto-release violates the second one:
+
+**Purpose 1 — During the operation**: The lock prevents another cog from issuing a command while the SPI bus is in use. This is the obvious purpose. Once the operation completes, this purpose is satisfied and the lock could theoretically be released.
+
+**Purpose 2 — After the operation**: The lock prevents another cog from overwriting the mailbox result slots (`pb_status`, `pb_data0`) before the original caller reads them. This is the subtle but critical purpose.
+
+The mailbox has a single set of result slots shared by all cogs. When the worker finishes a read:
+
+```
+Worker finishes:
+  pb_status := bytes_read         (or negative error)
+  pb_data0  := bytes_read
+  pb_cmd    := CMD_NONE
+```
+
+If the worker auto-released the lock here, the following race becomes possible:
+
+```
+Cog A: startReadHandle() → worker completes → lock auto-released
+Cog B: immediately acquires lock, issues deleteFile()
+Cog B: worker writes pb_status := SUCCESS (0) for the delete
+Cog A: getResult() → reads pb_status = 0 → thinks 0 bytes were read
+```
+
+Cog A asked for a read and got back the result of Cog B's delete. Silent data corruption — no error, no crash, just the wrong answer. The caller would believe the read returned 0 bytes (EOF) when the data was actually available.
+
+**For close, auto-release works** precisely because the caller doesn't need to read the result. There is nothing in the mailbox that matters after a close. Whether it returned SUCCESS or E_IO_ERROR, the file is done and the handle is freed. The mailbox can safely be reused by the next cog.
+
+**For read/write, the result is the entire point.** The caller needs the byte count. The caller needs the error status. The lock must stay held until the caller has consumed those values from the mailbox.
+
+### Alternative Considered: Per-Cog Result Slots
+
+One way to enable auto-release for all operations would be to replace the single `pb_status`/`pb_data0` with per-cog arrays:
+
+```spin2
+DAT
+  pb_status_cog   LONG    0[8]    ' Result per cog
+  pb_data0_cog    LONG    0[8]    ' Data per cog
+```
+
+The worker would write results to `pb_status_cog[pb_caller]`, and each cog would read only its own slot. No overwrite risk, so the lock could be released immediately after the worker finishes.
+
+**Rejected because**:
+- Adds 64 bytes of hub RAM (8 cogs x 2 LONGs) for a marginal benefit
+- Complicates the worker's write path and every caller's read path
+- Breaks the clean single-channel mailbox architecture that the blocking API uses
+- The `getResult()` contract for read/write is **natural** — the caller genuinely wants the result, so the ceremony of calling `getResult()` is not ceremony at all, it's the purpose of the operation
+- The footgun (forgetting `getResult()`) is specific to close, where the caller doesn't want the result. For read/write, forgetting `getResult()` means forgetting to use the data you asked for — a much more obvious bug
+
+**Summary**: Auto-lock-release is the right pattern for close (v2) because the caller doesn't need the result. It is the wrong pattern for read/write (v1) because the lock protects the result channel, not just the SPI bus. The two-phase protocol for read/write is not a limitation — it's the correct design for operations where the caller needs the answer.
 
 ---
 
@@ -329,16 +409,30 @@ No conflict between the two features. They're complementary.
 
 ---
 
-## Open Questions
+## Resolved Design Decisions
 
-1. **Should `isComplete()` use POLLATN instead of hub read?** POLLATN is faster (2 cycles vs hub access latency) but consumes the ATN flag. If the caller uses ATN for other purposes, this is destructive. Current design: read `pb_cmd` from hub — safe and simple.
+### D1: isComplete() uses hub read, not POLLATN
 
-2. **Should we add async versions of mount/unmount?** Mount can take 500ms+. But it's called once at startup. Low priority.
+`isComplete()` reads `pb_cmd` from hub RAM (2-9 cycles hub access). POLLATN would be faster (2 cycles) but destructively consumes the ATN flag — if the caller uses ATN for its own inter-cog signaling, the async completion flag would interfere. Hub read is safe, simple, and the cycle difference is negligible.
 
-3. **Error code for double-start?** What if caller calls `startReadHandle()` while an async op is already active? Should return an error. Add `E_ASYNC_BUSY = -95` or similar.
+### D2: No async versions of mount/unmount/open/close
 
-4. **Should `startReadHandle()` validate that the caller is the same cog that mounted?** Not needed — the lock serializes access. Any cog can use async as long as it follows the protocol.
+All are transition operations (once per session or once per file), not hot-loop operations. The recurring cycle savings live in read/write. See "v1 Scope" section above for the full analysis, including why async close creates a dangerous footgun (temptation to skip `getResult()`, deadlocking the SD subsystem).
 
-5. **Naming**: `startReadHandle` / `isComplete` / `getResult` vs `asyncRead` / `asyncPoll` / `asyncFinish` vs `beginRead` / `checkRead` / `endRead`? The start/isComplete/getResult pattern is most explicit about the lifecycle.
+### D3: E_ASYNC_BUSY (-95) returned on double-start
 
-6. **Feature gate**: Should this be behind `#ifdef SD_INCLUDE_ASYNC`? The methods are small (~30 lines each) but add 5 new PUB methods to the API surface. Recommend: yes, gate it.
+If the caller calls `startReadHandle()` or `startWriteHandle()` while an async operation is already active (`async_active == true`), the method returns `E_ASYNC_BUSY` without acquiring the lock or issuing a command. The caller must call `getResult()` or `cancelAsync()` to complete the in-flight operation before starting a new one.
+
+### D4: Any cog can use async
+
+Once the filesystem is mounted, any cog can issue commands — blocking or async. There is no "mounting cog" with special privileges. The `api_lock` serializes access; it doesn't restrict which cog can use it. The only constraint is that `startReadHandle()` and `getResult()` must be called from the **same cog**, because `lockrel()` can only release a lock acquired by that cog. This is already documented in the Lock Ownership section.
+
+### D5: Naming — start/isComplete/getResult
+
+`startReadHandle` / `startWriteHandle` / `isComplete` / `getResult` / `cancelAsync`. This naming is most explicit about the lifecycle: you start an operation, check if it's complete, then get the result. Alternatives considered and rejected:
+- `asyncRead`/`asyncPoll`/`asyncFinish` — "async" prefix is redundant on every call
+- `beginRead`/`checkRead`/`endRead` — "begin/end" implies scoping (like a transaction), which is misleading
+
+### D6: Gated behind SD_INCLUDE_ASYNC
+
+The async API is gated behind `#ifdef SD_INCLUDE_ASYNC`. The 5 PUB methods and 2 error codes add API surface and a new usage pattern that most applications won't need. The blocking API remains the default. `SD_INCLUDE_ALL` enables it along with all other optional features.
