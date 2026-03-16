@@ -217,6 +217,29 @@ PUB go() | result, h1, h2, bytesWritten, bytesRead, pLabel, idx, pEntry, wrtDate
     if h2 >= 0
         sd.closeFileHandle(h2)
 
+    ' Test: syncAllHandles persists directory entry to disk
+    utils.startTest(@"syncAllHandles() persists dir entry to disk")
+    utils.setCheckCountPerTest(3)
+    sd.deleteFile(@vlSyncFile)
+    h1 := sd.createFileNew(@vlSyncFile)
+    utils.evaluateSubBool(h1 >= 0, @"create file", true)
+    if h1 >= 0
+        bytesWritten := sd.writeHandle(h1, @syncContent, strsize(@syncContent))
+        result := sd.syncAllHandles()
+        utils.evaluateSubValue(result, @"syncAllHandles()", 0)
+        ' Open same file with a SECOND read handle -- reads dir entry from disk
+        h2 := sd.openFileRead(@vlSyncFile)
+        if h2 >= 0
+            utils.evaluateSubValue(sd.fileSizeHandle(h2), @"size via 2nd handle", strsize(@syncContent))
+            sd.closeFileHandle(h2)
+        else
+            utils.evaluateSubBool(false, @"size via 2nd handle", true)
+        sd.closeFileHandle(h1)
+    else
+        utils.evaluateSubBool(false, @"syncAllHandles()", true)
+        utils.evaluateSubBool(false, @"size via 2nd handle", true)
+    utils.showSubTestResults()
+
     ' ======================================================================
     ' TEST GROUP: sync
     ' ======================================================================

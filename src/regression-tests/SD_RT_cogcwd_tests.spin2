@@ -1,0 +1,654 @@
+'' =================================================================================================
+''
+''   File....... SD_RT_cogcwd_tests.spin2
+''   Purpose.... This object exercises per-cog CWD isolation: verifies that cog_dir_sec[pb_caller]
+''               correctly isolates working directories across cogs
+''   Author..... Stephen M Moraco
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... MAR 2026
+''   Updated.... 16 MAR 2026
+''
+'' =================================================================================================
+
+CON
+
+     _CLKFREQ        = 350_000_000
+
+     ' P2 Edge module SD slot pins
+     SD_CS   = 60
+     SD_MOSI = 59
+     SD_MISO = 58
+     SD_SCK  = 61
+
+     ' Multi-cog test configuration
+     NUM_WORKER_COGS = 1             ' Only 1 worker needed (main + worker = 2 cogs)
+     STACK_SIZE      = 128           ' Stack size per worker cog (longs)
+
+     ' Worker status codes
+     STATUS_IDLE      = 0
+     STATUS_RUNNING   = 1
+     STATUS_PASS      = 2
+     STATUS_FAIL      = -1
+
+' Enable all features for testing
+#pragma exportdef SD_INCLUDE_ALL
+
+OBJ
+    sd    : "micro_sd_fat32_fs"
+    utils : "isp_rt_utilities"
+
+DAT
+
+' Directory names (no leading slash -- used with changeDirectory after cd to root)
+dirName1        BYTE    "CWDTEST1", 0
+dirName2        BYTE    "CWDTEST2", 0
+rootPath        BYTE    "/", 0
+
+' Seed filenames
+fileNameA       BYTE    "FILE_A.TXT", 0
+fileNameB       BYTE    "FILE_B.TXT", 0
+
+' Test content for seed files
+contentA        BYTE    "AAAA", 0
+contentB        BYTE    "BBBB", 0
+
+' Files created during test 3
+cogFile0        BYTE    "COG0.TXT", 0
+cogFile1        BYTE    "COG1.TXT", 0
+contentCog0     BYTE    "FROM_COG0", 0
+contentCog1     BYTE    "FROM_COG1", 0
+
+' Verification file for test 4
+verifyFile      BYTE    "VERIFY.TXT", 0
+verifyContent   BYTE    "OK", 0
+
+' Worker cog stacks
+worker_stacks   LONG    0[NUM_WORKER_COGS * STACK_SIZE]
+
+' Read buffers for worker cog (separate from stack)
+worker_buf      BYTE    0[64]
+worker_buf_guard BYTE   0[16]
+
+' Worker status and results (shared between cogs)
+worker_status   LONG    0[NUM_WORKER_COGS]
+worker_result   LONG    0[NUM_WORKER_COGS]
+worker_errors   LONG    0[NUM_WORKER_COGS]
+
+' Synchronization
+sync_barrier    LONG    0             ' Barrier for synchronized start
+sync_barrier2   LONG    0             ' Second barrier for multi-phase sync
+
+' Cog IDs of launched workers
+launched_cogs   LONG    0[NUM_WORKER_COGS]
+
+' Main cog read buffer
+main_buf        BYTE    0[64]
+main_buf_guard  BYTE    0[16]
+
+' Current test phase -- tells worker which test to run
+test_phase      LONG    0
+
+
+PUB go() | result
+'' Main entry point -- runs per-cog CWD isolation tests.
+
+    debug(" ")
+    debug("==============================================")
+    debug("  SD Card Driver - Per-Cog CWD Isolation Tests")
+    debug("==============================================")
+    debug(" ")
+
+    ' Initialize worker status
+    worker_status[0] := STATUS_IDLE
+    worker_result[0] := 0
+    worker_errors[0] := 0
+    launched_cogs[0] := -1
+
+    ' Mount the filesystem
+    result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    if result < 0
+        debug("ERROR: Could not mount SD card - aborting CWD tests!")
+        debug("END_SESSION")
+        return
+
+    ' Create test directories and seed files
+    createTestDirectories()
+
+    ' ----------------------------------
+    ' TEST GROUP 1: Basic CWD Independence
+    ' ----------------------------------
+    utils.startTestGroup(@"Basic CWD Independence")
+    runTest1_TwoCogsDifferentDirs()
+    runTest2_CdNoAffectOtherCog()
+    runTest3_BothCogsCreateFiles()
+
+    ' ----------------------------------
+    ' TEST GROUP 2: CWD Persistence Under Load
+    ' ----------------------------------
+    utils.startTestGroup(@"CWD Persistence Under Load")
+    runTest4_CwdSurvivesRepeatOps()
+    runTest5_CwdIsolationOnReset()
+
+    ' ----------------------------------
+    ' Cleanup and summary
+    ' ----------------------------------
+    cleanupTestDirectories()
+
+    result := sd.unmount()
+    if result < 0
+        debug("WARNING: unmount() returned ", sdec_(result))
+
+    utils.ShowTestEndCounts()
+
+    debug(" ")
+    debug("* Per-Cog CWD Isolation Tests Complete")
+    debug("END_SESSION")
+
+
+' ═══════════════════════════════════════════════════════════════════════════
+' TEST METHODS
+' ═══════════════════════════════════════════════════════════════════════════
+
+PRI runTest1_TwoCogsDifferentDirs() | handle, bytesRead, workerOk
+    ' Test 1: Two cogs in different directories see different files
+    utils.startTest(@"Two cogs in different dirs see different files")
+    utils.setCheckCountPerTest(4)
+    utils.initGuard(@worker_buf_guard)
+    utils.initGuard(@main_buf_guard)
+
+    ' Both cogs start at root
+    sd.changeDirectory(@rootPath)
+
+    ' Launch worker -- it will wait for barrier, then cd to CWDTEST2 and read FILE_B.TXT
+    test_phase := 1
+    sync_barrier := 0
+    sync_barrier2 := 0
+    resetWorker()
+    launched_cogs[0] := cogspin(NEWCOG, workerTestDispatch(0), @worker_stacks[0])
+
+    ' Main cog: cd to CWDTEST1
+    sd.changeDirectory(@dirName1)
+
+    ' Release barrier -- worker will cd to CWDTEST2
+    sync_barrier := 1
+
+    ' Wait for worker to finish cd (barrier2)
+    repeat until sync_barrier2 <> 0
+
+    ' Main cog: open and read FILE_A.TXT
+    handle := sd.openFileRead(@fileNameA)
+    utils.evaluateSubValue(handle >= 0 ? 1 : 0, @"main open FILE_A", 1)
+
+    if handle >= 0
+        bytefill(@main_buf, 0, 64)
+        bytesRead := sd.readHandle(handle, @main_buf, 4)
+        utils.evaluateSubBool(bytecomp(@main_buf, @contentA, 4), @"main read AAAA", true)
+        sd.closeFileHandle(handle)
+    else
+        utils.evaluateSubBool(false, @"main read AAAA", true)
+
+    ' Wait for worker to complete
+    waitForWorkers()
+    utils.checkGuard(@worker_buf_guard, @"worker_buf guard")
+    utils.checkGuard(@main_buf_guard, @"main_buf guard")
+
+    ' Check worker results
+    utils.evaluateSubBool(worker_result[0] >= 0, @"worker open FILE_B", true)
+    utils.evaluateSubBool(bytecomp(@worker_buf, @contentB, 4), @"worker read BBBB", true)
+
+    utils.showSubTestResults()
+    stopWorkerCogs()
+    sd.changeDirectory(@rootPath)
+
+
+PRI runTest2_CdNoAffectOtherCog() | handle, result
+    ' Test 2: One cog's changeDirectory does not affect another cog's CWD
+    utils.startTest(@"One cog's cd does not affect another cog's CWD")
+    utils.setCheckCountPerTest(2)
+
+    ' Main cog: cd to CWDTEST1
+    sd.changeDirectory(@rootPath)
+    sd.changeDirectory(@dirName1)
+
+    ' Launch worker that will cd to CWDTEST2
+    test_phase := 2
+    sync_barrier := 0
+    resetWorker()
+    launched_cogs[0] := cogspin(NEWCOG, workerTestDispatch(0), @worker_stacks[0])
+    sync_barrier := 1
+
+    ' Wait for worker to complete its cd
+    waitForWorkers()
+
+    ' Main cog should still be in CWDTEST1
+    handle := sd.openFileRead(@fileNameA)
+    utils.evaluateSubBool(handle >= 0, @"main still sees FILE_A", true)
+    if handle >= 0
+        sd.closeFileHandle(handle)
+
+    utils.evaluateSubBool(worker_status[0] == STATUS_PASS, @"worker cd completed", true)
+
+    utils.showSubTestResults()
+    stopWorkerCogs()
+    sd.changeDirectory(@rootPath)
+
+
+PRI runTest3_BothCogsCreateFiles() | handle, bytesRead, result
+    ' Test 3: Both cogs create files in their own CWD
+    utils.startTest(@"Both cogs create files in their own CWD")
+    utils.setCheckCountPerTest(8)
+
+    ' Start both cogs at root
+    sd.changeDirectory(@rootPath)
+
+    ' Launch worker -- will cd to CWDTEST2 and create COG1.TXT
+    test_phase := 3
+    sync_barrier := 0
+    sync_barrier2 := 0
+    resetWorker()
+    launched_cogs[0] := cogspin(NEWCOG, workerTestDispatch(0), @worker_stacks[0])
+
+    ' Main cog: cd to CWDTEST1
+    sd.changeDirectory(@dirName1)
+
+    ' Release barrier
+    sync_barrier := 1
+
+    ' Wait for worker to finish its cd
+    repeat until sync_barrier2 <> 0
+
+    ' Main cog: create COG0.TXT
+    handle := sd.createFileNew(@cogFile0)
+    if handle >= 0
+        sd.writeHandle(handle, @contentCog0, strsize(@contentCog0))
+        sd.closeFileHandle(handle)
+
+    ' Wait for worker to finish creating its file
+    waitForWorkers()
+    stopWorkerCogs()
+
+    ' Verification phase (main cog only, sequential)
+    ' Check CWDTEST1 has COG0.TXT but not COG1.TXT
+    sd.changeDirectory(@rootPath)
+    sd.changeDirectory(@dirName1)
+
+    handle := sd.openFileRead(@cogFile0)
+    utils.evaluateSubBool(handle >= 0, @"COG0 in CWDTEST1", true)
+    if handle >= 0
+        bytefill(@main_buf, 0, 64)
+        bytesRead := sd.readHandle(handle, @main_buf, strsize(@contentCog0))
+        utils.evaluateSubBool(bytecomp(@main_buf, @contentCog0, strsize(@contentCog0)), @"COG0 content", true)
+        sd.closeFileHandle(handle)
+    else
+        utils.evaluateSubBool(false, @"COG0 content", true)
+
+    handle := sd.openFileRead(@cogFile1)
+    utils.evaluateSubBool(handle < 0, @"COG1 NOT in CWDTEST1", true)
+    if handle >= 0
+        sd.closeFileHandle(handle)
+
+    ' Check CWDTEST2 has COG1.TXT but not COG0.TXT
+    sd.changeDirectory(@rootPath)
+    sd.changeDirectory(@dirName2)
+
+    handle := sd.openFileRead(@cogFile1)
+    utils.evaluateSubBool(handle >= 0, @"COG1 in CWDTEST2", true)
+    if handle >= 0
+        bytefill(@main_buf, 0, 64)
+        bytesRead := sd.readHandle(handle, @main_buf, strsize(@contentCog1))
+        utils.evaluateSubBool(bytecomp(@main_buf, @contentCog1, strsize(@contentCog1)), @"COG1 content", true)
+        sd.closeFileHandle(handle)
+    else
+        utils.evaluateSubBool(false, @"COG1 content", true)
+
+    handle := sd.openFileRead(@cogFile0)
+    utils.evaluateSubBool(handle < 0, @"COG0 NOT in CWDTEST2", true)
+    if handle >= 0
+        sd.closeFileHandle(handle)
+
+    ' No need for separate showSubTestResults -- evaluateSubBool tracks it
+    utils.showSubTestResults()
+
+    ' Clean up created files
+    sd.deleteFile(@cogFile1)
+    sd.changeDirectory(@rootPath)
+    sd.changeDirectory(@dirName1)
+    sd.deleteFile(@cogFile0)
+    sd.changeDirectory(@rootPath)
+
+
+PRI runTest4_CwdSurvivesRepeatOps() | handle, result, iter
+    ' Test 4: CWD survives repeated file operations
+    utils.startTest(@"CWD survives repeated file operations")
+    utils.setCheckCountPerTest(2)
+
+    sd.changeDirectory(@rootPath)
+
+    ' Launch worker -- will cd to CWDTEST2 and do 10 create/delete cycles
+    test_phase := 4
+    sync_barrier := 0
+    sync_barrier2 := 0
+    resetWorker()
+    launched_cogs[0] := cogspin(NEWCOG, workerTestDispatch(0), @worker_stacks[0])
+
+    ' Main cog: cd to CWDTEST1
+    sd.changeDirectory(@dirName1)
+
+    ' Release barrier
+    sync_barrier := 1
+
+    ' Wait for worker cd
+    repeat until sync_barrier2 <> 0
+
+    ' Main cog: 10 iterations of create/write/close/delete
+    repeat iter from 0 to 9
+        handle := sd.createFileNew(@"TMPM.TXT")
+        if handle >= 0
+            sd.writeHandle(handle, @verifyContent, 2)
+            sd.closeFileHandle(handle)
+            sd.deleteFile(@"TMPM.TXT")
+
+    ' Verify main cog is still in CWDTEST1
+    handle := sd.createFileNew(@verifyFile)
+    if handle >= 0
+        sd.writeHandle(handle, @verifyContent, 2)
+        sd.closeFileHandle(handle)
+
+    ' Check that VERIFY.TXT is in CWDTEST1
+    sd.changeDirectory(@rootPath)
+    sd.changeDirectory(@dirName1)
+    handle := sd.openFileRead(@verifyFile)
+    utils.evaluateSubBool(handle >= 0, @"main CWD intact", true)
+    if handle >= 0
+        sd.closeFileHandle(handle)
+    sd.deleteFile(@verifyFile)
+
+    ' Wait for worker to complete
+    waitForWorkers()
+    utils.evaluateSubBool(worker_status[0] == STATUS_PASS, @"worker CWD intact", true)
+    utils.showSubTestResults()
+    stopWorkerCogs()
+    sd.changeDirectory(@rootPath)
+
+
+PRI runTest5_CwdIsolationOnReset() | handle, result
+    ' Test 5: CWD isolation when one cog resets to root
+    utils.startTest(@"CWD isolation when worker resets to root")
+    utils.setCheckCountPerTest(2)
+
+    ' Main cog: cd to CWDTEST1
+    sd.changeDirectory(@rootPath)
+    sd.changeDirectory(@dirName1)
+
+    ' Launch worker that will cd to CWDTEST2, then cd to root
+    test_phase := 5
+    sync_barrier := 0
+    sync_barrier2 := 0
+    resetWorker()
+    launched_cogs[0] := cogspin(NEWCOG, workerTestDispatch(0), @worker_stacks[0])
+    sync_barrier := 1
+
+    ' Wait for worker cd to CWDTEST2
+    repeat until sync_barrier2 <> 0
+
+    ' Release second barrier so worker resets to root
+    sync_barrier := 2
+
+    ' Wait for worker to complete
+    waitForWorkers()
+
+    ' Main cog should still be in CWDTEST1
+    handle := sd.openFileRead(@fileNameA)
+    utils.evaluateSubBool(handle >= 0, @"main CWD unaffected", true)
+    if handle >= 0
+        sd.closeFileHandle(handle)
+
+    utils.evaluateSubBool(worker_status[0] == STATUS_PASS, @"worker completed", true)
+    utils.showSubTestResults()
+    stopWorkerCogs()
+    sd.changeDirectory(@rootPath)
+
+
+' ═══════════════════════════════════════════════════════════════════════════
+' WORKER COG METHODS
+' ═══════════════════════════════════════════════════════════════════════════
+
+PRI workerTestDispatch(worker_id)
+    ' Worker cog dispatcher -- routes to correct test based on test_phase
+    '
+    ' @param worker_id - Worker identifier (always 0 for this suite)
+
+    ' Wait for barrier
+    repeat until sync_barrier <> 0
+
+    case test_phase
+        1: workerTest1(worker_id)
+        2: workerTest2(worker_id)
+        3: workerTest3(worker_id)
+        4: workerTest4(worker_id)
+        5: workerTest5(worker_id)
+
+
+PRI workerTest1(worker_id) | handle, bytesRead
+    ' Worker for Test 1: cd to CWDTEST2, read FILE_B.TXT
+    sd.changeDirectory(@dirName2)
+    sync_barrier2 := 1    ' Signal cd complete
+
+    handle := sd.openFileRead(@fileNameB)
+    worker_result[worker_id] := handle
+
+    if handle >= 0
+        bytefill(@worker_buf, 0, 64)
+        bytesRead := sd.readHandle(handle, @worker_buf, 4)
+        sd.closeFileHandle(handle)
+        worker_status[worker_id] := STATUS_PASS
+    else
+        worker_status[worker_id] := STATUS_FAIL
+
+
+PRI workerTest2(worker_id)
+    ' Worker for Test 2: just cd to CWDTEST2 and report success
+    sd.changeDirectory(@dirName2)
+    worker_status[worker_id] := STATUS_PASS
+
+
+PRI workerTest3(worker_id) | handle
+    ' Worker for Test 3: cd to CWDTEST2, create COG1.TXT
+    sd.changeDirectory(@dirName2)
+    sync_barrier2 := 1    ' Signal cd complete
+
+    handle := sd.createFileNew(@cogFile1)
+    if handle >= 0
+        sd.writeHandle(handle, @contentCog1, strsize(@contentCog1))
+        sd.closeFileHandle(handle)
+        worker_status[worker_id] := STATUS_PASS
+    else
+        worker_errors[worker_id]++
+        worker_status[worker_id] := STATUS_FAIL
+
+
+PRI workerTest4(worker_id) | handle, iter
+    ' Worker for Test 4: cd to CWDTEST2, do 10 create/delete cycles, verify CWD
+    sd.changeDirectory(@dirName2)
+    sync_barrier2 := 1    ' Signal cd complete
+
+    repeat iter from 0 to 9
+        handle := sd.createFileNew(@"TMPW.TXT")
+        if handle >= 0
+            sd.writeHandle(handle, @verifyContent, 2)
+            sd.closeFileHandle(handle)
+            sd.deleteFile(@"TMPW.TXT")
+
+    ' Verify still in CWDTEST2 by creating a file and checking
+    handle := sd.createFileNew(@verifyFile)
+    if handle >= 0
+        sd.writeHandle(handle, @verifyContent, 2)
+        sd.closeFileHandle(handle)
+
+    ' Check that file is in CWDTEST2
+    handle := sd.openFileRead(@verifyFile)
+    if handle >= 0
+        sd.closeFileHandle(handle)
+        sd.deleteFile(@verifyFile)
+        worker_status[worker_id] := STATUS_PASS
+    else
+        worker_status[worker_id] := STATUS_FAIL
+
+
+PRI workerTest5(worker_id)
+    ' Worker for Test 5: cd to CWDTEST2, wait, then cd to root
+    sd.changeDirectory(@dirName2)
+    sync_barrier2 := 1    ' Signal cd complete
+
+    ' Wait for main to release second barrier
+    repeat until sync_barrier == 2
+
+    ' Reset to root
+    sd.changeDirectory(@rootPath)
+    worker_status[worker_id] := STATUS_PASS
+
+
+' ═══════════════════════════════════════════════════════════════════════════
+' HELPER METHODS
+' ═══════════════════════════════════════════════════════════════════════════
+
+PRI bytecomp(pBuf1, pBuf2, count) : bMatch | idx
+    ' Compare two byte buffers
+    '
+    ' @param pBuf1 - Pointer to first buffer
+    ' @param pBuf2 - Pointer to second buffer
+    ' @param count - Number of bytes to compare
+    ' @returns bMatch - TRUE if all bytes match, FALSE otherwise
+
+    bMatch := true
+    repeat idx from 0 to count - 1
+        if BYTE[pBuf1][idx] <> BYTE[pBuf2][idx]
+            bMatch := false
+            quit
+
+
+PRI resetWorker()
+    ' Reset worker status for next test
+    worker_status[0] := STATUS_RUNNING
+    worker_result[0] := 0
+    worker_errors[0] := 0
+
+
+PRI waitForWorkers() | allDone
+    ' Wait for all worker cogs to complete.
+    ' No internal timeout -- external test runner provides safety timeout.
+
+    repeat
+        allDone := true
+        if worker_status[0] == STATUS_RUNNING
+            allDone := false
+
+        if allDone
+            quit
+
+        waitms(10)
+
+
+PRI stopWorkerCogs()
+    ' Stop all launched worker cogs
+
+    if launched_cogs[0] <> -1
+        cogstop(launched_cogs[0])
+        launched_cogs[0] := -1
+
+
+PRI createTestDirectories() | handle
+    ' Create test directories and seed files on the card.
+    ' Creates /CWDTEST1/FILE_A.TXT and /CWDTEST2/FILE_B.TXT
+
+    debug("  Creating test directories...")
+
+    ' Clean up any leftovers from a previous failed run
+    cleanupTestDirectories()
+
+    ' Create CWDTEST1 and seed file
+    sd.newDirectory(@dirName1)
+    sd.changeDirectory(@dirName1)
+    handle := sd.createFileNew(@fileNameA)
+    if handle >= 0
+        sd.writeHandle(handle, @contentA, strsize(@contentA))
+        sd.closeFileHandle(handle)
+        debug("    Created /CWDTEST1/FILE_A.TXT")
+    else
+        debug("    FAILED to create FILE_A.TXT")
+
+    ' Return to root
+    sd.changeDirectory(@rootPath)
+
+    ' Create CWDTEST2 and seed file
+    sd.newDirectory(@dirName2)
+    sd.changeDirectory(@dirName2)
+    handle := sd.createFileNew(@fileNameB)
+    if handle >= 0
+        sd.writeHandle(handle, @contentB, strsize(@contentB))
+        sd.closeFileHandle(handle)
+        debug("    Created /CWDTEST2/FILE_B.TXT")
+    else
+        debug("    FAILED to create FILE_B.TXT")
+
+    ' Return to root
+    sd.changeDirectory(@rootPath)
+    debug("  Test directories created")
+
+
+PRI cleanupTestDirectories()
+    ' Remove all test files and directories.
+    ' Tolerates missing files/dirs (deleteFile returns error but doesn't crash).
+
+    ' Clean files from CWDTEST1
+    sd.changeDirectory(@rootPath)
+    sd.changeDirectory(@dirName1)
+    sd.deleteFile(@fileNameA)
+    sd.deleteFile(@cogFile0)
+    sd.deleteFile(@verifyFile)
+    sd.deleteFile(@"TMPM.TXT")
+
+    ' Clean files from CWDTEST2
+    sd.changeDirectory(@rootPath)
+    sd.changeDirectory(@dirName2)
+    sd.deleteFile(@fileNameB)
+    sd.deleteFile(@cogFile1)
+    sd.deleteFile(@verifyFile)
+    sd.deleteFile(@"TMPW.TXT")
+
+    ' Return to root and delete directories
+    sd.changeDirectory(@rootPath)
+    sd.deleteFile(@dirName1)
+    sd.deleteFile(@dirName2)
+
+    debug("  Test directories cleaned up")
+
+con { license }
+
+{{
+  =================================================================================================
+
+  Terms of Use: MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this
+  software and associated documentation files (the "Software"), to deal in the Software
+  without restriction, including without limitation the rights to use, copy, modify,
+  merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies
+  or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+  INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+  HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+  CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+  OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+  =================================================================================================
+}}

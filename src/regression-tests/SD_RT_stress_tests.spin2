@@ -1,0 +1,563 @@
+'' =================================================================================================
+''
+''   File....... SD_RT_stress_tests.spin2
+''   Purpose.... This object exercises concurrent read/write stress: verifies data integrity
+''               under sustained parallel I/O with multiple cogs
+''   Author..... Stephen M Moraco
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... MAR 2026
+''   Updated.... 16 MAR 2026
+''
+'' =================================================================================================
+
+CON
+
+     _CLKFREQ        = 350_000_000
+
+     ' P2 Edge module SD slot pins
+     SD_CS   = 60
+     SD_MOSI = 59
+     SD_MISO = 58
+     SD_SCK  = 61
+
+     ' Stress test configuration
+     STRESS_ITERATIONS = 50          ' Iterations per stress test loop
+     READ_SIZE         = 512         ' One full sector per read
+     WRITE_SIZE        = 64          ' Small writes to maximize lock contention
+     NUM_SECTORS       = 10          ' Sectors in STRESS_R.TXT
+     OPEN_CLOSE_CYCLES = 20          ' Rapid open/close iteration count
+     DUAL_READ_CYCLES  = 20          ' Dual-reader iteration count
+
+     ' Multi-cog configuration
+     NUM_WORKER_COGS = 1
+     STACK_SIZE      = 128
+
+     ' Worker status codes
+     STATUS_IDLE      = 0
+     STATUS_RUNNING   = 1
+     STATUS_PASS      = 2
+     STATUS_FAIL      = -1
+
+' Enable all features for testing
+#pragma exportdef SD_INCLUDE_ALL
+
+OBJ
+    sd    : "micro_sd_fat32_fs"
+    utils : "isp_rt_utilities"
+
+DAT
+
+' Test filenames
+stressReadFile  BYTE    "STRESS_R.TXT", 0
+stressWriteFile BYTE    "STRESS_W.TXT", 0
+rootPath        BYTE    "/", 0
+
+' Worker cog stacks
+worker_stacks   LONG    0[NUM_WORKER_COGS * STACK_SIZE]
+
+' Main cog read buffer (512 bytes + guard)
+main_read_buf   BYTE    0[READ_SIZE]
+main_read_guard BYTE    0[16]
+
+' Setup buffer for creating STRESS_R.TXT (512 bytes)
+setup_buf       BYTE    0[READ_SIZE]
+
+' Worker buffer (64 bytes + guard)
+worker_buf      BYTE    0[WRITE_SIZE]
+worker_buf_guard BYTE   0[16]
+
+' Worker status and results
+worker_status   LONG    0[NUM_WORKER_COGS]
+worker_result   LONG    0[NUM_WORKER_COGS]
+worker_errors   LONG    0[NUM_WORKER_COGS]
+
+' Synchronization
+sync_barrier    LONG    0
+launched_cogs   LONG    0[NUM_WORKER_COGS]
+
+' Current test phase
+test_phase      LONG    0
+
+' Shared counters for main cog assertions
+sector_errors   LONG    0             ' Data mismatch count (main reader)
+main_cycles_ok  LONG    0             ' Successful open/close cycles (main)
+
+
+PUB go() | result
+'' Main entry point -- runs concurrent stress tests.
+
+    debug(" ")
+    debug("==============================================")
+    debug("  SD Card Driver - Concurrent Stress Tests")
+    debug("==============================================")
+    debug(" ")
+
+    ' Initialize worker status
+    worker_status[0] := STATUS_IDLE
+    worker_result[0] := 0
+    worker_errors[0] := 0
+    launched_cogs[0] := -1
+
+    ' Mount the filesystem
+    result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    if result < 0
+        debug("ERROR: Could not mount SD card - aborting stress tests!")
+        debug("END_SESSION")
+        return
+
+    ' Create test files
+    createStressFiles()
+
+    ' ----------------------------------
+    ' TEST GROUP 1: Sustained Concurrent Read + Write
+    ' ----------------------------------
+    utils.startTestGroup(@"Sustained Concurrent Read + Write")
+    runTest6_ReaderIntegrity()
+    runTest7_WriterIntegrity()
+
+    ' ----------------------------------
+    ' TEST GROUP 2: High-Contention Interleaved Ops
+    ' ----------------------------------
+    utils.startTestGroup(@"High-Contention Interleaved Ops")
+    runTest8_DualReaderSameFile()
+    runTest9_RapidOpenClose()
+
+    ' ----------------------------------
+    ' Cleanup and summary
+    ' ----------------------------------
+    cleanupStressFiles()
+
+    result := sd.unmount()
+    if result < 0
+        debug("WARNING: unmount() returned ", sdec_(result))
+
+    utils.ShowTestEndCounts()
+
+    debug(" ")
+    debug("* Concurrent Stress Tests Complete")
+    debug("END_SESSION")
+
+
+' ═══════════════════════════════════════════════════════════════════════════
+' TEST METHODS
+' ═══════════════════════════════════════════════════════════════════════════
+
+PRI runTest6_ReaderIntegrity() | handle_r, bytesRead, iter, sector_idx, expected_fill, byteIdx, closeResult
+    ' Test 6: Reader integrity under concurrent writing
+    ' Main cog reads STRESS_R.TXT while worker writes STRESS_W.TXT
+    utils.startTest(@"Reader integrity during concurrent write")
+    utils.setCheckCountPerTest(3)
+    utils.initGuard(@main_read_guard)
+    utils.initGuard(@worker_buf_guard)
+
+    sector_errors := 0
+
+    ' Launch writer worker
+    test_phase := 6
+    sync_barrier := 0
+    resetWorker()
+    launched_cogs[0] := cogspin(NEWCOG, workerDispatch(0), @worker_stacks[0])
+
+    ' Main cog: open read file
+    handle_r := sd.openFileRead(@stressReadFile)
+    if handle_r < 0
+        debug("  ERROR: Could not open STRESS_R.TXT for read: ", sdec_(handle_r))
+        utils.evaluateSubBool(false, @"reader open", true)
+        utils.evaluateSubBool(false, @"zero mismatches", true)
+        utils.evaluateSubBool(false, @"worker zero errs", true)
+        utils.showSubTestResults()
+        stopWorkerCogs()
+        return
+
+    ' Release barrier
+    sync_barrier := 1
+
+    ' Reader loop: 50 iterations x 10 sectors = 500 sector reads
+    repeat iter from 0 to STRESS_ITERATIONS - 1
+        sd.seekHandle(handle_r, 0)
+        repeat sector_idx from 0 to NUM_SECTORS - 1
+            bytefill(@main_read_buf, $FF, READ_SIZE)
+            bytesRead := sd.readHandle(handle_r, @main_read_buf, READ_SIZE)
+            expected_fill := sector_idx * $11
+            if bytesRead == READ_SIZE
+                repeat byteIdx from 0 to READ_SIZE - 1
+                    if BYTE[@main_read_buf][byteIdx] <> expected_fill
+                        sector_errors++
+                        quit
+            else
+                sector_errors++
+
+    closeResult := sd.closeFileHandle(handle_r)
+
+    ' Wait for worker
+    waitForWorkers()
+    utils.checkGuard(@main_read_guard, @"main_read guard")
+    utils.checkGuard(@worker_buf_guard, @"worker_buf guard")
+
+    ' Assertions
+    utils.evaluateSubValue(sector_errors, @"sector mismatches", 0)
+    utils.evaluateSubValue(worker_errors[0], @"writer errors", 0)
+    utils.evaluateSubBool(worker_status[0] == STATUS_PASS, @"writer completed", true)
+
+    utils.showSubTestResults()
+    stopWorkerCogs()
+    debug("  Reader: ", udec_(STRESS_ITERATIONS), " iters x ", udec_(NUM_SECTORS), " sectors, ", udec_(sector_errors), " errors")
+
+
+PRI runTest7_WriterIntegrity() | handle, fileSize, expectedSize, bytesRead, chunk, startVal, bMatch, offset
+    ' Test 7: Writer integrity verified after concurrent reading
+    ' Read back STRESS_W.TXT and verify pattern integrity
+    utils.startTest(@"Writer data integrity verification")
+    utils.setCheckCountPerTest(2)
+
+    expectedSize := STRESS_ITERATIONS * WRITE_SIZE
+
+    handle := sd.openFileRead(@stressWriteFile)
+    if handle < 0
+        debug("  ERROR: Could not open STRESS_W.TXT for read: ", sdec_(handle))
+        utils.evaluateSubBool(false, @"file size", true)
+        utils.evaluateSubBool(false, @"data pattern", true)
+        utils.showSubTestResults()
+        return
+
+    fileSize := sd.fileSizeHandle(handle)
+    utils.evaluateSubValue(fileSize, @"file size", expectedSize)
+
+    ' Verify pattern for each chunk
+    bMatch := true
+    repeat chunk from 0 to STRESS_ITERATIONS - 1
+        bytefill(@main_read_buf, 0, WRITE_SIZE)
+        bytesRead := sd.readHandle(handle, @main_read_buf, WRITE_SIZE)
+        if bytesRead == WRITE_SIZE
+            startVal := chunk & $FF
+            if not utils.verifyBufferPattern(@main_read_buf, WRITE_SIZE, startVal)
+                bMatch := false
+                debug("  Mismatch at chunk ", udec_(chunk))
+                quit
+        else
+            bMatch := false
+            debug("  Short read at chunk ", udec_(chunk), ": ", sdec_(bytesRead))
+            quit
+
+    utils.evaluateSubBool(bMatch, @"data pattern OK", true)
+    sd.closeFileHandle(handle)
+    utils.showSubTestResults()
+
+
+PRI runTest8_DualReaderSameFile() | handle_m, handle_w_result, iter, sector_idx, seekPos, bytesRead, expected_fill, byteIdx, mainMismatches
+    ' Test 8: Both cogs read same file simultaneously
+    utils.startTest(@"Both cogs read same file simultaneously")
+    utils.setCheckCountPerTest(3)
+    utils.initGuard(@main_read_guard)
+    utils.initGuard(@worker_buf_guard)
+
+    mainMismatches := 0
+
+    ' Launch worker reader
+    test_phase := 8
+    sync_barrier := 0
+    resetWorker()
+    launched_cogs[0] := cogspin(NEWCOG, workerDispatch(0), @worker_stacks[0])
+
+    ' Main cog: open STRESS_R.TXT for read
+    handle_m := sd.openFileRead(@stressReadFile)
+    if handle_m < 0
+        debug("  ERROR: main could not open for read: ", sdec_(handle_m))
+        utils.evaluateSubBool(false, @"main open", true)
+        utils.evaluateSubBool(false, @"main 0 mismatches", true)
+        utils.evaluateSubBool(false, @"worker 0 mismatches", true)
+        utils.showSubTestResults()
+        stopWorkerCogs()
+        return
+
+    ' Release barrier
+    sync_barrier := 1
+
+    ' Main reader: 20 reads at deterministic pseudo-random sector positions
+    repeat iter from 0 to DUAL_READ_CYCLES - 1
+        sector_idx := (iter * 7) +// NUM_SECTORS
+        seekPos := sector_idx * READ_SIZE
+        sd.seekHandle(handle_m, seekPos)
+        bytefill(@main_read_buf, $FF, READ_SIZE)
+        bytesRead := sd.readHandle(handle_m, @main_read_buf, READ_SIZE)
+        expected_fill := sector_idx * $11
+        if bytesRead == READ_SIZE
+            repeat byteIdx from 0 to READ_SIZE - 1
+                if BYTE[@main_read_buf][byteIdx] <> expected_fill
+                    mainMismatches++
+                    quit
+        else
+            mainMismatches++
+
+    sd.closeFileHandle(handle_m)
+
+    ' Wait for worker
+    waitForWorkers()
+    utils.checkGuard(@main_read_guard, @"main_read guard")
+    utils.checkGuard(@worker_buf_guard, @"worker_buf guard")
+
+    ' Assertions
+    utils.evaluateSubValue(mainMismatches, @"main mismatches", 0)
+    utils.evaluateSubValue(worker_errors[0], @"worker mismatches", 0)
+    utils.evaluateSubBool(worker_status[0] == STATUS_PASS, @"worker completed", true)
+
+    utils.showSubTestResults()
+    stopWorkerCogs()
+
+
+PRI runTest9_RapidOpenClose() | iter, handle, bytesRead, mainErrors, expected_fill
+    ' Test 9: Rapid open/close cycles under contention
+    utils.startTest(@"Rapid open/close cycles under contention")
+    utils.setCheckCountPerTest(3)
+    utils.initGuard(@main_read_guard)
+    utils.initGuard(@worker_buf_guard)
+
+    mainErrors := 0
+
+    ' Launch worker that also does rapid open/close
+    test_phase := 9
+    sync_barrier := 0
+    resetWorker()
+    launched_cogs[0] := cogspin(NEWCOG, workerDispatch(0), @worker_stacks[0])
+
+    ' Release barrier
+    sync_barrier := 1
+
+    ' Main cog: 20 cycles of open/read/close
+    expected_fill := 0  ' Sector 0 fill byte is $00
+    repeat iter from 0 to OPEN_CLOSE_CYCLES - 1
+        handle := sd.openFileRead(@stressReadFile)
+        if handle >= 0
+            bytefill(@main_read_buf, $FF, WRITE_SIZE)
+            bytesRead := sd.readHandle(handle, @main_read_buf, WRITE_SIZE)
+            if bytesRead <> WRITE_SIZE
+                mainErrors++
+            else
+                ' First 64 bytes should be sector 0 fill ($00)
+                repeat bytesRead from 0 to WRITE_SIZE - 1
+                    if BYTE[@main_read_buf][bytesRead] <> expected_fill
+                        mainErrors++
+                        quit
+            sd.closeFileHandle(handle)
+        else
+            mainErrors++
+
+    ' Wait for worker
+    waitForWorkers()
+    utils.checkGuard(@main_read_guard, @"main_read guard")
+    utils.checkGuard(@worker_buf_guard, @"worker_buf guard")
+
+    main_cycles_ok := OPEN_CLOSE_CYCLES - mainErrors
+
+    ' Assertions
+    utils.evaluateSubValue(main_cycles_ok, @"main cycles OK", OPEN_CLOSE_CYCLES)
+    utils.evaluateSubValue(worker_result[0], @"worker cycles OK", OPEN_CLOSE_CYCLES)
+    utils.evaluateSubBool(worker_status[0] == STATUS_PASS, @"worker completed", true)
+
+    utils.showSubTestResults()
+    stopWorkerCogs()
+
+
+' ═══════════════════════════════════════════════════════════════════════════
+' WORKER COG METHODS
+' ═══════════════════════════════════════════════════════════════════════════
+
+PRI workerDispatch(worker_id)
+    ' Worker cog dispatcher
+    '
+    ' @param worker_id - Worker identifier (always 0)
+
+    repeat until sync_barrier <> 0
+
+    case test_phase
+        6: workerTest6_Writer(worker_id)
+        8: workerTest8_DualReader(worker_id)
+        9: workerTest9_RapidOpenClose(worker_id)
+
+
+PRI workerTest6_Writer(worker_id) | handle, iter, bytesWritten, startVal
+    ' Worker for Test 6: write to STRESS_W.TXT continuously
+    handle := sd.openFileWrite(@stressWriteFile)
+    if handle < 0
+        worker_errors[worker_id]++
+        worker_status[worker_id] := STATUS_FAIL
+        return
+
+    repeat iter from 0 to STRESS_ITERATIONS - 1
+        startVal := iter & $FF
+        utils.fillBufferWithPattern(@worker_buf, WRITE_SIZE, startVal)
+        bytesWritten := sd.writeHandle(handle, @worker_buf, WRITE_SIZE)
+        if bytesWritten <> WRITE_SIZE
+            worker_errors[worker_id]++
+
+    sd.closeFileHandle(handle)
+    worker_result[worker_id] := STRESS_ITERATIONS
+
+    if worker_errors[worker_id] == 0
+        worker_status[worker_id] := STATUS_PASS
+    else
+        worker_status[worker_id] := STATUS_FAIL
+
+
+PRI workerTest8_DualReader(worker_id) | handle, iter, sector_idx, seekPos, bytesRead, expected_fill, byteIdx
+    ' Worker for Test 8: read STRESS_R.TXT at pseudo-random sectors
+    handle := sd.openFileRead(@stressReadFile)
+    if handle < 0
+        worker_errors[worker_id]++
+        worker_status[worker_id] := STATUS_FAIL
+        return
+
+    repeat iter from 0 to DUAL_READ_CYCLES - 1
+        ' Use different multiplier than main cog for different access pattern
+        sector_idx := (iter * 3) +// NUM_SECTORS
+        seekPos := sector_idx * READ_SIZE
+        sd.seekHandle(handle, seekPos)
+        bytefill(@worker_buf, $FF, WRITE_SIZE)
+        ' Read only 64 bytes into worker_buf (smaller than main's 512)
+        bytesRead := sd.readHandle(handle, @worker_buf, WRITE_SIZE)
+        expected_fill := sector_idx * $11
+        if bytesRead == WRITE_SIZE
+            repeat byteIdx from 0 to WRITE_SIZE - 1
+                if BYTE[@worker_buf][byteIdx] <> expected_fill
+                    worker_errors[worker_id]++
+                    quit
+        else
+            worker_errors[worker_id]++
+
+    sd.closeFileHandle(handle)
+    worker_result[worker_id] := DUAL_READ_CYCLES
+
+    if worker_errors[worker_id] == 0
+        worker_status[worker_id] := STATUS_PASS
+    else
+        worker_status[worker_id] := STATUS_FAIL
+
+
+PRI workerTest9_RapidOpenClose(worker_id) | iter, handle, bytesRead, expected_fill, errors, cyclesOk
+    ' Worker for Test 9: rapid open/read/close cycles
+    errors := 0
+    expected_fill := 0  ' Sector 0 fill byte
+
+    repeat iter from 0 to OPEN_CLOSE_CYCLES - 1
+        handle := sd.openFileRead(@stressReadFile)
+        if handle >= 0
+            bytefill(@worker_buf, $FF, WRITE_SIZE)
+            bytesRead := sd.readHandle(handle, @worker_buf, WRITE_SIZE)
+            if bytesRead <> WRITE_SIZE
+                errors++
+            else
+                repeat bytesRead from 0 to WRITE_SIZE - 1
+                    if BYTE[@worker_buf][bytesRead] <> expected_fill
+                        errors++
+                        quit
+            sd.closeFileHandle(handle)
+        else
+            errors++
+
+    worker_errors[worker_id] := errors
+    cyclesOk := OPEN_CLOSE_CYCLES - errors
+    worker_result[worker_id] := cyclesOk
+
+    if errors == 0
+        worker_status[worker_id] := STATUS_PASS
+    else
+        worker_status[worker_id] := STATUS_FAIL
+
+
+' ═══════════════════════════════════════════════════════════════════════════
+' HELPER METHODS
+' ═══════════════════════════════════════════════════════════════════════════
+
+PRI resetWorker()
+    ' Reset worker status for next test
+    worker_status[0] := STATUS_RUNNING
+    worker_result[0] := 0
+    worker_errors[0] := 0
+
+
+PRI waitForWorkers() | allDone
+    ' Wait for worker cog to complete.
+
+    repeat
+        if worker_status[0] <> STATUS_RUNNING
+            quit
+        waitms(10)
+
+
+PRI stopWorkerCogs()
+    ' Stop launched worker cog
+
+    if launched_cogs[0] <> -1
+        cogstop(launched_cogs[0])
+        launched_cogs[0] := -1
+
+
+PRI createStressFiles() | handle, sector_idx, fill_byte
+    ' Create STRESS_R.TXT with 10 sectors of known fill patterns
+    ' and STRESS_W.TXT as empty file.
+
+    debug("  Creating stress test files...")
+
+    ' Clean up any leftovers
+    sd.deleteFile(@stressReadFile)
+    sd.deleteFile(@stressWriteFile)
+
+    ' Create STRESS_R.TXT: 10 sectors, each filled with sector_idx * $11
+    handle := sd.createFileNew(@stressReadFile)
+    if handle < 0
+        debug("  ERROR: Could not create STRESS_R.TXT: ", sdec_(handle))
+        return
+
+    repeat sector_idx from 0 to NUM_SECTORS - 1
+        fill_byte := sector_idx * $11
+        bytefill(@setup_buf, fill_byte, READ_SIZE)
+        sd.writeHandle(handle, @setup_buf, READ_SIZE)
+
+    sd.closeFileHandle(handle)
+    debug("    Created STRESS_R.TXT (", udec_(NUM_SECTORS * READ_SIZE), " bytes)")
+
+    ' Create STRESS_W.TXT as empty file
+    handle := sd.createFileNew(@stressWriteFile)
+    if handle >= 0
+        sd.closeFileHandle(handle)
+        debug("    Created STRESS_W.TXT (empty)")
+    else
+        debug("  ERROR: Could not create STRESS_W.TXT: ", sdec_(handle))
+
+
+PRI cleanupStressFiles()
+    ' Remove stress test files
+
+    sd.deleteFile(@stressReadFile)
+    sd.deleteFile(@stressWriteFile)
+    debug("  Stress test files cleaned up")
+
+con { license }
+
+{{
+  =================================================================================================
+
+  Terms of Use: MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this
+  software and associated documentation files (the "Software"), to deal in the Software
+  without restriction, including without limitation the rights to use, copy, modify,
+  merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies
+  or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+  INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+  HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+  CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+  OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+  =================================================================================================
+}}
