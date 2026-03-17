@@ -1,0 +1,321 @@
+'' =================================================================================================
+''
+''   File....... SD_RT_timestamp_tests.spin2
+''   Purpose.... This object tests date/time timestamps: setDate, getDate, live clock,
+''               creation stamps, and modification stamps on close/sync
+''   Author..... Stephen M Moraco
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... MAR 2026
+''   Updated.... 16 MAR 2026
+''
+'' =================================================================================================
+
+CON
+
+     _CLKFREQ        = 350_000_000
+
+     ' P2 Edge module SD slot pins
+     SD_CS   = 60
+     SD_MOSI = 59
+     SD_MISO = 58
+     SD_SCK  = 61
+
+     ' FAT32 directory entry offsets
+     DE_CRT_TIME  = 14    ' Creation time (WORD)
+     DE_CRT_DATE  = 16    ' Creation date (WORD)
+     DE_WRT_TIME  = 22    ' Modification time (WORD)
+     DE_WRT_DATE  = 24    ' Modification date (WORD)
+
+' Enable all features for testing
+#pragma exportdef SD_INCLUDE_ALL
+
+OBJ
+    sd    : "micro_sd_fat32_fs"
+    utils : "isp_rt_utilities"
+
+DAT
+
+tsTestFile1     BYTE    "TSTEST1.TXT", 0
+tsTestFile2     BYTE    "TSTEST2.TXT", 0
+tsContent       BYTE    "Timestamp test data", 0
+rootPath        BYTE    "/", 0
+
+' Buffer for reading directory entries
+read_buf        BYTE    0[64]
+
+
+PUB go() | result
+'' Main entry point -- runs timestamp tests.
+
+    debug(" ")
+    debug("==============================================")
+    debug("  SD Card Driver - Timestamp Tests")
+    debug("==============================================")
+    debug(" ")
+
+    ' Mount the filesystem
+    result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    if result < 0
+        debug("ERROR: Could not mount SD card - aborting timestamp tests!")
+        debug("END_SESSION")
+        return
+
+    ' Clean up any leftovers
+    sd.deleteFile(@tsTestFile1)
+    sd.deleteFile(@tsTestFile2)
+
+    ' ----------------------------------
+    ' TEST GROUP: setDate / getDate
+    ' ----------------------------------
+    utils.startTestGroup(@"setDate / getDate")
+    runTest1_SetDateCreation()
+    runTest2_ModTimestampOnClose()
+    runTest3_TimestampsAdvance()
+    runTest4_DefaultTimestamp()
+    runTest5_GetDateRoundTrip()
+    runTest6_GetDateAdvances()
+
+    ' Cleanup
+    sd.deleteFile(@tsTestFile1)
+    sd.deleteFile(@tsTestFile2)
+
+    result := sd.unmount()
+    if result < 0
+        debug("WARNING: unmount() returned ", sdec_(result))
+
+    utils.ShowTestEndCounts()
+
+    debug(" ")
+    debug("* Timestamp Tests Complete")
+    debug("END_SESSION")
+
+
+' ═══════════════════════════════════════════════════════════════════════════
+' TEST METHODS
+' ═══════════════════════════════════════════════════════════════════════════
+
+PRI runTest1_SetDateCreation() | handle, pEntry, hDir, wrtTime, wrtDate, expTime, expDate, found
+    ' Test 1: setDate produces correct creation timestamp
+    utils.startTest(@"setDate creates correct timestamp")
+    utils.setCheckCountPerTest(3)
+
+    sd.setDate(2026, 3, 15, 14, 30, 0)
+
+    sd.deleteFile(@tsTestFile1)
+    handle := sd.createFileNew(@tsTestFile1)
+    utils.evaluateSubBool(handle >= 0, @"create file", true)
+    if handle >= 0
+        sd.writeHandle(handle, @tsContent, strsize(@tsContent))
+        sd.closeFileHandle(handle)
+
+    ' Read directory entry to check timestamps
+    ' Expected: date = (2026-1980)<<9 | 3<<5 | 15 = 46<<9 | 3<<5 | 15 = $5C6F
+    ' Expected: time = 14<<11 | 30<<5 | 0 = $73C0
+    expDate := (2026 - 1980) << 9 | 3 << 5 | 15
+    expTime := 14 << 11 | 30 << 5 | 0
+
+    found := false
+    hDir := sd.openDirectory(@".")
+    if hDir >= 0
+        repeat
+            pEntry := sd.readDirectoryHandle(hDir)
+            if pEntry == 0
+                quit
+            if strcomp(sd.fileName(), @tsTestFile1)
+                wrtDate := WORD[pEntry + DE_WRT_DATE]
+                wrtTime := WORD[pEntry + DE_WRT_TIME]
+                found := true
+                quit
+        sd.closeDirectoryHandle(hDir)
+
+    utils.evaluateSubBool(found, @"entry found", true)
+    if found
+        utils.evaluateSubValueHex(wrtDate, @"wrtDate", expDate)
+    else
+        utils.evaluateSubBool(false, @"wrtDate", true)
+    utils.showSubTestResults()
+
+
+PRI runTest2_ModTimestampOnClose() | handle, pEntry, hDir, wrtTime, wrtDate, found
+    ' Test 2: Modification timestamp updated on close
+    utils.startTest(@"Mod timestamp updated on close")
+    utils.setCheckCountPerTest(2)
+
+    sd.setDate(2026, 3, 15, 16, 45, 0)
+
+    sd.deleteFile(@tsTestFile1)
+    handle := sd.createFileNew(@tsTestFile1)
+    if handle >= 0
+        sd.writeHandle(handle, @tsContent, strsize(@tsContent))
+        sd.closeFileHandle(handle)
+
+    ' Verify WrtTime and WrtDate are non-zero
+    found := false
+    hDir := sd.openDirectory(@".")
+    if hDir >= 0
+        repeat
+            pEntry := sd.readDirectoryHandle(hDir)
+            if pEntry == 0
+                quit
+            if strcomp(sd.fileName(), @tsTestFile1)
+                wrtDate := WORD[pEntry + DE_WRT_DATE]
+                wrtTime := WORD[pEntry + DE_WRT_TIME]
+                found := true
+                quit
+        sd.closeDirectoryHandle(hDir)
+
+    utils.evaluateSubBool(wrtDate > 0, @"wrtDate non-zero", true)
+    utils.evaluateSubBool(wrtTime > 0, @"wrtTime non-zero", true)
+    utils.showSubTestResults()
+
+
+PRI runTest3_TimestampsAdvance() | handle, pEntry, hDir, dateA, dateB, timeA, timeB, stampA, stampB, found
+    ' Test 3: Timestamps advance over time
+    utils.startTest(@"Timestamps advance over time")
+    utils.setCheckCountPerTest(2)
+
+    sd.setDate(2026, 3, 15, 10, 0, 0)
+
+    ' Create file A immediately
+    sd.deleteFile(@tsTestFile1)
+    handle := sd.createFileNew(@tsTestFile1)
+    if handle >= 0
+        sd.writeHandle(handle, @tsContent, strsize(@tsContent))
+        sd.closeFileHandle(handle)
+
+    ' Wait 5 seconds for clock to advance (2-second granularity, need >= 2 ticks)
+    waitms(5000)
+
+    ' Create file B
+    sd.deleteFile(@tsTestFile2)
+    handle := sd.createFileNew(@tsTestFile2)
+    if handle >= 0
+        sd.writeHandle(handle, @tsContent, strsize(@tsContent))
+        sd.closeFileHandle(handle)
+
+    ' Read both directory entries
+    stampA := 0
+    stampB := 0
+    hDir := sd.openDirectory(@".")
+    if hDir >= 0
+        repeat
+            pEntry := sd.readDirectoryHandle(hDir)
+            if pEntry == 0
+                quit
+            if strcomp(sd.fileName(), @tsTestFile1)
+                stampA := WORD[pEntry + DE_WRT_DATE] << 16 | WORD[pEntry + DE_WRT_TIME]
+            elseif strcomp(sd.fileName(), @tsTestFile2)
+                stampB := WORD[pEntry + DE_WRT_DATE] << 16 | WORD[pEntry + DE_WRT_TIME]
+        sd.closeDirectoryHandle(hDir)
+
+    utils.evaluateSubBool(stampA > 0, @"file A has timestamp", true)
+    utils.evaluateSubBool(stampB > stampA, @"file B later than A", true)
+    utils.showSubTestResults()
+
+    debug("  stampA=$", uhex_(stampA), " stampB=$", uhex_(stampB))
+
+
+PRI runTest4_DefaultTimestamp() | handle, pEntry, hDir, wrtDate, month, day, year, found
+    ' Test 4: Default timestamp without setDate is valid
+    ' Note: We already called setDate, so this tests that the default
+    ' setDate(2009,1,27,7,0,0) at mount time produces valid results.
+    ' We verify the date fields are in plausible ranges.
+    utils.startTest(@"Timestamp fields are valid ranges")
+    utils.setCheckCountPerTest(3)
+
+    ' Read any file's timestamp and verify fields are in range
+    found := false
+    hDir := sd.openDirectory(@".")
+    if hDir >= 0
+        repeat
+            pEntry := sd.readDirectoryHandle(hDir)
+            if pEntry == 0
+                quit
+            if strcomp(sd.fileName(), @tsTestFile1)
+                wrtDate := WORD[pEntry + DE_WRT_DATE]
+                found := true
+                quit
+        sd.closeDirectoryHandle(hDir)
+
+    if found
+        year := (wrtDate >> 9) + 1980
+        month := (wrtDate >> 5) & $0F
+        day := wrtDate & $1F
+        utils.evaluateSubBool(year >= 1980 and year <= 2107, @"year valid", true)
+        utils.evaluateSubBool(month >= 1 and month <= 12, @"month valid", true)
+        utils.evaluateSubBool(day >= 1 and day <= 31, @"day valid", true)
+    else
+        utils.evaluateSubBool(false, @"year valid", true)
+        utils.evaluateSubBool(false, @"month valid", true)
+        utils.evaluateSubBool(false, @"day valid", true)
+    utils.showSubTestResults()
+
+
+PRI runTest5_GetDateRoundTrip() | result, year, month, day, hour, minute, second
+    ' Test 5: getDate round-trip matches setDate
+    utils.startTest(@"getDate round-trip matches setDate")
+    utils.setCheckCountPerTest(6)
+
+    result := sd.setDate(2026, 3, 15, 14, 30, 0)
+
+    year, month, day, hour, minute, second := sd.getDate()
+
+    utils.evaluateSubValue(year, @"year", 2026)
+    utils.evaluateSubValue(month, @"month", 3)
+    utils.evaluateSubValue(day, @"day", 15)
+    utils.evaluateSubValue(hour, @"hour", 14)
+    utils.evaluateSubValue(minute, @"minute", 30)
+    utils.evaluateSubValue(second, @"second", 0)
+    utils.showSubTestResults()
+
+
+PRI runTest6_GetDateAdvances() | year, month, day, hour, minute, second, sec1, sec2
+    ' Test 6: getDate advances after waiting
+    utils.startTest(@"getDate advances after 4 seconds")
+    utils.setCheckCountPerTest(2)
+
+    sd.setDate(2026, 3, 15, 14, 30, 0)
+    year, month, day, hour, minute, second := sd.getDate()
+    sec1 := hour * 3600 + minute * 60 + second
+
+    waitms(5000)
+
+    year, month, day, hour, minute, second := sd.getDate()
+    sec2 := hour * 3600 + minute * 60 + second
+
+    ' Should have advanced by at least 2 seconds (one tick)
+    utils.evaluateSubBool(sec2 > sec1, @"time advanced", true)
+    utils.evaluateSubBool(sec2 - sec1 >= 2, @"advanced >= 2s", true)
+    utils.showSubTestResults()
+
+    debug("  sec1=", udec_(sec1), " sec2=", udec_(sec2), " delta=", udec_(sec2 - sec1))
+
+con { license }
+
+{{
+  =================================================================================================
+
+  Terms of Use: MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this
+  software and associated documentation files (the "Software"), to deal in the Software
+  without restriction, including without limitation the rights to use, copy, modify,
+  merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies
+  or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+  INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+  HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+  CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+  OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+  =================================================================================================
+}}

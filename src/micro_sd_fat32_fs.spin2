@@ -184,6 +184,7 @@ CON ' error codes
   E_INVALID_HANDLE    = -91     ' Handle out of range or not open
   E_FILE_ALREADY_OPEN = -92     ' File is already open for writing (single-writer policy)
   E_NOT_A_DIR_HANDLE  = -93     ' Handle is not a directory handle (or vice versa)
+  E_INVALID_PARAM     = -94     ' Parameter value out of valid range
 
 CON ' card warning/capability flags (bitmask, returned by cardWarnings())
   CW_NONE              = $00     ' No warnings or capabilities
@@ -469,7 +470,9 @@ DAT ' ---- Singleton Control ----
   idle_timer        LONG    0           ' getct() at last command completion
   idle_flush_clocks LONG    0           ' Threshold in clock ticks (set at mount time)
   flush_done        BYTE    false       ' TRUE after idle flush completes (reset on next command)
-  ct_active         BYTE    0           ' TRUE when CT1 clock is armed (F2 placeholder)
+  ct_active         BYTE    0           ' TRUE when live clock is enabled (set by setDate)
+  ct_last_tick      LONG    0           ' getct() at last clock tick
+  ct_tick_clocks    LONG    0           ' Clock ticks per 2-second interval (set at mount)
 
   ' ═══════════════════════════════════════════════════════════════════════
   ' WORKER COG STACK
@@ -509,7 +512,16 @@ DAT ' ---- Singleton Control ----
   cluster_offset LONG   0               ' Cluster offset calculation
   cog_dir_sec   LONG    0[8]            ' Per-cog current directory sector
   entry_address LONG    0               ' Current entry byte address
-  date_stamp    LONG    0               ' Timestamp for new files
+  date_stamp    LONG    0               ' Timestamp for new files (live packed FAT32 date+time)
+
+  ' FIELD pointers into date_stamp (initialized in worker startup)
+  fld_yr        LONG    0               ' ^@date_stamp.[31..25]  Year-1980 (7 bits)
+  fld_mon       LONG    0               ' ^@date_stamp.[24..21]  Month (4 bits)
+  fld_day       LONG    0               ' ^@date_stamp.[20..16]  Day (5 bits)
+  fld_hr        LONG    0               ' ^@date_stamp.[15..11]  Hour (5 bits)
+  fld_min       LONG    0               ' ^@date_stamp.[10..5]   Minute (6 bits)
+  fld_sec       LONG    0               ' ^@date_stamp.[4..0]    Second/2 (5 bits)
+  days_table    BYTE    31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31
   n_sec         LONG    0               ' Current sector number
   flags         LONG    0               ' State flags (F_MOUNTED, F_NEWDIR)
   dir_sec_in_buf LONG   0               ' Directory sector currently in dir_buf
@@ -1061,17 +1073,56 @@ PUB freeSpace() : result
     result := pb_data0
 
 
-PUB setDate(year, month, day, hour, minute, second)
-'' Set the current date and time for new files/folders.
+PUB setDate(year, month, day, hour, minute, second) : result
+'' Set the current date and time for file timestamps.
+'' Starts the auto-incrementing clock (CT1-based, 2-second tick).
 ''
-'' @param year - Year (e.g., 2024)
+'' @param year - Year (1980-2107)
 '' @param month - Month (1-12)
 '' @param day - Day (1-31)
 '' @param hour - Hour (0-23)
 '' @param minute - Minute (0-59)
 '' @param second - Second (0-59)
+'' @returns result - SUCCESS (0) or E_INVALID_PARAM
 
-  date_stamp := (year - FAT_EPOCH_YEAR) << 25 | month << 21 | day << 16 | hour << 11 | minute << 5 | second >> 1
+  if year < 1980 or year > 2107
+    return set_error(E_INVALID_PARAM)
+  if month < 1 or month > 12
+    return set_error(E_INVALID_PARAM)
+  if day < 1 or day > daysInMonth(year, month)
+    return set_error(E_INVALID_PARAM)
+  if hour > 23 or minute > 59 or second > 59
+    return set_error(E_INVALID_PARAM)
+
+  FIELD[fld_yr][0]  := year - FAT_EPOCH_YEAR
+  FIELD[fld_mon][0] := month
+  FIELD[fld_day][0] := day
+  FIELD[fld_hr][0]  := hour
+  FIELD[fld_min][0] := minute
+  FIELD[fld_sec][0] := second >> 1
+  ct_active := true
+  ct_last_tick := getct()
+  result := SUCCESS
+
+
+PUB getDate() : year, month, day, hour, minute, second
+'' Get the current date and time as the driver knows it.
+'' Returns the live clock value maintained by the worker cog CT1 tick.
+'' If setDate() was never called, returns the default timestamp.
+''
+'' @returns year - Year (e.g., 2026)
+'' @returns month - Month (1-12)
+'' @returns day - Day (1-31)
+'' @returns hour - Hour (0-23)
+'' @returns minute - Minute (0-59)
+'' @returns second - Second (0-58, even values only)
+
+  year   := FIELD[fld_yr][0] + FAT_EPOCH_YEAR
+  month  := FIELD[fld_mon][0]
+  day    := FIELD[fld_day][0]
+  hour   := FIELD[fld_hr][0]
+  minute := FIELD[fld_min][0]
+  second := FIELD[fld_sec][0] << 1
 
 
 CON ' ═══════════════════════════════════════════════════════════════════════════
@@ -2120,18 +2171,27 @@ PRI fs_worker() | cur_cmd
 
   debug[CH_API]("  [fs_worker] Pins initialized: CS=P", udec_(cs), " MOSI=P", udec_(mosi), " MISO=P", udec_(miso), " SCK=P", udec_(sck))
 
+  ' Initialize FIELD pointers for direct date_stamp access
+  fld_yr  := ^@date_stamp.[31..25]
+  fld_mon := ^@date_stamp.[24..21]
+  fld_day := ^@date_stamp.[20..16]
+  fld_hr  := ^@date_stamp.[15..11]
+  fld_min := ^@date_stamp.[10..5]
+  fld_sec := ^@date_stamp.[4..0]
+
   ' Main command loop (structured: clock tick, command dispatch, idle flush)
   idle_timer := getct()
   flush_done := true
 
   repeat
-    ' --- Clock tick (F2 — placeholder, no-op until F2) ---
-    'if ct_active and pollct1()
-    '  tick_clock()
-    '  addct1(clkfreq * 2)
-
     ' --- Filesystem command (Priority 1) ---
     repeat until (cur_cmd := pb_cmd) <> CMD_NONE
+      ' --- Clock tick (F2: 2-second live timestamp) ---
+      if ct_active
+        if (getct() - ct_last_tick) >= ct_tick_clocks
+          tick_clock()
+          ct_last_tick := getct()
+
       ' --- Auto-flush (F3 — placeholder, no-op until F3) ---
       'if not flush_done
       '  if (getct() - idle_timer) >= idle_flush_clocks
@@ -2377,6 +2437,51 @@ PRI fs_worker() | cur_cmd
     COGATN(1 << pb_caller)                                                      ' Wake the caller
     idle_timer := getct()
     flush_done := false
+
+
+PRI tick_clock()
+' Advance the live clock by 2 seconds. Operates directly on the packed
+' date_stamp LONG via FIELD pointers — no unpacking, no repacking.
+
+  FIELD[fld_sec][0]++
+  if FIELD[fld_sec][0] >= 30
+    FIELD[fld_sec][0]~
+    FIELD[fld_min][0]++
+    if FIELD[fld_min][0] >= 60
+      FIELD[fld_min][0]~
+      FIELD[fld_hr][0]++
+      if FIELD[fld_hr][0] >= 24
+        FIELD[fld_hr][0]~
+        FIELD[fld_day][0]++
+        if FIELD[fld_day][0] > daysInMonth(FIELD[fld_yr][0] + FAT_EPOCH_YEAR, FIELD[fld_mon][0])
+          FIELD[fld_day][0] := 1
+          FIELD[fld_mon][0]++
+          if FIELD[fld_mon][0] > 12
+            FIELD[fld_mon][0] := 1
+            FIELD[fld_yr][0]++
+
+
+PRI daysInMonth(year, month) : days
+' Return the number of days in the given month.
+'
+' @param year - Full year (e.g., 2026)
+' @param month - Month (1-12)
+' @returns days - Number of days in that month
+
+  days := BYTE[@days_table][month - 1]
+  if month == 2 and isLeapYear(year)
+    days := 29
+
+
+PRI isLeapYear(year) : result
+' Check if year is a leap year.
+'
+' @param year - Full year (e.g., 2024)
+' @returns result - TRUE if leap year
+
+  result := (year & 3) == 0
+  if year == 2100
+    result := false
 
 
 PRI send_command(op_cmd, p0, p1, p2, p3) : status
@@ -2806,6 +2911,7 @@ PRI do_mount() : result | reserved, pPart, pVBR, pFSI, idx, p_entry, cluster, se
           root_sec := (fat_sec + 2 * sec_per_fat)
           longfill(@cog_dir_sec, root_sec, 8)                                   ' All cogs start at root
           idle_flush_clocks := clkfreq / 1000 * IDLE_FLUSH_MS                   ' Auto-flush threshold
+          ct_tick_clocks := clkfreq * 2                                            ' 2-second clock tick interval
           cluster_offset := root_sec // sec_per_clus
           bytemove(@vol_label, vbrVolLabelAddr(pVBR), SFN_TOTAL_LEN)
           vol_label[11] := 0
@@ -3146,6 +3252,7 @@ PRI do_close_h(handle) : result | p_buf
         result := E_IO_ERROR
       else
         long[@dir_buf + h_dir_offset[handle] + DE_FILESIZE_OFFSET] := h_size[handle]  ' Update size field
+        long[@dir_buf + h_dir_offset[handle] + DE_WRT_TIME_OFFSET] := date_stamp    ' Update modification timestamp
         if writeSector(h_dir_sector[handle], BUF_DIR) < 0
           debug[CH_FILE]("  [do_close_h] Directory write FAILED for sector ", udec_(h_dir_sector[handle]))
           result := E_IO_ERROR
@@ -3474,6 +3581,7 @@ PRI do_sync_h(handle) : result | p_buf
         result := E_IO_ERROR
       else
         long[@dir_buf + h_dir_offset[handle] + DE_FILESIZE_OFFSET] := h_size[handle]
+        long[@dir_buf + h_dir_offset[handle] + DE_WRT_TIME_OFFSET] := date_stamp    ' Update modification timestamp
         writeSector(h_dir_sector[handle], BUF_DIR)
 
     debug[CH_FILE]("  [do_sync_h] Sync complete")
