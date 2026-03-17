@@ -26,7 +26,7 @@ Automated regression test suite for the P2 SD Card Driver. All tests execute on 
 | Test Suite | Description | Tests |
 |------------|-------------|-------|
 | **Directory Handle Tests** | V3 directory handle enumeration, pool interaction, E_NOT_A_DIR_HANDLE | 25 |
-| **Volume Tests** | Volume label, VBR access, syncAll, sync, setDate, disk full simulation | 27 |
+| **Volume Tests** | Volume label, VBR access, syncAll, sync, setDate, disk full, auto-flush | 31 |
 | **Register Tests** | CSD register access, timeout values, capacity cross-check | 10 |
 | **Speed Tests** | SPI frequency, CMD6, high-speed mode, speed boundaries | 15 |
 | **CRC Diagnostic Tests** | CRC counters, validation toggle, CMD13 diagnostics | 14 |
@@ -38,8 +38,8 @@ Automated regression test suite for the P2 SD Card Driver. All tests execute on 
 | **Stress Tests** | Concurrent reader/writer integrity, rapid open/close under contention | 4 |
 | **Timestamp Tests** | setDate/getDate round-trip, live clock advance, creation/modification stamps | 6 |
 | **Async I/O Tests** | Non-blocking read/write, isComplete polling, cancelAsync, multi-cog interleave | 6 |
-| | **Additional Total** | **160** |
-| | **Grand Total (24 suites)** | **448** |
+| | **Additional Total** | **164** |
+| | **Grand Total (24 suites)** | **452** |
 
 ## Prerequisites
 

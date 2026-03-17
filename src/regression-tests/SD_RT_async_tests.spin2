@@ -187,11 +187,15 @@ PRI runTest2_AsyncWriteVerify() | hWrite, hRead, status, bytesWritten, bytesRead
     hWrite := sd.createFileNew(@asyncTestFile)
     utils.evaluateSubBool(hWrite >= 0, @"create for async write", true)
     if hWrite >= 0
+        debug("  DBG: calling startWriteHandle(", sdec_(hWrite), ", @buf, ", udec_(contentLen), ")")
         status := sd.startWriteHandle(hWrite, @asyncContent, contentLen)
+        debug("  DBG: startWriteHandle returned status=", sdec_(status))
         if status == sd.PENDING
             bytesWritten := sd.getResult()
+            debug("  DBG: getResult returned=", sdec_(bytesWritten))
         else
             bytesWritten := status
+            debug("  DBG: startWriteHandle not PENDING, bytesWritten=", sdec_(bytesWritten))
         sd.closeFileHandle(hWrite)
     else
         bytesWritten := -1

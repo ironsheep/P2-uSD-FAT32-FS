@@ -1219,6 +1219,7 @@ PUB getResult() : result
     result := pb_data0
 
   async_active := false
+  if POLLATN()                           ' Drain stale COGATN from worker completion
   lockrel(api_lock)
 
 
@@ -1235,6 +1236,7 @@ PUB cancelAsync() : result
   repeat until pb_cmd == CMD_NONE
 
   async_active := false
+  if POLLATN()                           ' Drain stale COGATN from worker completion
   lockrel(api_lock)
   result := SUCCESS
 

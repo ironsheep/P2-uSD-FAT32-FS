@@ -44,6 +44,7 @@ LOG_DIR="$SCRIPT_DIR/logs"
 # --- Parse Arguments ---
 INCLUDE_FORMAT=false
 COMPILE_ONLY=false
+RUN_ONLY=false
 FROM_SUITE=""
 
 while [[ $# -gt 0 ]]; do
@@ -58,19 +59,22 @@ while [[ $# -gt 0 ]]; do
             ;;
         --include-format)  INCLUDE_FORMAT=true; shift ;;
         --compile-only)    COMPILE_ONLY=true; shift ;;
+        --run-only)        RUN_ONLY=true; shift ;;
         -h|--help)
-            echo "Usage: $0 [--from <name>] [--include-format] [--compile-only]"
+            echo "Usage: $0 [--from <name>] [--include-format] [--compile-only] [--run-only]"
             echo ""
             echo "Options:"
             echo "  --from <name>      Resume from suite matching <name> (substring match)"
             echo "  --include-format   Include format test (WARNING: erases SD card!)"
             echo "  --compile-only     Only compile, do not run on hardware"
+            echo "  --run-only         Skip compile, run on hardware using existing .bin files"
             echo ""
             echo "Examples:"
-            echo "  $0                              # Full regression (19 suites)"
-            echo "  $0 --include-format             # Full regression + format (20 suites)"
+            echo "  $0                              # Full regression (23 suites)"
+            echo "  $0 --include-format             # Full regression + format (24 suites)"
             echo "  $0 --from volume                # Resume from SD_RT_volume_tests"
             echo "  $0 --compile-only               # Compile check only"
+            echo "  $0 --run-only                   # Run only (after prior compile)"
             exit 0
             ;;
         *) echo -e "${RED}Error: Unknown option: $1${NC}"; exit 1 ;;
@@ -186,7 +190,13 @@ else
     echo "  Test suites: ${TOTAL_SUITES}"
 fi
 echo "  Format test: $([[ "$INCLUDE_FORMAT" == true ]] && echo "INCLUDED (destructive!)" || echo "excluded")"
-echo "  Mode: $([[ "$COMPILE_ONLY" == true ]] && echo "COMPILE ONLY" || echo "COMPILE + RUN")"
+if [[ "$COMPILE_ONLY" == true ]]; then
+    echo "  Mode: COMPILE ONLY"
+elif [[ "$RUN_ONLY" == true ]]; then
+    echo "  Mode: RUN ONLY (using existing .bin files)"
+else
+    echo "  Mode: COMPILE + RUN"
+fi
 echo ""
 
 # --- Compute include paths once ---
@@ -198,56 +208,88 @@ UTILS_PATH="$(_relpath "$PROJECT_ROOT/src/UTILS" "$REGTEST_DIR")"
 DEMO_PATH="$(_relpath "$PROJECT_ROOT/src/DEMO" "$REGTEST_DIR")"
 
 # --- Phase 1: Compile tests (from START_INDEX onward) ---
-echo -e "${CYAN}--- Phase 1: Compiling test suites ---${NC}"
-echo ""
-
-COMPILE_PASS=0
-COMPILE_FAIL=0
-COMPILE_FAILED_FILES=()
-
-cd "$REGTEST_DIR"
-
-for i in "${!SUITES[@]}"; do
-    if [[ $i -lt $START_INDEX ]]; then
-        continue
-    fi
-
-    entry="${SUITES[$i]}"
-    FILE="${entry%%:*}"
-    if [[ ! -f "$FILE" ]]; then
-        echo -e "  ${RED}MISSING${NC}: $FILE"
-        COMPILE_FAIL=$((COMPILE_FAIL + 1))
-        COMPILE_FAILED_FILES+=("$FILE")
-        continue
-    fi
-
-    BASENAME="${FILE%.spin2}"
-    if pnut-ts -d -I "$SRC_PATH" -I "$UTILS_PATH" -I "$DEMO_PATH" -I . "$FILE" >/dev/null 2>&1; then
-        SIZE=$(wc -c < "${BASENAME}.bin" | tr -d ' ')
-        echo -e "  ${GREEN}OK${NC}: $FILE (${SIZE} bytes)"
-        COMPILE_PASS=$((COMPILE_PASS + 1))
-    else
-        echo -e "  ${RED}FAIL${NC}: $FILE"
-        pnut-ts -d -I "$SRC_PATH" -I "$UTILS_PATH" -I "$DEMO_PATH" -I . "$FILE" 2>&1 | grep -i error || true
-        COMPILE_FAIL=$((COMPILE_FAIL + 1))
-        COMPILE_FAILED_FILES+=("$FILE")
-    fi
-done
-
-cd "$SCRIPT_DIR"
-
-echo ""
-echo -e "  Compile results: ${GREEN}${COMPILE_PASS} pass${NC}, ${RED}${COMPILE_FAIL} fail${NC}"
-echo ""
-
-if [[ $COMPILE_FAIL -gt 0 ]]; then
-    echo -e "${RED}Compile failures:${NC}"
-    for f in "${COMPILE_FAILED_FILES[@]}"; do
-        echo "  - $f"
-    done
+if [[ "$RUN_ONLY" == true ]]; then
+    echo -e "${CYAN}--- Phase 1: Compile skipped (--run-only) ---${NC}"
     echo ""
-    echo -e "${RED}Fix compile errors before running tests.${NC}"
-    exit 1
+
+    # Verify .bin files exist for all suites we'll run
+    MISSING_BINS=()
+    cd "$REGTEST_DIR"
+    for i in "${!SUITES[@]}"; do
+        if [[ $i -lt $START_INDEX ]]; then
+            continue
+        fi
+        entry="${SUITES[$i]}"
+        FILE="${entry%%:*}"
+        BASENAME="${FILE%.spin2}"
+        if [[ ! -f "${BASENAME}.bin" ]]; then
+            MISSING_BINS+=("$FILE")
+        fi
+    done
+    cd "$SCRIPT_DIR"
+
+    if [[ ${#MISSING_BINS[@]} -gt 0 ]]; then
+        echo -e "${RED}Missing .bin files (run without --run-only first):${NC}"
+        for f in "${MISSING_BINS[@]}"; do
+            echo "  - ${f%.spin2}.bin"
+        done
+        echo ""
+        exit 1
+    fi
+    echo -e "  All .bin files present"
+    echo ""
+else
+    echo -e "${CYAN}--- Phase 1: Compiling test suites ---${NC}"
+    echo ""
+
+    COMPILE_PASS=0
+    COMPILE_FAIL=0
+    COMPILE_FAILED_FILES=()
+
+    cd "$REGTEST_DIR"
+
+    for i in "${!SUITES[@]}"; do
+        if [[ $i -lt $START_INDEX ]]; then
+            continue
+        fi
+
+        entry="${SUITES[$i]}"
+        FILE="${entry%%:*}"
+        if [[ ! -f "$FILE" ]]; then
+            echo -e "  ${RED}MISSING${NC}: $FILE"
+            COMPILE_FAIL=$((COMPILE_FAIL + 1))
+            COMPILE_FAILED_FILES+=("$FILE")
+            continue
+        fi
+
+        BASENAME="${FILE%.spin2}"
+        if pnut-ts -d -I "$SRC_PATH" -I "$UTILS_PATH" -I "$DEMO_PATH" -I . "$FILE" >/dev/null 2>&1; then
+            SIZE=$(wc -c < "${BASENAME}.bin" | tr -d ' ')
+            echo -e "  ${GREEN}OK${NC}: $FILE (${SIZE} bytes)"
+            COMPILE_PASS=$((COMPILE_PASS + 1))
+        else
+            echo -e "  ${RED}FAIL${NC}: $FILE"
+            pnut-ts -d -I "$SRC_PATH" -I "$UTILS_PATH" -I "$DEMO_PATH" -I . "$FILE" 2>&1 | grep -i error || true
+            COMPILE_FAIL=$((COMPILE_FAIL + 1))
+            COMPILE_FAILED_FILES+=("$FILE")
+        fi
+    done
+
+    cd "$SCRIPT_DIR"
+
+    echo ""
+    echo -e "  Compile results: ${GREEN}${COMPILE_PASS} pass${NC}, ${RED}${COMPILE_FAIL} fail${NC}"
+    echo ""
+
+    if [[ $COMPILE_FAIL -gt 0 ]]; then
+        echo -e "${RED}Compile failures:${NC}"
+        for f in "${COMPILE_FAILED_FILES[@]}"; do
+            echo "  - $f"
+        done
+        echo ""
+        echo -e "${RED}Fix compile errors before running tests.${NC}"
+        exit 1
+    fi
 fi
 
 if [[ "$COMPILE_ONLY" == true ]]; then
