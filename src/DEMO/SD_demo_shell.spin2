@@ -87,6 +87,10 @@ CON { parser }
   CLI_BUF_SIZE = 128                                            ' command input buffer size
   CLI_MAX_TKNS =  10                                            ' max tokens per command
 
+CON { FAT32 directory entry offsets }
+
+  DE_WRT_TIME  = 22                                             ' modification time (WORD)
+  DE_WRT_DATE  = 24                                             ' modification date (WORD)
 
 CON { command enums }
 
@@ -102,6 +106,7 @@ CON { command enums }
   CMD_AUDIT, CMD_FSCK, CMD_BENCH
   CMD_LABEL, CMD_VOL
   CMD_ALIAS, CMD_TREE
+  CMD_DATE
 
 
 '' Enable full driver features for card info display
@@ -275,6 +280,7 @@ PUB run_command(eCmd)
       CMD_LABEL, CMD_VOL      : do_label()
       CMD_ALIAS               : do_alias()
       CMD_TREE                : do_tree()
+      CMD_DATE                : do_date()
       other                   : not_implemented()
 
 
@@ -301,7 +307,8 @@ PUB show_help()
     serial.fstr0(@"  card        Card summary (cid)      fsck        Check & repair FS\r\n")
     serial.fstr0(@"  version     Driver version          bench       Throughput test\r\n")
     serial.fstr0(@"  label [n]   Volume label (vol)      format      Format SD card\r\n")
-    serial.fstr0(@"  cls         Clear screen            help        This help\r\n")
+    serial.fstr0(@"  date [...]  Show/set date+time      help        This help\r\n")
+    serial.fstr0(@"  cls         Clear screen\r\n")
     serial.fstr0(@"  alias       Show command aliases\r\n")
 
 
@@ -454,8 +461,8 @@ PUB do_stats() | total_sectors, total_mb, free_sectors, free_mb
     serial.fstr1(@"Label:  %s\r\n", sd.volumeLabel())
 
 
-PUB do_dir() | dh, result, count, total_size, attrib, size, p_name, p_path
-'' List directory contents with attributes, sizes, and summary using handle-based enumeration.
+PUB do_dir() | dh, result, count, total_size, attrib, size, p_name, p_path, p_entry, wrt_date, wrt_time, yr, mo, dy, hr, mn
+'' List directory contents with attributes, timestamps, sizes, and summary.
 ''
 ' @local dh - Directory handle
 ' @local result - readDirectoryHandle result
@@ -465,6 +472,14 @@ PUB do_dir() | dh, result, count, total_size, attrib, size, p_name, p_path
 ' @local size - File size of current entry
 ' @local p_name - Pointer to current entry name string
 ' @local p_path - Pointer to path argument or "."
+' @local p_entry - Pointer to 32-byte FAT directory entry
+' @local wrt_date - Packed FAT date word
+' @local wrt_time - Packed FAT time word
+' @local yr - Year extracted from date
+' @local mo - Month extracted from date
+' @local dy - Day extracted from date
+' @local hr - Hour extracted from time
+' @local mn - Minute extracted from time
 
   if (ntokens > 2)
     bad_syntax()
@@ -481,11 +496,10 @@ PUB do_dir() | dh, result, count, total_size, attrib, size, p_name, p_path
     else
       p_path := @"."
       serial.fstr1(@"\r\n Directory of %s\r\n\r\n", @cwd)
-    serial.fstr0(@"  Attr      Size  Name\r\n")
-    serial.fstr0(@"  ----  --------  --------------------------------\r\n")
+    serial.fstr0(@"  Attr  Modified              Size  Name\r\n")
+    serial.fstr0(@"  ----  ----------------  --------  --------------------------------\r\n")
 
     dh := sd.openDirectory(p_path)
-    debug("openDir handle=", sdec_(dh))
     if (dh < 0)
       serial.fstr1(@"  Error opening directory: %d\r\n", dh)
     else
@@ -493,8 +507,8 @@ PUB do_dir() | dh, result, count, total_size, attrib, size, p_name, p_path
       total_size := 0
 
       repeat
-        result := sd.readDirectoryHandle(dh)
-        if (result == 0)                                            ' no more entries
+        p_entry := sd.readDirectoryHandle(dh)
+        if (p_entry == 0)                                            ' no more entries
           quit
 
         p_name := sd.fileName()
@@ -504,12 +518,24 @@ PUB do_dir() | dh, result, count, total_size, attrib, size, p_name, p_path
         attrib := sd.attributes()
         size := sd.fileSize()
 
+        ' Extract modification timestamp from directory entry
+        wrt_time := WORD[p_entry + DE_WRT_TIME]
+        wrt_date := WORD[p_entry + DE_WRT_DATE]
+        yr := (wrt_date >> 9) + 1980
+        mo := (wrt_date >> 5) & $0F
+        dy := wrt_date & $1F
+        hr := wrt_time >> 11
+        mn := (wrt_time >> 5) & $3F
+
         ' Format attributes
         serial.fstr0(@"  ")
         serial.tx((attrib & sd.ATTR_DIRECTORY) ? "D" : "-")          ' directory
         serial.tx((attrib & sd.ATTR_READONLY) ? "R" : "-")           ' read-only
         serial.tx((attrib & sd.ATTR_HIDDEN) ? "H" : "-")             ' hidden
         serial.tx((attrib & sd.ATTR_SYSTEM) ? "S" : "-")             ' system
+
+        ' Format timestamp: YYYY-MM-DD HH:MM
+        serial.fstr5(@"  %04d-%02d-%02d %02d:%02d", yr, mo, dy, hr, mn)
 
         if (attrib & sd.ATTR_DIRECTORY)                               ' directory
           serial.fstr1(@"    <DIR>  %s\r\n", p_name)
@@ -1355,6 +1381,41 @@ PUB do_alias()
   serial.fstr0(@"  cls         clear       Clear screen\r\n")
 
 
+PUB do_date() | yr, mo, dy, hr, mn, sec, result
+'' Display or set the driver clock. Usage: date [YYYY MM DD HH MM SS]
+''
+' @local yr - Year
+' @local mo - Month
+' @local dy - Day
+' @local hr - Hour
+' @local mn - Minute
+' @local sec - Second
+' @local result - setDate return value
+
+  if (ntokens <> 1 and ntokens <> 7)
+    serial.fstr0(@"Usage: date                   Show current date/time\r\n")
+    serial.fstr0(@"       date YYYY MM DD HH MM SS   Set date/time\r\n")
+  elseif (check_mount() == false)
+    ' error already printed by check_mount()
+  elseif (ntokens == 7)
+    ' Set date/time from 6 arguments
+    yr  := decval(token(1))
+    mo  := decval(token(2))
+    dy  := decval(token(3))
+    hr  := decval(token(4))
+    mn  := decval(token(5))
+    sec := decval(token(6))
+    result := sd.setDate(yr, mo, dy, hr, mn, sec)
+    if (result < 0)
+      serial.fstr1(@"Invalid date/time (error %d)\r\n", result)
+    else
+      serial.fstr6(@"Date set: %04d-%02d-%02d %02d:%02d:%02d\r\n", yr, mo, dy, hr, mn, sec)
+  else
+    ' Display current date/time
+    yr, mo, dy, hr, mn, sec := sd.getDate()
+    serial.fstr6(@"%04d-%02d-%02d %02d:%02d:%02d\r\n", yr, mo, dy, hr, mn, sec)
+
+
 PUB do_tree() | p_path
 '' Display a recursive directory tree. Usage: tree [path]
 ''
@@ -1876,6 +1937,19 @@ PRI lcstr(p_str) : p_lcstr | ch
     ++p_str
 
 
+PRI decval(p_str) : value | ch
+' Parse a null-terminated decimal string to an integer.
+'
+' @param p_str - Pointer to null-terminated decimal string
+' @returns value - Parsed integer value (0 if no digits found)
+' @local ch - Current character
+
+  repeat strsize(p_str)
+    ch := byte[p_str++]
+    if (ch >= "0" and ch <= "9")
+      value := value * 10 + (ch - "0")
+
+
 CON { inline parser }
 
 
@@ -2006,6 +2080,7 @@ cmdLabel      BYTE    CMD_LABEL,     "label",     0
 cmdVol        BYTE    CMD_VOL,       "vol",       0
 cmdAlias      BYTE    CMD_ALIAS,     "alias",     0
 cmdTree       BYTE    CMD_TREE,      "tree",      0
+cmdDate       BYTE    CMD_DATE,      "date",      0
 
 cmdTable      ' first table-entry must follow immediately
               WORD    @cmdHelp, @cmdVersion, @cmdCls, @cmdClear
@@ -2020,6 +2095,7 @@ cmdTable      ' first table-entry must follow immediately
               WORD    @cmdAudit, @cmdFsck, @cmdBench
               WORD    @cmdLabel, @cmdVol
               WORD    @cmdAlias, @cmdTree
+              WORD    @cmdDate
 cmdTableEnd   ' last entry must be immediately above this line
 ' ------------------------------------------------------------
 cmdCt         BYTE    (@cmdTableEnd - @cmdTable) >> 1
