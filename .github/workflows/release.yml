@@ -108,12 +108,35 @@ jobs:
           cp src/UTILS/isp_string_fifo.spin2 "${DEST}/src/UTILS/"
           cp src/UTILS/SD_card_identify.spin2 "${DEST}/src/UTILS/"
 
-          # src/regression-tests/ - test suites and framework
+          # src/regression-tests/ - test suites and framework (24 suites)
           mkdir -p "${DEST}/src/regression-tests"
           cp src/regression-tests/README.md "${DEST}/src/regression-tests/"
           cp src/regression-tests/THEORY-OF-OPERATIONS.md "${DEST}/src/regression-tests/"
-          cp src/regression-tests/SD_RT_*_tests.spin2 "${DEST}/src/regression-tests/"
           cp src/regression-tests/isp_rt_utilities.spin2 "${DEST}/src/regression-tests/"
+          cp src/regression-tests/SD_RT_mount_tests.spin2 "${DEST}/src/regression-tests/"
+          cp src/regression-tests/SD_RT_raw_sector_tests.spin2 "${DEST}/src/regression-tests/"
+          cp src/regression-tests/SD_RT_multiblock_tests.spin2 "${DEST}/src/regression-tests/"
+          cp src/regression-tests/SD_RT_register_tests.spin2 "${DEST}/src/regression-tests/"
+          cp src/regression-tests/SD_RT_speed_tests.spin2 "${DEST}/src/regression-tests/"
+          cp src/regression-tests/SD_RT_crc_diag_tests.spin2 "${DEST}/src/regression-tests/"
+          cp src/regression-tests/SD_RT_error_handling_tests.spin2 "${DEST}/src/regression-tests/"
+          cp src/regression-tests/SD_RT_crc_validation_tests.spin2 "${DEST}/src/regression-tests/"
+          cp src/regression-tests/SD_RT_recovery_tests.spin2 "${DEST}/src/regression-tests/"
+          cp src/regression-tests/SD_RT_file_ops_tests.spin2 "${DEST}/src/regression-tests/"
+          cp src/regression-tests/SD_RT_read_write_tests.spin2 "${DEST}/src/regression-tests/"
+          cp src/regression-tests/SD_RT_multihandle_tests.spin2 "${DEST}/src/regression-tests/"
+          cp src/regression-tests/SD_RT_seek_tests.spin2 "${DEST}/src/regression-tests/"
+          cp src/regression-tests/SD_RT_volume_tests.spin2 "${DEST}/src/regression-tests/"
+          cp src/regression-tests/SD_RT_subdir_ops_tests.spin2 "${DEST}/src/regression-tests/"
+          cp src/regression-tests/SD_RT_directory_tests.spin2 "${DEST}/src/regression-tests/"
+          cp src/regression-tests/SD_RT_dirhandle_tests.spin2 "${DEST}/src/regression-tests/"
+          cp src/regression-tests/SD_RT_fifo_tests.spin2 "${DEST}/src/regression-tests/"
+          cp src/regression-tests/SD_RT_multicog_tests.spin2 "${DEST}/src/regression-tests/"
+          cp src/regression-tests/SD_RT_cogcwd_tests.spin2 "${DEST}/src/regression-tests/"
+          cp src/regression-tests/SD_RT_timestamp_tests.spin2 "${DEST}/src/regression-tests/"
+          cp src/regression-tests/SD_RT_stress_tests.spin2 "${DEST}/src/regression-tests/"
+          cp src/regression-tests/SD_RT_async_tests.spin2 "${DEST}/src/regression-tests/"
+          cp src/regression-tests/SD_RT_format_tests.spin2 "${DEST}/src/regression-tests/"
 
           # Remove any macOS artifacts
           find "${DEST}" -name '.DS_Store' -delete
