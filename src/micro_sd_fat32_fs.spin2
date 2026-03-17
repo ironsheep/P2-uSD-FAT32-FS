@@ -473,6 +473,8 @@ DAT ' ---- Singleton Control ----
   ct_active         BYTE    0           ' TRUE when live clock is enabled (set by setDate)
   ct_last_tick      LONG    0           ' getct() at last clock tick
   ct_tick_clocks    LONG    0           ' Clock ticks per 2-second interval (set at mount)
+  async_active      BYTE    0           ' TRUE when an async operation is in flight
+  async_caller      BYTE    0           ' Cog ID of the async caller
 
   ' ═══════════════════════════════════════════════════════════════════════
   ' WORKER COG STACK
@@ -1124,6 +1126,119 @@ PUB getDate() : year, month, day, hour, minute, second
   minute := FIELD[fld_min][0]
   second := FIELD[fld_sec][0] << 1
 
+
+#ifdef SD_INCLUDE_ASYNC
+
+CON ' ═══════════════════════════════════════════════════════════════════════════
+    ' SECTION 5B: NON-BLOCKING FILE I/O
+    ' ═══════════════════════════════════════════════════════════════════════════
+  PENDING         = 1                   ' Returned by start*() to indicate operation launched
+  E_ASYNC_BUSY    = -95                 ' An async operation is already in flight
+  E_NO_ASYNC_OP   = -96                 ' No async operation to get result from
+
+PUB startReadHandle(handle, p_buffer, count) : status
+'' Begin an asynchronous read. Returns immediately with PENDING.
+'' Caller must call isComplete()/getResult() to get the data.
+'' The api_lock is held until getResult() or cancelAsync() is called.
+''
+'' @param handle - Valid read handle
+'' @param p_buffer - Pointer to destination buffer
+'' @param count - Number of bytes to read
+'' @returns status - PENDING (1) on success, negative error on failure
+
+  if async_active
+    return set_error(E_ASYNC_BUSY)
+  if cog_id == -1
+    return set_error(E_NOT_MOUNTED)
+
+  repeat until locktry(api_lock)
+
+  pb_caller := COGID()
+  pb_param0 := handle
+  pb_param1 := p_buffer
+  pb_param2 := count
+  pb_cmd := CMD_READ_H
+
+  async_active := true
+  async_caller := COGID()
+  status := PENDING
+
+
+PUB startWriteHandle(handle, p_buffer, count) : status
+'' Begin an asynchronous write. Returns immediately with PENDING.
+'' Caller must call isComplete()/getResult() to get the result.
+''
+'' @param handle - Valid write handle
+'' @param p_buffer - Pointer to source data
+'' @param count - Number of bytes to write
+'' @returns status - PENDING (1) on success, negative error on failure
+
+  if async_active
+    return set_error(E_ASYNC_BUSY)
+  if cog_id == -1
+    return set_error(E_NOT_MOUNTED)
+
+  repeat until locktry(api_lock)
+
+  pb_caller := COGID()
+  pb_param0 := handle
+  pb_param1 := p_buffer
+  pb_param2 := count
+  pb_cmd := CMD_WRITE_H
+
+  async_active := true
+  async_caller := COGID()
+  status := PENDING
+
+
+PUB isComplete() : done
+'' Check if the current async operation has completed.
+'' Does NOT release the lock or consume the result.
+''
+'' @returns done - TRUE if complete, FALSE if still in progress
+
+  done := async_active and (pb_cmd == CMD_NONE)
+
+
+PUB getResult() : result
+'' Get the result of a completed async operation and release the lock.
+'' After this call, new commands can be issued.
+''
+'' @returns result - Bytes read/written, or negative error code
+
+  if not async_active
+    return set_error(E_NO_ASYNC_OP)
+
+  ' Wait for completion if not already done
+  repeat until pb_cmd == CMD_NONE
+
+  if pb_status < 0
+    result := pb_status
+    set_error(pb_status)
+  else
+    result := pb_data0
+
+  async_active := false
+  lockrel(api_lock)
+
+
+PUB cancelAsync() : result
+'' Cancel a pending async operation and release the lock.
+'' Waits for the worker to finish (cannot interrupt SPI mid-transfer),
+'' then discards the result.
+''
+'' @returns result - SUCCESS
+
+  if not async_active
+    return set_error(E_NO_ASYNC_OP)
+
+  repeat until pb_cmd == CMD_NONE
+
+  async_active := false
+  lockrel(api_lock)
+  result := SUCCESS
+
+#endif  ' SD_INCLUDE_ASYNC
 
 CON ' ═══════════════════════════════════════════════════════════════════════════
     ' SECTION 6: LEGACY
