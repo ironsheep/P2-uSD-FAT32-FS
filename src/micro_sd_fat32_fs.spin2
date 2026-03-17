@@ -211,6 +211,9 @@ CON ' worker cog stack size
   STACK_GUARD_LONGS = 4         ' 4 longs = 16 bytes guard zone after stack
   STACK_GUARD_BYTE  = $CC       ' Sentinel value (matches isp_rt_utilities convention)
 
+CON ' idle flush threshold
+  IDLE_FLUSH_MS      = 200    ' Milliseconds idle before auto-flush
+
 CON ' sector geometry
   SECTOR_SIZE        = 512    ' Bytes per sector (FAT32 standard)
   SECTOR_SHIFT       = 9     ' log2(SECTOR_SIZE) -- byte-to-sector conversion
@@ -459,6 +462,14 @@ DAT ' ---- Singleton Control ----
   pb_param3     LONG    0               ' Parameter 3
   pb_data0      LONG    0               ' Result data 0 (handle, count, etc.)
   pb_data1      LONG    0               ' Result data 1
+
+  ' ═══════════════════════════════════════════════════════════════════════
+  ' WORKER LOOP STATE (idle flush + clock tick)
+  ' ═══════════════════════════════════════════════════════════════════════
+  idle_timer        LONG    0           ' getct() at last command completion
+  idle_flush_clocks LONG    0           ' Threshold in clock ticks (set at mount time)
+  flush_done        BYTE    false       ' TRUE after idle flush completes (reset on next command)
+  ct_active         BYTE    0           ' TRUE when CT1 clock is armed (F2 placeholder)
 
   ' ═══════════════════════════════════════════════════════════════════════
   ' WORKER COG STACK
@@ -2109,10 +2120,24 @@ PRI fs_worker() | cur_cmd
 
   debug[CH_API]("  [fs_worker] Pins initialized: CS=P", udec_(cs), " MOSI=P", udec_(mosi), " MISO=P", udec_(miso), " SCK=P", udec_(sck))
 
-  ' Main command loop
+  ' Main command loop (structured: clock tick, command dispatch, idle flush)
+  idle_timer := getct()
+  flush_done := true
+
   repeat
-    ' Wait for command (polling - will optimize to WAITATN later)
+    ' --- Clock tick (F2 — placeholder, no-op until F2) ---
+    'if ct_active and pollct1()
+    '  tick_clock()
+    '  addct1(clkfreq * 2)
+
+    ' --- Filesystem command (Priority 1) ---
     repeat until (cur_cmd := pb_cmd) <> CMD_NONE
+      ' --- Auto-flush (F3 — placeholder, no-op until F3) ---
+      'if not flush_done
+      '  if (getct() - idle_timer) >= idle_flush_clocks
+      '    do_idle_flush()
+      '    flush_done := true
+
 #ifdef SD_INCLUDE_STACK_CHECK
     stackUtils.checkStack(@cog_stack, STACK_SIZE)
 #endif
@@ -2347,9 +2372,11 @@ PRI fs_worker() | cur_cmd
         debug[CH_API]("  [fs_worker] Unknown command: ", udec_(cur_cmd))
         pb_status := E_BAD_RESPONSE
 
-    ' Signal completion
+    ' Signal completion and reset idle timer
     pb_cmd := CMD_NONE
     COGATN(1 << pb_caller)                                                      ' Wake the caller
+    idle_timer := getct()
+    flush_done := false
 
 
 PRI send_command(op_cmd, p0, p1, p2, p3) : status
@@ -2778,6 +2805,7 @@ PRI do_mount() : result | reserved, pPart, pVBR, pFSI, idx, p_entry, cluster, se
           fat2_sec := fat_sec + sec_per_fat
           root_sec := (fat_sec + 2 * sec_per_fat)
           longfill(@cog_dir_sec, root_sec, 8)                                   ' All cogs start at root
+          idle_flush_clocks := clkfreq / 1000 * IDLE_FLUSH_MS                   ' Auto-flush threshold
           cluster_offset := root_sec // sec_per_clus
           bytemove(@vol_label, vbrVolLabelAddr(pVBR), SFN_TOTAL_LEN)
           vol_label[11] := 0
