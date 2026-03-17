@@ -2192,11 +2192,10 @@ PRI fs_worker() | cur_cmd
           tick_clock()
           ct_last_tick := getct()
 
-      ' --- Auto-flush (F3 — placeholder, no-op until F3) ---
-      'if not flush_done
-      '  if (getct() - idle_timer) >= idle_flush_clocks
-      '    do_idle_flush()
-      '    flush_done := true
+      ' --- Auto-flush (F3: flush dirty handles after 200ms idle) ---
+      if not flush_done
+        if (getct() - idle_timer) >= idle_flush_clocks
+          do_idle_flush()
 
 #ifdef SD_INCLUDE_STACK_CHECK
     stackUtils.checkStack(@cog_stack, STACK_SIZE)
@@ -3585,6 +3584,20 @@ PRI do_sync_h(handle) : result | p_buf
         writeSector(h_dir_sector[handle], BUF_DIR)
 
     debug[CH_FILE]("  [do_sync_h] Sync complete")
+
+
+PRI do_idle_flush() | idx
+' Auto-flush dirty handles after idle period. Scans all handles for HF_DIRTY,
+' syncs each, then updates FSInfo if needed. Checks pb_cmd between each handle
+' sync to abort immediately if a command arrives.
+
+  repeat idx from 0 to MAX_OPEN_FILES - 1
+    if pb_cmd <> CMD_NONE
+      return                                                                    ' Command arrived, abort flush
+    if h_flags[idx] & HF_DIRTY
+      do_sync_h(idx)
+  updateFSInfo()
+  flush_done := true
 
 
 PRI do_sync_all() : result | idx
