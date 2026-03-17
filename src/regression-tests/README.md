@@ -4,7 +4,7 @@ Automated regression test suite for the P2 SD Card Driver. All tests execute on 
 
 ## Test Summary
 
-### Core Test Suites (verified 2026-03-06)
+### Core Test Suites (verified 2026-03-17)
 
 | Test Suite | Description | Tests |
 |------------|-------------|-------|
@@ -34,8 +34,12 @@ Automated regression test suite for the P2 SD Card Driver. All tests execute on 
 | **CRC Validation Tests** | CRC error injection hooks, forced read/write CRC errors, hook state management | 6 |
 | **Recovery Tests** | Recovery after read/write errors, CRC counter verification, remount recovery, handle isolation | 7 |
 | **FIFO Tests** | String FIFO (isp_string_fifo) inter-cog communication | 21 |
-| | **Additional Total** | **139** |
-| | **Grand Total (20 suites)** | **427** |
+| **Cog CWD Tests** | Per-cog working directory isolation, multi-cog CWD independence | 5 |
+| **Stress Tests** | Concurrent reader/writer integrity, rapid open/close under contention | 4 |
+| **Timestamp Tests** | setDate/getDate round-trip, live clock advance, creation/modification stamps | 6 |
+| **Async I/O Tests** | Non-blocking read/write, isComplete polling, cancelAsync, multi-cog interleave | 6 |
+| | **Additional Total** | **160** |
+| | **Grand Total (24 suites)** | **448** |
 
 ## Prerequisites
 
@@ -83,6 +87,14 @@ cd tools/
 
 # Error handling tests
 ./run_test.sh ../src/regression-tests/SD_RT_error_handling_tests.spin2
+
+# Multi-cog isolation and stress tests
+./run_test.sh ../src/regression-tests/SD_RT_cogcwd_tests.spin2
+./run_test.sh ../src/regression-tests/SD_RT_stress_tests.spin2
+
+# Timestamp and async I/O tests
+./run_test.sh ../src/regression-tests/SD_RT_timestamp_tests.spin2
+./run_test.sh ../src/regression-tests/SD_RT_async_tests.spin2 -t 120
 
 # Format test (WARNING: erases card!)
 ./run_test.sh ../src/regression-tests/SD_RT_format_tests.spin2 -t 300

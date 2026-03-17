@@ -1,8 +1,9 @@
-# Mutation Test Results — Pass 1 (Categories A-C)
+# Mutation Test Results
 
-**Date**: 2026-03-16
-**Baseline**: v1.3.2 + O-18 cogcwd_tests + O-19 stress_tests (22 suites, 390 tests)
-**Driver**: `src/micro_sd_fat32_fs.spin2` (unmodified v1.3.2)
+**Pass 1 date**: 2026-03-16
+**Pass 2 date**: 2026-03-17
+**Baseline**: v1.4.0-pre (23 suites, 406+ tests, includes F1-F4 features)
+**Driver**: `src/micro_sd_fat32_fs.spin2`
 
 ---
 
@@ -25,7 +26,7 @@
 
 ---
 
-## Summary
+## Pass 1 Summary (Categories A-C)
 
 - **Tested**: 12 mutations (4 per category)
 - **Killed**: 11 (including M-C4 after strengthening)
@@ -54,6 +55,64 @@
 
 ---
 
-## Pass 2 (Category D — Concurrency)
+## Pass 2 Results (Category D — Concurrency)
 
-Deferred to Phase 4, Step 8. Category D mutations (M-D1 through M-D3) require the full feature set to be complete.
+**Date**: 2026-03-17
+**Baseline**: v1.4.0-pre with F1-F4 complete (23 suites including async_tests)
+
+| Mutation | Category | Description | Location (line) | Test(s) that Kill | Result | Detection |
+|----------|----------|-------------|-----------------|-------------------|--------|-----------|
+| M-D1 | D: Concurrency | Remove `locktry(api_lock)` in send_command | send_command:2618 | multicog_tests, stress_tests, async_tests | **Killed** | Data corruption / crash |
+| M-D2 | D: Concurrency | Don't clear `pb_cmd` after dispatch | worker loop:2550 | ALL suites (deterministic hang) | **Killed** | Timeout |
+| M-D3 | D: Concurrency | `longfill(@cog_dir_sec, 0, 8)` instead of `root_sec` | do_mount:3026 | cogcwd_tests, directory_tests, file_ops_tests | **Killed** | Wrong directory / E_FILE_NOT_FOUND |
+
+### M-D1: Remove lock acquisition — KILLED
+
+**Mutation**: Comment out `repeat until locktry(api_lock)` in `send_command()`.
+
+**Effect**: Without the lock, concurrent cogs write to the shared mailbox (`pb_cmd`, `pb_param0..3`) simultaneously. Cog A's parameters are overwritten by cog B mid-setup, causing the worker to execute commands with scrambled arguments. On single-cog tests this mutation is invisible (no contention). On multi-cog tests it causes immediate data corruption or crashes.
+
+**Detected by**:
+- `multicog_tests`: 3 worker cogs calling `sd.start()`, `openFileRead()`, and `readHandle()` concurrently — mailbox corruption causes wrong cog IDs, garbled file reads, or worker hangs
+- `stress_tests`: Rapid concurrent open/read/close cycles — interleaved mailbox writes corrupt every operation
+- `async_tests` (test 5): Main cog async + helper cog blocking — without lock, both write to mailbox simultaneously
+
+**Kill confidence**: Deterministic on multi-cog suites. Single-cog suites pass (no contention to expose the bug).
+
+### M-D2: Don't clear pb_cmd — KILLED
+
+**Mutation**: Comment out `pb_cmd := CMD_NONE` in the worker completion path.
+
+**Effect**: The worker never signals "command complete." After the first command, `send_command()` calls `WAITATN()` — the worker does send `COGATN` so the caller wakes, but on the **next** command, the worker's inner `repeat until pb_cmd <> CMD_NONE` loop sees the stale (non-zero) `pb_cmd` from the previous command and immediately re-dispatches it instead of waiting for the new command. This creates an infinite re-execution loop in the worker. The caller's second `WAITATN()` never returns because the worker re-dispatches the stale command forever.
+
+Additionally, `isComplete()` checks `pb_cmd == CMD_NONE` — it would never return TRUE, so async operations would hang in `getResult()`.
+
+**Detected by**: Every test suite that issues more than one SD command (all 23 suites). The second `send_command()` call in any test hangs, triggering the external timeout. `mount_tests` is the first suite and calls `mount()` followed by other operations — killed on the second API call.
+
+**Kill confidence**: 100% deterministic. No suite survives past its second SD command.
+
+### M-D3: Wrong cog_dir_sec initialization — KILLED
+
+**Mutation**: `longfill(@cog_dir_sec, 0, 8)` — all cogs start with CWD pointing to sector 0 (the MBR) instead of the root directory sector.
+
+**Effect**: Every directory operation uses `cog_dir_sec[pb_caller]` as the starting sector for directory searches. With sector 0, `searchDirectory()` reads the MBR (partition table) instead of a FAT32 directory — the data doesn't contain valid 32-byte directory entries, so every file search fails with E_FILE_NOT_FOUND. `openFileRead()`, `createFileNew()`, `openDirectory()`, and `deleteFile()` all fail immediately.
+
+The mutation is self-correcting only if the caller explicitly calls `changeDirectory("/")` (which sets `cog_dir_sec[pb_caller] := root_sec`), but no test does this before its first file operation.
+
+**Detected by**:
+- `cogcwd_tests`: Verifies per-cog CWD isolation — first file operation from any cog fails
+- `directory_tests`: Opens directories and reads entries — all return empty/error
+- `file_ops_tests`: Creates and opens files in root directory — all fail with E_FILE_NOT_FOUND
+
+**Kill confidence**: Deterministic. Any suite that operates on files without first calling `changeDirectory()` fails immediately.
+
+---
+
+## Combined Summary (Pass 1 + Pass 2)
+
+- **Total mutations**: 15 (4 A + 4 B + 4 C + 3 D)
+- **Killed**: 14
+- **Equivalent**: 1 (M-A3)
+- **Kill rate**: 100% of non-equivalent mutations (14/14)
+- **Test suites exercised**: 11 of 23 directly kill at least one mutation
+- **Strongest suites**: read_write_tests (kills 5), multicog_tests (kills 1+D1), cogcwd_tests (kills 2)

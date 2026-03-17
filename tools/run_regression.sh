@@ -133,6 +133,7 @@ SUITES+=(
     "SD_RT_cogcwd_tests.spin2:120"
     "SD_RT_timestamp_tests.spin2:120"
     "SD_RT_stress_tests.spin2:120"
+    "SD_RT_async_tests.spin2:120"
 )
 
 # Optional: Format (destructive!)

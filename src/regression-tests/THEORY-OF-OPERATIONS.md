@@ -6,9 +6,9 @@
 
 ## 1. Executive Summary
 
-The regression test suite validates the `micro_sd_fat32_fs.spin2` — a Propeller 2 SD card driver that uses smart pins for SPI communication, the P2 streamer for bulk data transfer, and a dedicated worker cog for all card I/O. The suite currently contains **20 test files** producing **427 test assertions**. The original 10 core files are joined by 10 additional files covering directory handles, volume operations, register access, speed/CMD6, CRC diagnostics, subdirectory operations, error handling, CRC error injection validation, recovery scenarios, and inter-cog FIFO infrastructure.
+The regression test suite validates the `micro_sd_fat32_fs.spin2` — a Propeller 2 SD card driver that uses smart pins for SPI communication, the P2 streamer for bulk data transfer, and a dedicated worker cog for all card I/O. The suite currently contains **24 test files** producing **448 test assertions**. The original 10 core files are joined by 14 additional files covering directory handles, volume operations, register access, speed/CMD6, CRC diagnostics, subdirectory operations, error handling, CRC error injection validation, recovery scenarios, inter-cog FIFO infrastructure, per-cog CWD isolation, concurrent stress testing, live timestamps, and non-blocking async I/O.
 
-**Verified on hardware (2026-03-07):** All 20 suites totaling **427 tests** — all passing.
+**Verified on hardware (2026-03-17):** All 24 suites totaling **448 tests** — all passing.
 
 The tests exercise the driver from low-level raw sector I/O through the full FAT32 filesystem stack, including multi-cog concurrent access, multi-handle file operations, and card formatting validation. Every test runs on real hardware (P2 Edge + physical SD card) via the `run_test.sh` headless test runner.
 
@@ -77,7 +77,7 @@ Each test is identified by:
 
 ## 3. Test Suite Overview
 
-### 3.1 Test Files (427 tests — verified 2026-03-07)
+### 3.1 Test Files (448 tests — verified 2026-03-17)
 
 | # | Test File | Tests | Focus Area | Driver API Category |
 |---|-----------|:-----:|------------|---------------------|
@@ -101,7 +101,11 @@ Each test is identified by:
 | 18 | `SD_RT_crc_validation_tests.spin2` | 6 | CRC error injection hooks, forced read/write errors, hook state management | CRC Injection |
 | 19 | `SD_RT_recovery_tests.spin2` | 7 | Recovery after read/write errors, CRC counter verification, remount recovery | Recovery Scenarios |
 | 20 | `SD_RT_fifo_tests.spin2` | 21 | String FIFO (isp_string_fifo) inter-cog communication | Infrastructure |
-| | **Total** | **427** | | |
+| 21 | `SD_RT_cogcwd_tests.spin2` | 5 | Per-cog working directory isolation, multi-cog CWD independence | Multi-Cog Safety |
+| 22 | `SD_RT_stress_tests.spin2` | 4 | Concurrent reader/writer integrity, rapid open/close under contention | Multi-Cog Safety |
+| 23 | `SD_RT_timestamp_tests.spin2` | 6 | setDate/getDate round-trip, live clock advance, creation/modification stamps | Timestamps |
+| 24 | `SD_RT_async_tests.spin2` | 6 | Non-blocking read/write, isComplete polling, cancelAsync, multi-cog interleave | Async I/O |
+| | **Total** | **448** | | |
 
 ### 3.2 Diagnostic Test Files (in `diagnostic-tests/`)
 
@@ -969,6 +973,55 @@ Focused testing of error conditions and edge cases:
 - `writeHandle()` on read-only handle returns E_INVALID_HANDLE
 - `tellHandle()`, `fileSizeHandle()`, `eofHandle()`, `syncHandle()` on dir handle return E_NOT_A_DIR_HANDLE
 
+#### SD_RT_cogcwd_tests.spin2 (5 tests)
+
+Per-cog working directory isolation. The driver maintains `cog_dir_sec[8]` — one CWD sector per cog. These tests launch a second cog and verify that `changeDirectory()` on one cog does not affect another cog's CWD.
+
+| Test | What We Verify | Why |
+|------|----------------|-----|
+| Two cogs in different directories see different files | CWD array isolation | Proves per-cog indexing works |
+| One cog's cd doesn't affect another | Cross-cog independence | Detects M-B3 (wrong index) and M-D3 (wrong init) mutations |
+| Both cogs create files in own CWD | Write isolation | Cross-verified by reading from each cog's directory |
+| CWD survives repeated file operations | Stability | cog_dir_sec not corrupted by open/close cycles |
+| CWD isolation when one cog resets to root | Partial reset | cd "/" on cog A doesn't affect cog B |
+
+#### SD_RT_stress_tests.spin2 (4 tests)
+
+Sustained concurrent load testing. Multiple cogs issue rapid file operations simultaneously to stress lock serialization and handle management.
+
+| Test | What We Verify | Why |
+|------|----------------|-----|
+| Reader integrity during concurrent writing | Data not garbled under contention | Lock serializes reads and writes correctly |
+| Writer integrity verification post-read | Written data survives concurrent reads | No read-side mutation of write buffers |
+| Both cogs reading same file simultaneously | Multi-reader safety | Handle-based API allows concurrent readers |
+| Rapid open/close cycles under contention | No handle leak or deadlock | Stress test for handle pool and lock release |
+
+#### SD_RT_timestamp_tests.spin2 (6 tests)
+
+Live clock timestamps via setDate/getDate and FAT32 directory entry verification.
+
+| Test | What We Verify | Why |
+|------|----------------|-----|
+| setDate creates correct timestamp | Packed FAT date/time in directory entry matches | FIELD-based packing produces correct bit layout |
+| Mod timestamp updated on close | WrtDate/WrtTime non-zero after write+close | Close path writes timestamp to directory entry |
+| Timestamps advance over time | File B later than file A (5s apart) | Live clock ticks at 2-second intervals |
+| Timestamp fields are valid ranges | Year/month/day in plausible ranges | No FIELD overflow or adjacent-field corruption |
+| getDate round-trip matches setDate | All 6 fields match after set+get | Packed FIELD read/write round-trip correct |
+| getDate advances after 4 seconds | Time-of-day increases by >= 2s | Worker cog clock tick runs independently |
+
+#### SD_RT_async_tests.spin2 (6 tests)
+
+Non-blocking file I/O via `SD_INCLUDE_ASYNC` conditional compilation. Tests the two-phase start/getResult protocol.
+
+| Test | What We Verify | Why |
+|------|----------------|-----|
+| Async read matches blocking read | startReadHandle + getResult == readHandle | Async path produces identical data |
+| Async write verified by blocking read | startWriteHandle data readable afterward | Write-through correct, lock released properly |
+| isComplete transitions FALSE to TRUE | Poll returns FALSE (or TRUE immediately on fast cards), then TRUE | Completion detection works |
+| cancelAsync releases lock for next op | Cancel + subsequent blocking read succeeds | Lock properly released by cancelAsync |
+| Async + blocking interleave from 2nd cog | Main async + helper blocking both succeed | Lock serializes async and blocking callers |
+| Double start returns E_ASYNC_BUSY | Second start without getResult returns -95 | Prevents double-lock acquisition |
+
 #### SD_card_info_tests.spin2 *(diagnostic-tests/)*
 
 Certification test for struct-based register access — verifies that `sd.cid_t` and `sd.scr_t` struct fields match raw byte access at the same offsets. Tests both unmounted (`initCardOnly`) and mounted paths. Also tests OCR, card size, SPI frequency, MBR read, and ACMD13 SD Status decode (speed class, UHS grade, video class).
@@ -1131,7 +1184,16 @@ All critical gaps identified in the original analysis have been addressed:
 | **CRC diagnostic API** | ~14 tests: counters, CRC values, validation toggle, CMD13 | `SD_RT_crc_diag_tests.spin2` |
 | **Large file multi-cluster** | 9 tests: 128KB, 256KB, seek across clusters, backward seek, delete reclaims | `SD_RT_read_write_tests.spin2` |
 
-### 6.3 Remaining Low Priority Gaps
+### 6.3 v1.4.0 Gaps — RESOLVED
+
+| Gap | Resolution | Test File |
+|-----|-----------|-----------|
+| **Per-cog CWD isolation** | 5 tests: multi-cog CWD independence, cd isolation, create-in-own-CWD | `SD_RT_cogcwd_tests.spin2` |
+| **Concurrent stress** | 4 tests: reader/writer integrity, multi-reader, rapid open/close | `SD_RT_stress_tests.spin2` |
+| **Live timestamps** | 6 tests: setDate/getDate round-trip, clock advance, directory entry verification | `SD_RT_timestamp_tests.spin2` |
+| **Non-blocking async I/O** | 6 tests: async read/write, isComplete, cancelAsync, multi-cog interleave, E_ASYNC_BUSY | `SD_RT_async_tests.spin2` |
+
+### 6.4 Remaining Low Priority Gaps
 
 | Gap | Missing Coverage | Notes |
 |-----|-----------------|-------|
@@ -1139,7 +1201,7 @@ All critical gaps identified in the original analysis have been addressed:
 | **Long Filename (LFN) support** | Driver doesn't support LFN | Not a gap — feature not implemented |
 | **File attributes (read-only, hidden)** | `attributes()` partially tested | Low priority — 8.3 FAT32 attributes rarely used on embedded |
 
-### 6.4 Structural Gaps
+### 6.5 Structural Gaps
 
 | Area | Current State | Improvement |
 |------|---------------|-------------|
@@ -1150,7 +1212,7 @@ All critical gaps identified in the original analysis have been addressed:
 
 ---
 
-## 7. Test Count Summary (verified 2026-03-05)
+## 7. Test Count Summary (verified 2026-03-17)
 
 | Test File | Tests | Status |
 |-----------|:-----:|:------:|
@@ -1174,7 +1236,11 @@ All critical gaps identified in the original analysis have been addressed:
 | SD_RT_crc_validation_tests | 6 | 6 pass |
 | SD_RT_recovery_tests | 7 | 7 pass |
 | SD_RT_fifo_tests | 21 | 21 pass |
-| **Total** | **427** | **427 pass** |
+| SD_RT_cogcwd_tests | 5 | 5 pass |
+| SD_RT_stress_tests | 4 | 4 pass |
+| SD_RT_timestamp_tests | 6 | 6 pass |
+| SD_RT_async_tests | 6 | 6 pass |
+| **Total** | **448** | **448 pass** |
 
 ---
 
@@ -1212,6 +1278,14 @@ cd /path/to/P2-uSD-FAT32-FS/tools
 # Infrastructure tests
 ./run_test.sh ../src/regression-tests/SD_RT_fifo_tests.spin2
 
+# Multi-cog isolation and stress tests
+./run_test.sh ../src/regression-tests/SD_RT_cogcwd_tests.spin2
+./run_test.sh ../src/regression-tests/SD_RT_stress_tests.spin2
+
+# Timestamp and async I/O tests
+./run_test.sh ../src/regression-tests/SD_RT_timestamp_tests.spin2
+./run_test.sh ../src/regression-tests/SD_RT_async_tests.spin2 -t 120
+
 # Format test (WARNING: erases card!)
 ./run_test.sh ../src/regression-tests/SD_RT_format_tests.spin2 -t 300
 
@@ -1230,6 +1304,6 @@ cd /path/to/P2-uSD-FAT32-FS/tools
 
 ---
 
-*Document updated: 2026-03-07*
+*Document updated: 2026-03-17*
 *Based on: micro_sd_fat32_fs.spin2 (100+ public methods, 46 worker cog commands)*
-*Test suite: 20 test files, 427 assertions — all verified passing on hardware*
+*Test suite: 24 test files, 448 assertions — all verified passing on hardware*

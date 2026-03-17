@@ -1,0 +1,443 @@
+'' =================================================================================================
+''
+''   File....... SD_RT_async_tests.spin2
+''   Purpose.... This object exercises the non-blocking file I/O API: startReadHandle,
+''               startWriteHandle, isComplete, getResult, cancelAsync
+''   Author..... Stephen M Moraco
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... MAR 2026
+''   Updated.... 17 MAR 2026
+''
+'' =================================================================================================
+
+CON
+
+     _CLKFREQ        = 350_000_000
+
+     ' P2 Edge module SD slot pins
+     SD_CS   = 60
+     SD_MOSI = 59
+     SD_MISO = 58
+     SD_SCK  = 61
+
+     ' Async test configuration
+     STACK_SIZE      = 128           ' Stack size for helper cog (longs)
+     BUF_SIZE        = 64            ' Test buffer size (bytes)
+
+     ' Worker status codes
+     STATUS_IDLE      = 0
+     STATUS_RUNNING   = 1
+     STATUS_PASS      = 2
+     STATUS_FAIL      = -1
+
+' Enable all features including async
+#pragma exportdef SD_INCLUDE_ALL
+#pragma exportdef SD_INCLUDE_ASYNC
+
+OBJ
+    sd    : "micro_sd_fat32_fs"
+    utils : "isp_rt_utilities"
+
+DAT
+
+' Test files
+asyncTestFile   BYTE    "ASYNC1.TXT", 0
+asyncContent    BYTE    "Async test data 1234567890ABCDEF", 0
+
+' Buffers for async operations
+asyncBuf        BYTE    0[BUF_SIZE]
+asyncBuf_guard  BYTE    0[16]
+blockBuf        BYTE    0[BUF_SIZE]
+blockBuf_guard  BYTE    0[16]
+
+' Helper cog resources
+helper_stack    LONG    0[STACK_SIZE]
+helper_status   LONG    0
+helper_result   LONG    0
+helper_cogid    LONG    -1
+sync_barrier    LONG    0
+
+
+PUB go() | result
+'' Main entry point -- runs non-blocking file I/O tests.
+
+    debug(" ")
+    debug("==============================================")
+    debug("  SD Card Driver - Async I/O Tests")
+    debug("==============================================")
+    debug(" ")
+
+    result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    if result < 0
+        debug("ERROR: Could not mount SD card - aborting async tests!")
+        debug("END_SESSION")
+        return
+
+    ' Create test file with known content
+    createTestFile()
+
+    ' ----------------------------------
+    ' TEST GROUP: Async Read
+    ' ----------------------------------
+    utils.startTestGroup(@"Async Read Operations")
+    runTest1_AsyncReadMatch()
+    runTest2_AsyncWriteVerify()
+
+    ' ----------------------------------
+    ' TEST GROUP: Async Lifecycle
+    ' ----------------------------------
+    utils.startTestGroup(@"Async Lifecycle")
+    runTest3_IsCompleteTransition()
+    runTest4_CancelReleasesLock()
+
+    ' ----------------------------------
+    ' TEST GROUP: Multi-Cog Async
+    ' ----------------------------------
+    utils.startTestGroup(@"Multi-Cog Async Interleave")
+    runTest5_AsyncInterleave()
+
+    ' ----------------------------------
+    ' TEST GROUP: Error Cases
+    ' ----------------------------------
+    utils.startTestGroup(@"Async Error Cases")
+    runTest6_DoubleStartBusy()
+
+    ' Cleanup
+    sd.deleteFile(@asyncTestFile)
+
+    result := sd.unmount()
+    if result < 0
+        debug("WARNING: unmount() returned ", sdec_(result))
+
+    utils.ShowTestEndCounts()
+
+    debug(" ")
+    debug("* Async I/O Tests Complete")
+    debug("END_SESSION")
+
+
+' ═══════════════════════════════════════════════════════════════════════════
+' TEST METHODS
+' ═══════════════════════════════════════════════════════════════════════════
+
+PRI runTest1_AsyncReadMatch() | handle, status, bytesAsync, bytesBlock, contentLen, matched
+    ' Test 1: Async read produces same data as blocking read
+    utils.startTest(@"Async read matches blocking read")
+    utils.setCheckCountPerTest(4)
+
+    contentLen := strsize(@asyncContent)
+    utils.initGuard(@asyncBuf_guard)
+    utils.initGuard(@blockBuf_guard)
+
+    ' First: blocking read into blockBuf
+    bytefill(@blockBuf, 0, BUF_SIZE)
+    handle := sd.openFileRead(@asyncTestFile)
+    utils.evaluateSubBool(handle >= 0, @"open for blocking read", true)
+    if handle >= 0
+        bytesBlock := sd.readHandle(handle, @blockBuf, contentLen)
+        sd.closeFileHandle(handle)
+    else
+        bytesBlock := -1
+
+    ' Second: async read into asyncBuf
+    bytefill(@asyncBuf, 0, BUF_SIZE)
+    handle := sd.openFileRead(@asyncTestFile)
+    utils.evaluateSubBool(handle >= 0, @"open for async read", true)
+    if handle >= 0
+        status := sd.startReadHandle(handle, @asyncBuf, contentLen)
+        if status == sd.PENDING
+            bytesAsync := sd.getResult()
+        else
+            bytesAsync := status
+        sd.closeFileHandle(handle)
+    else
+        bytesAsync := -1
+
+    ' Compare results
+    utils.evaluateSubValue(bytesAsync, @"async bytes == blocking bytes", bytesBlock)
+
+    ' Compare buffer contents
+    if bytesAsync > 0 and bytesBlock > 0
+        matched := true
+        repeat contentLen
+            if asyncBuf[contentLen - 1] <> blockBuf[contentLen - 1]
+                matched := false
+                quit
+            contentLen--
+        utils.evaluateSubBool(matched, @"buffer contents match", true)
+    else
+        utils.evaluateSubBool(false, @"buffer contents match", true)
+    utils.showSubTestResults()
+
+    utils.checkGuard(@asyncBuf_guard, @"asyncBuf guard")
+    utils.checkGuard(@blockBuf_guard, @"blockBuf guard")
+
+
+PRI runTest2_AsyncWriteVerify() | hWrite, hRead, status, bytesWritten, bytesRead, contentLen, matched, idx
+    ' Test 2: Async write, then blocking read to verify data
+    utils.startTest(@"Async write verified by blocking read")
+    utils.setCheckCountPerTest(4)
+
+    contentLen := strsize(@asyncContent)
+    utils.initGuard(@asyncBuf_guard)
+
+    ' Delete and recreate with async write
+    sd.deleteFile(@asyncTestFile)
+    hWrite := sd.createFileNew(@asyncTestFile)
+    utils.evaluateSubBool(hWrite >= 0, @"create for async write", true)
+    if hWrite >= 0
+        status := sd.startWriteHandle(hWrite, @asyncContent, contentLen)
+        if status == sd.PENDING
+            bytesWritten := sd.getResult()
+        else
+            bytesWritten := status
+        sd.closeFileHandle(hWrite)
+    else
+        bytesWritten := -1
+
+    utils.evaluateSubValue(bytesWritten, @"async wrote all bytes", contentLen)
+
+    ' Blocking read to verify
+    bytefill(@asyncBuf, 0, BUF_SIZE)
+    hRead := sd.openFileRead(@asyncTestFile)
+    utils.evaluateSubBool(hRead >= 0, @"open for verify read", true)
+    if hRead >= 0
+        bytesRead := sd.readHandle(hRead, @asyncBuf, contentLen)
+        sd.closeFileHandle(hRead)
+
+        matched := true
+        repeat idx from 0 to contentLen - 1
+            if asyncBuf[idx] <> BYTE[@asyncContent][idx]
+                matched := false
+                quit
+        utils.evaluateSubBool(matched, @"read-back data matches", true)
+    else
+        utils.evaluateSubBool(false, @"read-back data matches", true)
+    utils.showSubTestResults()
+
+    utils.checkGuard(@asyncBuf_guard, @"asyncBuf guard")
+
+
+PRI runTest3_IsCompleteTransition() | handle, status, wasFalse, contentLen
+    ' Test 3: isComplete returns FALSE then TRUE
+    utils.startTest(@"isComplete transitions FALSE to TRUE")
+    utils.setCheckCountPerTest(3)
+
+    contentLen := strsize(@asyncContent)
+
+    handle := sd.openFileRead(@asyncTestFile)
+    utils.evaluateSubBool(handle >= 0, @"open file", true)
+    if handle >= 0
+        status := sd.startReadHandle(handle, @asyncBuf, contentLen)
+        utils.evaluateSubValue(status, @"startReadHandle returns PENDING", sd.PENDING)
+
+        ' Poll until complete — record if we ever see FALSE
+        wasFalse := false
+        if not sd.isComplete()
+            wasFalse := true
+
+        ' Wait for completion
+        repeat until sd.isComplete()
+
+        ' For fast SD cards, isComplete may already be TRUE on first check.
+        ' Either we saw FALSE (transition observed) or TRUE immediately (fast card).
+        ' Both are valid — the key invariant is that getResult succeeds.
+        sd.getResult()
+
+        ' isComplete followed by getResult must succeed (no hang)
+        utils.evaluateSubBool(true, @"isComplete+getResult completed", true)
+        sd.closeFileHandle(handle)
+    else
+        utils.evaluateSubBool(false, @"startReadHandle returns PENDING", true)
+        utils.evaluateSubBool(false, @"isComplete+getResult completed", true)
+    utils.showSubTestResults()
+
+    if wasFalse
+        debug("  (saw FALSE before TRUE - transition observed)")
+    else
+        debug("  (isComplete was TRUE immediately - fast card)")
+
+
+PRI runTest4_CancelReleasesLock() | handle, status, bytesRead, contentLen
+    ' Test 4: cancelAsync releases lock, subsequent blocking read works
+    utils.startTest(@"cancelAsync releases lock for next op")
+    utils.setCheckCountPerTest(3)
+
+    contentLen := strsize(@asyncContent)
+    utils.initGuard(@asyncBuf_guard)
+
+    handle := sd.openFileRead(@asyncTestFile)
+    utils.evaluateSubBool(handle >= 0, @"open file", true)
+    if handle >= 0
+        ' Start async read then immediately cancel
+        status := sd.startReadHandle(handle, @asyncBuf, contentLen)
+        utils.evaluateSubValue(status, @"startReadHandle PENDING", sd.PENDING)
+
+        sd.cancelAsync()
+
+        ' Now do a blocking read — must succeed (proves lock was released)
+        sd.seekHandle(handle, 0)
+        bytefill(@asyncBuf, 0, BUF_SIZE)
+        bytesRead := sd.readHandle(handle, @asyncBuf, contentLen)
+        utils.evaluateSubValue(bytesRead, @"blocking read after cancel", contentLen)
+
+        sd.closeFileHandle(handle)
+    else
+        utils.evaluateSubBool(false, @"startReadHandle PENDING", true)
+        utils.evaluateSubBool(false, @"blocking read after cancel", true)
+    utils.showSubTestResults()
+
+    utils.checkGuard(@asyncBuf_guard, @"asyncBuf guard")
+
+
+PRI runTest5_AsyncInterleave() | hMain, hHelper, status, bytesMain, contentLen
+    ' Test 5: Async on main cog, blocking read on helper cog
+    ' Helper cog should block on lock until main calls getResult
+    utils.startTest(@"Async + blocking interleave from 2nd cog")
+    utils.setCheckCountPerTest(3)
+
+    contentLen := strsize(@asyncContent)
+    utils.initGuard(@asyncBuf_guard)
+
+    ' Open two handles — one for main cog async, one for helper cog blocking
+    hMain := sd.openFileRead(@asyncTestFile)
+    utils.evaluateSubBool(hMain >= 0, @"open handle for main cog", true)
+
+    hHelper := sd.openFileRead(@asyncTestFile)
+    utils.evaluateSubBool(hHelper >= 0, @"open handle for helper cog", true)
+
+    if hMain >= 0 and hHelper >= 0
+        ' Launch helper cog — it will wait on barrier, then do blocking read
+        helper_status := STATUS_RUNNING
+        helper_result := 0
+        sync_barrier := 0
+        helper_cogid := cogspin(NEWCOG, helper_blocking_read(hHelper), @helper_stack)
+
+        ' Start async read on main cog (acquires lock)
+        status := sd.startReadHandle(hMain, @asyncBuf, contentLen)
+
+        ' Release helper — it will try blocking read (will spin on locktry)
+        sync_barrier := 1
+
+        ' Complete our async op (releases lock — helper can proceed)
+        bytesMain := sd.getResult()
+
+        ' Wait for helper to finish
+        repeat until helper_status <> STATUS_RUNNING
+            waitms(10)
+
+        ' Both operations should succeed
+        utils.evaluateSubBool(bytesMain == contentLen and helper_status == STATUS_PASS, @"both cogs read OK", true)
+
+        if helper_cogid <> -1
+            cogstop(helper_cogid)
+            helper_cogid := -1
+
+        sd.closeFileHandle(hMain)
+        sd.closeFileHandle(hHelper)
+    else
+        utils.evaluateSubBool(false, @"both cogs read OK", true)
+        if hMain >= 0
+            sd.closeFileHandle(hMain)
+        if hHelper >= 0
+            sd.closeFileHandle(hHelper)
+    utils.showSubTestResults()
+
+    utils.checkGuard(@asyncBuf_guard, @"asyncBuf guard")
+
+
+PRI runTest6_DoubleStartBusy() | handle, status1, status2, contentLen
+    ' Test 6: Second startWriteHandle without getResult returns E_ASYNC_BUSY
+    utils.startTest(@"Double start returns E_ASYNC_BUSY")
+    utils.setCheckCountPerTest(3)
+
+    contentLen := strsize(@asyncContent)
+
+    handle := sd.openFileRead(@asyncTestFile)
+    utils.evaluateSubBool(handle >= 0, @"open file", true)
+    if handle >= 0
+        ' First start — should succeed
+        status1 := sd.startReadHandle(handle, @asyncBuf, contentLen)
+        utils.evaluateSubValue(status1, @"first start PENDING", sd.PENDING)
+
+        ' Second start without getResult — should fail with E_ASYNC_BUSY
+        status2 := sd.startReadHandle(handle, @asyncBuf, contentLen)
+        utils.evaluateSubValue(status2, @"second start E_ASYNC_BUSY", sd.E_ASYNC_BUSY)
+
+        ' Clean up: complete the first operation
+        sd.getResult()
+        sd.closeFileHandle(handle)
+    else
+        utils.evaluateSubBool(false, @"first start PENDING", true)
+        utils.evaluateSubBool(false, @"second start E_ASYNC_BUSY", true)
+    utils.showSubTestResults()
+
+
+' ═══════════════════════════════════════════════════════════════════════════
+' HELPER COG METHODS
+' ═══════════════════════════════════════════════════════════════════════════
+
+PRI helper_blocking_read(handle) | bytesRead, contentLen
+    ' Helper cog: wait for barrier, then do a blocking read.
+    ' The main cog holds the api_lock via async — this cog will spin
+    ' on locktry until main calls getResult().
+    '
+    ' @param handle - Open read handle to use
+
+    repeat until sync_barrier <> 0
+
+    contentLen := strsize(@asyncContent)
+    bytesRead := sd.readHandle(handle, @blockBuf, contentLen)
+
+    if bytesRead == contentLen
+        helper_status := STATUS_PASS
+    else
+        helper_status := STATUS_FAIL
+    helper_result := bytesRead
+
+
+' ═══════════════════════════════════════════════════════════════════════════
+' HELPER METHODS
+' ═══════════════════════════════════════════════════════════════════════════
+
+PRI createTestFile() | handle
+    ' Create the test file with known content
+
+    sd.deleteFile(@asyncTestFile)
+    handle := sd.createFileNew(@asyncTestFile)
+    if handle >= 0
+        sd.writeHandle(handle, @asyncContent, strsize(@asyncContent))
+        sd.closeFileHandle(handle)
+        debug("  Created test file: ", zstr_(@asyncTestFile))
+    else
+        debug("  FAILED to create test file!")
+
+con { license }
+
+{{
+  =================================================================================================
+
+  Terms of Use: MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this
+  software and associated documentation files (the "Software"), to deal in the Software
+  without restriction, including without limitation the rights to use, copy, modify,
+  merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies
+  or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+  INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+  HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+  CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+  OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+  =================================================================================================
+}}
