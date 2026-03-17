@@ -83,14 +83,13 @@ SD:/>
 SD:/> dir
  Directory of /
 
-  Attr    Name          Size
-  ----    --------      ----------
-  D---    MYDIR/
-  -A--    README.TXT    1,234
-  -A--    DATA.BIN      65,536
+  Attr  Modified              Size  Name
+  ----  ----------------  --------  --------------------------------
+  D---  2026-03-17 10:00    <DIR>   MYDIR
+  ----  2026-03-17 14:30      1234  README.TXT
+  ----  2026-03-15 09:15     65536  DATA.BIN
 
-       2 File(s)     66,770 bytes
-       1 Dir(s)
+  3 file(s), 66770 bytes
 
 SD:/> cd MYDIR
 SD:/MYDIR> dir
@@ -227,6 +226,8 @@ SD:/> bench
 | `stats` | `info` | Show filesystem statistics |
 | `card` | `cid` | Show card identification (CID register) |
 | `version` | | Show driver version and SPI frequency |
+| `date` | | Show current date/time |
+| `date YYYY MM DD HH MM SS` | | Set date/time for file timestamps |
 
 ### Diagnostics
 | Command | Aliases | Description |

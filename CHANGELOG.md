@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-03-17
+
+**Worker loop restructure, live timestamps, auto-flush, non-blocking async I/O.**
+
+### New Features
+
+- `setDate()`, `getDate()`: Live clock with 2-second auto-advance for file timestamps
+- Auto-flush dirty handles after 200ms idle (zero cost during active I/O)
+- `SD_INCLUDE_ASYNC`: Non-blocking file I/O via `startReadHandle()`, `startWriteHandle()`, `isComplete()`, `getResult()`, `cancelAsync()`
+- Demo shell: `date` command to show/set driver clock; directory listings show modification timestamps
+
+### Bug Fixes
+
+- Async I/O: Stale COGATN drained via `POLLATN()` before lock release (prevented silent filesystem corruption after async operations)
+
+### Improvements
+
+- Worker cog loop restructured with dedicated clock tick and idle flush slots
+- `run_regression.sh`: `--run-only` flag recompiles only stale .bin files (checks source and driver timestamps)
+
+### Tests
+
+- 452 tests across 24 suites, verified on hardware
+- New suites: per-cog CWD isolation, concurrent stress, live timestamps, async I/O
+- Mutation testing pass 2: 14/14 non-equivalent mutations killed (100%)
+
 ## [1.3.2] - 2026-03-10
 
 **NCO write alignment fix, selective debug channels, controller-specific code removed.**
@@ -219,7 +245,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Initial testing release** -- driver, utilities, demo shell, and 263+ regression tests.
 
-[Unreleased]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.3.1...HEAD
+[Unreleased]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.3.2...v1.4.0
+[1.3.2]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.3.1...v1.3.2
 [1.3.1]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.2.0...v1.2.1

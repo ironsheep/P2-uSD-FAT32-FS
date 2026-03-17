@@ -20,11 +20,14 @@ This project provides a robust, high-performance SD card driver for the P2 micro
 - **CRC Validation**: Hardware-accelerated CRC-16 on all data transfers
 - **Directory Operations**: Create, navigate, and enumerate directories (index-based and handle-based)
 - **File Operations**: Create, open, read, write, seek, rename, delete
+- **Live Timestamps**: `setDate()`/`getDate()` with 2-second auto-advance for file creation and modification stamps
+- **Auto-Flush**: Dirty handles flushed after 200ms idle — protects against card removal data loss
+- **Non-Blocking Async I/O**: Optional `startReadHandle()`/`startWriteHandle()` for overlapping computation with SD I/O (`SD_INCLUDE_ASYNC`)
 - **Built-in Card Formatter**: Format any SD card as FAT32 directly from the P2 — no PC required
 - **Filesystem Repair**: Integrated read-only audit (39 checks) and 4-pass fsck with auto-repair
 - **Multi-Cog Safe**: Dedicated worker cog with hardware lock serialization
 - **Per-Cog Working Directory**: Each cog maintains its own CWD for safe concurrent navigation
-- **Regression Tested**: 427 automated tests across 20 test suites
+- **Regression Tested**: 452 automated tests across 24 test suites
 
 ## Documentation
 
@@ -37,7 +40,7 @@ This project provides a robust, high-performance SD card driver for the P2 micro
 | **[FAT32 API Concepts](DOCs/Reference/FAT32-API-CONCEPTS-REFERENCE.md)** | FAT32 background for embedded developers |
 | **[Utilities Guide](DOCs/SD-CARD-UTILITIES.md)** | Standalone utility programs (format, audit, fsck, benchmark) |
 | **[Utility Internals](DOCs/Utils/)** | Theory of operations for each utility |
-| **[Regression Testing](src/regression-tests/README.md)** | Test infrastructure, 427 tests across 20 suites |
+| **[Regression Testing](src/regression-tests/README.md)** | Test infrastructure, 452 tests across 24 suites |
 | **[Example Programs](src/EXAMPLES/README.md)** | Compilable examples: read/write, data logger, directory walk, multi-cog |
 | **[Demo Shell](src/DEMO/README.md)** | Full-featured terminal shell with card formatting, filesystem repair, file management, and benchmarking |
 
@@ -139,8 +142,8 @@ P2-uSD-FAT32-FS/
 │       ├── isp_mem_strings.spin2       # String formatting utilities
 │       └── isp_stack_check.spin2       # Stack usage diagnostic
 │
-│   ├── regression-tests/          # Regression test suite (427 tests)
-│   │   ├── SD_RT_*_tests.spin2        # 20 test files (mount, file ops, seek, etc.)
+│   ├── regression-tests/          # Regression test suite (452 tests)
+│   │   ├── SD_RT_*_tests.spin2        # 24 test files (mount, file ops, seek, async, etc.)
 │   │   ├── isp_rt_utilities.spin2     # Shared test framework
 │   │   └── TestCard/                  # Test card setup and validation
 │
