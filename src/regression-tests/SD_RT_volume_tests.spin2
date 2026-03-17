@@ -69,6 +69,7 @@ vlDateFile      BYTE    "VLDATE1.TXT", 0
 vlDateFile2     BYTE    "VLDATE2.TXT", 0
 vlDateDir       BYTE    "VLDTDIR", 0
 vlLegacyFile    BYTE    "VLLEGCY.TXT", 0
+vlFlushFile     BYTE    "VLFLUSH.TXT", 0
 dfTestFile      BYTE    "DFTEST.BIN", 0
 dfVerifyFile    BYTE    "DFVERFY.BIN", 0
 dfNameBuf       BYTE    "DF00.BIN", 0
@@ -80,6 +81,7 @@ maxLabel        BYTE    "12345678901", 0
 ' File content
 testContent     BYTE    "Volume test content data", 0
 syncContent     BYTE    "Sync test data chunk one", 0
+flushContent    BYTE    "Auto-flush test data pattern!", 0
 
 ' Buffers
 vbrBuf          BYTE    0[sd.SECTOR_SIZE]
@@ -259,6 +261,74 @@ PUB go() | result, h1, h2, bytesWritten, bytesRead, pLabel, idx, pEntry, wrtDate
     utils.startTest(@"sync() with no file open")
     result := sd.sync()
     utils.evaluateSingleValue(result, @"sync() no file", sd.SUCCESS)
+
+    ' ======================================================================
+    ' TEST GROUP: Auto-Flush on Idle
+    ' ======================================================================
+    utils.startTestGroup(@"Auto-Flush on Idle")
+
+    ' Test: Auto-flush writes dirty handle after idle period
+    utils.startTest(@"Auto-flush persists data after 300ms idle")
+    utils.setCheckCountPerTest(2)
+    sd.deleteFile(@vlFlushFile)
+    h1 := sd.createFileNew(@vlFlushFile)
+    utils.evaluateSubBool(h1 >= 0, @"create file", true)
+    if h1 >= 0
+        bytesWritten := sd.writeHandle(h1, @flushContent, strsize(@flushContent))
+        ' Do NOT close — wait for auto-flush (200ms threshold)
+        waitms(300)
+        ' Open same file with second handle to read dir entry from disk
+        h2 := sd.openFileRead(@vlFlushFile)
+        if h2 >= 0
+            utils.evaluateSubValue(sd.fileSizeHandle(h2), @"size via 2nd handle", strsize(@flushContent))
+            sd.closeFileHandle(h2)
+        else
+            utils.evaluateSubBool(false, @"size via 2nd handle", true)
+        sd.closeFileHandle(h1)
+    else
+        utils.evaluateSubBool(false, @"size via 2nd handle", true)
+    utils.showSubTestResults()
+
+    ' Test: Auto-flush updates directory entry
+    utils.startTest(@"Auto-flush updates dir entry size")
+    utils.setCheckCountPerTest(2)
+    sd.deleteFile(@vlFlushFile)
+    h1 := sd.createFileNew(@vlFlushFile)
+    utils.evaluateSubBool(h1 >= 0, @"create file", true)
+    if h1 >= 0
+        ' Write twice to grow the file
+        sd.writeHandle(h1, @flushContent, strsize(@flushContent))
+        sd.writeHandle(h1, @flushContent, strsize(@flushContent))
+        waitms(300)
+        ' Verify size reflects both writes
+        h2 := sd.openFileRead(@vlFlushFile)
+        if h2 >= 0
+            utils.evaluateSubValue(sd.fileSizeHandle(h2), @"size after 2 writes", strsize(@flushContent) * 2)
+            sd.closeFileHandle(h2)
+        else
+            utils.evaluateSubBool(false, @"size after 2 writes", true)
+        sd.closeFileHandle(h1)
+    else
+        utils.evaluateSubBool(false, @"size after 2 writes", true)
+    utils.showSubTestResults()
+
+    ' Test: Auto-flush does not interfere with active I/O
+    utils.startTest(@"Active I/O not disrupted by flush")
+    utils.setCheckCountPerTest(2)
+    sd.deleteFile(@vlFlushFile)
+    h1 := sd.createFileNew(@vlFlushFile)
+    utils.evaluateSubBool(h1 >= 0, @"create file", true)
+    if h1 >= 0
+        ' Rapid writes with no 200ms gap
+        bytesWritten := 0
+        repeat 50
+            bytesWritten += sd.writeHandle(h1, @flushContent, strsize(@flushContent))
+        utils.evaluateSubValue(bytesWritten, @"total bytes written", strsize(@flushContent) * 50)
+        sd.closeFileHandle(h1)
+    else
+        utils.evaluateSubBool(false, @"total bytes written", true)
+    utils.showSubTestResults()
+    sd.deleteFile(@vlFlushFile)
 
     ' ======================================================================
     ' TEST GROUP: setDate
