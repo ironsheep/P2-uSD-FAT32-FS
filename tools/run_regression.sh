@@ -67,7 +67,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --from <name>      Resume from suite matching <name> (substring match)"
             echo "  --include-format   Include format test (WARNING: erases SD card!)"
             echo "  --compile-only     Only compile, do not run on hardware"
-            echo "  --run-only         Skip compile, run on hardware using existing .bin files"
+            echo "  --run-only         Only recompile stale .bin files (source or driver newer)"
             echo ""
             echo "Examples:"
             echo "  $0                              # Full regression (23 suites)"
@@ -208,13 +208,29 @@ UTILS_PATH="$(_relpath "$PROJECT_ROOT/src/UTILS" "$REGTEST_DIR")"
 DEMO_PATH="$(_relpath "$PROJECT_ROOT/src/DEMO" "$REGTEST_DIR")"
 
 # --- Phase 1: Compile tests (from START_INDEX onward) ---
+DRIVER_SRC="$PROJECT_ROOT/src/micro_sd_fat32_fs.spin2"
+
+# Determine if a .bin needs recompiling: missing, or older than source or driver
+_needs_compile() {
+    local spin_file="$1"
+    local bin_file="${spin_file%.spin2}.bin"
+    [[ ! -f "$bin_file" ]] && return 0
+    [[ "$spin_file" -nt "$bin_file" ]] && return 0
+    [[ "$DRIVER_SRC" -nt "$bin_file" ]] && return 0
+    return 1
+}
+
 if [[ "$RUN_ONLY" == true ]]; then
-    echo -e "${CYAN}--- Phase 1: Compile skipped (--run-only) ---${NC}"
+    echo -e "${CYAN}--- Phase 1: Compile (--run-only, stale bins only) ---${NC}"
     echo ""
 
-    # Verify .bin files exist for all suites we'll run
-    MISSING_BINS=()
+    COMPILE_PASS=0
+    COMPILE_FAIL=0
+    COMPILE_SKIP=0
+    COMPILE_FAILED_FILES=()
+
     cd "$REGTEST_DIR"
+
     for i in "${!SUITES[@]}"; do
         if [[ $i -lt $START_INDEX ]]; then
             continue
@@ -222,22 +238,42 @@ if [[ "$RUN_ONLY" == true ]]; then
         entry="${SUITES[$i]}"
         FILE="${entry%%:*}"
         BASENAME="${FILE%.spin2}"
-        if [[ ! -f "${BASENAME}.bin" ]]; then
-            MISSING_BINS+=("$FILE")
+
+        if _needs_compile "$FILE"; then
+            if pnut-ts -d -I "$SRC_PATH" -I "$UTILS_PATH" -I "$DEMO_PATH" -I . "$FILE" >/dev/null 2>&1; then
+                SIZE=$(wc -c < "${BASENAME}.bin" | tr -d ' ')
+                echo -e "  ${GREEN}OK${NC}: $FILE (${SIZE} bytes) [recompiled]"
+                COMPILE_PASS=$((COMPILE_PASS + 1))
+            else
+                echo -e "  ${RED}FAIL${NC}: $FILE"
+                pnut-ts -d -I "$SRC_PATH" -I "$UTILS_PATH" -I "$DEMO_PATH" -I . "$FILE" 2>&1 | grep -i error || true
+                COMPILE_FAIL=$((COMPILE_FAIL + 1))
+                COMPILE_FAILED_FILES+=("$FILE")
+            fi
+        else
+            COMPILE_SKIP=$((COMPILE_SKIP + 1))
         fi
     done
+
     cd "$SCRIPT_DIR"
 
-    if [[ ${#MISSING_BINS[@]} -gt 0 ]]; then
-        echo -e "${RED}Missing .bin files (run without --run-only first):${NC}"
-        for f in "${MISSING_BINS[@]}"; do
-            echo "  - ${f%.spin2}.bin"
+    echo ""
+    if [[ $COMPILE_PASS -gt 0 || $COMPILE_FAIL -gt 0 ]]; then
+        echo -e "  Compiled: ${GREEN}${COMPILE_PASS} pass${NC}, ${RED}${COMPILE_FAIL} fail${NC}, ${COMPILE_SKIP} up-to-date"
+    else
+        echo -e "  All ${COMPILE_SKIP} .bin files up-to-date"
+    fi
+    echo ""
+
+    if [[ $COMPILE_FAIL -gt 0 ]]; then
+        echo -e "${RED}Compile failures:${NC}"
+        for f in "${COMPILE_FAILED_FILES[@]}"; do
+            echo "  - $f"
         done
         echo ""
+        echo -e "${RED}Fix compile errors before running tests.${NC}"
         exit 1
     fi
-    echo -e "  All .bin files present"
-    echo ""
 else
     echo -e "${CYAN}--- Phase 1: Compiling test suites ---${NC}"
     echo ""
@@ -293,7 +329,11 @@ else
 fi
 
 if [[ "$COMPILE_ONLY" == true ]]; then
-    echo -e "${GREEN}All ${COMPILE_PASS} test suites compiled successfully.${NC}"
+    if [[ $COMPILE_PASS -gt 0 ]]; then
+        echo -e "${GREEN}All ${COMPILE_PASS} test suites compiled successfully.${NC}"
+    else
+        echo -e "${GREEN}All test suites up-to-date.${NC}"
+    fi
     exit 0
 fi
 
