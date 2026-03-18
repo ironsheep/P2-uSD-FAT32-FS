@@ -95,11 +95,11 @@ SD:/> cd MYDIR
 SD:/MYDIR> dir
  Directory of /MYDIR
 
-  Attr    Name          Size
-  ----    --------      ----------
-  -A--    NOTES.TXT     512
+  Attr  Modified              Size  Name
+  ----  ----------------  --------  --------------------------------
+  ----  2026-03-17 14:30       512  NOTES.TXT
 
-       1 File(s)     512 bytes
+  1 file(s), 512 bytes
 
 SD:/MYDIR> cd /
 SD:/>
@@ -155,6 +155,12 @@ SD:/> card
 SD:/> version
   SD Card Driver - Iron Sheep Productions
   SPI Frequency: 25000000 Hz
+
+SD:/> date
+2009-01-27 07:00:00
+
+SD:/> date 2026 3 17 14 30 0
+Date set: 2026-03-17 14:30:00
 ```
 
 ### Diagnostics

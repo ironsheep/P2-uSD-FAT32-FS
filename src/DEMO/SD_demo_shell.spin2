@@ -307,7 +307,8 @@ PUB show_help()
     serial.fstr0(@"  card        Card summary (cid)      fsck        Check & repair FS\r\n")
     serial.fstr0(@"  version     Driver version          bench       Throughput test\r\n")
     serial.fstr0(@"  label [n]   Volume label (vol)      format      Format SD card\r\n")
-    serial.fstr0(@"  date [...]  Show/set date+time      help        This help\r\n")
+    serial.fstr0(@"  date        Show current date       help        This help\r\n")
+    serial.fstr0(@"  date YYYY MM DD HH MM SS  Set date+time\r\n")
     serial.fstr0(@"  cls         Clear screen\r\n")
     serial.fstr0(@"  alias       Show command aliases\r\n")
 
@@ -535,7 +536,16 @@ PUB do_dir() | dh, result, count, total_size, attrib, size, p_name, p_path, p_en
         serial.tx((attrib & sd.ATTR_SYSTEM) ? "S" : "-")             ' system
 
         ' Format timestamp: YYYY-MM-DD HH:MM
-        serial.fstr5(@"  %04d-%02d-%02d %02d:%02d", yr, mo, dy, hr, mn)
+        serial.fstr0(@"  ")
+        emit_zpad(yr, 4)
+        serial.tx("-")
+        emit_zpad(mo, 2)
+        serial.tx("-")
+        emit_zpad(dy, 2)
+        serial.tx(" ")
+        emit_zpad(hr, 2)
+        serial.tx(":")
+        emit_zpad(mn, 2)
 
         if (attrib & sd.ATTR_DIRECTORY)                               ' directory
           serial.fstr1(@"    <DIR>  %s\r\n", p_name)
@@ -1409,11 +1419,14 @@ PUB do_date() | yr, mo, dy, hr, mn, sec, result
     if (result < 0)
       serial.fstr1(@"Invalid date/time (error %d)\r\n", result)
     else
-      serial.fstr6(@"Date set: %04d-%02d-%02d %02d:%02d:%02d\r\n", yr, mo, dy, hr, mn, sec)
+      serial.fstr0(@"Date set: ")
+      emit_datetime(yr, mo, dy, hr, mn, sec)
+      serial.fstr0(@"\r\n")
   else
     ' Display current date/time
     yr, mo, dy, hr, mn, sec := sd.getDate()
-    serial.fstr6(@"%04d-%02d-%02d %02d:%02d:%02d\r\n", yr, mo, dy, hr, mn, sec)
+    emit_datetime(yr, mo, dy, hr, mn, sec)
+    serial.fstr0(@"\r\n")
 
 
 PUB do_tree() | p_path
@@ -1456,9 +1469,10 @@ PRI write_demo_file(p_name, p_content) | handle, len
   len := strsize(p_content)
   serial.fstr2(@"  Writing %s (%d bytes)...\r\n", p_name, len)
 
+  sd.deleteFile(p_name)                                         ' Remove if exists (ignore error)
   handle := sd.createFileNew(p_name)
   if (handle < 0)
-    serial.fstr0(@"    ERROR: Could not create file\r\n")
+    serial.fstr1(@"    ERROR: Could not create file (%d)\r\n", handle)
   else
     sd.writeHandle(handle, p_content, len)
     sd.closeFileHandle(handle)
@@ -1935,6 +1949,46 @@ PRI lcstr(p_str) : p_lcstr | ch
     if (ch >= "A") && (ch <= "Z")
       byte[p_str] := ch + 32
     ++p_str
+
+
+PRI emit_zpad(value, width) | divisor, digit, started
+' Emit a decimal number with leading zero padding to the specified width.
+'
+' @param value - Non-negative integer to emit
+' @param width - Minimum field width (2 or 4)
+
+  divisor := 1
+  repeat width - 1
+    divisor *= 10
+
+  repeat width
+    digit := value / divisor
+    value := value // divisor
+    divisor /= 10
+    serial.tx(digit + "0")
+
+
+PRI emit_datetime(yr, mo, dy, hr, mn, sec)
+' Emit a formatted date/time string: YYYY-MM-DD HH:MM:SS
+'
+' @param yr - Year
+' @param mo - Month
+' @param dy - Day
+' @param hr - Hour
+' @param mn - Minute
+' @param sec - Second
+
+  emit_zpad(yr, 4)
+  serial.tx("-")
+  emit_zpad(mo, 2)
+  serial.tx("-")
+  emit_zpad(dy, 2)
+  serial.tx(" ")
+  emit_zpad(hr, 2)
+  serial.tx(":")
+  emit_zpad(mn, 2)
+  serial.tx(":")
+  emit_zpad(sec, 2)
 
 
 PRI decval(p_str) : value | ch

@@ -267,7 +267,7 @@ Cards that need to be re-run through the updated `SD_card_characterize.spin2` to
 | sandisk-ss08g-8gb | **verified** | ACMD13 (Class 4, U0, V0) | — |
 | pny-sd16g-16gb | **verified** | ACMD13 (Class 4, U0, V0) | 350+250 |
 | wd-wx64g-64gb | **verified** | ACMD13 (Class 10, U1, A2, V10) | 350+250 |
-| siliconpower-spcc-64gb | **verified** | ACMD13 (Class 10, U3, A1, V30) — label says U1 | **BLOCKED** |
+| siliconpower-spcc-64gb | **verified** | ACMD13 (Class 10, U3, A1, V30) — label says U1 | **--** |
 | samsung-jd1y7-128gb | **verified** | ACMD13 (Class 10, U3, A2, V30) | 350+250 |
 | amazon-basics-usd00-64gb | **verified** | ACMD13 (Class 10, U3, A2, V30) | 350+250 |
 | sandisk-sh32g-32gb | **verified** | ACMD13 (Class 10, U3, A2, V30) | 350+250 |

@@ -18,10 +18,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `SD_INCLUDE_ASYNC`: Non-blocking file I/O via `startReadHandle()`, `startWriteHandle()`, `isComplete()`, `getResult()`, `cancelAsync()`
 - Demo shell: `date` command to show/set driver clock; directory listings show modification timestamps
 
-### Bug Fixes
-
-- Async I/O: Stale COGATN drained via `POLLATN()` before lock release (prevented silent filesystem corruption after async operations)
-
 ### Improvements
 
 - Worker cog loop restructured with dedicated clock tick and idle flush slots
