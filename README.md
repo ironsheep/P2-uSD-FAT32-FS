@@ -111,7 +111,7 @@ Measured at 350 MHz sysclk with 25 MHz SPI, smart pin hardware acceleration, str
 | Raw Multi-sector Write (32KB) | 2,170 KB/s | 2,275 KB/s | 2,305 KB/s | **2,319 KB/s** |
 | Mount | 486 ms | 400 ms | 233 ms | 243 ms |
 
-Raw SPI efficiency reaches 80% of theoretical maximum (2,427 / 3,052 KB/s). Multi-sector commands provide 46-69% improvement over single-sector operations. 20 cards tested across 9 manufacturers — see [Card Performance](DOCs/SD-CARD-PERFORMANCE.md) for ranked comparisons and card selection guidance.
+Raw SPI efficiency reaches 80% of theoretical maximum (2,427 / 3,052 KB/s). Multi-sector commands provide 46-69% improvement over single-sector operations. 23 cards tested across 9 manufacturers — see [Card Performance](DOCs/SD-CARD-PERFORMANCE.md) for ranked comparisons and card selection guidance.
 
 > **Sysclk and performance:** Both 350 MHz and 250 MHz sysclk produce the same 25 MHz SPI clock, but higher sysclk reduces Spin2 inter-transfer overhead between SPI bursts, yielding 10-20% better file throughput. For best performance, use `_CLKFREQ = 350_000_000`. See the [Performance Guide](DOCs/SD-CARD-PERFORMANCE.md) for detailed analysis.
 
@@ -179,7 +179,7 @@ P2-uSD-FAT32-FS/
 
 ### Card Size Support
 
-The driver's goal is full support for cards up to **2 TB** (the FAT32 and SDXC maximum defined by the Microsoft FAT32 specification and SD Physical Layer Specification). Tested with cards up to **128 GB** across 9 manufacturers.
+The driver's goal is full support for cards up to **2 TB** (the FAT32 and SDXC maximum defined by the Microsoft FAT32 specification and SD Physical Layer Specification). Tested with cards up to **128 GB** across 23 cards from 9 manufacturers.
 
 The FSCK utility provides full cluster-chain validation on cards of any size. For cards exceeding approximately 64 GB, a windowed bitmap approach processes the cluster space in 2M-cluster passes, extending full 4-pass validation (chain integrity, cross-link detection, lost cluster recovery, FAT sync) to any card.
 
