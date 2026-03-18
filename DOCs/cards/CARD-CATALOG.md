@@ -149,6 +149,7 @@ This section documents ALL fields available from SD card registers and indicates
 | SanDisk_SH32G_8.0_5BFECCD8_202508 | SanDisk ($03) | SH32G | 32 GB | **A** | PASS |
 | SanDisk_WX64G_8.0_EEBAD6C0_202403 | SanDisk ($03) — WD subsidiary | WX64G | 64 GB | **A** | PASS |
 | Phison_SD16G_3.0_01CD5CF5_201808 | PNY (Phison $27) | SD16G | 16 GB | **D** | PASS |
+| Phison_SD16G_3.0_DA00094B_201610 | Sony (Phison $27) - Taiwan | SD16G | 16 GB | **D** | PASS |
 
 ---
 
@@ -183,13 +184,14 @@ Cards tested with `diagnostic-tests/SD_speed_characterize.spin2` have measured i
 | Kingston_SD8GB | Kingston ($41) | 8 GB | — | — | — | not yet tested |
 | SanDisk_SU08G | Chinese #1 ($03) | 8 GB | — | — | — | not yet tested |
 | Samsung_00000 | Chinese #2 ($1B) | 8 GB | — | — | — | not yet tested |
-| SanDisk_SS08G | SanDisk Taiwan ($03) | 8 GB | — | — | — | not yet tested |
+| SanDisk_SS08G | SanDisk Taiwan ($03) | 8 GB | **687 KB/s** | 0.75 ms | MED | 25 MHz |
 | SharedOEM_SPCC | Silicon Power ($9F) | 64 GB | **967 KB/s** | 0.53 ms | HIGH | 25 MHz |
 | SanDisk_SH32G | SanDisk ($03) | 32 GB | **~951 KB/s** | 0.54 ms | HIGH | 25 MHz |
 | SanDisk_WX64G | WD Purple ($03) | 64 GB | — | — | — | not yet tested |
-| Phison_SD16G | PNY ($27) | 16 GB | **31.3 KB/s** | 16.0 ms | LOW | 25 MHz |
+| Phison_SD16G (PNY) | PNY ($27) | 16 GB | **31.3 KB/s** | 16.0 ms | LOW | 25 MHz |
+| Phison_SD16G (Sony) | Sony ($27) | 16 GB | **714 KB/s** | 0.72 ms | MED | 25 MHz |
 
-**Tested: 10 of 22 cards**
+**Tested: 12 of 23 cards**
 
 **Key Observations:**
 1. **Lexar V30 U3 64GB** - **Fastest card tested** (1,059 KB/s), 12% faster than SP Elite

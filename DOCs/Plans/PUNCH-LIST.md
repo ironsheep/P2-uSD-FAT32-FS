@@ -20,7 +20,7 @@ Items to investigate when time permits.
 
 ---
 
-### Samsung 00000 8GB -- FAT32 format writes but doesn't persist
+### Samsung 00000 8GB -- FAT32 format writes but doesn't persist — PAUSED (card not located)
 
 **Card:** samsung-00000-8gb
 **Unique ID:** `Samsung_00000_1.0_D9FB539C_201408`
@@ -80,6 +80,7 @@ However, immediately re-reading the card shows the **original factory values are
 - All other 16 cards in the collection format successfully
 
 *Noted: 2026-02-15*
+*Paused: 2026-03-17 — unable to locate card for retesting*
 
 ---
 
@@ -92,6 +93,39 @@ The driver flagged PNY/AData cards (manufacturer ID $1D) as `card_is_slow := tru
 **Resolution:** Removed `card_is_slow` DAT variable and all 4 references (identifyCard, setOptimalSpeed, do_attempt_high_speed, stale comment in initCard). Fixed the actual bug with `xfrq -= 1` for exact NCO division. No driver logic now branches on manufacturer ID. See [NCO-WRITE-ALIGNMENT-ANALYSIS](../Analysis/NCO-WRITE-ALIGNMENT-ANALYSIS.md) and [NCO-WRITE-FIX-ENGINEERING-GUIDE](ext-agents/NCO-WRITE-FIX-ENGINEERING-GUIDE.md).
 
 *Noted: 2026-03-02 — Resolved: 2026-03-09*
+
+---
+
+### Maxwell NCard 4GB -- Format fails with busyTimeout on sector 0
+
+**Card:** Maxwell microSD HC 4GB (label), Silicon Motion NCard (controller)
+**Unique ID:** `SiliconMotion_NCard_1.0_0000058F_201008`
+
+```
+Silicon Motion NCard SDHC 3GB [Empty] SD 3.x rev1.0 SN:$0000_058F 2010/08
+Class 4, U0, V0, SPI 25 MHz
+```
+
+**Symptom:** Card initializes and reads successfully. Format utility writes MBR to sector 0 — card accepts CMD24, data response `$05` (accepted), but then stays busy indefinitely (busyTimeout, result=6). No valid MBR or filesystem on card (sector 0 is mostly zeros with "SMI" signature at offset $19).
+
+**Diagnostic output:**
+```
+ERROR: Failed to write MBR!
+  DIAG: result=6 R1=$00 dresp=$05 sector=0
+  (1=CMD24fatal 2=drespTimeout 3=CRCreject 4=writeErr 5=unknownReject 6=busyTimeout 7=OK)
+```
+
+**Possible Causes:**
+- Worn-out flash — controller accepts write command but can't complete erase/program cycle
+- Similar to Samsung 00000 write-persist issue (different symptom, same class of problem)
+- Card manufactured August 2010 — over 15 years old
+- Unknown if only sector 0 fails or all writes fail (not yet tested)
+
+**To Investigate:**
+- Try raw write to non-zero sector (e.g., sector 1000) to determine if all writes fail or just sector 0
+- Check if card has internal write-protect mechanism not visible in CSD bits
+
+*Noted: 2026-03-17*
 
 ---
 

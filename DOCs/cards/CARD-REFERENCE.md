@@ -232,6 +232,17 @@ Class 4, U0, V0, SPI 25 MHz  [P2FMTER]
 
 ---
 
+### Sony SR-16UY 16GB (Phison)
+
+**Label:** Sony 16GB microSD HC (10) i U3 SR-16D, Made in Taiwan
+
+```
+Phison SD16G SDHC 14GB [FAT32] SD 4.x rev3.0 SN:DA00094B 2016/10
+Class 10, U3, V0, SPI 25 MHz
+```
+
+---
+
 ## Re-characterization Status
 
 Cards that need to be re-run through the updated `SD_card_characterize.spin2` to get verified ACMD13 data for Line 2:

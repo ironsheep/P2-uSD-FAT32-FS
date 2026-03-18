@@ -2,7 +2,7 @@
 
 **Label:** SanDisk 8GB (4) microSD HC, Made in Taiwan
 **Unique ID:** `SanDisk_SS08G_3.0_DAAEE8AD_201509`
-**Test Date:** 2026-02-02 (characterization)
+**Test Date:** 2026-03-17 (characterization + benchmark)
 
 ### Card Designator
 
@@ -135,6 +135,84 @@ SCR: $02 $35 $80 $02 $01 $00 $00 $00
 | MBR Read | PASS | FAT32 CHS partition |
 | VBR Read | PASS | Valid FAT32 filesystem |
 | Mount | READY | FAT32 formatted - ready for use |
+
+### Performance Benchmarks (350 MHz sysclk)
+
+**SPI Clock:** 25,000 kHz | **Mount:** 203.5 ms | **Volume:** NO NAME | **Free:** 7,383 MB
+
+| Test | Size | Min | Avg | Max | Throughput |
+|------|------|-----|-----|-----|------------|
+| **Raw Single-Sector** | | | | | |
+| Read (1x512B) | 512B | 741 us | 745 us | 748 us | 687 KB/s |
+| Write (1x512B) | 512B | 3,438 us | 3,444 us | 3,453 us | 148 KB/s |
+| **Raw Multi-Sector Read (CMD18)** | | | | | |
+| 8 sectors | 4 KB | 2,354 us | 2,354 us | 2,356 us | 1,740 KB/s |
+| 32 sectors | 16 KB | 7,864 us | 7,864 us | 7,866 us | 2,083 KB/s |
+| 64 sectors | 32 KB | 14,901 us | 14,902 us | 14,903 us | 2,198 KB/s |
+| **Raw Multi-Sector Write (CMD25)** | | | | | |
+| 8 sectors | 4 KB | 9,689 us | 9,695 us | 9,699 us | 422 KB/s |
+| 32 sectors | 16 KB | 15,795 us | 15,799 us | 15,803 us | 1,037 KB/s |
+| 64 sectors | 32 KB | 23,169 us | 23,172 us | 23,179 us | 1,414 KB/s |
+| **File Write** | | | | | |
+| create+write+close | 512B | 17,095 us | 20,171 us | 47,805 us | 25 KB/s |
+| create+write+close | 4 KB | 41,102 us | 44,382 us | 52,573 us | 92 KB/s |
+| create+write+close | 32 KB | 178,990 us | 191,793 us | 231,442 us | 170 KB/s |
+| **File Read** | | | | | |
+| open+read+close | 4 KB | 5,553 us | 5,620 us | 6,210 us | 728 KB/s |
+| open+read+close | 32 KB | 42,837 us | 42,916 us | 43,513 us | 763 KB/s |
+| open+read+close | 128 KB | 171,455 us | 171,614 us | 173,011 us | 763 KB/s |
+| open+read+close | 256 KB | 342,498 us | 342,673 us | 344,065 us | 764 KB/s |
+| **Overhead** | | | | | |
+| File Open | -- | 131 us | 212 us | 941 us | -- |
+| File Close | -- | 36 us | 36 us | 36 us | -- |
+| Unmount | -- | -- | 0 ms | -- | -- |
+
+**Multi-sector gain:** 64x single=50,248 us vs 1x multi=14,898 us --> **70% improvement**
+
+### Performance Benchmarks (250 MHz sysclk)
+
+**SPI Clock:** 25,000 kHz | **Mount:** 206.0 ms | **Volume:** NO NAME | **Free:** 7,383 MB
+
+| Test | Size | Min | Avg | Max | Throughput |
+|------|------|-----|-----|-----|------------|
+| **Raw Single-Sector** | | | | | |
+| Read (1x512B) | 512B | 895 us | 896 us | 898 us | 571 KB/s |
+| Write (1x512B) | 512B | 3,616 us | 3,640 us | 3,802 us | 140 KB/s |
+| **Raw Multi-Sector Read (CMD18)** | | | | | |
+| 8 sectors | 4 KB | 2,488 us | 2,489 us | 2,491 us | 1,645 KB/s |
+| 32 sectors | 16 KB | 8,513 us | 8,516 us | 8,521 us | 1,923 KB/s |
+| 64 sectors | 32 KB | 16,112 us | 16,113 us | 16,115 us | 2,033 KB/s |
+| **Raw Multi-Sector Write (CMD25)** | | | | | |
+| 8 sectors | 4 KB | 9,924 us | 11,056 us | 21,146 us | 370 KB/s |
+| 32 sectors | 16 KB | 16,529 us | 16,537 us | 16,547 us | 990 KB/s |
+| 64 sectors | 32 KB | 24,575 us | 27,747 us | 35,640 us | 1,180 KB/s |
+| **File Write** | | | | | |
+| create+write+close | 512B | 16,524 us | 19,366 us | 29,645 us | 26 KB/s |
+| create+write+close | 4 KB | 35,204 us | 43,824 us | 71,988 us | 93 KB/s |
+| create+write+close | 32 KB | 199,864 us | 211,096 us | 226,788 us | 155 KB/s |
+| **File Read** | | | | | |
+| open+read+close | 4 KB | 6,172 us | 6,243 us | 6,885 us | 656 KB/s |
+| open+read+close | 32 KB | 47,212 us | 47,307 us | 47,947 us | 692 KB/s |
+| open+read+close | 128 KB | 188,159 us | 188,363 us | 189,838 us | 695 KB/s |
+| open+read+close | 256 KB | 376,726 us | 376,913 us | 378,412 us | 695 KB/s |
+| **Overhead** | | | | | |
+| File Open | -- | 183 us | 270 us | 1,052 us | -- |
+| File Close | -- | 50 us | 50 us | 51 us | -- |
+| Unmount | -- | -- | 0 ms | -- | -- |
+
+**Multi-sector gain:** 64x single=57,365 us vs 1x multi=16,114 us --> **71% improvement**
+
+### Sysclk Effect (350 vs 250 MHz, same 25 MHz SPI)
+
+| Metric | 350 MHz | 250 MHz | Delta |
+|--------|---------|---------|-------|
+| Raw read 1x (KB/s) | 687 | 571 | +20% |
+| Raw write 1x (KB/s) | 148 | 140 | +6% |
+| Raw read 64x (KB/s) | 2,198 | 2,033 | +8% |
+| Raw write 64x (KB/s) | 1,414 | 1,180 | +20% |
+| File read 256KB (KB/s) | 764 | 695 | +10% |
+| File write 32KB (KB/s) | 170 | 155 | +10% |
+| Multi-sector gain | 70% | 71% | -- |
 
 ### Notes
 
