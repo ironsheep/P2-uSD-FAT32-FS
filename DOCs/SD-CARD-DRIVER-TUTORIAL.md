@@ -23,12 +23,13 @@ This tutorial shows how to perform common filesystem operations using the SD car
 9. [File Information](#file-information)
 10. [File Management](#file-management)
 11. [Multi-Cog Access](#multi-cog-access)
-12. [Error Handling](#error-handling)
-13. [Complete Examples](#complete-examples)
-14. [Example Programs](#example-programs)
-15. [Architecture Notes](#architecture-notes)
-16. [API Quick Reference](#api-quick-reference)
-17. [Conditional API Modules](#conditional-api-modules)
+12. [Non-Blocking (Async) File I/O](#non-blocking-async-file-io)
+13. [Error Handling](#error-handling)
+14. [Complete Examples](#complete-examples)
+15. [Example Programs](#example-programs)
+16. [Architecture Notes](#architecture-notes)
+17. [API Quick Reference](#api-quick-reference)
+18. [Conditional API Modules](#conditional-api-modules)
 
 ---
 
@@ -692,19 +693,49 @@ free_sectors := sd.freeSpace()
 debug("Free space: ", udec(free_sectors >> 11), " MB")  ' sectors / 2048 = MB
 ```
 
-### Setting Timestamps
+### Date and Time
 
-Set the date/time that will be applied to new files:
+The driver maintains an auto-incrementing clock for file timestamps. Call `setDate()` once to seed the clock — the worker cog then advances it automatically using a CT1-based 2-second tick. Files created or modified after `setDate()` receive accurate timestamps without further calls.
+
+**Setting the Clock:**
 
 ```spin2
-PUB setDate(year, month, day, hour, minute, second)
+PUB setDate(year, month, day, hour, minute, second) : result
 ```
 
+| Parameter | Range | Description |
+|-----------|-------|-------------|
+| `year` | 1980-2107 | Year (FAT32 epoch starts at 1980) |
+| `month` | 1-12 | Month |
+| `day` | 1-31 | Day |
+| `hour` | 0-23 | Hour (24-hour format) |
+| `minute` | 0-59 | Minute |
+| `second` | 0-59 | Second |
+
+**Returns:** `SUCCESS` (0) or `E_INVALID_PARAM` if any value is out of range.
+
 ```spin2
-' Set timestamp before creating files
-sd.setDate(2026, 2, 3, 14, 30, 0)
+' Seed the clock at startup — it auto-increments from here
+sd.setDate(2026, 3, 18, 14, 30, 0)
+
+' All files created after this get accurate timestamps
 handle := sd.createFileNew(string("TIMESTAMPED.TXT"))
 sd.closeFileHandle(handle)
+```
+
+**Reading the Clock:**
+
+```spin2
+PUB getDate() : year, month, day, hour, minute, second
+```
+
+Returns the live clock value maintained by the worker cog. If `setDate()` was never called, returns the default timestamp. Seconds are even values only (FAT32 stores seconds / 2).
+
+```spin2
+' Read current driver clock
+year, month, day, hour, minute, second := sd.getDate()
+debug("Date: ", udec(year), "-", udec(month), "-", udec(day))
+debug("Time: ", udec(hour), ":", udec(minute), ":", udec(second))
 ```
 
 ---
@@ -794,6 +825,131 @@ PUB readerTask() | handle, buf[128], bytes_read
 4. **Don't call `stop()` or `unmount()` while other cogs are using the driver.**
 
 > **See also:** [SD_example_multicog.spin2](../src/EXAMPLES/SD_example_multicog.spin2) for a complete working example.
+
+---
+
+## Non-Blocking (Async) File I/O
+
+### Concept
+
+The standard `readHandle()` and `writeHandle()` calls are **blocking** — the calling cog halts (via `WAITATN`) until the SD card finishes. For many applications this is fine. But when your cog has real-time work — sensor polling, control loops, display updates — those 5-50ms SD transfers waste millions of clock cycles.
+
+The async API lets you **start** a read or write, **keep running** while the worker cog handles the SD transfer, then **collect the result** when you're ready.
+
+### Enabling the Async API
+
+The async methods require the `SD_INCLUDE_ASYNC` feature flag:
+
+```spin2
+#pragma exportdef SD_INCLUDE_ASYNC
+
+OBJ
+  sd : "micro_sd_fat32_fs"
+```
+
+(`SD_INCLUDE_ALL` also enables it.)
+
+### The Three-Phase Pattern
+
+```
+1. START   — sd.startReadHandle() or sd.startWriteHandle()
+             Returns immediately with PENDING (1)
+2. DO WORK — Your cog runs freely while the SD transfer happens
+             Poll sd.isComplete() when convenient
+3. COLLECT — sd.getResult() returns bytes read/written
+             Releases the lock so other cogs can use the driver
+```
+
+### API Reference
+
+| Method | Description |
+|--------|-------------|
+| `startReadHandle(handle, buffer, count)` | Begin async read. Returns `PENDING` (1) or negative error |
+| `startWriteHandle(handle, buffer, count)` | Begin async write. Returns `PENDING` (1) or negative error |
+| `isComplete()` | Returns `TRUE` if the operation has finished |
+| `getResult()` | Returns bytes read/written (or error). Releases the lock |
+| `cancelAsync()` | Waits for worker to finish, discards result, releases lock |
+
+### Important: Lock Behavior
+
+While an async operation is in flight, the **API lock is held**. No other cog can issue SD commands until you call `getResult()` or `cancelAsync()`. This means:
+
+- Don't start an async op and forget about it — other cogs will block
+- Call `getResult()` as soon as you're ready for the data
+- If you need to bail out, call `cancelAsync()` (it still waits for the SPI transfer to finish safely)
+
+### Error Codes
+
+| Code | Constant | Description |
+|------|----------|-------------|
+| 1 | `PENDING` | Operation launched successfully |
+| -95 | `E_ASYNC_BUSY` | Another async operation is already in flight |
+| -96 | `E_NO_ASYNC_OP` | No async operation to get result from |
+
+### Example: Async Read with Sensor Polling
+
+```spin2
+#pragma exportdef SD_INCLUDE_ASYNC
+
+OBJ
+  sd : "micro_sd_fat32_fs"
+
+VAR
+  byte file_buf[512]
+
+PUB dataAcquisition() | handle, status, bytes_read
+  handle := sd.openFileRead(string("CONFIG.DAT"))
+  if handle < 0
+    return
+
+  ' Phase 1: Start the read
+  status := sd.startReadHandle(handle, @file_buf, 512)
+  if status <> sd.PENDING
+    debug("Async start failed: ", sdec(status))
+    sd.closeFileHandle(handle)
+    return
+
+  ' Phase 2: Do useful work while SD card transfers data
+  repeat until sd.isComplete()
+    pollSensors()                                ' Real-time work continues!
+    updateControlLoop()
+
+  ' Phase 3: Collect the result
+  bytes_read := sd.getResult()
+  if bytes_read > 0
+    processConfig(@file_buf, bytes_read)
+
+  sd.closeFileHandle(handle)
+```
+
+### Example: Async Write for Data Logging
+
+```spin2
+PUB logWithAsync(handle, p_data, count) | status, result
+  ' Start the write — returns immediately
+  status := sd.startWriteHandle(handle, p_data, count)
+  if status <> sd.PENDING
+    return status
+
+  ' Cog continues running while the write happens
+  repeat until sd.isComplete()
+    readNextSensorSample()
+
+  ' Collect result
+  result := sd.getResult()
+  if result < 0
+    debug("Write error: ", sdec(result))
+  return result
+```
+
+### When to Use Async vs Blocking
+
+| Situation | Use |
+|-----------|-----|
+| Simple file operations, no time pressure | `readHandle()` / `writeHandle()` (blocking) |
+| Cog has real-time work during SD transfers | `startReadHandle()` / `startWriteHandle()` (async) |
+| Multiple cogs issuing frequent SD commands | Blocking (async holds the lock longer) |
+| Single cog with control loop + logging | Async (keeps control loop responsive) |
 
 ---
 
@@ -1142,7 +1298,8 @@ These methods are always available in the core driver (no feature flags required
 | `volumeLabel()` | Card volume label |
 | `setVolumeLabel(label)` | Set volume label |
 | `freeSpace()` | Free sectors on card |
-| `setDate(y,m,d,h,mi,s)` | Set date/time for new files |
+| `setDate(y,m,d,h,mi,s)` | Set date/time, starts auto-incrementing clock |
+| `getDate()` | Get current clock (returns year, month, day, hour, minute, second) |
 | `getSPIFrequency()` | Current SPI clock in Hz |
 | `getCardMaxSpeed()` | Card's reported max speed in Hz |
 | `getManufacturerID()` | Card manufacturer ID byte |
@@ -1181,6 +1338,18 @@ To enable all modules at once:
 OBJ
   sd : "micro_sd_fat32_fs"
 ```
+
+### SD_INCLUDE_ASYNC - Non-Blocking File I/O
+
+For applications where the calling cog must keep running during SD transfers. See [Non-Blocking (Async) File I/O](#non-blocking-async-file-io) for detailed usage.
+
+| Method | Description |
+|--------|-------------|
+| `startReadHandle(handle, buffer, count)` | Begin async read, returns `PENDING` (1) |
+| `startWriteHandle(handle, buffer, count)` | Begin async write, returns `PENDING` (1) |
+| `isComplete()` | Check if async operation has finished |
+| `getResult()` | Get bytes read/written, release lock |
+| `cancelAsync()` | Discard result, release lock |
 
 ### SD_INCLUDE_RAW - Raw Sector Access
 
