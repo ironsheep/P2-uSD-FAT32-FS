@@ -16,15 +16,15 @@ Feature flags are declared in your **top-level application file** (the file that
 
 ### Available Flags
 
-| Flag | What It Enables | Approximate Size |
-|------|-----------------|------------------|
-| `SD_INCLUDE_RAW` | Raw sector read/write, `initCardOnly()`, multi-block CMD18/CMD25 | ~2 KB |
-| `SD_INCLUDE_REGISTERS` | Card register access: CID, CSD, SCR, SD Status | ~3 KB |
-| `SD_INCLUDE_SPEED` | High-speed mode switch via CMD6 (up to 50 MHz SPI) | ~2 KB |
-| `SD_INCLUDE_DEBUG` | Debug/diagnostic methods and CRC error getters | ~8 KB |
-| `SD_INCLUDE_ASYNC` | Non-blocking file I/O: `startReadHandle()`, `startWriteHandle()`, `isComplete()`, `getResult()`, `cancelAsync()` | ~1 KB |
-| `SD_INCLUDE_STACK_CHECK` | Worker cog stack depth measurement (diagnostic) | ~1 KB |
-| `SD_INCLUDE_ALL` | Convenience: enables RAW + REGISTERS + SPEED + DEBUG + ASYNC | ~16 KB |
+| Flag | What It Enables | Category | Size |
+|------|-----------------|----------|------|
+| `SD_INCLUDE_ASYNC` | Non-blocking file I/O: `startReadHandle()`, `startWriteHandle()`, `isComplete()`, `getResult()`, `cancelAsync()` | **User** | ~1 KB |
+| `SD_INCLUDE_RAW` | Raw sector read/write, `initCardOnly()`, multi-block CMD18/CMD25 | **User** | ~2 KB |
+| `SD_INCLUDE_SPEED` | High-speed mode switch via CMD6 (up to 50 MHz SPI) | **User** | ~2 KB |
+| `SD_INCLUDE_REGISTERS` | Card register access: CID, CSD, SCR, SD Status | Diagnostic | ~3 KB |
+| `SD_INCLUDE_DEBUG` | Debug/diagnostic methods and CRC error getters | Diagnostic | ~8 KB |
+| `SD_INCLUDE_STACK_CHECK` | Worker cog stack depth measurement | Diagnostic | ~1 KB |
+| `SD_INCLUDE_ALL` | Convenience: enables all of the above except STACK_CHECK | Both | ~16 KB |
 
 ### Flag Dependencies
 
