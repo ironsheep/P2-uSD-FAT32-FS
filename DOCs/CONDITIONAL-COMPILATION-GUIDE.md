@@ -52,6 +52,55 @@ With no feature flags, the driver provides all standard filesystem operations:
 
 This is sufficient for the vast majority of applications. The example programs (`src/EXAMPLES/`) use no feature flags at all.
 
+### SD_INCLUDE_ASYNC — Non-Blocking File I/O
+
+Unlike the other feature flags (which enable diagnostic, debug, or low-level access), `SD_INCLUDE_ASYNC` adds **application-level functionality**: the ability to start a read or write and keep your cog running while the SD card completes the transfer.
+
+This matters for embedded applications where the calling cog has real-time work — sensor polling, control loops, display updates — that can't pause for 5-50ms while the SD card finishes a sector write.
+
+**Enable it:**
+
+```spin2
+#pragma exportdef SD_INCLUDE_ASYNC
+
+OBJ
+    sd : "micro_sd_fat32_fs"
+```
+
+**Use it — async write pattern:**
+
+```spin2
+PUB data_logger() | handle, status, bytes
+    handle := sd.createFileNew(@"LOG.CSV")
+
+    repeat
+        acquire_sensor_data()
+
+        ' Start the write — returns immediately
+        sd.startWriteHandle(handle, @sensor_buf, 512)
+
+        ' Cog keeps running at full 350 MHz while SD card writes
+        repeat
+            process_control_loop()
+            update_display()
+        until sd.isComplete()
+
+        ' Retrieve the result and release the SD bus
+        bytes := sd.getResult()
+```
+
+**The 5 async methods:**
+
+| Method | Purpose |
+|--------|---------|
+| `startReadHandle(handle, buffer, count)` | Begin async read, returns `PENDING` (1) |
+| `startWriteHandle(handle, buffer, count)` | Begin async write, returns `PENDING` (1) |
+| `isComplete()` | Non-blocking poll — returns TRUE when done |
+| `getResult()` | Get byte count (or error), releases the SD bus lock |
+| `cancelAsync()` | Discard result, release lock |
+
+**Key rule:** Always call `getResult()` or `cancelAsync()` after starting an async operation. The SD bus lock is held until you do — other cogs cannot issue SD commands while an async operation is in flight.
+
 ---
 
 ## How to Enable Features
