@@ -22,8 +22,9 @@ Feature flags are declared in your **top-level application file** (the file that
 | `SD_INCLUDE_REGISTERS` | Card register access: CID, CSD, SCR, SD Status | ~3 KB |
 | `SD_INCLUDE_SPEED` | High-speed mode switch via CMD6 (up to 50 MHz SPI) | ~2 KB |
 | `SD_INCLUDE_DEBUG` | Debug/diagnostic methods and CRC error getters | ~8 KB |
+| `SD_INCLUDE_ASYNC` | Non-blocking file I/O: `startReadHandle()`, `startWriteHandle()`, `isComplete()`, `getResult()`, `cancelAsync()` | ~1 KB |
 | `SD_INCLUDE_STACK_CHECK` | Worker cog stack depth measurement (diagnostic) | ~1 KB |
-| `SD_INCLUDE_ALL` | Convenience: enables RAW + REGISTERS + SPEED + DEBUG | ~15 KB |
+| `SD_INCLUDE_ALL` | Convenience: enables RAW + REGISTERS + SPEED + DEBUG + ASYNC | ~16 KB |
 
 ### Flag Dependencies
 
@@ -32,6 +33,8 @@ Feature flags are declared in your **top-level application file** (the file that
 ```
 SD_INCLUDE_SPEED_REQUIRES_SD_INCLUDE_REGISTERS
 ```
+
+`SD_INCLUDE_ASYNC` is independent — it can be enabled alongside any other flags or alone. It **is** included by `SD_INCLUDE_ALL`.
 
 `SD_INCLUDE_STACK_CHECK` is independent and is **not** included by `SD_INCLUDE_ALL`. It must be enabled separately when needed.
 
