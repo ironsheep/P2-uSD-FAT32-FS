@@ -24,12 +24,13 @@ This tutorial shows how to perform common filesystem operations using the SD car
 10. [File Management](#file-management)
 11. [Multi-Cog Access](#multi-cog-access)
 12. [Non-Blocking (Async) File I/O](#non-blocking-async-file-io)
-13. [Error Handling](#error-handling)
-14. [Complete Examples](#complete-examples)
-15. [Example Programs](#example-programs)
-16. [Architecture Notes](#architecture-notes)
-17. [API Quick Reference](#api-quick-reference)
-18. [Conditional API Modules](#conditional-api-modules)
+13. [File Defragmentation](#file-defragmentation)
+14. [Error Handling](#error-handling)
+15. [Complete Examples](#complete-examples)
+16. [Example Programs](#example-programs)
+17. [Architecture Notes](#architecture-notes)
+18. [API Quick Reference](#api-quick-reference)
+19. [Conditional API Modules](#conditional-api-modules)
 
 ---
 
@@ -953,6 +954,106 @@ PUB logWithAsync(handle, p_data, count) | status, result
 
 ---
 
+## File Defragmentation
+
+### Concept
+
+FAT32 fragmentation occurs when a file's clusters are scattered across the disk instead of stored contiguously. This hurts read/write throughput (multi-block CMD18/CMD25 transfers only work on contiguous sectors) and is critical for the P2 boot file which must be contiguous.
+
+The defrag API lets you query fragmentation, compact individual files, and pre-allocate contiguous space for new files. Enable it with `SD_INCLUDE_DEFRAG`.
+
+### Enabling the Defrag API
+
+```spin2
+#pragma exportdef SD_INCLUDE_DEFRAG
+
+OBJ
+    sd : "micro_sd_fat32_fs"
+```
+
+### Checking if a File is Contiguous
+
+```spin2
+PUB check_boot_file() | frags
+    ' Quick boolean check
+    if not sd.isFileContiguous(@"_BOOT_P2.BIX")
+        debug("Boot file is fragmented!")
+
+    ' Detailed fragment count
+    frags := sd.fileFragments(@"_BOOT_P2.BIX")
+    if frags > 1
+        debug("Boot file has ", udec_(frags), " fragments")
+```
+
+`fileFragments()` returns the number of non-contiguous runs in the cluster chain (1 = fully contiguous). `isFileContiguous()` is a convenience wrapper that returns TRUE when the fragment count is 1.
+
+### Compacting a Fragmented File
+
+```spin2
+PUB ensure_boot_contiguous() | result
+    if not sd.isFileContiguous(@"_BOOT_P2.BIX")
+        result := sd.compactFile(@"_BOOT_P2.BIX")
+        if result == 0
+            debug("Boot file compacted successfully")
+        else
+            debug("Compaction failed: ", sdec_(result))
+```
+
+`compactFile()` relocates the file's clusters into a contiguous chain. It performs a full read-back verification after every cluster copy to ensure data integrity — a corrupted boot file would brick the device.
+
+**Requirements:**
+- The file must be **closed** (no active read or write handles). Returns `E_FILE_OPEN_FOR_COMPACT` (-62) otherwise.
+- Sufficient contiguous free space must exist on the card. Returns `E_NO_CONTIGUOUS_SPACE` (-61) if not.
+- This is a maintenance operation, not a hot path — it may take several seconds for large files.
+
+**Safety:** The copy-then-free strategy means the file is always readable during compaction. Worst case on power loss is orphaned clusters (wasted space, not data loss), recoverable by FSCK.
+
+### Creating a Pre-Allocated Contiguous File
+
+When you know the file size in advance (firmware images, fixed-size logs, configuration blocks), you can pre-allocate contiguous space at creation time:
+
+```spin2
+PUB write_firmware_image(p_data, data_size) | handle, written
+    handle := sd.createFileContiguous(@"FIRMWARE.BIN", data_size)
+    if handle < 0
+        debug("Failed to create contiguous file: ", sdec_(handle))
+        return handle
+
+    written := sd.writeHandle(handle, p_data, data_size)
+    sd.closeFileHandle(handle)
+
+    ' Verify contiguity (should always be true)
+    if sd.isFileContiguous(@"FIRMWARE.BIN")
+        debug("Firmware written contiguously: ", udec_(written), " bytes")
+```
+
+`createFileContiguous()` finds a contiguous run of free clusters large enough for the specified size, allocates the entire chain upfront, and returns a write handle. Subsequent `writeHandle()` calls fill the pre-allocated space without ever calling the allocator — guaranteed no fragmentation.
+
+If the pre-allocated space is exhausted (caller writes more than `file_size` bytes), `writeHandle()` returns 0 bytes written, similar to disk-full behavior.
+
+### API Reference
+
+| Method | Description |
+|--------|-------------|
+| `fileFragments(path)` | Count non-contiguous runs (1 = contiguous, 0 = empty file) |
+| `isFileContiguous(path)` | TRUE if fragment count is 1 |
+| `compactFile(path)` | Relocate to contiguous clusters with read-back verify |
+| `createFileContiguous(path, size)` | Create file with pre-allocated contiguous chain |
+
+### Error Codes
+
+| Code | Constant | Meaning |
+|------|----------|---------|
+| -61 | `E_NO_CONTIGUOUS_SPACE` | No contiguous free cluster run large enough |
+| -62 | `E_FILE_OPEN_FOR_COMPACT` | File has active handles (close first) |
+| -63 | `E_VERIFY_FAILED` | Read-back verification failed after copy |
+
+### Fragmentation Prevention
+
+The driver also uses **next-fit allocation** (always enabled, no flag needed) which starts each cluster search from where the previous allocation left off instead of always starting at cluster 2. This keeps sequential writes contiguous automatically and reduces fragmentation on normal file operations.
+
+---
+
 ## Error Handling
 
 ### Checking for Errors
@@ -1350,6 +1451,17 @@ For applications where the calling cog must keep running during SD transfers. Se
 | `isComplete()` | Check if async operation has finished |
 | `getResult()` | Get bytes read/written, release lock |
 | `cancelAsync()` | Discard result, release lock |
+
+### SD_INCLUDE_DEFRAG - File Defragmentation
+
+For applications that need contiguous file storage (boot files, firmware images) or want to query and repair fragmentation. See [File Defragmentation](#file-defragmentation) for detailed usage.
+
+| Method | Description |
+|--------|-------------|
+| `fileFragments(path)` | Count non-contiguous cluster chain runs (1 = contiguous) |
+| `isFileContiguous(path)` | Returns TRUE if fragment count is 1 |
+| `compactFile(path)` | Relocate file to contiguous clusters with read-back verify |
+| `createFileContiguous(path, size)` | Create file with pre-allocated contiguous chain |
 
 ### SD_INCLUDE_RAW - Raw Sector Access
 
