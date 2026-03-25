@@ -595,14 +595,19 @@ PUB go() | result, h1, h2, bytesWritten, bytesRead, pLabel, idx, pEntry, wrtDate
     utils.startTest(@"Write-path disk full exhausts clusters")
     utils.setCheckCountPerTest(3)
     sd.clearTestErrors()
-    sd.setTestMaxClusters(20)
+    ' Delete all files from Tests A and B to start with a clean disk
+    repeat idx from 0 to 29
+        dfNameBuf[2] := $30 + idx / 10
+        dfNameBuf[3] := $30 + idx // 10
+        sd.deleteFile(@dfNameBuf)
     sd.deleteFile(@dfTestFile)
+    sd.setTestMaxClusters(20)
     dfHandle := sd.createFileNew(@dfTestFile)
     utils.evaluateSubBool(dfHandle >= 0, @"create for write test", true)
     bytesWritten := 0
     if dfHandle >= 0
         bytefill(@writeBuf, $55, 512)
-        repeat idx from 0 to 99
+        repeat idx from 0 to 499                                                 ' 500 writes * 512 = 256KB — exhausts 20 clusters at any cluster size
             result := sd.writeHandle(dfHandle, @writeBuf, 512)
             if result <= 0
                 quit

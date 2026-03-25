@@ -19,6 +19,7 @@ Feature flags are declared in your **top-level application file** (the file that
 | Flag | What It Enables | Category | Size |
 |------|-----------------|----------|------|
 | `SD_INCLUDE_ASYNC` | Non-blocking file I/O: `startReadHandle()`, `startWriteHandle()`, `isComplete()`, `getResult()`, `cancelAsync()` | **Application** | ~1 KB |
+| `SD_INCLUDE_DEFRAG` | Defragmentation: `fileFragments()`, `isFileContiguous()`, `compactFile()`, `createFileContiguous()` | **Application** | ~1 KB |
 | `SD_INCLUDE_RAW` | Raw sector read/write, `initCardOnly()`, multi-block CMD18/CMD25 | Utility | ~2 KB |
 | `SD_INCLUDE_SPEED` | High-speed mode switch via CMD6 (up to 50 MHz SPI) | Utility | ~2 KB |
 | `SD_INCLUDE_REGISTERS` | Card register access: CID, CSD, SCR, SD Status | Utility | ~3 KB |
@@ -37,6 +38,8 @@ SD_INCLUDE_SPEED_REQUIRES_SD_INCLUDE_REGISTERS
 ```
 
 `SD_INCLUDE_ASYNC` is independent — it can be enabled alongside any other flags or alone. It **is** included by `SD_INCLUDE_ALL`.
+
+`SD_INCLUDE_DEFRAG` is independent — it can be enabled alongside any other flags or alone. It **is** included by `SD_INCLUDE_ALL`.
 
 `SD_INCLUDE_STACK_CHECK` is independent and is **not** included by `SD_INCLUDE_ALL`. It must be enabled separately when needed.
 
@@ -102,6 +105,44 @@ PUB data_logger() | handle, status, bytes
 | `cancelAsync()` | Discard result, release lock |
 
 **Key rule:** Always call `getResult()` or `cancelAsync()` after starting an async operation. The SD bus lock is held until you do — other cogs cannot issue SD commands while an async operation is in flight.
+
+### SD_INCLUDE_DEFRAG — File Defragmentation
+
+`SD_INCLUDE_DEFRAG` adds the ability to query, prevent, and repair file fragmentation. This is critical for the P2 boot file (`_BOOT_P2.BIX`) which must be stored in contiguous sectors, and beneficial for any file where multi-block CMD18/CMD25 transfer performance matters.
+
+**Enable it:**
+
+```spin2
+#pragma exportdef SD_INCLUDE_DEFRAG
+
+OBJ
+    sd : "micro_sd_fat32_fs"
+```
+
+**Use it — boot file contiguity check:**
+
+```spin2
+PUB ensure_boot_contiguous() | result
+    if not sd.isFileContiguous(@"_BOOT_P2.BIX")
+        result := sd.compactFile(@"_BOOT_P2.BIX")
+        if result < 0
+            debug("Compaction failed: ", sdec_(result))
+```
+
+**The 4 defrag methods:**
+
+| Method | Purpose |
+|--------|---------|
+| `fileFragments(p_path)` | Count non-contiguous runs in a file's cluster chain (1 = contiguous) |
+| `isFileContiguous(p_path)` | Returns TRUE if fragment count is 1 |
+| `compactFile(p_path)` | Relocate file's clusters into a contiguous chain (with read-back verify) |
+| `createFileContiguous(p_path, file_size)` | Create a new file with pre-allocated contiguous clusters |
+
+**Key rules:**
+- `compactFile()` requires the file to be **closed** (no active handles) — returns `E_FILE_OPEN_FOR_COMPACT` otherwise
+- `compactFile()` performs mandatory read-back verification after every cluster copy — a corrupted boot file bricks the device
+- `createFileContiguous()` requires knowing the file size upfront — returns `E_NO_CONTIGUOUS_SPACE` if no run of sufficient length exists
+- The driver also uses **next-fit allocation** (unconditional, no flag needed) to prevent fragmentation during normal writes
 
 ---
 

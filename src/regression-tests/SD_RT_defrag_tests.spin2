@@ -1,0 +1,382 @@
+'' =================================================================================================
+''
+''   File....... SD_RT_defrag_tests.spin2
+''   Purpose.... Regression tests for defragmentation: fileFragments, isFileContiguous,
+''               compactFile, createFileContiguous, and next-fit allocation
+''   Author..... Stephen M Moraco
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... 25 MAR 2026
+''   Updated.... 25 MAR 2026
+''
+'' =================================================================================================
+
+CON
+
+     _CLKFREQ        = 350_000_000
+
+     ' P2 Edge module SD slot pins
+     SD_CS   = 60
+     SD_MOSI = 59
+     SD_MISO = 58
+     SD_SCK  = 61
+
+     WRITE_SIZE      = 2048          ' Bytes per write chunk
+     FILL_WRITES     = 32           ' Number of WRITE_SIZE writes to span multiple clusters (32*2048 = 64KB)
+     PATTERN_BYTE    = $A5           ' Known byte pattern for integrity checks
+     GUARD_SIZE      = 16
+
+' Enable defrag and debug features
+#ifdef __SPINTOOLS__
+#define SD_INCLUDE_DEFRAG
+#define SD_INCLUDE_DEBUG
+#elseifdef __FLEXSPIN__
+#define SD_INCLUDE_DEFRAG
+#pragma exportdef SD_INCLUDE_DEFRAG
+#define SD_INCLUDE_DEBUG
+#pragma exportdef SD_INCLUDE_DEBUG
+#else
+#pragma exportdef SD_INCLUDE_DEFRAG
+#pragma exportdef SD_INCLUDE_DEBUG
+#endif
+
+OBJ
+    sd    : "micro_sd_fat32_fs"
+    utils : "isp_rt_utilities"
+
+DAT
+
+' Test filenames
+fileA           BYTE    "DEFRAG_A.TXT", 0
+spacerFile      BYTE    "SPACER.TXT", 0
+fileContig      BYTE    "CONTIG.TXT", 0
+fileEmpty       BYTE    "EMPTY.TXT", 0
+fileSeqA        BYTE    "SEQ_A.TXT", 0
+fileSeqB        BYTE    "SEQ_B.TXT", 0
+fileSeqC        BYTE    "SEQ_C.TXT", 0
+nonexistent     BYTE    "NOPE.TXT", 0
+fillPrefix      BYTE    "FILL", 0
+
+' Buffers
+writeBuffer     BYTE    0[WRITE_SIZE]
+writeBuffer_guard BYTE  0[GUARD_SIZE]
+readBuffer      BYTE    0[WRITE_SIZE]
+readBuffer_guard BYTE   0[GUARD_SIZE]
+
+
+PUB go() | result, handle, h2, frags, bytesWritten, bytesRead, idx, fillHandle, fillName, fillIdx
+'' Main entry point for defragmentation regression tests
+
+    debug(" ")
+    debug("==============================================")
+    debug("  SD Card Driver - Defrag Tests")
+    debug("  (fileFragments, compactFile, createFileContiguous)")
+    debug("==============================================")
+
+    ' Mount the card
+    result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    if result < 0
+        debug("ERROR: Could not mount SD card!")
+        debug("END_SESSION")
+        return
+
+    debug(" ")
+    debug("* SD Card mounted OK")
+
+    ' Initialize guard zones
+    utils.initGuard(@writeBuffer_guard)
+    utils.initGuard(@readBuffer_guard)
+
+    ' Clean up any leftover test files from previous runs
+    cleanupAllFiles()
+
+    ' =========================================================================
+    ' TEST GROUP 1: Fragment Query API
+    ' =========================================================================
+    utils.startTestGroup(@"Fragment Query API")
+
+    ' --- Test 1: fileFragments() on fresh file ---
+    utils.startTest(@"fileFragments() on fresh file returns 1")
+    handle := sd.createFileNew(@fileA)
+    if handle >= 0
+        bytefill(@writeBuffer, PATTERN_BYTE, WRITE_SIZE)
+        bytesWritten := sd.writeHandle(handle, @writeBuffer, WRITE_SIZE)
+        sd.closeFileHandle(handle)
+        frags := sd.fileFragments(@fileA)
+        utils.evaluateSingleValue(frags, @"fragment count", 1)
+    else
+        debug("  SKIP: createFileNew failed")
+        utils.recordFail()
+    sd.deleteFile(@fileA)
+
+    ' --- Test 2: isFileContiguous() on fresh file ---
+    utils.startTest(@"isFileContiguous() on fresh file returns TRUE")
+    handle := sd.createFileNew(@fileA)
+    if handle >= 0
+        bytefill(@writeBuffer, PATTERN_BYTE, WRITE_SIZE)
+        sd.writeHandle(handle, @writeBuffer, WRITE_SIZE)
+        sd.closeFileHandle(handle)
+        result := sd.isFileContiguous(@fileA)
+        utils.evaluateBool(result, @"isFileContiguous", true)
+    else
+        debug("  SKIP: createFileNew failed")
+        utils.recordFail()
+    sd.deleteFile(@fileA)
+
+    ' --- Test 3: Create fragmentation, verify fragments > 1 ---
+    utils.startTest(@"Fragmented file has fragment count > 1")
+    ' Step 1: Create FILE_A with enough data to span multiple clusters
+    handle := sd.createFileNew(@fileA)
+    if handle >= 0
+        bytefill(@writeBuffer, PATTERN_BYTE, WRITE_SIZE)
+        repeat FILL_WRITES
+            sd.writeHandle(handle, @writeBuffer, WRITE_SIZE)
+        sd.closeFileHandle(handle)
+    ' Step 2: Create SPACER with enough data to occupy clusters after FILE_A
+    h2 := sd.createFileNew(@spacerFile)
+    if h2 >= 0
+        bytefill(@writeBuffer, $BB, WRITE_SIZE)
+        repeat FILL_WRITES
+            sd.writeHandle(h2, @writeBuffer, WRITE_SIZE)
+        sd.closeFileHandle(h2)
+    ' Step 3: Append to FILE_A — must skip over SPACER's clusters, creating fragmentation
+    if handle >= 0
+        handle := sd.openFileWrite(@fileA)
+        if handle >= 0
+            bytefill(@writeBuffer, PATTERN_BYTE + 1, WRITE_SIZE)
+            repeat FILL_WRITES
+                sd.writeHandle(handle, @writeBuffer, WRITE_SIZE)
+            sd.closeFileHandle(handle)
+        frags := sd.fileFragments(@fileA)
+        utils.evaluateRange(frags, @"fragment count >= 2", 2, 100)
+    else
+        debug("  SKIP: file creation failed")
+        utils.recordFail()
+
+    ' =========================================================================
+    ' TEST GROUP 2: compactFile API
+    ' =========================================================================
+    utils.startTestGroup(@"compactFile API")
+
+    ' --- Test 4: compactFile() makes fragmented file contiguous ---
+    utils.startTest(@"compactFile() makes fragmented file contiguous")
+    ' FILE_A is still fragmented from Test 3
+    result := sd.compactFile(@fileA)
+    if result == 0
+        result := sd.isFileContiguous(@fileA)
+        utils.evaluateBool(result, @"isFileContiguous after compact", true)
+    else
+        debug("  compactFile returned error: ", sdec_(result))
+        utils.recordFail()
+    ' Clean up Test 3/4 files
+    sd.deleteFile(@fileA)
+    sd.deleteFile(@spacerFile)
+
+    ' --- Test 5: Data integrity preserved after compactFile ---
+    utils.startTest(@"Data integrity preserved after compactFile")
+    utils.setCheckCountPerTest(3)
+    ' Create fragmented file with known pattern (same strategy as Test 3)
+    handle := sd.createFileNew(@fileA)
+    if handle >= 0
+        bytefill(@writeBuffer, PATTERN_BYTE, WRITE_SIZE)
+        repeat FILL_WRITES
+            sd.writeHandle(handle, @writeBuffer, WRITE_SIZE)
+        sd.closeFileHandle(handle)
+    h2 := sd.createFileNew(@spacerFile)
+    if h2 >= 0
+        bytefill(@writeBuffer, $BB, WRITE_SIZE)
+        repeat FILL_WRITES
+            sd.writeHandle(h2, @writeBuffer, WRITE_SIZE)
+        sd.closeFileHandle(h2)
+    handle := sd.openFileWrite(@fileA)
+    if handle >= 0
+        bytefill(@writeBuffer, PATTERN_BYTE, WRITE_SIZE)
+        repeat FILL_WRITES
+            sd.writeHandle(handle, @writeBuffer, WRITE_SIZE)
+        sd.closeFileHandle(handle)
+    ' Verify fragmented
+    frags := sd.fileFragments(@fileA)
+    utils.evaluateSubBool(frags >= 2, @"file is fragmented", true)
+    ' Compact
+    result := sd.compactFile(@fileA)
+    utils.evaluateSubValue(result, @"compactFile result", 0)
+    ' Read back first WRITE_SIZE bytes and verify all are PATTERN_BYTE
+    handle := sd.openFileRead(@fileA)
+    if handle >= 0
+        bytefill(@readBuffer, 0, WRITE_SIZE)
+        bytesRead := sd.readHandle(handle, @readBuffer, WRITE_SIZE)
+        result := true
+        repeat idx from 0 to WRITE_SIZE - 1
+            if readBuffer[idx] <> PATTERN_BYTE
+                result := false
+                quit
+        utils.evaluateSubBool(result, @"data intact after compact", true)
+        sd.closeFileHandle(handle)
+    else
+        utils.evaluateSubBool(false, @"data intact after compact", true)
+    utils.showSubTestResults()
+    utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+    sd.deleteFile(@fileA)
+    sd.deleteFile(@spacerFile)
+
+    ' --- Test 6: compactFile() on already contiguous file is no-op ---
+    utils.startTest(@"compactFile() on contiguous file returns SUCCESS")
+    handle := sd.createFileNew(@fileA)
+    if handle >= 0
+        bytefill(@writeBuffer, PATTERN_BYTE, WRITE_SIZE)
+        sd.writeHandle(handle, @writeBuffer, WRITE_SIZE)
+        sd.closeFileHandle(handle)
+        result := sd.compactFile(@fileA)
+        utils.evaluateSingleValue(result, @"compactFile result", 0)
+    else
+        utils.recordFail()
+    sd.deleteFile(@fileA)
+
+    ' --- Test 7: compactFile() on open file returns E_FILE_OPEN_FOR_COMPACT ---
+    utils.startTest(@"compactFile() on open file returns error")
+    handle := sd.createFileNew(@fileA)
+    if handle >= 0
+        bytefill(@writeBuffer, PATTERN_BYTE, 64)
+        sd.writeHandle(handle, @writeBuffer, 64)
+        ' Do NOT close — attempt compact while open
+        result := sd.compactFile(@fileA)
+        utils.evaluateSingleValue(result, @"compactFile result", sd.E_FILE_OPEN_FOR_COMPACT)
+        sd.closeFileHandle(handle)
+    else
+        utils.recordFail()
+    sd.deleteFile(@fileA)
+
+    ' --- Test 8: compactFile() on nonexistent file ---
+    utils.startTest(@"compactFile() on nonexistent file returns E_FILE_NOT_FOUND")
+    result := sd.compactFile(@nonexistent)
+    utils.evaluateSingleValue(result, @"compactFile result", sd.E_FILE_NOT_FOUND)
+
+    ' --- Test 9: compactFile() on empty file ---
+    utils.startTest(@"compactFile() on empty file returns SUCCESS")
+    handle := sd.createFileNew(@fileEmpty)
+    if handle >= 0
+        sd.closeFileHandle(handle)
+        result := sd.compactFile(@fileEmpty)
+        utils.evaluateSingleValue(result, @"compactFile result", 0)
+    else
+        utils.recordFail()
+    sd.deleteFile(@fileEmpty)
+
+    ' =========================================================================
+    ' TEST GROUP 3: createFileContiguous API
+    ' =========================================================================
+    utils.startTestGroup(@"createFileContiguous API")
+
+    ' --- Test 10: createFileContiguous() basic ---
+    utils.startTest(@"createFileContiguous() creates contiguous file")
+    utils.setCheckCountPerTest(3)
+    handle := sd.createFileContiguous(@fileContig, 4096)
+    utils.evaluateSubBool(handle >= 0, @"handle valid", true)
+    if handle >= 0
+        bytefill(@writeBuffer, $CD, WRITE_SIZE)
+        bytesWritten := sd.writeHandle(handle, @writeBuffer, WRITE_SIZE)
+        utils.evaluateSubValue(bytesWritten, @"bytes written", WRITE_SIZE)
+        sd.closeFileHandle(handle)
+        result := sd.isFileContiguous(@fileContig)
+        utils.evaluateSubBool(result, @"isFileContiguous", true)
+    else
+        debug("  SKIP: createFileContiguous failed: ", sdec_(handle))
+        utils.evaluateSubBool(false, @"bytes written check", true)
+        utils.evaluateSubBool(false, @"isFileContiguous check", true)
+    utils.showSubTestResults()
+    sd.deleteFile(@fileContig)
+
+    ' --- Test 11: createFileContiguous() with insufficient space ---
+    ' Use test_max_clusters to constrain the FAT to 20 clusters, then request
+    ' more contiguous clusters than available. Clusters 0-1 reserved, 2 is root dir,
+    ' so only clusters 3-19 are usable = 17 clusters. Request 18 clusters worth.
+    utils.startTest(@"createFileContiguous() returns E_NO_CONTIGUOUS_SPACE when constrained")
+    sd.setTestMaxClusters(20)                                                    ' Limit FAT to 20 clusters (3-19 usable = 17)
+    handle := sd.createFileContiguous(@fileContig, 1_000_000)                    ' 1 MB >> 17 clusters at any cluster size
+    utils.evaluateSingleValue(handle, @"handle", sd.E_NO_CONTIGUOUS_SPACE)
+    if handle >= 0
+        sd.closeFileHandle(handle)
+        sd.deleteFile(@fileContig)
+    sd.clearTestErrors()                                                         ' Reset test_max_clusters
+
+    ' =========================================================================
+    ' TEST GROUP 4: Next-Fit Allocation
+    ' =========================================================================
+    utils.startTestGroup(@"Next-Fit Allocation")
+
+    ' --- Test 12: Sequential creates are contiguous ---
+    utils.startTest(@"Sequential file creates are contiguous")
+    utils.setCheckCountPerTest(3)
+    ' Create three files in sequence — next-fit should keep them contiguous
+    handle := sd.createFileNew(@fileSeqA)
+    if handle >= 0
+        bytefill(@writeBuffer, $AA, WRITE_SIZE)
+        sd.writeHandle(handle, @writeBuffer, WRITE_SIZE)
+        sd.closeFileHandle(handle)
+    handle := sd.createFileNew(@fileSeqB)
+    if handle >= 0
+        bytefill(@writeBuffer, $BB, WRITE_SIZE)
+        sd.writeHandle(handle, @writeBuffer, WRITE_SIZE)
+        sd.closeFileHandle(handle)
+    handle := sd.createFileNew(@fileSeqC)
+    if handle >= 0
+        bytefill(@writeBuffer, $CC, WRITE_SIZE)
+        sd.writeHandle(handle, @writeBuffer, WRITE_SIZE)
+        sd.closeFileHandle(handle)
+    ' All three should be contiguous (single fragment each)
+    frags := sd.fileFragments(@fileSeqA)
+    utils.evaluateSubValue(frags, @"SEQ_A fragments", 1)
+    frags := sd.fileFragments(@fileSeqB)
+    utils.evaluateSubValue(frags, @"SEQ_B fragments", 1)
+    frags := sd.fileFragments(@fileSeqC)
+    utils.evaluateSubValue(frags, @"SEQ_C fragments", 1)
+    utils.showSubTestResults()
+
+    ' =========================================================================
+    ' CLEANUP
+    ' =========================================================================
+    cleanupAllFiles()
+
+    sd.unmount()
+
+    utils.ShowTestEndCounts()
+    debug("END_SESSION")
+
+
+PRI cleanupAllFiles()
+' Delete all test files (ignore errors for files that don't exist)
+    sd.deleteFile(@fileA)
+    sd.deleteFile(@spacerFile)
+    sd.deleteFile(@fileContig)
+    sd.deleteFile(@fileEmpty)
+    sd.deleteFile(@fileSeqA)
+    sd.deleteFile(@fileSeqB)
+    sd.deleteFile(@fileSeqC)
+
+
+{{
+  =================================================================================================
+
+  Terms of Use: MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this
+  software and associated documentation files (the "Software"), to deal in the Software
+  without restriction, including without limitation the rights to use, copy, modify,
+  merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies
+  or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+  INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+  HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+  CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+  OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+  =================================================================================================
+}}

@@ -4,7 +4,7 @@ Automated regression test suite for the P2 SD Card Driver. All tests execute on 
 
 ## Test Summary
 
-### Core Test Suites (verified 2026-03-17)
+### Core Test Suites (verified 2026-03-25)
 
 | Test Suite | Description | Tests |
 |------------|-------------|-------|
@@ -38,8 +38,9 @@ Automated regression test suite for the P2 SD Card Driver. All tests execute on 
 | **Stress Tests** | Concurrent reader/writer integrity, rapid open/close under contention | 4 |
 | **Timestamp Tests** | setDate/getDate round-trip, live clock advance, creation/modification stamps | 6 |
 | **Async I/O Tests** | Non-blocking read/write, isComplete polling, cancelAsync, multi-cog interleave | 6 |
-| | **Additional Total** | **164** |
-| | **Grand Total (24 suites)** | **452** |
+| **Defrag Tests** | fileFragments, isFileContiguous, compactFile, createFileContiguous, next-fit allocation | 12 |
+| | **Additional Total** | **176** |
+| | **Grand Total (25 suites)** | **464** |
 
 ## Prerequisites
 
@@ -95,6 +96,9 @@ cd tools/
 # Timestamp and async I/O tests
 ./run_test.sh ../src/regression-tests/SD_RT_timestamp_tests.spin2
 ./run_test.sh ../src/regression-tests/SD_RT_async_tests.spin2 -t 120
+
+# Defrag tests
+./run_test.sh ../src/regression-tests/SD_RT_defrag_tests.spin2 -t 120
 
 # Format test (WARNING: erases card!)
 ./run_test.sh ../src/regression-tests/SD_RT_format_tests.spin2 -t 300

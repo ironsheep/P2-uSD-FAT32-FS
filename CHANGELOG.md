@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-03-25
+
+**Defragmentation support, next-fit allocation, contiguous file creation.**
+
+### New Features
+
+- `SD_INCLUDE_DEFRAG`: `fileFragments()`, `isFileContiguous()`, `compactFile()`, `createFileContiguous()` APIs
+- `compactFile()` relocates a file's clusters into a contiguous chain with mandatory read-back verification
+- `createFileContiguous()` pre-allocates a contiguous cluster chain for guaranteed non-fragmented writes
+- FSCK/Audit reports fragmented file count and total fragments in summary output
+
+### Improvements
+
+- `allocateCluster()`: Next-fit scanning reduces fragmentation on sequential writes
+- Allocation locality hint (`fsi_nxt_free`) persisted across mount/unmount cycles
+
+### Bug Fixes
+
+- `readSector()`: CRC match counter no longer incremented when CRC validation is disabled
+- Disk-full simulation tests: Cluster cleanup between test phases prevents false failures
+
+### Tests
+
+- New SD_RT_defrag_tests suite: 12 tests covering fragment query, compaction, contiguous creation, next-fit allocation
+- 25 suites, 464 tests, all passing on hardware
+
 ## [1.4.0] - 2026-03-17
 
 **Worker loop restructure, live timestamps, auto-flush, non-blocking async I/O.**

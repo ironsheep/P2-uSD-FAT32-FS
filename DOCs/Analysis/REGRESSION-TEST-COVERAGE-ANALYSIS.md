@@ -2,8 +2,8 @@
 
 An analysis of the P2-uSD-FAT32-FS regression test suite against the principles in [REGRESSION-TESTING-BEST-PRACTICES.md](../Decisions/REGRESSION-TESTING-BEST-PRACTICES.md).
 
-**Date:** 2026-03-05
-**Suite Version:** v1.1.0 (20 suites, 389 tests, all passing)
+**Date:** 2026-03-25
+**Suite Version:** v1.4.1 (25 suites, 464 tests, all passing)
 
 ---
 
@@ -58,8 +58,13 @@ These gaps represent opportunities, not urgent defects. The existing suite catch
 | 18 | SD_RT_crc_validation_tests | CRC match/mismatch counters | 6 | 3 | Yes | Yes |
 | 19 | SD_RT_crc_diag_tests | CRC diagnostic getters | 14 | 4 | Yes | Yes |
 | 20 | SD_RT_fifo_tests | String FIFO (isp_string_fifo) | 21 | 8 | No | N/A |
+| 21 | SD_RT_cogcwd_tests | Per-cog CWD isolation | 5 | 2 | Yes | Yes |
+| 22 | SD_RT_timestamp_tests | Live clock timestamps | 6 | 2 | No | Yes |
+| 23 | SD_RT_stress_tests | Concurrent read/write stress | 4 | 2 | Yes | Yes |
+| 24 | SD_RT_async_tests | Non-blocking async I/O | 6 | 3 | Yes | Yes |
+| 25 | SD_RT_defrag_tests | Defrag: fragments, compact, contiguous | 12 | 4 | Yes | Yes |
 
-**Totals:** 411 `startTest()` calls, 120 `startTestGroup()` calls, 271 sub-assertions, 214 guard init/check calls across 20 suites.
+**Totals:** ~464 `startTest()` calls, 120 `startTestGroup()` calls, 271 sub-assertions, 214 guard init/check calls across 20 suites.
 
 ---
 

@@ -6,9 +6,9 @@
 
 ## 1. Executive Summary
 
-The regression test suite validates the `micro_sd_fat32_fs.spin2` — a Propeller 2 SD card driver that uses smart pins for SPI communication, the P2 streamer for bulk data transfer, and a dedicated worker cog for all card I/O. The suite currently contains **24 test files** producing **452 test assertions**. The original 10 core files are joined by 14 additional files covering directory handles, volume operations, register access, speed/CMD6, CRC diagnostics, subdirectory operations, error handling, CRC error injection validation, recovery scenarios, inter-cog FIFO infrastructure, per-cog CWD isolation, concurrent stress testing, live timestamps, and non-blocking async I/O.
+The regression test suite validates the `micro_sd_fat32_fs.spin2` — a Propeller 2 SD card driver that uses smart pins for SPI communication, the P2 streamer for bulk data transfer, and a dedicated worker cog for all card I/O. The suite currently contains **25 test files** producing **464 test assertions**. The original 10 core files are joined by 15 additional files covering directory handles, volume operations, register access, speed/CMD6, CRC diagnostics, subdirectory operations, error handling, CRC error injection validation, recovery scenarios, inter-cog FIFO infrastructure, per-cog CWD isolation, concurrent stress testing, live timestamps, non-blocking async I/O, and defragmentation.
 
-**Verified on hardware (2026-03-17):** All 24 suites totaling **452 tests** — all passing.
+**Verified on hardware (2026-03-25):** All 25 suites totaling **464 tests** — all passing.
 
 The tests exercise the driver from low-level raw sector I/O through the full FAT32 filesystem stack, including multi-cog concurrent access, multi-handle file operations, and card formatting validation. Every test runs on real hardware (P2 Edge + physical SD card) via the `run_test.sh` headless test runner.
 
@@ -77,7 +77,7 @@ Each test is identified by:
 
 ## 3. Test Suite Overview
 
-### 3.1 Test Files (452 tests — verified 2026-03-17)
+### 3.1 Test Files (464 tests — verified 2026-03-25)
 
 | # | Test File | Tests | Focus Area | Driver API Category |
 |---|-----------|:-----:|------------|---------------------|
@@ -105,7 +105,8 @@ Each test is identified by:
 | 22 | `SD_RT_stress_tests.spin2` | 4 | Concurrent reader/writer integrity, rapid open/close under contention | Multi-Cog Safety |
 | 23 | `SD_RT_timestamp_tests.spin2` | 6 | setDate/getDate round-trip, live clock advance, creation/modification stamps | Timestamps |
 | 24 | `SD_RT_async_tests.spin2` | 6 | Non-blocking read/write, isComplete polling, cancelAsync, multi-cog interleave | Async I/O |
-| | **Total** | **452** | | |
+| 25 | `SD_RT_defrag_tests.spin2` | 12 | fileFragments, isFileContiguous, compactFile, createFileContiguous, next-fit | Defragmentation |
+| | **Total** | **464** | | |
 
 ### 3.2 Diagnostic Test Files (in `diagnostic-tests/`)
 
@@ -1240,7 +1241,8 @@ All critical gaps identified in the original analysis have been addressed:
 | SD_RT_stress_tests | 4 | 4 pass |
 | SD_RT_timestamp_tests | 6 | 6 pass |
 | SD_RT_async_tests | 6 | 6 pass |
-| **Total** | **452** | **452 pass** |
+| SD_RT_defrag_tests | 12 | 12 pass |
+| **Total** | **464** | **464 pass** |
 
 ---
 
@@ -1286,6 +1288,9 @@ cd /path/to/P2-uSD-FAT32-FS/tools
 ./run_test.sh ../src/regression-tests/SD_RT_timestamp_tests.spin2
 ./run_test.sh ../src/regression-tests/SD_RT_async_tests.spin2 -t 120
 
+# Defrag tests
+./run_test.sh ../src/regression-tests/SD_RT_defrag_tests.spin2 -t 120
+
 # Format test (WARNING: erases card!)
 ./run_test.sh ../src/regression-tests/SD_RT_format_tests.spin2 -t 300
 
@@ -1306,4 +1311,4 @@ cd /path/to/P2-uSD-FAT32-FS/tools
 
 *Document updated: 2026-03-17*
 *Based on: micro_sd_fat32_fs.spin2 (100+ public methods, 46 worker cog commands)*
-*Test suite: 24 test files, 452 assertions — all verified passing on hardware*
+*Test suite: 25 test files, 464 assertions — all verified passing on hardware*

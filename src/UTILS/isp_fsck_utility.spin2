@@ -152,6 +152,8 @@ VAR
   LONG    v_fileCount
   LONG    scanDepth
   LONG    v_lostCount           ' running count of lost clusters freed
+  LONG    v_fragmentedFileCount ' files with fragment_count > 1
+  LONG    v_totalFragments      ' sum of all fragment counts
   LONG    windowStart           ' first cluster in current bitmap window
   LONG    windowEnd             ' last cluster+1 in current window (exclusive)
   LONG    currentWindow         ' current window index (0-based)
@@ -333,6 +335,8 @@ PRI runAudit(cardSectors) | result, idx, failsToPrint
 
     v_passCount := 0
     v_failCount := 0
+    v_fragmentedFileCount := 0
+    v_totalFragments := 0
     longfill(@v_failNames, 0, MAX_FAIL_NAMES)
 
     fifo.put(@"=== FAT32 Filesystem Audit (read-only) ===")
@@ -357,6 +361,8 @@ PRI runAudit(cardSectors) | result, idx, failsToPrint
         fifo.put(@"=== AUDIT COMPLETE ===")
         fifo.putFmt2(@"Tests: %d  Pass: %d", v_passCount + v_failCount, v_passCount)
         fifo.putFmt1(@"Fail: %d", v_failCount)
+        if v_fragmentedFileCount > 0
+            fifo.putFmt2(@"Fragmented files: %d (%d fragments total)", v_fragmentedFileCount, v_totalFragments)
         if v_failCount == 0
             fifo.put(@"FILESYSTEM INTEGRITY: OK")
         else
@@ -385,6 +391,8 @@ PRI runFsck(cardSectors)
     v_dirCount := 0
     v_fileCount := 0
     v_lostCount := 0
+    v_fragmentedFileCount := 0
+    v_totalFragments := 0
     scanDepth := 0
     fatBufSector := -1
     fatBufDirty := false
@@ -414,6 +422,8 @@ PRI runFsck(cardSectors)
         fifo.putFmt2(@"Errors: %d  Repairs: %d", v_errorCount, v_repairCount)
         fifo.putFmt1(@"Warnings: %d", v_warningCount)
         fifo.putFmt2(@"Directories: %d  Files: %d", v_dirCount, v_fileCount)
+        if v_fragmentedFileCount > 0
+            fifo.putFmt2(@"Fragmented files: %d (%d fragments total)", v_fragmentedFileCount, v_totalFragments)
         if v_errorCount == 0
             if v_repairCount == 0
                 fifo.put(@"STATUS: CLEAN")
@@ -997,7 +1007,7 @@ PRI fsckScanDir(dirCluster) | dirDone, sector, entSector, entIdx, pEntry, attr, 
     scanDepth--
 
 
-PRI fsckValidateChain(startClus, fSize, isDir) | clus, nextClus, chainLen, expectedLen
+PRI fsckValidateChain(startClus, fSize, isDir) | clus, nextClus, chainLen, expectedLen, fragCount
 ' Follow a cluster chain and validate integrity.
 ' Marks each visited cluster in the bitmap to detect cross-links.
 ' On window 0: repairs bad refs and reports errors.
@@ -1008,6 +1018,7 @@ PRI fsckValidateChain(startClus, fSize, isDir) | clus, nextClus, chainLen, expec
 ' @param isDir - TRUE if this chain belongs to a directory
 
     chainLen := 0
+    fragCount := 1
     clus := startClus
 
     repeat while clus >= 2
@@ -1061,7 +1072,18 @@ PRI fsckValidateChain(startClus, fSize, isDir) | clus, nextClus, chainLen, expec
         if nextClus == FAT_BAD
             quit
 
+        ' Detect fragment transitions (non-contiguous cluster)
+        if nextClus <> clus + 1
+            fragCount++
+
         clus := nextClus
+
+    ' Track fragmentation statistics (window 0 only, files only)
+    if currentWindow == 0
+        if not isDir
+            if chainLen > 0 and fragCount > 1
+                v_fragmentedFileCount++
+                v_totalFragments += fragCount
 
     ' For files, check chain length vs expected
     if currentWindow == 0
