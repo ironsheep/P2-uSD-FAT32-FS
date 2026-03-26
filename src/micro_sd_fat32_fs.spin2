@@ -4761,8 +4761,15 @@ PRI allocateCluster(cluster) : result | fat_idx, buf_idx, high_bits, start_fat_i
           quit
       buf_idx := fat_idx & SECTOR_OFFSET_MASK
       if test_max_clusters > 0 and (fat_idx >> 2) >= test_max_clusters           '  test hook: artificial cluster limit
-        result := E_IO_ERROR
-        quit
+        if wrapped                                                               '   already wrapped — all visible clusters scanned
+          result := E_DISK_FULL
+          quit
+        fat_idx := 8                                                             '   wrap to cluster 2
+        buf_idx := 8
+        wrapped := true
+        if fat_idx >= start_fat_idx                                              '   started at cluster 2? nowhere left to scan
+          result := E_DISK_FULL
+          quit
       result := long[@fat_buf + buf_idx]                                        '  read a cluster cell
       if (result & FAT32_ENTRY_MASK) == $0000_0000                               '  if cluster cell is empty (check only low 28 bits)
         high_bits := result & FAT32_RESERVED_MASK                                        '  preserve high 4 bits

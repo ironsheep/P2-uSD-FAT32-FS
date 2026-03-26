@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.2] - 2026-03-26
+
+**Audit fix, allocator wrap-around fix, theory doc updated.**
+
+### Bug Fixes
+
+- Audit: Volume label scan searches all root directory entries (not just offset 0)
+- `allocateCluster()`: Next-fit scan wraps correctly when `test_max_clusters` limit is active
+
+### Improvements
+
+- Theory of Operations: New sections for cluster allocation, auto-flush, defragmentation, async I/O
+- Theory of Operations: Updated feature flags, command opcodes, error codes, and API tables
+- Demo shell: Defrag commands enabled via `SD_INCLUDE_DEFRAG`
+
+### Tests
+
+- 25 suites, 464 tests, all passing on hardware
+
 ## [1.4.1] - 2026-03-25
 
 **Defragmentation support, next-fit allocation, contiguous file creation.**

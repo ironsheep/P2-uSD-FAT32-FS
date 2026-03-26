@@ -697,18 +697,31 @@ PRI auditFAT() | result, idx, mismatch
     fifo.put(@" ")
 
 
-PRI auditRootDir() | result
+PRI auditRootDir() | result, idx, p_entry, found_label
 ' Verify root directory structure
+' FAT32 spec: volume label entry can be anywhere in root directory, not necessarily first.
+' Some formatters only write the label in the VBR, not the root directory.
 
     fifo.put(@"Checking Root Directory...")
 
     sd.readSectorRaw(dataStart, @buf)
 
-    result := buf[sd.DE_ATTR_OFFSET]
-    auditRunTest(@"Volume label entry (attr=$08)", result == sd.ATTR_VOLUME_ID)
+    ' Scan all entries in first root dir sector for volume label
+    found_label := false
+    repeat idx from 0 to (sd.SECTOR_SIZE / sd.DIR_ENTRY_SIZE) - 1
+      p_entry := @buf + (idx * sd.DIR_ENTRY_SIZE)
+      if byte[p_entry] == DIR_END_MARKER
+        quit
+      if byte[p_entry] <> sd.DIR_ENTRY_DELETED and byte[p_entry + sd.DE_ATTR_OFFSET] == sd.ATTR_VOLUME_ID
+        found_label := true
+        result := byte[p_entry]
+        quit
+    auditRunTest(@"Volume label entry (attr=$08)", found_label)
 
-    result := buf[0]
-    auditRunTest(@"Valid volume label chars", result >= $20 AND result <= $7E)
+    if found_label
+      auditRunTest(@"Valid volume label chars", result >= $20 AND result <= $7E)
+    else
+      auditRunTest(@"Valid volume label chars", true)  ' VBR-only label is acceptable
 
     result := buf[sd.DIR_ENTRY_SIZE]
     auditRunTest(@"Second entry valid or end", result == DIR_END_MARKER OR result == sd.DIR_ENTRY_DELETED OR (result >= $20 AND result <= $7E))

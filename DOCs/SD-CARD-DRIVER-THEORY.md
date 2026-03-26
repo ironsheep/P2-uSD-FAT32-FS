@@ -13,7 +13,11 @@ Key architectural features:
 - **Single-writer policy** preventing concurrent write corruption
 - **Hardware-accelerated CRC-16** using the P2's `GETCRC` instruction
 - **Exported STRUCT types** for named access to SD card registers and FAT32 on-disk structures
-- **Conditional compilation** with 5 feature flags for minimal or full builds
+- **Conditional compilation** with 7 feature flags for minimal or full builds
+- **Next-fit cluster allocation** with wrap-around for efficient free-space reuse
+- **Auto-flush on idle** -- worker cog flushes dirty handles after 200ms without commands
+- **Defragmentation** -- query fragmentation, compact existing files, create contiguous files
+- **Non-blocking file I/O** -- async read/write with poll-based completion
 
 ## Architecture
 
@@ -110,8 +114,10 @@ The driver uses `#ifdef` / `#endif` blocks to exclude optional features from min
 | `SD_INCLUDE_RAW` | Raw sector read/write, `initCardOnly()`, multi-block (CMD18/CMD25) |
 | `SD_INCLUDE_REGISTERS` | CID, CSD, SCR, SD Status register access, OCR, VBR read |
 | `SD_INCLUDE_SPEED` | CMD6 high-speed mode query and switch (50 MHz) |
-| `SD_INCLUDE_DEBUG` | Debug getters, CRC diagnostic methods, display utilities |
-| `SD_INCLUDE_ALL` | Enables all four flags above |
+| `SD_INCLUDE_DEBUG` | Debug getters, CRC diagnostic methods, display utilities, test hooks |
+| `SD_INCLUDE_DEFRAG` | Defragmentation: `fileFragments()`, `compactFile()`, `createFileContiguous()` |
+| `SD_INCLUDE_ASYNC` | Non-blocking file I/O: `startReadHandle()`, `startWriteHandle()`, `isComplete()`, `getResult()` |
+| `SD_INCLUDE_ALL` | Enables RAW, REGISTERS, SPEED, DEBUG, and DEFRAG (not ASYNC) |
 
 ### Enabling Flags
 
@@ -230,6 +236,9 @@ All cog-to-worker communication flows through shared hub RAM variables:
 | `CMD_READ_CID` | 27 | `SD_INCLUDE_REGISTERS` | Read CID register |
 | `CMD_READ_CSD` | 28 | `SD_INCLUDE_REGISTERS` | Read CSD register |
 | `CMD_READ_SD_STATUS` | 29 | `SD_INCLUDE_REGISTERS` | Read SD Status (ACMD13) |
+| `CMD_CREATE_CONTIGUOUS` | 47 | `SD_INCLUDE_DEFRAG` | Create file with contiguous chain |
+| `CMD_COMPACT_FILE` | 48 | `SD_INCLUDE_DEFRAG` | Defragment existing file |
+| `CMD_FILE_FRAGMENTS` | 49 | `SD_INCLUDE_DEFRAG` | Count file fragmentation |
 
 ## Handle System
 
@@ -264,6 +273,7 @@ Each handle slot contains:
 | `h_dir_offset` | WORD | Offset within dir sector | 0 (unused) |
 | `h_buf[512]` | BYTE | Per-handle data buffer | Per-handle sector cache |
 | `h_buf_sector` | LONG | Sector in buffer (-1=none) | Sector in buffer (-1=none) |
+| `h_prealloc_end` | LONG | Last pre-allocated cluster (defrag only, 0=normal) | 0 (unused) |
 
 ### Handle Lifecycle
 
@@ -538,6 +548,108 @@ PRI calcDataCRC(pData, len) : crc | raw
 
 Match/mismatch counters and the `setCRCValidation()` toggle are available via `SD_INCLUDE_DEBUG` (see Conditional Compilation).
 
+## Cluster Allocation
+
+### Next-Fit Strategy
+
+The driver uses a next-fit allocator rather than first-fit. After each allocation, `fsi_nxt_free` records the next cluster number to try, so sequential file writes don't re-scan from the beginning of the FAT. This reduces FAT sector reads from O(N) to O(1) for typical sequential writes.
+
+### Allocation Flow
+
+1. Choose starting scan position:
+   - If extending an existing chain: start after the previous cluster
+   - If starting a new chain: use the `fsi_nxt_free` hint from FSInfo
+   - Fallback: cluster 2 (first data cluster)
+2. Scan forward through the FAT looking for a zero (free) entry
+3. If the scan reaches the end of the FAT without finding a free cluster, wrap to cluster 2 and continue
+4. If the scan returns to the starting position after wrapping, the disk is full (`E_DISK_FULL`)
+5. When a free cluster is found: mark it as EOC (`$0FFFFFFF`), link the previous cluster if extending, write both FAT copies, update `fsi_nxt_free` and `fsi_free_count`
+
+### FSInfo Tracking
+
+The driver maintains `fsi_free_count` and `fsi_nxt_free` incrementally during operation (rather than scanning the entire FAT). Both are persisted to the FSInfo sector at unmount.
+
+## Auto-Flush on Idle
+
+The worker cog monitors idle time between commands. When no command arrives for 200ms (`IDLE_FLUSH_MS`), the worker scans all handles for dirty buffers and flushes them to disk:
+
+1. Worker polls `pb_cmd` in its main loop
+2. Between polls, a clock counter tracks elapsed idle time
+3. If `(getct() - idle_timer) >= idle_flush_clocks` and no command pending:
+   - Scan all handles for `HF_DIRTY` flag
+   - For each dirty handle: write the sector buffer to disk, update the directory entry with the current file size and timestamp, clear `HF_DIRTY`
+4. Reset the idle timer after flush or after any command completes
+
+This ensures data reaches the card even if the application forgets to call `syncHandle()` or `closeFileHandle()`. The 200ms threshold is short enough for data safety but long enough that it doesn't interfere with normal write bursts.
+
+## Defragmentation
+
+*Requires `SD_INCLUDE_DEFRAG`.*
+
+FAT32 allocates clusters on demand, so files written over time may end up with clusters scattered across the disk. The defragmentation API provides three operations: query fragmentation, compact existing files, and create pre-allocated contiguous files.
+
+### Fragment Counting
+
+`fileFragments(path)` walks a file's FAT chain and counts transitions where `next_cluster != current_cluster + 1`. A contiguous file has fragment count 1. An empty file returns 0.
+
+### Compacting an Existing File (compactFile)
+
+`compactFile(path)` relocates a fragmented file's clusters into a contiguous chain using a copy-then-free strategy. The file must be closed (no open handles). The process:
+
+1. **Find** the file and verify it is not open (`isFileOpenAny`)
+2. **Skip** if empty or already contiguous (fragment count = 1)
+3. **Count** total clusters by walking the FAT chain
+4. **Find** a contiguous run of N free clusters via `findContiguousRun()` -- linear scan from cluster 2
+5. **Copy** each cluster from old location to new contiguous location (`copyClusterData`)
+6. **Verify** read-back of every copied cluster, byte-by-byte comparison (`verifyClusterCopy`). If any mismatch is found, the operation aborts with `E_VERIFY_FAILED` -- the original data is still intact
+7. **Build** new FAT chain: sequential links (3->4->5->...->EOC) via `allocateContiguousChain`
+8. **Update** directory entry to point to new first cluster
+9. **Free** old cluster chain
+10. **Invalidate** all sector caches
+
+The copy-then-free ordering ensures the original data is always intact until verification succeeds. If power is lost during compaction, the original chain is still valid (the new chain is not linked from the directory until step 8).
+
+### Creating a Contiguous File (createFileContiguous)
+
+`createFileContiguous(path, file_size)` creates a new empty file with a pre-allocated contiguous cluster chain. This is useful for data logging and streaming where fragmentation must be avoided:
+
+1. Calculate clusters needed: `ceil(file_size / bytes_per_cluster)`
+2. Find a contiguous run via `findContiguousRun()`
+3. Allocate the chain via `allocateContiguousChain()`
+4. Create the directory entry with the first cluster set
+5. Return a write handle with `h_prealloc_end` set to the last pre-allocated cluster
+
+When `h_prealloc_end` is non-zero, `writeHandle()` skips the normal `allocateCluster()` path at cluster boundaries. Instead, it simply advances to the next sequential cluster (which is already allocated). This eliminates FAT reads/writes during the write path, improving write throughput. If writes exceed the pre-allocated space, the write returns 0 bytes written.
+
+### Shared Helpers
+
+`compactFile` and `createFileContiguous` share two low-level helpers:
+
+- **`findContiguousRun(count)`** -- linear scan from cluster 2 looking for N consecutive free FAT entries. Returns the first cluster of the run or `E_NO_CONTIGUOUS_SPACE`.
+- **`allocateContiguousChain(first, count)`** -- marks a sequential run of clusters as a linked chain in both FAT copies, with the last entry set to EOC.
+
+## Non-Blocking File I/O
+
+*Requires `SD_INCLUDE_ASYNC`.*
+
+The standard `readHandle()` and `writeHandle()` block the caller via `WAITATN` until the worker completes. For applications where the calling cog must keep running (sensor polling, control loops, display updates), the async API provides non-blocking alternatives.
+
+### How It Works
+
+The async API reuses the existing command protocol but skips the `WAITATN` sleep:
+
+1. **`startReadHandle()` / `startWriteHandle()`** -- acquires the API lock, writes mailbox parameters, sets `pb_cmd`, then returns immediately with `PENDING` (1). The lock is held throughout the operation.
+2. **`isComplete()`** -- polls `pb_cmd == CMD_NONE` (the worker clears `pb_cmd` when done). Returns TRUE/FALSE without blocking.
+3. **`getResult()`** -- waits if needed, reads the result from `pb_status`/`pb_data0`, releases the lock, and drains any stale `COGATN`. After this call, new commands can be issued.
+4. **`cancelAsync()`** -- waits for the worker to finish (cannot interrupt SPI mid-transfer), discards the result, and releases the lock.
+
+### Constraints
+
+- Only one async operation can be in flight at a time (`E_ASYNC_BUSY` if a second is attempted)
+- The API lock is held for the entire duration, so no other cog can issue commands until `getResult()` or `cancelAsync()` is called
+- The caller must not modify the data buffer while the async write is in progress
+- `SD_INCLUDE_ASYNC` is not part of `SD_INCLUDE_ALL` -- it must be enabled separately
+
 ## Exported STRUCT Types
 
 The driver defines and exports packed struct types (requires `{Spin2_v45}`) for named access to SD card registers and FAT32 on-disk structures. Consumer objects access them via the `sd.` prefix (e.g., `sd.cid_t`, `sd.dir_entry_t`).
@@ -599,11 +711,16 @@ All structs are packed (Spin2 default) with offsets matching their respective ha
 | `E_FILE_NOT_OPEN` | -45 | File not open |
 | `E_END_OF_FILE` | -46 | Read past end of file |
 | `E_DISK_FULL` | -60 | No free clusters available |
+| `E_NO_CONTIGUOUS_SPACE` | -61 | No contiguous run of sufficient length (defrag) |
+| `E_FILE_OPEN_FOR_COMPACT` | -62 | File is open, cannot compact (defrag) |
+| `E_VERIFY_FAILED` | -63 | Read-back verification failed after compact (defrag) |
 | `E_NO_LOCK` | -64 | Could not acquire hardware lock |
 | `E_TOO_MANY_FILES` | -90 | All handle slots in use |
 | `E_INVALID_HANDLE` | -91 | Handle out of range or not open |
 | `E_FILE_ALREADY_OPEN` | -92 | File already open for writing |
 | `E_NOT_A_DIR_HANDLE` | -93 | Wrong handle type for operation |
+| `E_ASYNC_BUSY` | -95 | An async operation is already in flight |
+| `E_NO_ASYNC_OP` | -96 | No async operation to get result from |
 
 ## Public API Summary
 
@@ -743,6 +860,26 @@ All structs are packed (Spin2 default) with offsets matching their respective ha
 | `displaySector()` | Hex dump of sector buffer |
 | `displayEntry()` | Hex dump of directory entry |
 | `displayFAT(cluster)` | Hex dump of FAT sector |
+| `setTestMaxClusters(max)` | Set artificial cluster limit (disk-full testing) |
+
+### SD_INCLUDE_DEFRAG
+
+| Method | Description |
+|--------|-------------|
+| `fileFragments(pPath) : count` | Count non-contiguous fragments (1 = contiguous, 0 = empty) |
+| `isFileContiguous(pPath) : bool` | TRUE if file has exactly 1 fragment |
+| `createFileContiguous(pPath, size) : handle` | Create new file with pre-allocated contiguous chain |
+| `compactFile(pPath) : result` | Relocate file clusters into contiguous chain (file must be closed) |
+
+### SD_INCLUDE_ASYNC
+
+| Method | Description |
+|--------|-------------|
+| `startReadHandle(handle, pBuf, count) : status` | Begin non-blocking read, returns PENDING |
+| `startWriteHandle(handle, pBuf, count) : status` | Begin non-blocking write, returns PENDING |
+| `isComplete() : bool` | Poll whether async operation has finished |
+| `getResult() : result` | Get result and release lock (bytes read/written or error) |
+| `cancelAsync() : result` | Wait for completion, discard result, release lock |
 
 ---
 
