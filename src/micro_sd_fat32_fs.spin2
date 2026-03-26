@@ -1,4 +1,4 @@
-{Spin2_v46}
+{Spin2_v47}
 '' =================================================================================================
 ''
 ''   File....... micro_sd_fat32_fs.spin2
@@ -126,7 +126,7 @@ CON ' command codes for worker cog
 
 #ifdef SD_INCLUDE_SPEED
 #ifndef SD_INCLUDE_REGISTERS
-  SD_INCLUDE_SPEED_REQUIRES_SD_INCLUDE_REGISTERS
+#error "SD_INCLUDE_SPEED requires SD_INCLUDE_REGISTERS"
 #endif
   CMD_ATTEMPT_HIGH_SPEED = 83  ' Attempt 50 MHz high-speed: returns data0=boolean
   CMD_CHECK_HS_CAPABILITY = 84 ' Check CMD6 high-speed support: returns data0=boolean
