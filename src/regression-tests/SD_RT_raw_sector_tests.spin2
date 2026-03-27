@@ -220,14 +220,14 @@ PUB go() | result, idx, sector
 
     ' Verify all 512 bytes of Pattern A (sequential)
     debug("* Test: Full verify Pattern A (512 sequential bytes)")
-    if verifyFullPattern(TEST_SECTOR_A, $A0, 0)
+    if verifyFullPattern(TEST_SECTOR_A, 0)
         recordPass()
     else
         recordFail()
 
     ' Verify all 512 bytes of Pattern B (AA/55)
     debug("* Test: Full verify Pattern B (alternating AA/55)")
-    if verifyFullPatternAlt(TEST_SECTOR_B, $B0)
+    if verifyFullPatternAlt(TEST_SECTOR_B)
         recordPass()
     else
         recordFail()
@@ -390,11 +390,10 @@ PRI verifyMarkers(sector, expectedPattern) : success | secLow
         debug("  ERROR: Tail sector ID mismatch!")
         success := false
 
-PRI verifyFullPattern(sector, patternId, baseOffset) : success | idx, expected, actual
+PRI verifyFullPattern(sector, baseOffset) : success | idx, expected, actual
 ' Verify all 512 bytes of a sequential pattern sector
 '
 ' @param sector - sector number to verify
-' @param patternId - pattern identifier (for boundary markers)
 ' @param baseOffset - offset added to sequential count (0 for A, $E0 for E)
 ' @returns success - true if all data bytes match
 
@@ -414,11 +413,10 @@ PRI verifyFullPattern(sector, patternId, baseOffset) : success | idx, expected, 
     if success
         debug("  -> pass (496 data bytes verified)")
 
-PRI verifyFullPatternAlt(sector, patternId) : success | idx, expected, actual
+PRI verifyFullPatternAlt(sector) : success | idx, expected, actual
 ' Verify all bytes of alternating AA/55 pattern sector
 '
 ' @param sector - sector number to verify
-' @param patternId - pattern identifier (for boundary markers)
 ' @returns success - true if all data bytes match AA/55 pattern
 
     utils.initGuard(@read_buf_guard)

@@ -334,7 +334,7 @@ PUB showError(pCaller, bResult)
 ' -------
 ' Memory dump utilities
 
-PUB dbgMemDump(pMessage, pBytes, lenBytes) | rowCount, rowLen, pCurrByte, lastRowByteCount, bytesSoFar, offset
+PUB dbgMemDump(pMessage, pBytes, lenBytes) | rowCount, pCurrByte, lastRowByteCount, bytesSoFar, offset
 '' Dump memory contents in hex format
 ''
 '' @param pMessage - pointer to heading message (or 0 for none)
@@ -385,7 +385,7 @@ PUB fillBufferWithPattern(pBuffer, length, startValue) | idx
     repeat idx from 0 to length - 1
         BYTE[pBuffer][idx] := (startValue + idx) & $FF
 
-PUB fillBufferWithValue(pBuffer, length, value) | idx
+PUB fillBufferWithValue(pBuffer, length, value)
 '' Fill buffer with constant value
 ''
 '' @param pBuffer - pointer to buffer to fill

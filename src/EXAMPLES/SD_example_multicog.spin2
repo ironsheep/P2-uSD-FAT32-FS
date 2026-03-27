@@ -55,11 +55,10 @@ VAR
     long  reader_done                                   ' Flag: reader cog sets to 1 when finished
     long  setup_done                                    ' Flag: main cog sets to 1 when files ready
 
-PUB go() | handle, idx, buf[32]
+PUB go() | handle, idx
 '' Main entry point -- creates test files, starts a reader cog, and writes concurrently from the main cog.
 ' @local handle - File handle for creating and writing test files
 ' @local idx - Loop index for writing lines
-' @local buf - General-purpose buffer
 
     debug("=== SD Multi-Cog Example ===")
 

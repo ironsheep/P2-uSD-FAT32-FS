@@ -95,7 +95,7 @@ writeBuf        BYTE    0[512]
 ' Saved original label
 origLabel       BYTE    0[12]
 
-PUB go() | result, h1, h2, bytesWritten, bytesRead, pLabel, idx, pEntry, wrtDate, wrtTime, vbrSector, found, baselineFree, filesCreated, dfHandle
+PUB go() | result, h1, h2, bytesWritten, pLabel, idx, pEntry, wrtDate, wrtTime, vbrSector, found, baselineFree, filesCreated, dfHandle
 '' Main entry point for volume operation regression tests
 
     debug(" ")

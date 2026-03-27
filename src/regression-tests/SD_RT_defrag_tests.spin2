@@ -64,7 +64,7 @@ readBuffer      BYTE    0[WRITE_SIZE]
 readBuffer_guard BYTE   0[GUARD_SIZE]
 
 
-PUB go() | result, handle, h2, frags, bytesWritten, bytesRead, idx, fillHandle, fillName, fillIdx
+PUB go() | result, handle, h2, frags, bytesWritten, bytesRead, idx
 '' Main entry point for defragmentation regression tests
 
     debug(" ")

@@ -722,14 +722,13 @@ PUB jbin(value, digits, width, pad)
 
   str(mstr.fmt_number(value, 2, digits, width, pad))
 
-PUB memDump(pBytes, lenBytes, pMessage) | rowCount, rowLen, pCurrByte, lastRowByteCount, bytesSoFar
+PUB memDump(pBytes, lenBytes, pMessage) | rowCount, pCurrByte, lastRowByteCount, bytesSoFar
 '' Dump rows of hex values with address preceeding
 ''
 '' @param pBytes - pointer to byte array to dump
 '' @param lenBytes - number of bytes to dump
 '' @param pMessage - pointer to message string (or 0 for no message)
 ' @local rowCount - number of full 16-byte rows
-' @local rowLen - length of current row
 ' @local pCurrByte - pointer to current byte
 ' @local lastRowByteCount - bytes in final partial row
 ' @local bytesSoFar - bytes dumped so far

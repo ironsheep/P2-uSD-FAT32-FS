@@ -326,11 +326,10 @@ PRI run() | result, cardSectors
 ' Audit orchestration
 ' =========================================================================
 
-PRI runAudit(cardSectors) | result, idx, failsToPrint
+PRI runAudit(cardSectors) | idx, failsToPrint
 ' Run all audit checks and display summary with pass/fail counts.
 '
 ' @param cardSectors - Total number of sectors on the card
-' @local result - scratch variable for test results
 ' @local idx - loop index for failed test names
 ' @local failsToPrint - clamped count of fail names to display
 
@@ -1280,31 +1279,31 @@ PRI setBit(cluster) | idx
         bitmapData[idx >> 5] |= (1 << (idx & BIT_INDEX_MASK))
 
 
-PRI testBit(cluster) : result | idx
+PRI testBit(cluster) : bSet | idx
 ' Test whether a cluster is marked in the bitmap (window-relative).
 ' Returns FALSE for clusters outside the current window.
 '
 ' @param cluster - Cluster number to test
-' @returns result - TRUE (non-zero) if marked
+' @returns bSet - TRUE (non-zero) if marked
 
-    result := false
+    bSet := false
     if cluster >= windowStart and cluster < windowEnd
         idx := cluster - windowStart
-        result := (bitmapData[idx >> 5] >> (idx & BIT_INDEX_MASK)) & 1
+        bSet := (bitmapData[idx >> 5] >> (idx & BIT_INDEX_MASK)) & 1
 
 
-PRI isDot(pEntry) : result
+PRI isDot(pEntry) : bIsDot
 ' Check if a directory entry is the "." or ".." special entry.
 '
 ' @param pEntry - Pointer to 32-byte directory entry
-' @returns result - TRUE if entry is . or ..
+' @returns bIsDot - TRUE if entry is . or ..
 
-    result := false
+    bIsDot := false
     if BYTE[pEntry] == "."
         if BYTE[pEntry + 1] == " "
-            result := true
+            bIsDot := true
         if BYTE[pEntry + 1] == "."
-            result := true
+            bIsDot := true
 
 
 CON { license }

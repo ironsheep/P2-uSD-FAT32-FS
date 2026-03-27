@@ -275,7 +275,7 @@ PRI test_multi_sector_text() | handle, fileSize
     sd.closeFileHandle(handle)
 
 
-PRI test_large_file_cluster_chain() | handle, fileSize, pos, expected, actual
+PRI test_large_file_cluster_chain() | handle, fileSize, pos, expected
 ' Validate reading a 64KB file that spans multiple clusters (SIXTYFK.BIN).
 ' Seeks to 8 evenly-spaced positions (every 8KB) and verifies the XOR pattern byte.
 ' Pattern: byte[n] = (block << 1) XOR (n & $FF) where block = n / 512.
@@ -283,7 +283,6 @@ PRI test_large_file_cluster_chain() | handle, fileSize, pos, expected, actual
 ' @local fileSize - reported file size in bytes
 ' @local pos - seek offset for current sub-test check
 ' @local expected - computed expected pattern byte at the seek position
-' @local actual - (unused, reads into smallBuf[0] directly)
 
     utils.startTestGroup(@"Test 7: Multi-Cluster File (SIXTYFK.BIN)")
 
@@ -308,12 +307,11 @@ PRI test_large_file_cluster_chain() | handle, fileSize, pos, expected, actual
     sd.closeFileHandle(handle)
 
 
-PRI test_seek_operations() | handle, result
+PRI test_seek_operations() | handle
 ' Validate seek operations on SEEKTEST.BIN (2016 bytes = 32 blocks of 63 bytes each).
 ' Each block starts with "BLK##---" followed by 55 bytes of $55. Seeks to blocks 0, 1,
 ' 10, and 31 and verifies the 8-byte header at each position matches expectations.
 ' @local handle - file handle returned by openFileRead()
-' @local result - return value from driver API calls
 
     utils.startTestGroup(@"Test 8: Seek Operations (SEEKTEST.BIN)")
 
@@ -352,12 +350,11 @@ PRI test_seek_operations() | handle, result
     sd.closeFileHandle(handle)
 
 
-PRI test_checksum_integrity() | handle, result, idx, sum
+PRI test_checksum_integrity() | handle, idx, sum
 ' Validate data integrity of CHECKSUM.BIN (1024 bytes) by computing a byte-sum checksum.
 ' The file contains bytes 0-255 repeated 4 times. Expected checksum is 130560.
 ' Reads in two 512-byte chunks since the medium buffer is one sector.
 ' @local handle - file handle returned by openFileRead()
-' @local result - return value from driver API calls
 ' @local idx - byte index within each 512-byte chunk
 ' @local sum - running byte-sum accumulator across all 1024 bytes
 
@@ -467,13 +464,12 @@ PRI test_directory_navigation() | result, count, idx, pEntry
     utils.evaluateSingleValue(result, @"changeDirectory(/)", sd.SUCCESS)
 
 
-PRI test_benchmark_sequential() | handle, start, elapsed, bytesRead, idx, bytesPerSec
+PRI test_benchmark_sequential() | handle, start, elapsed, idx, bytesPerSec
 ' Benchmark sequential read throughput by reading SIXTYFK.BIN (64KB) in 128 sector reads.
 ' Measures elapsed clock ticks and computes approximate KB/sec throughput.
 ' @local handle - file handle returned by openFileRead()
 ' @local start - system counter value at benchmark start (getct())
 ' @local elapsed - total clock ticks for the 64KB read
-' @local bytesRead - (unused, reads directly into mediumBuf)
 ' @local idx - loop counter for 128 sector reads
 ' @local bytesPerSec - computed throughput in bytes per second
 

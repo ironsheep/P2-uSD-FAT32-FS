@@ -170,7 +170,7 @@ PRI runTest2_ModTimestampOnClose() | handle, pEntry, hDir, wrtTime, wrtDate, fou
     utils.showSubTestResults()
 
 
-PRI runTest3_TimestampsAdvance() | handle, pEntry, hDir, dateA, dateB, timeA, timeB, stampA, stampB, found
+PRI runTest3_TimestampsAdvance() | handle, pEntry, hDir, stampA, stampB
     ' Test 3: Timestamps advance over time
     utils.startTest(@"Timestamps advance over time")
     utils.setCheckCountPerTest(2)
@@ -216,7 +216,7 @@ PRI runTest3_TimestampsAdvance() | handle, pEntry, hDir, dateA, dateB, timeA, ti
     debug("  stampA=$", uhex_(stampA), " stampB=$", uhex_(stampB))
 
 
-PRI runTest4_DefaultTimestamp() | handle, pEntry, hDir, wrtDate, month, day, year, found
+PRI runTest4_DefaultTimestamp() | pEntry, hDir, wrtDate, month, day, year, found
     ' Test 4: Default timestamp without setDate is valid
     ' Note: We already called setDate, so this tests that the default
     ' setDate(2009,1,27,7,0,0) at mount time produces valid results.

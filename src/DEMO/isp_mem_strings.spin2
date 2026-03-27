@@ -532,10 +532,10 @@ PRI usdec(value, digits) : p_str | len
         quit
 
 
-PRI revstr(p_str) : result | first, len, last
+PRI revstr(p_str) : pStr | first, len, last
 ' Reverse the order of characters in a string.
 
-  result := first := p_str                                      ' start
+  pStr := first := p_str                                      ' start
   len := strsize(p_str)                                         ' length
   last := first + len - 1                                       ' end
 

@@ -159,11 +159,11 @@ PUB go() | result, spi_hz
 ' CARD IDENTIFICATION
 ' ════════════════════════════════════════════════════════════════════════════════
 
-PRI identifyCard() : result | mid, pnm[2]
+PRI identifyCard() : bIdentified | mid, pnm[2]
 ' Identify card by reading CID (call after mount).
 ' Displays MID, product name, and raw CID bytes.
 
-    result := false
+    bIdentified := false
     if sd.readCIDRaw(@cid_buf) >= 0
         ' Extract MID and product name
         mid := cid_buf[0]
@@ -173,7 +173,7 @@ PRI identifyCard() : result | mid, pnm[2]
         debug("  MID: ", uhex_byte_(mid), "  Product: ", zstr_(@pnm))
         debug("  CID: ", uhex_byte_(cid_buf[0]), " ", uhex_byte_(cid_buf[1]), " ", uhex_byte_(cid_buf[2]), " ", uhex_byte_(cid_buf[3]), " ", uhex_byte_(cid_buf[4]), " ", uhex_byte_(cid_buf[5]), " ", uhex_byte_(cid_buf[6]), " ", uhex_byte_(cid_buf[7]))
         debug("       ", uhex_byte_(cid_buf[8]), " ", uhex_byte_(cid_buf[9]), " ", uhex_byte_(cid_buf[10]), " ", uhex_byte_(cid_buf[11]), " ", uhex_byte_(cid_buf[12]), " ", uhex_byte_(cid_buf[13]), " ", uhex_byte_(cid_buf[14]), " ", uhex_byte_(cid_buf[15]))
-        result := true
+        bIdentified := true
     else
         debug("  readCIDRaw FAILED")
 
@@ -182,12 +182,12 @@ PRI identifyCard() : result | mid, pnm[2]
 ' MOUNT / UNMOUNT TIMING
 ' ════════════════════════════════════════════════════════════════════════════════
 
-PRI runMountBenchmark() : result | start_ct, elapsed_ct, elapsed_us
+PRI runMountBenchmark() : status | start_ct, elapsed_ct, elapsed_us
 ' Mount card and display timing.
 
     debug("MOUNT:")
     start_ct := getct()
-    result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    status := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
     elapsed_ct := getct() - start_ct
 
     elapsed_us := elapsed_ct / (clkfreq / 1_000_000)

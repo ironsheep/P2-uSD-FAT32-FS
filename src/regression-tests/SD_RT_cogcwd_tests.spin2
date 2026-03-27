@@ -150,7 +150,7 @@ PUB go() | result
 ' TEST METHODS
 ' ═══════════════════════════════════════════════════════════════════════════
 
-PRI runTest1_TwoCogsDifferentDirs() | handle, bytesRead, workerOk
+PRI runTest1_TwoCogsDifferentDirs() | handle, bytesRead
     ' Test 1: Two cogs in different directories see different files
     utils.startTest(@"Two cogs in different dirs see different files")
     utils.setCheckCountPerTest(4)
@@ -202,7 +202,7 @@ PRI runTest1_TwoCogsDifferentDirs() | handle, bytesRead, workerOk
     sd.changeDirectory(@rootPath)
 
 
-PRI runTest2_CdNoAffectOtherCog() | handle, result
+PRI runTest2_CdNoAffectOtherCog() | handle
     ' Test 2: One cog's changeDirectory does not affect another cog's CWD
     utils.startTest(@"One cog's cd does not affect another cog's CWD")
     utils.setCheckCountPerTest(2)
@@ -234,7 +234,7 @@ PRI runTest2_CdNoAffectOtherCog() | handle, result
     sd.changeDirectory(@rootPath)
 
 
-PRI runTest3_BothCogsCreateFiles() | handle, bytesRead, result
+PRI runTest3_BothCogsCreateFiles() | handle, bytesRead
     ' Test 3: Both cogs create files in their own CWD
     utils.startTest(@"Both cogs create files in their own CWD")
     utils.setCheckCountPerTest(8)
@@ -318,7 +318,7 @@ PRI runTest3_BothCogsCreateFiles() | handle, bytesRead, result
     sd.changeDirectory(@rootPath)
 
 
-PRI runTest4_CwdSurvivesRepeatOps() | handle, result, iter
+PRI runTest4_CwdSurvivesRepeatOps() | handle, iter
     ' Test 4: CWD survives repeated file operations
     utils.startTest(@"CWD survives repeated file operations")
     utils.setCheckCountPerTest(2)
@@ -372,7 +372,7 @@ PRI runTest4_CwdSurvivesRepeatOps() | handle, result, iter
     sd.changeDirectory(@rootPath)
 
 
-PRI runTest5_CwdIsolationOnReset() | handle, result
+PRI runTest5_CwdIsolationOnReset() | handle
     ' Test 5: CWD isolation when one cog resets to root
     utils.startTest(@"CWD isolation when worker resets to root")
     utils.setCheckCountPerTest(2)

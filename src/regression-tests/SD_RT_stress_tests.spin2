@@ -205,7 +205,7 @@ PRI runTest6_ReaderIntegrity() | handle_r, bytesRead, iter, sector_idx, expected
     debug("  Reader: ", udec_(STRESS_ITERATIONS), " iters x ", udec_(NUM_SECTORS), " sectors, ", udec_(sector_errors), " errors")
 
 
-PRI runTest7_WriterIntegrity() | handle, fileSize, expectedSize, bytesRead, chunk, startVal, bMatch, offset
+PRI runTest7_WriterIntegrity() | handle, fileSize, expectedSize, bytesRead, chunk, startVal, bMatch
     ' Test 7: Writer integrity verified after concurrent reading
     ' Read back STRESS_W.TXT and verify pattern integrity
     utils.startTest(@"Writer data integrity verification")
@@ -245,7 +245,7 @@ PRI runTest7_WriterIntegrity() | handle, fileSize, expectedSize, bytesRead, chun
     utils.showSubTestResults()
 
 
-PRI runTest8_DualReaderSameFile() | handle_m, handle_w_result, iter, sector_idx, seekPos, bytesRead, expected_fill, byteIdx, mainMismatches
+PRI runTest8_DualReaderSameFile() | handle_m, iter, sector_idx, seekPos, bytesRead, expected_fill, byteIdx, mainMismatches
     ' Test 8: Both cogs read same file simultaneously
     utils.startTest(@"Both cogs read same file simultaneously")
     utils.setCheckCountPerTest(3)
@@ -476,7 +476,7 @@ PRI resetWorker()
     worker_errors[0] := 0
 
 
-PRI waitForWorkers() | allDone
+PRI waitForWorkers()
     ' Wait for worker cog to complete.
 
     repeat

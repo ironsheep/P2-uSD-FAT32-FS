@@ -441,11 +441,10 @@ PUB do_stats() | total_sectors, total_mb, free_sectors, free_mb
     serial.fstr2(@"Free:   %d sectors (%d MB)\r\n", free_sectors, free_mb)
     serial.fstr1(@"Label:  %s\r\n", sd.volumeLabel())
 
-PUB do_dir() | dh, result, count, total_size, attrib, size, p_name, p_path, p_entry, wrt_date, wrt_time, yr, mo, dy, hr, mn
+PUB do_dir() | dh, count, total_size, attrib, size, p_name, p_path, p_entry, wrt_date, wrt_time, yr, mo, dy, hr, mn
 '' List directory contents with attributes, timestamps, sizes, and summary.
 ''
 ' @local dh - Directory handle
-' @local result - readDirectoryHandle result
 ' @local count - Number of entries listed
 ' @local total_size - Cumulative file size in bytes
 ' @local attrib - FAT attribute byte for current entry
@@ -1887,7 +1886,7 @@ PRI lcstr(p_str) : p_lcstr | ch
       BYTE[p_str] := ch + 32
     ++p_str
 
-PRI emit_zpad(value, width) | divisor, digit, STARTED
+PRI emit_zpad(value, width) | divisor, digit
 ' Emit a decimal number with leading zero padding to the specified width.
 '
 ' @param value - Non-negative integer to emit

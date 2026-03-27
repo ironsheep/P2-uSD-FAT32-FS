@@ -438,7 +438,7 @@ PRI lookupManufacturer(mid) : p_name | p_entry, entry_id
 ' CSD PARSING AND DISPLAY
 ' ============================================================
 
-PRI parseCSD() | time_val, time_unit, c_size
+PRI parseCSD() | time_val, time_unit
 ' Parse all CSD register fields.
 ' Handles both CSD v1.0 (SDSC) and v2.0 (SDHC/SDXC) formats.
 

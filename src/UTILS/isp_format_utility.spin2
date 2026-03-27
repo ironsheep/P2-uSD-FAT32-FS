@@ -144,23 +144,23 @@ fmt_cog_guard LONG    0[FMT_GUARD_LONGS]
 '' Synchronous API (existing - unchanged)
 '' =========================================================================
 
-PUB format(cs, mosi, miso, sck) : result
+PUB format(cs, mosi, miso, sck) : bSuccess
 '' Format the SD card with default volume label "P2-XFER".
 ''
 '' @param cs - Chip Select pin number
 '' @param mosi - Master Out Slave In pin number
 '' @param miso - Master In Slave Out pin number
 '' @param sck - Serial Clock pin number
-'' @returns result - TRUE if successful, FALSE if failed
+'' @returns bSuccess - TRUE if successful, FALSE if failed
 
     pinCS := cs
     pinMOSI := mosi
     pinMISO := miso
     pinSCK := sck
     setDefaultLabel()
-    result := doFormat()
+    bSuccess := doFormat()
 
-PUB formatWithLabel(cs, mosi, miso, sck, pLabel) : result | idx, ch
+PUB formatWithLabel(cs, mosi, miso, sck, pLabel) : bSuccess | idx, ch
 '' Format the SD card with a custom volume label.
 ''
 '' @param cs - Chip Select pin number
@@ -168,7 +168,7 @@ PUB formatWithLabel(cs, mosi, miso, sck, pLabel) : result | idx, ch
 '' @param miso - Master In Slave Out pin number
 '' @param sck - Serial Clock pin number
 '' @param pLabel - Pointer to null-terminated string (max 11 chars)
-'' @returns result - TRUE if successful, FALSE if failed
+'' @returns bSuccess - TRUE if successful, FALSE if failed
 
     pinCS := cs
     pinMOSI := mosi
@@ -190,7 +190,7 @@ PUB formatWithLabel(cs, mosi, miso, sck, pLabel) : result | idx, ch
         volumeLabel[idx] := ch
         idx++
 
-    result := doFormat()
+    bSuccess := doFormat()
 
 PUB stop()
 '' Stop the driver worker cog and release SPI pins.
@@ -319,13 +319,13 @@ PRI runInCog() | result
     fmt_op_done := true
 
 
-PRI doFormatCog() : result | ok
+PRI doFormatCog() : bSuccess | ok
 ' Execute the format operation with FIFO output instead of debug().
 ' Calls the same write methods (writeMBR, writeVBR, etc.) as doFormat().
 '
-' @returns result - TRUE if all steps succeeded
+' @returns bSuccess - TRUE if all steps succeeded
 
-    result := false
+    bSuccess := false
 
     fifo.put(@"=== SD Card FAT32 Formatter ===")
     fifo.putFmt1(@"Volume Label: %s", @volumeLabel)
@@ -409,7 +409,7 @@ PRI doFormatCog() : result | ok
         fifo.put(@"=== FORMAT COMPLETE ===")
         fifo.putFmt1(@"Volume: %s", @volumeLabel)
         fifo.putFmt2(@"Size: %d MB, Clusters: %d", totalSectors / 2048, totalClusters)
-        result := true
+        bSuccess := true
 
 
 PRI setDefaultLabel()
@@ -423,12 +423,12 @@ PRI setDefaultLabel()
     BYTE[@volumeLabel][10] := " "
     volumeLabel[11] := 0
 
-PRI doFormat() : result | ok
+PRI doFormat() : bSuccess | ok
 ' Execute the format operation: MBR, VBR, FSInfo, FAT tables, root directory.
 '
-' @returns result - TRUE if all steps succeeded, FALSE otherwise
+' @returns bSuccess - TRUE if all steps succeeded, FALSE otherwise
 
-    result := false
+    bSuccess := false
 
     debug("==============================================")
     debug("  SD Card FAT32 Formatter")
@@ -559,7 +559,7 @@ PRI doFormat() : result | ok
         debug("  Size: ", udec_(totalSectors / 2048), " MB")
         debug("  Clusters: ", udec_(totalClusters))
         debug("==============================================")
-        result := true
+        bSuccess := true
 
 PRI calculateParameters() : success
 ' Calculate filesystem parameters based on card size.
