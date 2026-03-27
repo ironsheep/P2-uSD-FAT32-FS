@@ -1,15 +1,15 @@
-{{ =================================================================================================
-
-   File....... isp_mem_strings.spin2
-   Purpose.... provide sprintf() c-like functions for Spin2 developers
-   Authors.... Stephen M. Moraco
-                (Highly leveraged from jm_serial.spin2 by Jon McPhalen)
-                (Number-to-string code adapted from jm_nstr.spin2 by Jon McPhalen)
-   E-mail..... stephen@ironsheep.biz
-   Started.... Feb 2022
-   Updated.... 20 Feb 2026
-
-================================================================================================= }}
+'' =========================================================================================
+''
+''   File....... isp_mem_strings.spin2
+''   Purpose.... provide sprintf() c-like functions for Spin2 developers
+''   Author..... Stephen M. Moraco
+''               (Highly leveraged from jm_serial.spin2 by Jon McPhalen)
+''               (Number-to-string code adapted from jm_nstr.spin2 by Jon McPhalen)
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... Feb 2022
+''   Updated.... 20 Feb 2026
+''
+'' =========================================================================================
 
 CON { suppress debug protocol output - this file is used via OBJ alongside serial on pin 62 }
 

@@ -164,6 +164,7 @@ CON ' buffer types for sector read/write (diagnostic: separate buffers to isolat
   BUF_DATA = 2      ' Data sector buffer
 
 CON ' error codes
+  {Spin2_Doc_CON}
   SUCCESS           = 0
   E_TIMEOUT         = -1        ' Card didn't respond in time
   E_NO_RESPONSE     = -2        ' Card not responding
@@ -200,12 +201,14 @@ CON ' error codes
   E_NOT_A_DIR_HANDLE  = -93     ' Handle is not a directory handle (or vice versa)
   E_INVALID_PARAM     = -94     ' Parameter value out of valid range
 
-CON ' card warning/capability flags (bitmask, returned by cardWarnings())
+CON ' card warning/capability flags
+  {Spin2_Doc_CON}
   CW_NONE              = $00     ' No warnings or capabilities
   CW_CMD13_UNRELIABLE  = $01     ' CMD13 probe failed at init; status checks disabled for this card
   CW_CMD23_SUPPORTED   = $02     ' CMD23 (SET_BLOCK_COUNT) confirmed working in SPI mode
 
 CON ' V3 multi-file handle configuration
+  {Spin2_Doc_CON}
   ' ═══════════════════════════════════════════════════════════════════════════
   ' FILE HANDLE SYSTEM - V3 supports multiple simultaneously open files
   ' User can override MAX_OPEN_FILES in their top-level CON section before OBJ
@@ -229,12 +232,16 @@ CON ' worker cog stack size
 CON ' idle flush threshold
   IDLE_FLUSH_MS      = 200    ' Milliseconds idle before auto-flush
 
-CON ' sector geometry
+CON ' sector geometry (public)
+  {Spin2_Doc_CON}
   SECTOR_SIZE        = 512    ' Bytes per sector (FAT32 standard)
+
+CON ' sector geometry (internal)
   SECTOR_SHIFT       = 9     ' log2(SECTOR_SIZE) -- byte-to-sector conversion
   SECTOR_OFFSET_MASK = 511   ' SECTOR_SIZE - 1 -- byte offset within sector
 
-CON ' FAT32 directory entry attribute flags (SD Physical Layer Spec)
+CON ' FAT32 directory entry attribute flags
+  {Spin2_Doc_CON}
   ATTR_READONLY   = $01     ' File is read-only
   ATTR_HIDDEN     = $02     ' File is hidden
   ATTR_SYSTEM     = $04     ' System file
@@ -244,6 +251,7 @@ CON ' FAT32 directory entry attribute flags (SD Physical Layer Spec)
   ATTR_LFN        = $0F     ' Long filename entry (RO+HID+SYS+VOL)
 
 CON ' FAT32 directory entry markers
+  {Spin2_Doc_CON}
   DIR_ENTRY_DELETED = $E5   ' First byte marks deleted entry
   DIR_ENTRY_SIZE    = 32    ' Bytes per directory entry
 
@@ -280,7 +288,8 @@ CON ' Directory/FAT iteration counts
   DIR_ENTRIES_PER_SECTOR = 16   ' SECTOR_SIZE / DIR_ENTRY_SIZE
   LAST_DIR_ENTRY_OFFSET  = 480  ' (DIR_ENTRIES_PER_SECTOR - 1) * DIR_ENTRY_SIZE
 
-CON ' Directory entry field byte offsets (matches dir_entry_t layout)
+CON ' Directory entry field byte offsets
+  {Spin2_Doc_CON}
   DE_ATTR_OFFSET     = 11    ' Attributes byte
   DE_CRT_TIME_OFFSET = 14    ' Creation timestamp (long)
   DE_CLUS_HI_OFFSET  = 20    ' Start cluster high word
@@ -390,6 +399,7 @@ CON ' Card initialization timing
   DATA_WRITE_ERROR       = $0D ' Lower 5 bits = xxx01101 = write error
 
 CON ' struct types - SD card register and FAT32 on-disk data structures
+  {Spin2_Doc_CON}
   ' ═══════════════════════════════════════════════════════════════════════════
   ' Struct type definitions for card registers, filesystem structures, and
   ' directory entries. Exported automatically to consumer objects via OBJ.
@@ -398,23 +408,87 @@ CON ' struct types - SD card register and FAT32 on-disk data structures
 
   ' --- SD Card Registers ---
 
+  ' CID register (16 bytes, big-endian from card):
+  '  mid      - Manufacturer ID (1 byte)
+  '  oid[2]   - OEM/Application ID (2 bytes ASCII)
+  '  pnm[5]   - Product name (5 bytes ASCII)
+  '  prv      - Product revision (1 byte, BCD: high=major, low=minor)
+  '  psn[4]   - Product serial number (4 bytes)
+  '  mdt[2]   - Manufacturing date (2 bytes: year offset from 2000, month)
+  '  crc      - CRC7 checksum (1 byte)
   STRUCT cid_t(BYTE mid, BYTE oid[2], BYTE pnm[5], BYTE prv, BYTE psn[4], BYTE mdt[2], BYTE crc)
-  '  CID register: 1+2+5+1+4+2+1 = 16 bytes (big-endian from card)
 
+  ' SCR register (8 bytes, big-endian from card):
+  '  sdSpec       - SD spec version (4 bits)
+  '  sdSecurity   - Security protocol support (4 bits)
+  '  sdSpec3Ext   - Spec 3.0 extended fields
+  '  sdSpecXLo    - Spec extensions (lower bits)
+  '  reserved[4]  - Reserved bytes
   STRUCT scr_t(BYTE sdSpec, BYTE sdSecurity, BYTE sdSpec3Ext, BYTE sdSpecXLo, BYTE reserved[4])
-  '  SCR register: 4+4 = 8 bytes (big-endian from card)
 
   ' --- FAT32 On-Disk Structures ---
 
+  ' Directory entry (32 bytes, little-endian):
+  '  name[8]    - Short filename (8 chars, space-padded)
+  '  ext[3]     - Extension (3 chars, space-padded)
+  '  attr       - Attribute flags (ATTR_READONLY, ATTR_DIRECTORY, etc.)
+  '  ntRes      - Reserved for Windows NT (case info)
+  '  crtTenth   - Creation time tenths of a second
+  '  crtTime    - Creation time (hour:min:sec/2)
+  '  crtDate    - Creation date (year-1980:month:day)
+  '  accDate    - Last access date
+  '  clusHI     - Start cluster high word
+  '  wrtTime    - Last write time
+  '  wrtDate    - Last write date
+  '  clusLO     - Start cluster low word
+  '  fileSize   - File size in bytes
   STRUCT dir_entry_t(BYTE name[8], BYTE ext[3], BYTE attr, BYTE ntRes, BYTE crtTenth, ...
     WORD crtTime, WORD crtDate, WORD accDate, WORD clusHI, ...
     WORD wrtTime, WORD wrtDate, WORD clusLO, LONG fileSize)
-  '  FAT32 directory entry: 8+3+1+1+1+2+2+2+2+2+2+2+4 = 32 bytes (little-endian)
 
+  ' MBR partition table entry (16 bytes, little-endian):
+  '  bootFlag     - Boot indicator ($00=inactive, $80=active)
+  '  chsStart[3]  - CHS address of first sector
+  '  partType     - Partition type ($0B/$0C = FAT32)
+  '  chsEnd[3]    - CHS address of last sector
+  '  lbaStart     - LBA of first sector
+  '  lbaSize      - Total sectors in partition
   STRUCT mbr_partition_t(BYTE bootFlag, BYTE chsStart[3], BYTE partType, ...
     BYTE chsEnd[3], LONG lbaStart, LONG lbaSize)
-  '  MBR partition entry: 1+3+1+3+4+4 = 16 bytes (little-endian)
 
+  ' VBR / FAT32 BPB (512 bytes, little-endian):
+  '  -- Boot header --
+  '  jumpBoot[3]     - Boot jump instruction ($EB xx $90)
+  '  oemName[8]      - OEM name / formatting tool ID
+  '  -- BPB geometry --
+  '  bytesPerSec     - Bytes per sector (always 512)
+  '  secPerClus      - Sectors per cluster (power of 2)
+  '  reservedSec     - Reserved sectors before first FAT
+  '  numFats         - Number of FAT copies (always 2)
+  '  rootEntCnt      - Root entry count (0 for FAT32)
+  '  totalSec16      - Total sectors 16-bit (0 for FAT32)
+  '  mediaType       - Media type ($F8 = hard disk)
+  '  secPerFat16     - Sectors per FAT 16-bit (0 for FAT32)
+  '  secPerTrack     - Sectors per track (CHS geometry)
+  '  numHeads        - Number of heads (CHS geometry)
+  '  hiddenSec       - Hidden sectors before partition
+  '  totalSec32      - Total sectors 32-bit
+  '  -- FAT32 extended --
+  '  secPerFat32     - Sectors per FAT (32-bit)
+  '  extFlags        - FAT mirroring flags
+  '  fsVersion       - Filesystem version (0.0)
+  '  rootCluster     - Root directory first cluster (usually 2)
+  '  fsInfoSec       - FSInfo sector number (usually 1)
+  '  backBootSec     - Backup boot sector (usually 6)
+  '  reserved2[12]   - Reserved
+  '  driveNum        - BIOS drive number
+  '  reserved3       - Reserved
+  '  bootSig         - Extended boot signature ($29)
+  '  volSerialNum    - Volume serial number
+  '  volLabel[11]    - Volume label (space-padded)
+  '  fsTypeLabel[8]  - Filesystem type string ("FAT32   ")
+  '  bootCode[420]   - Boot code
+  '  bootSignature   - Boot signature ($AA55)
   STRUCT vbr_t(BYTE jumpBoot[3], BYTE oemName[8], WORD bytesPerSec, BYTE secPerClus, ...
     WORD reservedSec, BYTE numFats, WORD rootEntCnt, WORD totalSec16, ...
     BYTE mediaType, WORD secPerFat16, WORD secPerTrack, WORD numHeads, ...
@@ -423,11 +497,17 @@ CON ' struct types - SD card register and FAT32 on-disk data structures
     BYTE reserved2[12], BYTE driveNum, BYTE reserved3, BYTE bootSig, ...
     LONG volSerialNum, BYTE volLabel[11], BYTE fsTypeLabel[8], ...
     BYTE bootCode[420], WORD bootSignature)
-  '  VBR (FAT32 BPB): 3+8+2+1+2+1+2+2+1+2+2+2+4+4+4+2+2+4+2+2+12+1+1+1+4+11+8+420+2 = 512 bytes
 
+  ' FSInfo sector (512 bytes, little-endian):
+  '  leadSig        - Lead signature ($41615252)
+  '  reserved1[480] - Reserved (must be zero)
+  '  structSig      - Struct signature ($61417272)
+  '  freeClusters   - Free cluster count ($FFFFFFFF if unknown)
+  '  nextFreeHint   - Next free cluster hint ($FFFFFFFF if unknown)
+  '  reserved2[12]  - Reserved
+  '  trailSig       - Trail signature ($AA550000)
   STRUCT fsinfo_t(LONG leadSig, BYTE reserved1[480], LONG structSig, ...
     LONG freeClusters, LONG nextFreeHint, BYTE reserved2[12], LONG trailSig)
-  '  FSInfo sector: 4+480+4+4+4+12+4 = 512 bytes
 
 DAT ' ---- Singleton Control ----
   ' ═══════════════════════════════════════════════════════════════════════
@@ -647,9 +727,7 @@ DAT ' ---- Singleton Control ----
 #endif
 
 
-CON ' ═══════════════════════════════════════════════════════════════════════════
-    ' SECTION 1: LIFECYCLE
-    ' ═══════════════════════════════════════════════════════════════════════════
+CON ' ---- Lifecycle ----
 
 PUB null()
 '' This is not a top-level object - placeholder to indicate driver must be instantiated as OBJ.
@@ -775,9 +853,7 @@ PUB unmount() : result
     set_error(result)
 
 
-CON ' ═══════════════════════════════════════════════════════════════════════════
-    ' SECTION 2: FILE I/O
-    ' ═══════════════════════════════════════════════════════════════════════════
+CON ' ---- File I/O ----
 
 PUB openFileRead(p_path) : handle
 '' Open file for reading (V3 multi-file) - opens existing file and returns handle.
@@ -974,9 +1050,7 @@ PUB sync() : result
     set_error(result)
 
 
-CON ' ═══════════════════════════════════════════════════════════════════════════
-    ' SECTION 3: DIRECTORY
-    ' ═══════════════════════════════════════════════════════════════════════════
+CON ' ---- Directory ----
 
 PUB openDirectory(p_path) : handle
 '' Open directory for enumeration (multi-cog safe) - returns handle for iterating entries.
@@ -1043,9 +1117,7 @@ PUB changeDirectory(name_ptr) : result
     set_error(result)
 
 
-CON ' ═══════════════════════════════════════════════════════════════════════════
-    ' SECTION 4: METADATA
-    ' ═══════════════════════════════════════════════════════════════════════════
+CON ' ---- Metadata ----
 
 PUB deleteFile(name_ptr) : result
 '' Delete file (multi-cog safe) - deletes file from current directory.
@@ -1146,9 +1218,7 @@ PUB getDate() : year, month, day, hour, minute, second
 
 #ifdef SD_INCLUDE_DEFRAG
 
-CON ' ═══════════════════════════════════════════════════════════════════════════
-    ' SECTION 5C: DEFRAGMENTATION API
-    ' ═══════════════════════════════════════════════════════════════════════════
+CON ' ---- Defragmentation API ----
 
 PUB fileFragments(p_path) : fragment_count
 '' Count the number of non-contiguous fragments in a file's cluster chain.
@@ -1215,9 +1285,8 @@ PUB compactFile(p_path) : result
 
 #ifdef SD_INCLUDE_ASYNC
 
-CON ' ═══════════════════════════════════════════════════════════════════════════
-    ' SECTION 5B: NON-BLOCKING FILE I/O
-    ' ═══════════════════════════════════════════════════════════════════════════
+CON ' ---- Non-Blocking File I/O ----
+  {Spin2_Doc_CON}
   PENDING         = 1                   ' Returned by start*() to indicate operation launched
   E_ASYNC_BUSY    = -95                 ' An async operation is already in flight
   E_NO_ASYNC_OP   = -96                 ' No async operation to get result from
@@ -1328,9 +1397,7 @@ PUB cancelAsync() : result
 
 #endif  ' SD_INCLUDE_ASYNC
 
-CON ' ═══════════════════════════════════════════════════════════════════════════
-    ' SECTION 6: LEGACY
-    ' ═══════════════════════════════════════════════════════════════════════════
+CON ' ---- Legacy ----
 
 PUB fileName() : result | p_temp, idx
 '' Return the 8.3 filename of the currently opened file.
@@ -1397,9 +1464,7 @@ PUB syncDirCache()
   dir_sec_in_buf := -1
 
 
-CON ' ═══════════════════════════════════════════════════════════════════════════
-    ' SECTION 7: ERROR / DIAGNOSTIC
-    ' ═══════════════════════════════════════════════════════════════════════════
+CON ' ---- Error / Diagnostic ----
 
 PUB error() : status
 '' Get last error for this cog - returns the error code from the most recent operation.
@@ -1454,9 +1519,7 @@ PUB reportStackDepth() : depth
 
 #endif
 
-CON ' ═══════════════════════════════════════════════════════════════════════════
-    ' SECTION 8: RAW SECTOR ACCESS [SD_INCLUDE_RAW]
-    ' ═══════════════════════════════════════════════════════════════════════════
+CON ' ---- Raw Sector Access [SD_INCLUDE_RAW] ----
 
 #ifdef SD_INCLUDE_RAW
 
@@ -1657,9 +1720,7 @@ PUB readVBRRaw(p_buf) : result
 #endif
 
 
-CON ' ═══════════════════════════════════════════════════════════════════════════
-    ' SECTION 9: CARD REGISTERS [SD_INCLUDE_REGISTERS]
-    ' ═══════════════════════════════════════════════════════════════════════════
+CON ' ---- Card Registers [SD_INCLUDE_REGISTERS] ----
 
 #ifdef SD_INCLUDE_REGISTERS
 
@@ -1738,9 +1799,7 @@ PUB getOCR() : ocr
 #endif
 
 
-CON ' ═══════════════════════════════════════════════════════════════════════════
-    ' SECTION 10: SPEED CONTROL [SD_INCLUDE_SPEED] + CARD INFO
-    ' ═══════════════════════════════════════════════════════════════════════════
+CON ' ---- Speed Control [SD_INCLUDE_SPEED] + Card Info ----
 
 #ifdef SD_INCLUDE_SPEED
 
@@ -1851,9 +1910,7 @@ PUB isHighSpeedActive() : active
   active := spi_freq >= 50_000_000
 
 
-CON ' ═══════════════════════════════════════════════════════════════════════════
-    ' SECTION 11: DEBUG / DIAGNOSTICS [SD_INCLUDE_DEBUG]
-    ' ═══════════════════════════════════════════════════════════════════════════
+CON ' ---- Debug / Diagnostics [SD_INCLUDE_DEBUG] ----
 
 #ifdef SD_INCLUDE_DEBUG
 
@@ -2345,9 +2402,7 @@ PUB displayFAT(cluster) | fat_sector, local_buf[128]
 #endif
 
 
-CON ' ═══════════════════════════════════════════════════════════════════════════
-    ' SECTION A: WORKER INFRASTRUCTURE
-    ' ═══════════════════════════════════════════════════════════════════════════
+CON ' ---- Worker Infrastructure ----
 
 PRI set_error(error_code) : code_out
 ' Set error code for this cog - store error code in per-cog slot and return the code.
@@ -2746,9 +2801,7 @@ PRI send_command(op_cmd, p0, p1, p2, p3) : status
     lockrel(api_lock)
 
 
-CON ' ═══════════════════════════════════════════════════════════════════════════
-    ' SECTION B: HANDLE MANAGEMENT
-    ' ═══════════════════════════════════════════════════════════════════════════
+CON ' ---- Handle Management ----
 
 PRI allocateHandle() : handle | idx
 ' Find and allocate a free handle slot by searching the handle table.
@@ -2833,9 +2886,7 @@ PRI initHandleTable() | idx
     freeHandle(idx)
 
 
-CON ' ═══════════════════════════════════════════════════════════════════════════
-    ' SECTION C: STRUCT ACCESSORS
-    ' ═══════════════════════════════════════════════════════════════════════════
+CON ' ---- Struct Accessors ----
 
 PRI partType(^mbr_partition_t pPart) : value
 ' Get partition type code from MBR partition entry.
@@ -3047,9 +3098,7 @@ PRI dirEntSetModifyStamp(^dir_entry_t pEntry, stamp)
   pEntry.wrtDate := stamp >> 16
 
 
-CON ' ═══════════════════════════════════════════════════════════════════════════
-    ' SECTION D: SD WORKER OPERATIONS
-    ' ═══════════════════════════════════════════════════════════════════════════
+CON ' ---- SD Worker Operations ----
 
 PRI do_mount() : result | reserved, pPart, pVBR, pFSI, idx, p_entry, cluster, sector, sec_idx, next_cluster, found
 ' Internal mount operation - initializes card and reads filesystem structures.
@@ -4601,9 +4650,7 @@ PRI do_check_hs_capability() : capable | status[16]
 #endif
 
 
-CON ' ═══════════════════════════════════════════════════════════════════════════
-    ' SECTION K: SD DIRECTORY / FAT OPERATIONS
-    ' ═══════════════════════════════════════════════════════════════════════════
+CON ' ---- SD Directory / FAT Operations ----
 
 PRI searchDirectory(name_ptr) : result | p_temp, p_entry, idx, search_sec, jdx
 ' Search directory for a file/directory by name.
@@ -5332,9 +5379,7 @@ PRI isFileOpenAny(dir_sector, dir_offset) : result | handle
 #endif  ' SD_INCLUDE_DEFRAG
 
 
-CON ' ═══════════════════════════════════════════════════════════════════════════
-    ' SECTION L: SD CONVERSION HELPERS
-    ' ═══════════════════════════════════════════════════════════════════════════
+CON ' ---- SD Conversion Helpers ----
 
 PRI byte2clus(byte_address) : result
 ' Convert byte address to cluster number.
@@ -5363,9 +5408,7 @@ PRI clus2sec(cluster) : result
   result := (cluster - ROOT_CLUSTER) * sec_per_clus + root_sec
 
 
-CON ' ═══════════════════════════════════════════════════════════════════════════
-    ' SECTION M: SD SPI LAYER
-    ' ═══════════════════════════════════════════════════════════════════════════
+CON ' ---- SD SPI Layer ----
 
 PRI initSPIPins()
 ' Configure smart pins for SPI operation - initialize Smart Pins for high-speed SPI communication.

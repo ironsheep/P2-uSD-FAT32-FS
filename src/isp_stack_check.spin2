@@ -1,15 +1,13 @@
-{{ =================================================================================================
-
-   File....... isp_stack_check.spin2
-   Purpose.... Utility Object Providing Stack-overflow testing
-
-   Authors.... Stephen M. Moraco
-               -- see below for terms of use
-   E-mail..... stephen@ironsheep.biz
-   Started.... Sep 2022
-   Updated.... 29 Sep 2022
-
-================================================================================================= }}
+'' =========================================================================================
+''
+''   File....... isp_stack_check.spin2
+''   Purpose.... Utility Object Providing Stack-overflow testing
+''   Author..... Stephen M. Moraco
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... Sep 2022
+''   Updated.... 29 Sep 2022
+''
+'' =========================================================================================
 
 CON { ----- TEST Support ----- }
 

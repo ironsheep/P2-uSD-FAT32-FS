@@ -1,21 +1,22 @@
 {Spin2_v49}
-{{ =================================================================================================
+'' =========================================================================================
+''
+''   File....... SD_demo_shell.spin2
+''   Purpose.... Interactive command-line shell for SD card filesystem
+''   Author..... Stephen M Moraco
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... FEB 2026
+''   Updated.... 07 FEB 2026
+''
+'' =========================================================================================
 
-   File....... SD_demo_shell.spin2
-   Purpose.... Interactive command-line shell for SD card filesystem
-   Author..... Stephen M Moraco
-               -- see below for terms of use
-   E-mail..... stephen@ironsheep.biz
-   Started.... FEB 2026
-   Updated.... 07 FEB 2026
-
+{ Description:
    Interactive shell for exploring SD card filesystem operations.
    Supports both DOS-style (dir, type, del) and Unix-style (ls, cat, rm) commands.
 
    Connect via serial terminal at 2,000,000 baud (2 Mbit).
    Type 'help' for list of available commands.
-
-================================================================================================= }}
+}
 
 CON { timing }
 

@@ -1,14 +1,13 @@
-{{ =================================================================================================
-
-   File....... SD_format_card.spin2
-   Purpose.... Simple format utility runner for SD cards
-   Author..... Stephen M Moraco
-               -- see below for terms of use
-   E-mail..... stephen@ironsheep.biz
-   Started.... JAN 2026
-   Updated.... 01 MAR 2026
-
-================================================================================================= }}
+'' =========================================================================================
+''
+''   File....... SD_format_card.spin2
+''   Purpose.... Simple format utility runner for SD cards
+''   Author..... Stephen M Moraco
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... JAN 2026
+''   Updated.... 01 MAR 2026
+''
+'' =========================================================================================
 
 CON
 

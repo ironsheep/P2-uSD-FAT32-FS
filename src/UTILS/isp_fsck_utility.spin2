@@ -1,14 +1,16 @@
-{{ =================================================================================================
+'' =========================================================================================
+''
+''   File....... isp_fsck_utility.spin2
+''   Purpose.... Combined FSCK (repair) + Audit (read-only) library for FAT32 filesystems
+''   Author..... Stephen M Moraco
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... 21 FEB 2026
+''   Updated.... 26 FEB 2026
+''
+'' =========================================================================================
 
-   File....... isp_fsck_utility.spin2
-   Purpose.... Combined FSCK (repair) + Audit (read-only) library for FAT32 filesystems
-               Runs in a temporary cog, communicates via FIFO strings
-   Author..... Stephen M Moraco
-               -- see below for terms of use
-   E-mail..... stephen@ironsheep.biz
-   Started.... 21 FEB 2026
-   Updated.... 26 FEB 2026
-
+{ Description:
+   Runs in a temporary cog, communicates via FIFO strings.
    Reusable library that runs FSCK or Audit in a temporary cog.
    Output is sent via isp_string_fifo for the caller to display.
 
@@ -26,8 +28,7 @@
                  drain remaining, quit
      caller: fsck.stop()
      caller: sd.mount(cs, mosi, miso, sck)
-
-================================================================================================= }}
+}
 
 CON { suppress debug output }
 

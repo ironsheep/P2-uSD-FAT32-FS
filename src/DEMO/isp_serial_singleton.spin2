@@ -1,24 +1,22 @@
-{{ =================================================================================================
+'' =========================================================================================
+''
+''   File....... isp_serial_singleton.spin2
+''   Purpose.... True mode, unbuffered serial coms using smart pins
+''   Author..... Eric Smith, Chip Gracey, and Jon McPhalen
+''               (singleton adaptation by Stephen M. Moraco from older file jm_serial.spin2)
+''   E-mail..... stephen@ironsheep.biz
+''   Started....
+''   Updated.... 21 May 2021  by Stephen M. Moraco
+''
+'' =========================================================================================
 
-   File....... isp_serial_singleton.spin2
-   Purpose.... True mode, unbuffererd serial coms using smart pins
-               -- same features as original P1 FDS with minor enhancements/changes
-               -- VAR content moved to DAT so we could share this singleton object across all objects in demo
-   Authors.... Eric Smith, Chip Gracey, and Jon McPhalen
-               (singleton adaptation by Stephen M. Moraco from older file jm_serial.spin2)
-               -- see below for terms of use
-   E-mail..... stephen@ironsheep.biz
-   Started....
-   Updated.... 21 May 2021  by Stephen M. Moraco
-
-================================================================================================= }}
-
-{
+{ Description:
+   Same features as original P1 FDS with minor enhancements/changes.
+   VAR content moved to DAT so we could share this singleton object across all objects in demo.
 
    Note: The dec(), bin(), and hex() methods will no longer require the digits parameter as
          in older versions of FullDuplexSerial. Use fwdec(), fwbin(), and fwhex() for code that
          requires a specific field width.
-
 }
 
 

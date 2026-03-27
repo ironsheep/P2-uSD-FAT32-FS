@@ -1,17 +1,18 @@
-{{ =================================================================================================
+'' =========================================================================================
+''
+''   File....... SD_FAT32_fsck.spin2
+''   Purpose.... FAT32 filesystem check and repair utility (thin wrapper around isp_fsck_utility)
+''   Author..... Stephen M Moraco
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... FEB 2026
+''   Updated.... 21 FEB 2026
+''
+'' =========================================================================================
 
-   File....... SD_FAT32_fsck.spin2
-   Purpose.... FAT32 filesystem check and repair utility (thin wrapper around isp_fsck_utility)
-   Author..... Stephen M Moraco
-               -- see below for terms of use
-   E-mail..... stephen@ironsheep.biz
-   Started.... FEB 2026
-   Updated.... 21 FEB 2026
-
+{ Description:
    Thin wrapper that launches the FSCK library in a temporary cog
    and displays output via debug().
-
-================================================================================================= }}
+}
 
 CON
 

@@ -1,13 +1,15 @@
-{{ =================================================================================================
+'' =========================================================================================
+''
+''   File....... SD_performance_benchmark.spin2
+''   Purpose.... Performance benchmark for SD card driver - measures real-world throughput
+''   Author..... Stephen M Moraco
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... JAN 2026
+''   Updated.... 07 FEB 2026
+''
+'' =========================================================================================
 
-   File....... SD_performance_benchmark.spin2
-   Purpose.... Performance benchmark for SD card driver - measures real-world throughput
-   Author..... Stephen M Moraco
-               -- see below for terms of use
-   E-mail..... stephen@ironsheep.biz
-   Started.... JAN 2026
-   Updated.... 07 FEB 2026
-
+{ Description:
    Measures SD card driver performance across three levels:
 
      1. RAW SINGLE-SECTOR: readSectorsRaw/writeSectorsRaw with count=1
@@ -27,8 +29,7 @@
    Test sizes (embedded use cases):
      Write: 512B (log entry), 4KB (config), 32KB (data batch)
      Read:  4KB (config), 32KB (icon), 128KB (small image), 256KB (large image)
-
-================================================================================================= }}
+}
 
 CON
 
