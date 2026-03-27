@@ -79,7 +79,7 @@ VAR
   ' Random number generator state
   long  rand_seed
 
-  ' Test results per speed level
+  ' Test statuss per speed level
   long  speed_hz[NUM_SPEED_LEVELS]
   long  actual_hz[NUM_SPEED_LEVELS]
   long  delta_pct_x10[NUM_SPEED_LEVELS]                         ' Delta % x 10 for one decimal
@@ -101,8 +101,8 @@ VAR
   long  hs_mode_active
 
   ' Buffers
-  byte  read_buf[512]
-  byte  multi_buf[512 * 8]                                      ' For 8-sector reads
+  byte  read_buf[sd.SECTOR_SIZE]
+  byte  multi_buf[sd.SECTOR_SIZE * 8]                           ' For 8-sector reads
 
 DAT
   ' Speed levels to test (Hz) - from 18 MHz to 50 MHz
@@ -118,9 +118,9 @@ DAT
                 long  45_000_000
                 long  50_000_000
 
-PUB main() | result, level, max_passed_level
-'' Main entry point - runs SPI speed characterization tests.
-'' Tests SD card at various SPI clock speeds to find maximum reliable frequency.
+PUB main() | status, level, max_passed_level
+'' Run SPI speed characterization tests at various clock speeds to find maximum reliable frequency.
+''
 
   debug("##############################################")
   debug("#  SPI Speed Characterization (Read-Only)   #")
@@ -129,8 +129,8 @@ PUB main() | result, level, max_passed_level
 
   ' Mount card (use mount instead of initCardOnly for external header compatibility)
   debug("Mounting SD card...")
-  result := sd.mount(CS_PIN, MOSI_PIN, MISO_PIN, SCK_PIN)
-  if result < 0
+  status := sd.mount(CS_PIN, MOSI_PIN, MISO_PIN, SCK_PIN)
+  if status < 0
     debug("FATAL: Failed to mount SD card!")
     debug("END_CHARACTERIZATION")
     repeat  ' Halt
@@ -183,7 +183,7 @@ PUB main() | result, level, max_passed_level
   repeat  ' Halt
 
 PRI initSpeedArray() | idx
-' Copy test speeds from DAT table to VAR array and initialize results.
+' Copy test speeds from DAT table to VAR array and initialize statuss.
 
   ' Copy speeds from DAT to VAR array
   repeat idx from 0 to NUM_SPEED_LEVELS - 1
@@ -387,7 +387,7 @@ PRI testSpeedLevel(level) : passed | target_hz, ok, crc_err, timeout, delta
 
   level_passed[level] := passed
 
-PRI runSingleSectorTest(iterations, p_ok, p_crc_err, p_timeout) | iter, sector, result, recv_crc, calc_crc
+PRI runSingleSectorTest(iterations, p_ok, p_crc_err, p_timeout) | iter, sector, status, recv_crc, calc_crc
 ' Run single-sector read tests with CRC verification.
 '
 ' @param iterations - Number of read iterations
@@ -404,9 +404,9 @@ PRI runSingleSectorTest(iterations, p_ok, p_crc_err, p_timeout) | iter, sector, 
     sector := getRandomTestSector()
 
     ' Read sector (returns SUCCESS=0 on success, negative on failure)
-    result := sd.readSectorRaw(sector, @read_buf)
+    status := sd.readSectorRaw(sector, @read_buf)
 
-    if result == sd.SUCCESS
+    if status == sd.SUCCESS
       ' Read succeeded - check CRC match
       recv_crc := sd.getLastReceivedCRC()
       calc_crc := sd.getLastCalculatedCRC()
@@ -423,7 +423,7 @@ PRI runSingleSectorTest(iterations, p_ok, p_crc_err, p_timeout) | iter, sector, 
     if (iter // 2500) == 0 and iter > 0
       debug("      Progress: ", udec_(iter))
 
-PRI runMultiSectorTest(iterations, sectors_per_read, p_ok, p_crc_err, p_timeout) | iter, start_sector, result
+PRI runMultiSectorTest(iterations, sectors_per_read, p_ok, p_crc_err, p_timeout) | iter, start_sector, status
 ' Run multi-sector read tests (CMD18 bulk transfers).
 '
 ' @param iterations - Number of multi-sector read iterations
@@ -443,13 +443,13 @@ PRI runMultiSectorTest(iterations, sectors_per_read, p_ok, p_crc_err, p_timeout)
       start_sector := TEST_SECTOR_BASE
 
     ' Read multiple sectors (returns count of sectors read)
-    result := sd.readSectorsRaw(start_sector, sectors_per_read, @multi_buf)
+    status := sd.readSectorsRaw(start_sector, sectors_per_read, @multi_buf)
 
-    if result == sectors_per_read
+    if status == sectors_per_read
       long[p_ok] += sectors_per_read
-    elseif result > 0
-      long[p_ok] += result
-      long[p_crc_err] += (sectors_per_read - result)
+    elseif status > 0
+      long[p_ok] += status
+      long[p_crc_err] += (sectors_per_read - status)
     else
       long[p_timeout] += sectors_per_read
 

@@ -30,7 +30,6 @@ CON
     SD_MISO = 58
     SD_SCK  = 61
 
-    MBR_SIGNATURE = $AA55
 
 ' Enable register access for CID/SCR/SD Status reads
 #ifdef __SPINTOOLS__
@@ -93,18 +92,15 @@ DAT
     fsUnknown     BYTE    "???", 0
 
 
-PUB go() | result
+PUB go() | status
 '' Mount SD card and display two-line identification summary.
 
-    result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if result < 0
-        debug("mount() failed: error ", sdec_(result))
-        debug("END_SESSION")
-        return
-
-    displayCardID()
-
-    sd.unmount()
+    status := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    if status < 0
+        debug("mount() failed: error ", sdec_(status))
+    else
+        displayCardID()
+        sd.unmount()
     debug("END_SESSION")
 
 
@@ -169,30 +165,33 @@ PRI getSDSpecVersion(^sd.scr_t p_scr) : p_version | sdSpec, spec3, spec4, specX
     specX := ((p_scr.sdSpec3Ext & $03) << 2) | ((p_scr.sdSpecXLo >> 6) & $03)
 
     if sdSpec < 2
-        return @"SD 1.x"
-    if spec3 == 0
-        return @"SD 2.0"
-    if spec4 == 0
-        return @"SD 3.x"
-    if specX == 0
-        return @"SD 4.x"
-    if specX == 1
-        return @"SD 5.x"
-    if specX == 2
-        return @"SD 6.x"
-    return @"SD >6.x"
+        p_version := @"SD 1.x"
+    elseif spec3 == 0
+        p_version := @"SD 2.0"
+    elseif spec4 == 0
+        p_version := @"SD 3.x"
+    elseif specX == 0
+        p_version := @"SD 4.x"
+    elseif specX == 1
+        p_version := @"SD 5.x"
+    elseif specX == 2
+        p_version := @"SD 6.x"
+    else
+        p_version := @"SD >6.x"
 
 
 PRI lookupMID(mid) : p_name | pCursor, entryMID
 ' Look up manufacturer name for a CID Manufacturer ID byte.
 
+    p_name := @"Unknown"
     pCursor := @midTable
     repeat
         entryMID := BYTE[pCursor]
         if entryMID == $FF
-            return @"Unknown"
+            quit
         if entryMID == mid
-            return pCursor + 1
+            p_name := pCursor + 1
+            quit
         pCursor++
         repeat while BYTE[pCursor] <> 0
             pCursor++
@@ -203,37 +202,38 @@ PRI getCardType(ocr, sizeMB) : p_type
 ' Classify card as SDSC, SDHC, or SDXC based on OCR CCS bit and capacity.
 
     if (ocr & (1 << 30)) == 0
-        return @ctSDSC
-    if sizeMB > 32768
-        return @ctSDXC
-    return @ctSDHC
+        p_type := @ctSDSC
+    elseif sizeMB > 32768
+        p_type := @ctSDXC
+    else
+        p_type := @ctSDHC
 
 
 PRI detectFilesystem() : p_fsName | pType
 ' Detect filesystem type from MBR partition type byte.
 
     sd.readSectorRaw(0, @sect_buf)
-    if WORD[@sect_buf + $1FE] <> MBR_SIGNATURE
-        return @fsUnknown
-
-    pType := sect_buf[$1C2]
-    case pType
-        $00 : return @fsEmpty
-        $01 : return @fsFAT12
-        $04, $06, $0E : return @fsFAT16
-        $0B, $0C : return @fsFAT32
-        $07 : return @fsExFAT
-        $83 : return @fsLinux
-        $EE : return @fsGPT
-        other : return @fsUnknown
+    if WORD[@sect_buf + sd.BOOT_SIG_OFFSET] <> sd.BOOT_SIGNATURE
+        p_fsName := @fsUnknown
+    else
+        pType := sect_buf[sd.MBR_PART_TYPE_OFFSET]
+        case pType
+            $00 : p_fsName := @fsEmpty
+            $01 : p_fsName := @fsFAT12
+            $04, $06, $0E : p_fsName := @fsFAT16
+            $0B, $0C : p_fsName := @fsFAT32
+            $07 : p_fsName := @fsExFAT
+            $83 : p_fsName := @fsLinux
+            $EE : p_fsName := @fsGPT
+            other : p_fsName := @fsUnknown
 
 
 PRI readOEMName() | partStart, idx
 ' Read OEM name from VBR of first partition. Result stored in oemBuf.
 
     sd.readSectorRaw(0, @sect_buf)
-    if WORD[@sect_buf + $1FE] == MBR_SIGNATURE
-        partStart := LONG[@sect_buf + $1C6]
+    if WORD[@sect_buf + sd.BOOT_SIG_OFFSET] == sd.BOOT_SIGNATURE
+        partStart := LONG[@sect_buf + sd.MBR_PART_LBA_OFFSET]
         if partStart > 0
             sd.readSectorRaw(partStart, @sect_buf)
             bytemove(@oemBuf, @sect_buf + 3, 8)
@@ -252,12 +252,12 @@ PRI decodeSpeedClass(classByte) : speedClass
 ' Decode SD Status SPEED_CLASS byte to integer speed class.
 
     case classByte
-        $00 : return 0
-        $01 : return 2
-        $02 : return 4
-        $03 : return 6
-        $04 : return 10
-        other : return 0
+        $00 : speedClass := 0
+        $01 : speedClass := 2
+        $02 : speedClass := 4
+        $03 : speedClass := 6
+        $04 : speedClass := 10
+        other : speedClass := 0
 
 con { license }
 

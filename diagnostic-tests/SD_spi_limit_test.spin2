@@ -34,10 +34,14 @@ CON
      'SD_MISO = 18
      'SD_SCK  = 21
 
-     SECTOR_SIZE      = 512
      WRITE_SECTOR_BASE = 200_200                 ' Safe write area
      MULTI_COUNT      = 8                        ' 8 sectors per round-trip
      NUM_ITERS        = 10                       ' Write-read-verify iterations
+     MIN_HP           = 4                        ' Minimum SPI half-period (hardware floor)
+     HP_ROUND_UP      = 49_999_999               ' Rounding constant for 50 MHz HP calculation
+     HP_DIVISOR       = 50_000_000               ' SPI HP divisor (50 MHz base)
+     PATTERN_SECTOR   = 41                       ' Pattern multiplier for sector index
+     PATTERN_ITER     = 67                       ' Pattern multiplier for iteration
 
 #ifdef __SPINTOOLS__
 #define SD_INCLUDE_RAW
@@ -65,11 +69,11 @@ OBJ
     utils : "isp_rt_utilities"
 
 VAR
-    BYTE    writeBuffer[MULTI_COUNT * SECTOR_SIZE]
-    BYTE    readBuffer[MULTI_COUNT * SECTOR_SIZE]
+    BYTE    writeBuffer[MULTI_COUNT * sd.SECTOR_SIZE]
+    BYTE    readBuffer[MULTI_COUNT * sd.SECTOR_SIZE]
     BYTE    readBuffer_guard[16]
 
-PUB go() | result, hp, actualHz, errors, iter, idx, sector, written, readCt, byteErrs
+PUB go() | status, hp, actualHz, errors, iter, idx, sector, written, readCt, byteErrs
 '' Test write-read-verify at max SPI speed for this SYSCLK.
 '' Calls setSPISpeed(25_000_000) -- the driver computes hp from clkfreq.
 '' At non-multiple-of-50MHz SYSCLK, hp rounds up and actual SPI < 25 MHz.
@@ -80,8 +84,8 @@ PUB go() | result, hp, actualHz, errors, iter, idx, sector, written, readCt, byt
     debug("  SYSCLK=", udec_(clkfreq))
 
     ' Mount
-    result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if result < 0
+    status := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    if status < 0
         debug("  MOUNT_FAIL")
         debug("END_SESSION")
         return
@@ -93,9 +97,9 @@ PUB go() | result, hp, actualHz, errors, iter, idx, sector, written, readCt, byt
     sd.setSPISpeed(25_000_000)
 
     ' Report what we actually got
-    hp := (clkfreq + 49_999_999) / 50_000_000
-    if hp < 4
-        hp := 4
+    hp := (clkfreq + HP_ROUND_UP) / HP_DIVISOR
+    if hp < MIN_HP
+        hp := MIN_HP
     actualHz := clkfreq / (hp * 2)
 
     debug("  hp=", udec_(hp), " actual=", udec_(actualHz), " Hz")
@@ -106,8 +110,8 @@ PUB go() | result, hp, actualHz, errors, iter, idx, sector, written, readCt, byt
         sector := WRITE_SECTOR_BASE + (iter * MULTI_COUNT)
 
         ' Fill write buffer
-        repeat idx from 0 to (MULTI_COUNT * SECTOR_SIZE) - 1
-            writeBuffer[idx] := ((idx / SECTOR_SIZE) * 41 + (idx // SECTOR_SIZE) + iter * 67) & $FF
+        repeat idx from 0 to (MULTI_COUNT * sd.SECTOR_SIZE) - 1
+            writeBuffer[idx] := ((idx / sd.SECTOR_SIZE) * PATTERN_SECTOR + (idx // sd.SECTOR_SIZE) + iter * PATTERN_ITER) & $FF
 
         ' Write
         written := sd.writeSectorsRaw(sector, MULTI_COUNT, @writeBuffer)
@@ -116,7 +120,7 @@ PUB go() | result, hp, actualHz, errors, iter, idx, sector, written, readCt, byt
             next
 
         ' Clear and read
-        bytefill(@readBuffer, $00, MULTI_COUNT * SECTOR_SIZE)
+        bytefill(@readBuffer, $00, MULTI_COUNT * sd.SECTOR_SIZE)
         utils.initGuard(@readBuffer_guard)
         readCt := sd.readSectorsRaw(sector, MULTI_COUNT, @readBuffer)
         utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
@@ -127,7 +131,7 @@ PUB go() | result, hp, actualHz, errors, iter, idx, sector, written, readCt, byt
 
         ' Verify
         byteErrs := 0
-        repeat idx from 0 to (MULTI_COUNT * SECTOR_SIZE) - 1
+        repeat idx from 0 to (MULTI_COUNT * sd.SECTOR_SIZE) - 1
             if readBuffer[idx] <> writeBuffer[idx]
                 byteErrs++
         if byteErrs > 0

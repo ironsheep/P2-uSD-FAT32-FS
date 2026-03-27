@@ -42,6 +42,9 @@ DOCs/process/
 # Release staging (local only)
 RELEASE-CHECK/
 
+# MCP config (host-specific paths)
+.mcp.json
+
 # Todo MCP data (local only)
 .todo-mcp/
 
@@ -228,3 +231,6 @@ tools/archive/
 USER-REPORTs/
 *.gz
 DOCs/procedures/
+
+# Devcontainer local overrides (user-specific mounts)
+.devcontainer/docker-compose.override.yml

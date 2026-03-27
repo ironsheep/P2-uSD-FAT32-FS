@@ -70,7 +70,7 @@ nonexistent     BYTE    "NOEXIST.TXT", 0
 
 readBuffer      BYTE    0[128]
 readBuffer_guard BYTE   0[16]
-sectorBuffer    BYTE    0[512]        ' For reading raw sectors during diagnostics
+sectorBuffer    BYTE    0[sd.SECTOR_SIZE]        ' For reading raw sectors during diagnostics
 sectorBuffer_guard BYTE 0[16]
 
 PUB go() | result, handle, h1, h2, h3, fileSize, bytesWritten, bytesRead, root_sec, idx, d_sec, d_buftype, d_token, d_b0, d_b1, d_b2, d_b3, d_pbuf, d_bef0, d_bef1, d_bef2, d_bef3, d_spi
@@ -118,7 +118,7 @@ PUB go() | result, handle, h1, h2, h3, fileSize, bytesWritten, bytesRead, root_s
             3: root_sec := 100
             4: root_sec := 1000
             5: root_sec := sd.debugGetRootSec()
-        bytefill(@sectorBuffer, $EE, 512)
+        bytefill(@sectorBuffer, $EE, sd.SECTOR_SIZE)
         utils.initGuard(@sectorBuffer_guard)
         result := sd.readSectorRaw(root_sec, @sectorBuffer)
         utils.checkGuard(@sectorBuffer_guard, @"sectorBuffer guard")
@@ -131,7 +131,7 @@ PUB go() | result, handle, h1, h2, h3, fileSize, bytesWritten, bytesRead, root_s
             debug("    DIAG: p_buf=$", uhex_long_(d_pbuf), " BEFORE: $", uhex_byte_(d_bef0), " $", uhex_byte_(d_bef1), " $", uhex_byte_(d_bef2), " $", uhex_byte_(d_bef3))
             debug("    DIAG: STREAMER: $", uhex_byte_(d_b0), " $", uhex_byte_(d_b1), " $", uhex_byte_(d_b2), " $", uhex_byte_(d_b3), " spi_period=", udec_(d_spi))
             ' Now read same sector using slow byte-by-byte method for comparison
-            bytefill(@sectorBuffer, $DD, 512)
+            bytefill(@sectorBuffer, $DD, sd.SECTOR_SIZE)
             result := sd.debugReadSectorSlow(root_sec, @sectorBuffer)
             debug("    DIAG: SLOW READ: $", uhex_byte_(sectorBuffer[0]), " $", uhex_byte_(sectorBuffer[1]), " $", uhex_byte_(sectorBuffer[2]), " $", uhex_byte_(sectorBuffer[3]), " result=", sdec_(result))
             ' Dump first 64 bytes (2 directory entries) to understand structure
@@ -173,7 +173,7 @@ PUB go() | result, handle, h1, h2, h3, fileSize, bytesWritten, bytesRead, root_s
     ' DIAGNOSTIC: Print buffer addresses
     debug("  DIAG: @sectorBuffer = $", uhex_long_(@sectorBuffer))
     debug("  DIAG: Testing basic sector read (MBR)...")
-    bytefill(@sectorBuffer, $AA, 512)
+    bytefill(@sectorBuffer, $AA, sd.SECTOR_SIZE)
     utils.initGuard(@sectorBuffer_guard)
     result := sd.readSectorRaw(0, @sectorBuffer)
     utils.checkGuard(@sectorBuffer_guard, @"sectorBuffer guard")
@@ -186,7 +186,7 @@ PUB go() | result, handle, h1, h2, h3, fileSize, bytesWritten, bytesRead, root_s
 
     ' Try reading sector 1 (partition table area) to see if issue is sector-specific
     debug("  DIAG: Reading sector 1...")
-    bytefill(@sectorBuffer, $CC, 512)
+    bytefill(@sectorBuffer, $CC, sd.SECTOR_SIZE)
     utils.initGuard(@sectorBuffer_guard)
     result := sd.readSectorRaw(1, @sectorBuffer)
     utils.checkGuard(@sectorBuffer_guard, @"sectorBuffer guard")
@@ -195,7 +195,7 @@ PUB go() | result, handle, h1, h2, h3, fileSize, bytesWritten, bytesRead, root_s
     ' Now read root directory sector
     root_sec := sd.debugGetRootSec()
     debug("  DIAG: root_sec = ", udec_(root_sec), " ($", uhex_long_(root_sec), ")")
-    bytefill(@sectorBuffer, $BB, 512)
+    bytefill(@sectorBuffer, $BB, sd.SECTOR_SIZE)
     utils.initGuard(@sectorBuffer_guard)
     result := sd.readSectorRaw(root_sec, @sectorBuffer)
     utils.checkGuard(@sectorBuffer_guard, @"sectorBuffer guard")
@@ -417,6 +417,7 @@ PUB go() | result, handle, h1, h2, h3, fileSize, bytesWritten, bytesRead, root_s
     debug("  Created test directory RTDIR1, result=", sdec_(result))
 
     utils.startTest(@"openFileRead() on directory returns E_NOT_A_FILE")
+    ' EXPECTED ERROR: opening a directory path as a file should fail because directories are not regular files
     handle := sd.openFileRead(@testdir1)
     utils.evaluateSingleValue(handle, @"openFileRead(dir)", sd.E_NOT_A_FILE)
 

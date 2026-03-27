@@ -38,7 +38,7 @@ CON
 OBJ
     fmt : "isp_format_utility"
 
-PUB go() | result
+PUB go() | status
 '' Main entry point - formats SD card with label "P2-BENCH".
 '' WARNING: This will ERASE ALL DATA on the card!
 
@@ -51,9 +51,9 @@ PUB go() | result
     debug(" ")
 
     debug("Formatting card with label 'P2-BENCH'...")
-    result := fmt.formatWithLabel(SD_CS, SD_MOSI, SD_MISO, SD_SCK, @label)
+    status := fmt.formatWithLabel(SD_CS, SD_MOSI, SD_MISO, SD_SCK, @label)
 
-    if result
+    if status
         debug(" ")
         debug("FORMAT SUCCESSFUL!")
     else

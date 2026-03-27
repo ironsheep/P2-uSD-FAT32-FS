@@ -41,13 +41,15 @@ CON
      'SD_SCK  = 21
 
      ' Test parameters
-     SECTOR_SIZE      = 512
      READ_SECTOR_BASE = 1_000                    ' Read from early data area
      WRITE_SECTOR_BASE = 200_100                 ' Write to safe area (above multiblock tests)
      READS_PER_SPEED  = 50                       ' Single-sector reads per speed level
      MULTI_READS      = 10                       ' Multi-sector read iterations per speed
      MULTI_COUNT      = 8                        ' Sectors per multi-sector read
      WRITE_VERIFY_ITERS = 5                      ' Write-read-verify iterations per speed
+     MIN_HP           = 4                        ' Minimum SPI half-period (hardware floor)
+     PATTERN_SECTOR   = 37                       ' Pattern multiplier for sector index
+     PATTERN_ITER     = 53                       ' Pattern multiplier for iteration
 
      ' Speed levels: 15 MHz to 25 MHz in 1 MHz steps
      NUM_SPEEDS       = 11
@@ -101,16 +103,16 @@ speed_table     long    15_000_000               ' 15 MHz
 results         byte    0[NUM_SPEEDS]
 
 ' Sector buffer for single reads
-sectorBuffer    byte    0[SECTOR_SIZE]
+sectorBuffer    byte    0[sd.SECTOR_SIZE]
 sectorBuffer_guard byte 0[16]
 
 ' Multi-sector buffer (8 sectors = 4KB)
-multiBuffer     byte    0[MULTI_COUNT * SECTOR_SIZE]
+multiBuffer     byte    0[MULTI_COUNT * sd.SECTOR_SIZE]
 multiBuffer_guard byte  0[16]
 
 ' Write-verify buffers
-writeBuffer     byte    0[MULTI_COUNT * SECTOR_SIZE]
-readBackBuffer  byte    0[MULTI_COUNT * SECTOR_SIZE]
+writeBuffer     byte    0[MULTI_COUNT * sd.SECTOR_SIZE]
+readBackBuffer  byte    0[MULTI_COUNT * sd.SECTOR_SIZE]
 readBackBuffer_guard byte 0[16]
 
 PUB go() | result, speedIdx, testFreq, spiFreq, passCount, failCount, actualHz, hp, p1, p2, p3
@@ -151,8 +153,8 @@ PUB go() | result, speedIdx, testFreq, spiFreq, passCount, failCount, actualHz, 
 
         ' Calculate expected half-period and actual frequency
         hp := (clkfreq + (testFreq * 2) - 1) / (testFreq * 2)
-        if hp < 4
-            hp := 4
+        if hp < MIN_HP
+            hp := MIN_HP
         actualHz := clkfreq / (hp * 2)
 
         debug(" ")
@@ -190,8 +192,8 @@ PUB go() | result, speedIdx, testFreq, spiFreq, passCount, failCount, actualHz, 
     repeat speedIdx from 0 to NUM_SPEEDS - 1
         testFreq := long[@speed_table][speedIdx]
         hp := (clkfreq + (testFreq * 2) - 1) / (testFreq * 2)
-        if hp < 4
-            hp := 4
+        if hp < MIN_HP
+            hp := MIN_HP
         actualHz := clkfreq / (hp * 2)
 
         p1 := results[speedIdx] & 1
@@ -287,8 +289,8 @@ PRI runWriteVerify(speedIdx) : passed | iter, idx, sector, written, readCt, erro
         sector := WRITE_SECTOR_BASE + (iter * MULTI_COUNT)
 
         ' Fill write buffer with unique pattern per iteration
-        repeat idx from 0 to (MULTI_COUNT * SECTOR_SIZE) - 1
-            writeBuffer[idx] := ((idx / SECTOR_SIZE) * 37 + (idx // SECTOR_SIZE) + iter * 53) & $FF
+        repeat idx from 0 to (MULTI_COUNT * sd.SECTOR_SIZE) - 1
+            writeBuffer[idx] := ((idx / sd.SECTOR_SIZE) * PATTERN_SECTOR + (idx // sd.SECTOR_SIZE) + iter * PATTERN_ITER) & $FF
 
         ' Write 8 sectors
         written := sd.writeSectorsRaw(sector, MULTI_COUNT, @writeBuffer)
@@ -298,7 +300,7 @@ PRI runWriteVerify(speedIdx) : passed | iter, idx, sector, written, readCt, erro
             next
 
         ' Clear read buffer
-        bytefill(@readBackBuffer, $00, MULTI_COUNT * SECTOR_SIZE)
+        bytefill(@readBackBuffer, $00, MULTI_COUNT * sd.SECTOR_SIZE)
 
         ' Read back 8 sectors
         utils.initGuard(@readBackBuffer_guard)
@@ -311,7 +313,7 @@ PRI runWriteVerify(speedIdx) : passed | iter, idx, sector, written, readCt, erro
             next
 
         ' Compare every byte
-        repeat idx from 0 to (MULTI_COUNT * SECTOR_SIZE) - 1
+        repeat idx from 0 to (MULTI_COUNT * sd.SECTOR_SIZE) - 1
             if readBackBuffer[idx] <> writeBuffer[idx]
                 errors++
                 if errors <= 3

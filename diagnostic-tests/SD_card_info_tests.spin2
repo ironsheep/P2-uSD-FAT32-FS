@@ -43,7 +43,6 @@ CON
     'SD_MISO = 18
     'SD_SCK  = 21
 
-    MBR_SIGNATURE = $AA55
 
 ' Enable full driver features for register reads
 #ifdef __SPINTOOLS__
@@ -62,7 +61,7 @@ OBJ
 DAT
 
     ' Sector buffer for MBR/VBR reads
-    sect_buf      BYTE    0[512]
+    sect_buf      BYTE    0[sd.SECTOR_SIZE]
     sect_buf_guard BYTE   0[16]
 
     ' SD Status buffer (ACMD13 - 64 bytes)
@@ -267,8 +266,8 @@ PRI testStructAccess() | sd.cid_t cid, sd.scr_t scr, result, ocr, sectors, spiHz
     utils.initGuard(@sect_buf_guard)
     result := sd.readSectorRaw(0, @sect_buf)
     utils.checkGuard(@sect_buf_guard, @"sect_buf guard")
-    if WORD[@sect_buf + $1FE] == MBR_SIGNATURE
-        debug("  MBR: valid, type=$", uhex_byte_(sect_buf[$1C2]), " start=", udec_(LONG[@sect_buf + $1C6]))
+    if WORD[@sect_buf + sd.BOOT_SIG_OFFSET] == sd.BOOT_SIGNATURE
+        debug("  MBR: valid, type=$", uhex_byte_(sect_buf[sd.MBR_PART_TYPE_OFFSET]), " start=", udec_(LONG[@sect_buf + sd.MBR_PART_LBA_OFFSET]))
         pass_count++
     else
         debug("  MBR: INVALID signature")
@@ -457,15 +456,15 @@ PRI detectFilesystem() : p_fsName | pType
 ' Detect the filesystem type by reading MBR sector 0 and examining partition type byte.
 ' Returns a pointer to a filesystem name string (FAT12, FAT16, FAT32, exFAT, etc.).
 ' @returns p_fsName - pointer to filesystem type name string
-' @local pType - partition type byte from MBR offset $1C2
+' @local pType - partition type byte from MBR_PART_TYPE_OFFSET
 
     utils.initGuard(@sect_buf_guard)
     sd.readSectorRaw(0, @sect_buf)
     utils.checkGuard(@sect_buf_guard, @"sect_buf guard")
-    if WORD[@sect_buf + $1FE] <> MBR_SIGNATURE
+    if WORD[@sect_buf + sd.BOOT_SIG_OFFSET] <> sd.BOOT_SIGNATURE
         return @fsUnknown
 
-    pType := sect_buf[$1C2]
+    pType := sect_buf[sd.MBR_PART_TYPE_OFFSET]
     case pType
         $00 : return @fsEmpty
         $01 : return @fsFAT12
@@ -487,8 +486,8 @@ PRI readOEMName() | partStart, idx
     utils.initGuard(@sect_buf_guard)
     sd.readSectorRaw(0, @sect_buf)
     utils.checkGuard(@sect_buf_guard, @"sect_buf guard")
-    if WORD[@sect_buf + $1FE] == MBR_SIGNATURE
-        partStart := LONG[@sect_buf + $1C6]
+    if WORD[@sect_buf + sd.BOOT_SIG_OFFSET] == sd.BOOT_SIGNATURE
+        partStart := LONG[@sect_buf + sd.MBR_PART_LBA_OFFSET]
         if partStart > 0
             utils.initGuard(@sect_buf_guard)
             sd.readSectorRaw(partStart, @sect_buf)

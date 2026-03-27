@@ -76,7 +76,7 @@ readBuffer2_guard BYTE  0[16]
 beforeContent   BYTE    "BEFORE", 0
 afterContent    BYTE    "AFTER", 0
 
-PUB go() | result, handle, h0, h1, h2, bytesRead, bytesRead2, crcBaseline
+PUB go() | result, handle, handle0, handle1, handle2, bytesRead, bytesRead2, crcBaseline
 '' Main entry point for recovery scenario regression tests
 
     debug(" ")
@@ -283,48 +283,48 @@ PUB go() | result, handle, h0, h1, h2, bytesRead, bytesRead2, crcBaseline
     sd.clearTestErrors()
 
     ' Open three files
-    h0 := sd.openFileRead(@recFile1)
-    h1 := sd.openFileRead(@recFile2)
-    h2 := sd.openFileRead(@recFile3)
+    handle0 := sd.openFileRead(@recFile1)
+    handle1 := sd.openFileRead(@recFile2)
+    handle2 := sd.openFileRead(@recFile3)
 
-    ' Read h0 successfully
+    ' Read handle0 successfully
     bytefill(@readBuffer, 0, BUFFER_SIZE)
     utils.initGuard(@readBuffer_guard)
-    bytesRead := sd.readHandle(h0, @readBuffer, BUFFER_SIZE)
+    bytesRead := sd.readHandle(handle0, @readBuffer, BUFFER_SIZE)
     utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
     result := utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $31)
-    utils.evaluateSubBool(result, @"h0 read correct", true)
+    utils.evaluateSubBool(result, @"handle0 read correct", true)
 
-    ' Force error on h1
+    ' Force error on handle1
     sd.setTestForceReadError(MAX_READ_CRC_RETRIES)
-    bytesRead := sd.readHandle(h1, @readBuffer, BUFFER_SIZE)
-    debug("  h1 read after force error: ", sdec_(bytesRead))
+    bytesRead := sd.readHandle(handle1, @readBuffer, BUFFER_SIZE)
+    debug("  handle1 read after force error: ", sdec_(bytesRead))
 
-    ' Clear errors, verify h0 and h2 still work
+    ' Clear errors, verify handle0 and handle2 still work
     sd.clearTestErrors()
-    ' h0 is at position 512 (already read first sector), read second sector
+    ' handle0 is at position 512 (already read first sector), read second sector
     bytefill(@readBuffer, 0, BUFFER_SIZE)
     utils.initGuard(@readBuffer_guard)
-    bytesRead := sd.readHandle(h0, @readBuffer, BUFFER_SIZE)
+    bytesRead := sd.readHandle(handle0, @readBuffer, BUFFER_SIZE)
     utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
-    utils.evaluateSubValue(bytesRead, @"h0 2nd read OK", BUFFER_SIZE)
+    utils.evaluateSubValue(bytesRead, @"handle0 2nd read OK", BUFFER_SIZE)
 
     bytefill(@readBuffer2, 0, BUFFER_SIZE)
     utils.initGuard(@readBuffer2_guard)
-    bytesRead2 := sd.readHandle(h2, @readBuffer2, BUFFER_SIZE)
+    bytesRead2 := sd.readHandle(handle2, @readBuffer2, BUFFER_SIZE)
     utils.checkGuard(@readBuffer2_guard, @"readBuffer2 guard")
     result := utils.verifyBufferPattern(@readBuffer2, BUFFER_SIZE, $53)
-    utils.evaluateSubBool(result, @"h2 read correct", true)
+    utils.evaluateSubBool(result, @"handle2 read correct", true)
 
-    sd.closeFileHandle(h0)
-    sd.closeFileHandle(h1)
-    sd.closeFileHandle(h2)
+    sd.closeFileHandle(handle0)
+    sd.closeFileHandle(handle1)
+    sd.closeFileHandle(handle2)
     utils.showSubTestResults()
 
     ' Test 7: Handle reuse after error close
     utils.startTest(@"Handle reuse after error close")
     sd.clearTestErrors()
-    ' h1 was closed above, open a new file in freed slot
+    ' handle1 was closed above, open a new file in freed slot
     handle := sd.openFileRead(@recFile2)
     if handle >= 0
         bytefill(@readBuffer, 0, BUFFER_SIZE)

@@ -33,7 +33,6 @@ CON
      'SD_MISO = 18
      'SD_SCK  = 21
 
-     BUFFER_SIZE = 512
      LARGE_BUFFER_SIZE = 2048
 
 ' Enable raw sector access for cluster boundary tests (VBR read)
@@ -69,13 +68,13 @@ testOnes        BYTE    "RTONES.BIN", 0
 testCluster     BYTE    "RTCLUST.BIN", 0
 
 ' Buffers
-writeBuffer     BYTE    0[BUFFER_SIZE]
-readBuffer      BYTE    0[BUFFER_SIZE]
+writeBuffer     BYTE    0[sd.SECTOR_SIZE]
+readBuffer      BYTE    0[sd.SECTOR_SIZE]
 readBuffer_guard BYTE   0[16]
 largeWriteBuf   BYTE    0[LARGE_BUFFER_SIZE]
 largeReadBuf    BYTE    0[LARGE_BUFFER_SIZE]
 largeReadBuf_guard BYTE 0[16]
-vbrBuf          BYTE    0[512]
+vbrBuf          BYTE    0[sd.SECTOR_SIZE]
 
 ' Test strings
 testStr1        BYTE    "Hello, World!", 0
@@ -358,7 +357,7 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize, secPerClus, c
         utils.evaluateSubValue(result, @"tell after write 256", 256)
         sd.writeHandle(handle, @writeBuffer, 256)
         result := sd.tellHandle(handle)
-        utils.evaluateSubValue(result, @"tell after write 512", 512)
+        utils.evaluateSubValue(result, @"tell after write 512", sd.SECTOR_SIZE)
         sd.closeFileHandle(handle)
     utils.showSubTestResults()
     utils.setCheckCountPerTest(1)
@@ -380,8 +379,8 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize, secPerClus, c
     utils.setCheckCountPerTest(3)
     handle := sd.openFileRead(@testBoundary)  ' 512-byte file from tellHandle test
     if handle >= 0
-        bytesRead := sd.readHandle(handle, @readBuffer, 512)
-        utils.evaluateSubValue(bytesRead, @"read all 512", 512)
+        bytesRead := sd.readHandle(handle, @readBuffer, sd.SECTOR_SIZE)
+        utils.evaluateSubValue(bytesRead, @"read all 512", sd.SECTOR_SIZE)
         result := sd.eofHandle(handle)
         utils.evaluateSubBool(result <> 0, @"eofHandle at EOF", true)
         bytesRead := sd.readHandle(handle, @readBuffer, 1)
@@ -464,7 +463,7 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize, secPerClus, c
     if handle >= 0
         fileSize := sd.fileSizeHandle(handle)
         utils.evaluateSubValue(fileSize, @"fileSize 511 bytes", 511)
-        bytefill(@readBuffer, 0, 512)
+        bytefill(@readBuffer, 0, sd.SECTOR_SIZE)
         utils.initGuard(@readBuffer_guard)
         bytesRead := sd.readHandle(handle, @readBuffer, 511)
         utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
@@ -478,20 +477,20 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize, secPerClus, c
     sd.deleteFile(@testBoundary)
     handle := sd.createFileNew(@testBoundary)
     if handle >= 0
-        utils.fillBufferWithPattern(@writeBuffer, 512, $B0)
-        sd.writeHandle(handle, @writeBuffer, 512)
+        utils.fillBufferWithPattern(@writeBuffer, sd.SECTOR_SIZE, $B0)
+        sd.writeHandle(handle, @writeBuffer, sd.SECTOR_SIZE)
         fileSize := sd.fileSizeHandle(handle)
-        utils.evaluateSubValue(fileSize, @"fileSize after write 512", 512)
+        utils.evaluateSubValue(fileSize, @"fileSize after write 512", sd.SECTOR_SIZE)
         sd.closeFileHandle(handle)
     handle := sd.openFileRead(@testBoundary)
     if handle >= 0
         fileSize := sd.fileSizeHandle(handle)
-        utils.evaluateSubValue(fileSize, @"fileSize 512 bytes", 512)
+        utils.evaluateSubValue(fileSize, @"fileSize 512 bytes", sd.SECTOR_SIZE)
         utils.initGuard(@readBuffer_guard)
-        bytesRead := sd.readHandle(handle, @readBuffer, 512)
+        bytesRead := sd.readHandle(handle, @readBuffer, sd.SECTOR_SIZE)
         utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
-        utils.evaluateSubValue(bytesRead, @"read 512 bytes", 512)
-        result := utils.verifyBufferPattern(@readBuffer, 512, $B0)
+        utils.evaluateSubValue(bytesRead, @"read 512 bytes", sd.SECTOR_SIZE)
+        result := utils.verifyBufferPattern(@readBuffer, sd.SECTOR_SIZE, $B0)
         utils.evaluateSubBool(result, @"512-byte pattern match", true)
         sd.closeFileHandle(handle)
 
@@ -500,8 +499,8 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize, secPerClus, c
     sd.deleteFile(@testBoundary)
     handle := sd.createFileNew(@testBoundary)
     if handle >= 0
-        utils.fillBufferWithPattern(@writeBuffer, 512, $C0)
-        sd.writeHandle(handle, @writeBuffer, 512)
+        utils.fillBufferWithPattern(@writeBuffer, sd.SECTOR_SIZE, $C0)
+        sd.writeHandle(handle, @writeBuffer, sd.SECTOR_SIZE)
         tempByte := $C1  ' Extra byte in second sector
         sd.writeHandle(handle, @tempByte, 1)
         fileSize := sd.fileSizeHandle(handle)
@@ -511,11 +510,11 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize, secPerClus, c
     if handle >= 0
         fileSize := sd.fileSizeHandle(handle)
         utils.evaluateSubValue(fileSize, @"fileSize 513 bytes", 513)
-        bytefill(@readBuffer, 0, 512)
+        bytefill(@readBuffer, 0, sd.SECTOR_SIZE)
         utils.initGuard(@readBuffer_guard)
-        bytesRead := sd.readHandle(handle, @readBuffer, 512)
+        bytesRead := sd.readHandle(handle, @readBuffer, sd.SECTOR_SIZE)
         utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
-        utils.evaluateSubValue(bytesRead, @"read first 512", 512)
+        utils.evaluateSubValue(bytesRead, @"read first 512", sd.SECTOR_SIZE)
         utils.initGuard(@readBuffer_guard)
         bytesRead := sd.readHandle(handle, @readBuffer, 1)
         utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
@@ -733,17 +732,17 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize, secPerClus, c
     handle := sd.createFileNew(@testZeros)
     utils.evaluateSubBool(handle >= 0, @"create zeros file", true)
     if handle >= 0
-        utils.fillBufferWithValue(@writeBuffer, 512, $00)
-        sd.writeHandle(handle, @writeBuffer, 512)
+        utils.fillBufferWithValue(@writeBuffer, sd.SECTOR_SIZE, $00)
+        sd.writeHandle(handle, @writeBuffer, sd.SECTOR_SIZE)
         utils.fillBufferWithValue(@largeWriteBuf, 1024, $00)
         sd.writeHandle(handle, @largeWriteBuf, 1024)
         sd.closeFileHandle(handle)
     handle := sd.openFileRead(@testZeros)
     if handle >= 0
         utils.initGuard(@readBuffer_guard)
-        bytesRead := sd.readHandle(handle, @readBuffer, 512)
+        bytesRead := sd.readHandle(handle, @readBuffer, sd.SECTOR_SIZE)
         utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
-        result := utils.verifyBufferValue(@readBuffer, 512, $00)
+        result := utils.verifyBufferValue(@readBuffer, sd.SECTOR_SIZE, $00)
         utils.evaluateSubBool(result, @"512-byte zeros match", true)
         utils.initGuard(@largeReadBuf_guard)
         bytesRead := sd.readHandle(handle, @largeReadBuf, 1024)
@@ -761,17 +760,17 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize, secPerClus, c
     handle := sd.createFileNew(@testOnes)
     utils.evaluateSubBool(handle >= 0, @"create ones file", true)
     if handle >= 0
-        utils.fillBufferWithValue(@writeBuffer, 512, $FF)
-        sd.writeHandle(handle, @writeBuffer, 512)
+        utils.fillBufferWithValue(@writeBuffer, sd.SECTOR_SIZE, $FF)
+        sd.writeHandle(handle, @writeBuffer, sd.SECTOR_SIZE)
         utils.fillBufferWithValue(@largeWriteBuf, 1024, $FF)
         sd.writeHandle(handle, @largeWriteBuf, 1024)
         sd.closeFileHandle(handle)
     handle := sd.openFileRead(@testOnes)
     if handle >= 0
         utils.initGuard(@readBuffer_guard)
-        bytesRead := sd.readHandle(handle, @readBuffer, 512)
+        bytesRead := sd.readHandle(handle, @readBuffer, sd.SECTOR_SIZE)
         utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
-        result := utils.verifyBufferValue(@readBuffer, 512, $FF)
+        result := utils.verifyBufferValue(@readBuffer, sd.SECTOR_SIZE, $FF)
         utils.evaluateSubBool(result, @"512-byte $FF match", true)
         utils.initGuard(@largeReadBuf_guard)
         bytesRead := sd.readHandle(handle, @largeReadBuf, 1024)
@@ -793,8 +792,8 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize, secPerClus, c
     ' Determine cluster size from VBR
     result := sd.readVBRRaw(@vbrBuf)
     secPerClus := vbrBuf[$0D]
-    clusterBytes := secPerClus * 512
-    writeLen := clusterBytes + 512
+    clusterBytes := secPerClus * sd.SECTOR_SIZE
+    writeLen := clusterBytes + sd.SECTOR_SIZE
     debug("   sec_per_clus=", udec_(secPerClus), " cluster_bytes=", udec_(clusterBytes), " writeLen=", udec_(writeLen))
 
     ' Test A: Write and verify bytes straddling cluster boundary
@@ -804,11 +803,11 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize, secPerClus, c
     handle := sd.createFileNew(@testCluster)
     utils.evaluateSubBool(handle >= 0, @"create cluster file", true)
     if handle >= 0
-        ' Write in 512-byte chunks with incrementing pattern starting at $37
+        ' Write in sector-sized chunks with incrementing pattern starting at $37
         chunkIdx := 0
-        repeat while chunkIdx * 512 < writeLen
-            utils.fillBufferWithPattern(@writeBuffer, 512, ($37 + chunkIdx * 512) & $FF)
-            sd.writeHandle(handle, @writeBuffer, 512)
+        repeat while chunkIdx * sd.SECTOR_SIZE < writeLen
+            utils.fillBufferWithPattern(@writeBuffer, sd.SECTOR_SIZE, ($37 + chunkIdx * sd.SECTOR_SIZE) & $FF)
+            sd.writeHandle(handle, @writeBuffer, sd.SECTOR_SIZE)
             chunkIdx++
         sd.closeFileHandle(handle)
     handle := sd.openFileRead(@testCluster)
@@ -816,17 +815,17 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize, secPerClus, c
         fileSize := sd.fileSizeHandle(handle)
         utils.evaluateSubValue(fileSize, @"file size", writeLen)
         ' Read and verify last sector of cluster 1
-        sd.seekHandle(handle, clusterBytes - 512)
+        sd.seekHandle(handle, clusterBytes - sd.SECTOR_SIZE)
         utils.initGuard(@readBuffer_guard)
-        bytesRead := sd.readHandle(handle, @readBuffer, 512)
+        bytesRead := sd.readHandle(handle, @readBuffer, sd.SECTOR_SIZE)
         utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
-        result := utils.verifyBufferPattern(@readBuffer, 512, ($37 + clusterBytes - 512) & $FF)
+        result := utils.verifyBufferPattern(@readBuffer, sd.SECTOR_SIZE, ($37 + clusterBytes - sd.SECTOR_SIZE) & $FF)
         utils.evaluateSubBool(result, @"last sector cluster 1", true)
         ' Read and verify first sector of cluster 2
         utils.initGuard(@readBuffer_guard)
-        bytesRead := sd.readHandle(handle, @readBuffer, 512)
+        bytesRead := sd.readHandle(handle, @readBuffer, sd.SECTOR_SIZE)
         utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
-        result := utils.verifyBufferPattern(@readBuffer, 512, ($37 + clusterBytes) & $FF)
+        result := utils.verifyBufferPattern(@readBuffer, sd.SECTOR_SIZE, ($37 + clusterBytes) & $FF)
         utils.evaluateSubBool(result, @"first sector cluster 2", true)
         sd.closeFileHandle(handle)
     utils.showSubTestResults()

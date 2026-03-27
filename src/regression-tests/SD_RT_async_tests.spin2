@@ -122,7 +122,9 @@ PUB go() | result
 ' ═══════════════════════════════════════════════════════════════════════════
 
 PRI runTest1_AsyncReadMatch() | handle, status, bytesAsync, bytesBlock, contentLen, matched
-    ' Test 1: Async read produces same data as blocking read
+' Verify async read produces identical data to blocking read of the same file.
+'
+
     utils.startTest(@"Async read matches blocking read")
     utils.setCheckCountPerTest(4)
 
@@ -175,7 +177,9 @@ PRI runTest1_AsyncReadMatch() | handle, status, bytesAsync, bytesBlock, contentL
 
 
 PRI runTest2_AsyncWriteVerify() | hWrite, hRead, status, bytesWritten, bytesRead, contentLen, matched, idx
-    ' Test 2: Async write, then blocking read to verify data
+' Verify async write persists correct data by reading it back with a blocking read.
+'
+
     utils.startTest(@"Async write verified by blocking read")
     utils.setCheckCountPerTest(4)
 
@@ -224,7 +228,9 @@ PRI runTest2_AsyncWriteVerify() | hWrite, hRead, status, bytesWritten, bytesRead
 
 
 PRI runTest3_IsCompleteTransition() | handle, status, wasFalse, contentLen
-    ' Test 3: isComplete returns FALSE then TRUE
+' Verify isComplete() transitions from FALSE to TRUE during an async read operation.
+'
+
     utils.startTest(@"isComplete transitions FALSE to TRUE")
     utils.setCheckCountPerTest(3)
 
@@ -264,7 +270,9 @@ PRI runTest3_IsCompleteTransition() | handle, status, wasFalse, contentLen
 
 
 PRI runTest4_CancelReleasesLock() | handle, status, bytesRead, contentLen
-    ' Test 4: cancelAsync releases lock, subsequent blocking read works
+' Verify cancelAsync() releases the API lock so a subsequent blocking read succeeds.
+'
+
     utils.startTest(@"cancelAsync releases lock for next op")
     utils.setCheckCountPerTest(3)
 
@@ -296,8 +304,9 @@ PRI runTest4_CancelReleasesLock() | handle, status, bytesRead, contentLen
 
 
 PRI runTest5_AsyncInterleave() | hMain, hHelper, status, bytesMain, contentLen
-    ' Test 5: Async on main cog, blocking read on helper cog
-    ' Helper cog should block on lock until main calls getResult
+' Verify async read on main cog and blocking read on helper cog interleave correctly.
+'
+
     utils.startTest(@"Async + blocking interleave from 2nd cog")
     utils.setCheckCountPerTest(3)
 
@@ -352,7 +361,9 @@ PRI runTest5_AsyncInterleave() | hMain, hHelper, status, bytesMain, contentLen
 
 
 PRI runTest6_DoubleStartBusy() | handle, status1, status2, contentLen
-    ' Test 6: Second startWriteHandle without getResult returns E_ASYNC_BUSY
+' Verify a second startReadHandle() without getResult() returns E_ASYNC_BUSY.
+'
+
     utils.startTest(@"Double start returns E_ASYNC_BUSY")
     utils.setCheckCountPerTest(3)
 
@@ -383,11 +394,12 @@ PRI runTest6_DoubleStartBusy() | handle, status1, status2, contentLen
 ' ═══════════════════════════════════════════════════════════════════════════
 
 PRI helper_blocking_read(handle) | bytesRead, contentLen
-    ' Helper cog: wait for barrier, then do a blocking read.
-    ' The main cog holds the api_lock via async — this cog will spin
-    ' on locktry until main calls getResult().
-    '
-    ' @param handle - Open read handle to use
+' Helper cog entry point: wait for barrier, then do a blocking read.
+' The main cog holds the api_lock via async -- this cog will spin
+' on locktry until main calls getResult().
+'
+' @param handle - open read handle to use
+'
 
     repeat until sync_barrier <> 0
 
@@ -406,7 +418,8 @@ PRI helper_blocking_read(handle) | bytesRead, contentLen
 ' ═══════════════════════════════════════════════════════════════════════════
 
 PRI createTestFile() | handle
-    ' Create the test file with known content
+' Create (or recreate) the test file with known content for async tests.
+'
 
     sd.deleteFile(@asyncTestFile)
     handle := sd.createFileNew(@asyncTestFile)

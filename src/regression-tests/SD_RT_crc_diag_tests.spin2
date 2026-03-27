@@ -152,6 +152,7 @@ PUB go() | result, handle, bytesRead, matchCount, mismatchCount, retryCount, las
     utils.startTest(@"lastCalculatedCRC != 0 after reads")
     lastCalcCRC := sd.getLastCalculatedCRC()
     debug("   Last calculated CRC: $", uhex_(lastCalcCRC))
+    ' EXPECTED NON-ZERO: after a successful read, the last calculated CRC should be non-zero (zero would indicate CRC was never computed)
     utils.evaluateNotZero(lastCalcCRC, @"lastCalculatedCRC")
 
     ' Test: lastSentCRC != 0 after write

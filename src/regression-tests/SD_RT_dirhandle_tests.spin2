@@ -483,7 +483,6 @@ PRI createTestStructure() | handle
 '   /DHTDIR1/DH1.TXT, DH2.TXT, DH3.TXT, DHSUB1/DHSUB.TXT
 '   /DHTEMPTY/   (empty directory)
 '
-' @local handle - File handle from createFileNew()
 
     debug(" ")
     debug("* Creating test directory structure...")
@@ -526,7 +525,8 @@ PRI createTestStructure() | handle
     debug(" ")
 
 PRI cleanupTestItems()
-' Delete all test files and directories (deepest first)
+' Delete all test files and directories (deepest first).
+'
 
     sd.changeDirectory(@"/")
 

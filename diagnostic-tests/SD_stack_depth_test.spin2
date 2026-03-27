@@ -44,7 +44,9 @@ OBJ
 VAR
     BYTE    readBuf[8 * SECTOR_SIZE]
 
-PUB go() | result, freeSpace, handle, bytesRead, depth
+PUB go() | status, freeSpace, handle, bytesRead, depth
+'' Measure worker cog stack depth by exercising all major driver operations.
+''
 
     debug(" ")
     debug("============================================================")
@@ -55,12 +57,12 @@ PUB go() | result, freeSpace, handle, bytesRead, depth
 
     ' Mount
     debug("--- Mount ---")
-    result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    debug("  mount() = ", sdec_(result))
+    status := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    debug("  mount() = ", sdec_(status))
     depth := sd.reportStackDepth()
     debug("  STACK: ", udec_(depth), " of ", udec_(sd.STACK_SIZE), " longs used")
 
-    if result == sd.SUCCESS
+    if status == sd.SUCCESS
         ' freeSpace (deep: do_freespace -> readSector x N)
         debug(" ")
         debug("--- freeSpace ---")
@@ -90,8 +92,8 @@ PUB go() | result, freeSpace, handle, bytesRead, depth
         ' Multi-block read (deep: readSectors with streamer)
         debug(" ")
         debug("--- readSectorsRaw (8 sectors) ---")
-        result := sd.readSectorsRaw(100, 8, @readBuf)
-        debug("  readSectorsRaw() = ", sdec_(result))
+        status := sd.readSectorsRaw(100, 8, @readBuf)
+        debug("  readSectorsRaw() = ", sdec_(status))
         depth := sd.reportStackDepth()
     debug("  STACK: ", udec_(depth), " of ", udec_(sd.STACK_SIZE), " longs used")
 
@@ -99,8 +101,8 @@ PUB go() | result, freeSpace, handle, bytesRead, depth
         debug(" ")
         debug("--- writeSectorRaw ---")
         bytefill(@readBuf, $A5, SECTOR_SIZE)
-        result := sd.writeSectorRaw(200_000, @readBuf)
-        debug("  writeSectorRaw() = ", sdec_(result))
+        status := sd.writeSectorRaw(200_000, @readBuf)
+        debug("  writeSectorRaw() = ", sdec_(status))
         depth := sd.reportStackDepth()
     debug("  STACK: ", udec_(depth), " of ", udec_(sd.STACK_SIZE), " longs used")
 
@@ -116,8 +118,8 @@ PUB go() | result, freeSpace, handle, bytesRead, depth
             debug(" ")
             debug("--- writeHandle ---")
             bytefill(@readBuf, $42, 256)
-            result := sd.writeHandle(handle, @readBuf, 256)
-            debug("  writeHandle() = ", sdec_(result))
+            status := sd.writeHandle(handle, @readBuf, 256)
+            debug("  writeHandle() = ", sdec_(status))
             depth := sd.reportStackDepth()
     debug("  STACK: ", udec_(depth), " of ", udec_(sd.STACK_SIZE), " longs used")
 

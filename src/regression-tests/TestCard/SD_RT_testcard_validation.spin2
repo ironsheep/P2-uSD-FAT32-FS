@@ -114,6 +114,7 @@ PUB go() | result
 PRI test_mount_validation() | pLabel
 ' Validate that the SD card mounted successfully by checking volume label and free space.
 ' @local pLabel - pointer to the volume label string
+'
 
     utils.startTestGroup(@"Test 1: Mount Validation")
 
@@ -131,6 +132,7 @@ PRI test_root_directory_enum() | count, idx, pEntry
 ' @local count - number of directory entries found
 ' @local idx - directory entry index for readDirectory() calls
 ' @local pEntry - pointer to current directory entry (0 when no more entries)
+'
 
     utils.startTestGroup(@"Test 2: Root Directory Enumeration")
 
@@ -155,6 +157,7 @@ PRI test_tiny_file() | handle, fileSize, bytesRead
 ' @local handle - file handle returned by openFileRead()
 ' @local fileSize - reported file size in bytes
 ' @local bytesRead - number of bytes returned by readHandle()
+'
 
     utils.startTestGroup(@"Test 3: Small File Read (TINY.TXT)")
 
@@ -186,6 +189,7 @@ PRI test_exact_sector() | handle, result, idx, allMatch
 ' @local result - bytes read from readHandle()
 ' @local idx - byte index within the 512-byte buffer
 ' @local allMatch - flag indicating whether all bytes matched expected value
+'
 
     utils.startTestGroup(@"Test 4: Exact Sector Boundary (EXACT512.BIN)")
 
@@ -221,6 +225,7 @@ PRI test_four_k_pattern() | handle, result, idx, expected, allMatch
 ' @local idx - outer loop sector index (0..7)
 ' @local expected - computed expected byte value at each position
 ' @local allMatch - flag indicating whether all bytes matched the pattern
+'
 
     utils.startTestGroup(@"Test 5: Multi-Sector Pattern (FOUR_K.BIN)")
 
@@ -256,6 +261,7 @@ PRI test_multi_sector_text() | handle, fileSize
 ' Verifies file size and that the first 8 bytes match the expected "LINE0001" header.
 ' @local handle - file handle returned by openFileRead()
 ' @local fileSize - reported file size in bytes
+'
 
     utils.startTestGroup(@"Test 6: Multi-Sector Text (TWOSEC.TXT)")
 
@@ -283,6 +289,7 @@ PRI test_large_file_cluster_chain() | handle, fileSize, pos, expected
 ' @local fileSize - reported file size in bytes
 ' @local pos - seek offset for current sub-test check
 ' @local expected - computed expected pattern byte at the seek position
+'
 
     utils.startTestGroup(@"Test 7: Multi-Cluster File (SIXTYFK.BIN)")
 
@@ -312,6 +319,7 @@ PRI test_seek_operations() | handle
 ' Each block starts with "BLK##---" followed by 55 bytes of $55. Seeks to blocks 0, 1,
 ' 10, and 31 and verifies the 8-byte header at each position matches expectations.
 ' @local handle - file handle returned by openFileRead()
+'
 
     utils.startTestGroup(@"Test 8: Seek Operations (SEEKTEST.BIN)")
 
@@ -357,6 +365,7 @@ PRI test_checksum_integrity() | handle, idx, sum
 ' @local handle - file handle returned by openFileRead()
 ' @local idx - byte index within each 512-byte chunk
 ' @local sum - running byte-sum accumulator across all 1024 bytes
+'
 
     utils.startTestGroup(@"Test 9: Checksum Verification (CHECKSUM.BIN)")
 
@@ -388,6 +397,7 @@ PRI test_path_resolution() | handle, fileSize
 ' Verifies the file can be opened, has the expected 54-byte size, and content matches.
 ' @local handle - file handle returned by openFileRead()
 ' @local fileSize - reported file size in bytes
+'
 
     utils.startTestGroup(@"Test 10: Subdirectory Path Resolution")
 
@@ -412,6 +422,7 @@ PRI test_deep_path() | handle, fileSize
 ' Verifies the file can be opened, has the expected 71-byte size, and content matches.
 ' @local handle - file handle returned by openFileRead()
 ' @local fileSize - reported file size in bytes
+'
 
     utils.startTestGroup(@"Test 11: Deep Nested Path")
 
@@ -439,6 +450,7 @@ PRI test_directory_navigation() | result, count, idx, pEntry
 ' @local count - number of directory entries found
 ' @local idx - directory entry index for readDirectory() calls
 ' @local pEntry - pointer to current directory entry (0 when no more entries)
+'
 
     utils.startTestGroup(@"Test 12: Directory Navigation (MULTI)")
 
@@ -472,6 +484,7 @@ PRI test_benchmark_sequential() | handle, start, elapsed, idx, bytesPerSec
 ' @local elapsed - total clock ticks for the 64KB read
 ' @local idx - loop counter for 128 sector reads
 ' @local bytesPerSec - computed throughput in bytes per second
+'
 
     utils.startTestGroup(@"Performance Benchmark")
 

@@ -155,9 +155,7 @@ PUB go() | result, spi_hz
     debug("END_SESSION")
 
 
-' ════════════════════════════════════════════════════════════════════════════════
 ' CARD IDENTIFICATION
-' ════════════════════════════════════════════════════════════════════════════════
 
 PRI identifyCard() : bIdentified | mid, pnm[2]
 ' Identify card by reading CID (call after mount).
@@ -178,9 +176,7 @@ PRI identifyCard() : bIdentified | mid, pnm[2]
         debug("  readCIDRaw FAILED")
 
 
-' ════════════════════════════════════════════════════════════════════════════════
 ' MOUNT / UNMOUNT TIMING
-' ════════════════════════════════════════════════════════════════════════════════
 
 PRI runMountBenchmark() : status | start_ct, elapsed_ct, elapsed_us
 ' Mount card and display timing.
@@ -217,9 +213,7 @@ PRI showVolumeInfo() | free_sectors, free_mb
     debug(" ")
 
 
-' ════════════════════════════════════════════════════════════════════════════════
 ' RAW SINGLE-SECTOR BENCHMARKS
-' ════════════════════════════════════════════════════════════════════════════════
 
 PRI runSingleSectorBenchmarks()
 ' Measure raw single-sector read and write performance.
@@ -234,9 +228,7 @@ PRI runSingleSectorBenchmarks()
     runRawWriteTest(1)
 
 
-' ════════════════════════════════════════════════════════════════════════════════
 ' RAW MULTI-SECTOR BENCHMARKS
-' ════════════════════════════════════════════════════════════════════════════════
 
 PRI runMultiSectorBenchmarks()
 ' Run all multi-sector read and write benchmarks at multiple sector counts.
@@ -379,9 +371,7 @@ PRI runComparisonTest(count) | idx, start_ct, elapsed_ct, single_us, multi_us, s
     debug("  Improvement: ", udec_(improvement), "%")
 
 
-' ════════════════════════════════════════════════════════════════════════════════
 ' FILE-LEVEL BENCHMARKS (handle-based API)
-' ════════════════════════════════════════════════════════════════════════════════
 
 PRI runFileLevelBenchmarks()
 ' Run all file-level benchmarks using handle-based API.
@@ -510,9 +500,7 @@ PRI runFileReadTest(size, p_label) | iter, handle, start_ct, elapsed_ct, min_us,
         debug("  ERROR: Could not create test file for read benchmark")
 
 
-' ════════════════════════════════════════════════════════════════════════════════
 ' FILE OPEN/CLOSE OVERHEAD
-' ════════════════════════════════════════════════════════════════════════════════
 
 PRI runFileOpenCloseBenchmark() | iter, handle, start_ct, elapsed_ct, open_min, open_max, open_total, close_min, close_max, close_total, open_avg, close_avg
 ' Measure file open and close overhead independently.
@@ -568,9 +556,7 @@ PRI runFileOpenCloseBenchmark() | iter, handle, start_ct, elapsed_ct, open_min, 
     sd.deleteFile(@testFile)
 
 
-' ════════════════════════════════════════════════════════════════════════════════
 ' UTILITY
-' ════════════════════════════════════════════════════════════════════════════════
 
 PRI fillBuffer(size, value)
 ' Fill the test buffer with a byte value.

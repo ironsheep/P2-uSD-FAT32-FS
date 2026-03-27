@@ -126,15 +126,15 @@ PUB go() | result, dataStart, fat1Start, fat2Start, idx, mismatch, cardSectors
     utils.evaluateBool(result == $00 OR result == $80, @"$00 or $80", true)
 
     utils.startTest(@"Partition 1 type")
-    result := buf[$1C2]
+    result := buf[sd.MBR_PART_TYPE_OFFSET]
     utils.evaluateBool(result == sd.PART_TYPE_FAT32_LBA, @"$0C (FAT32 LBA)", true)
 
     utils.startTest(@"Partition 1 start sector")
-    partitionStart := LONG[@buf + $1C6]
+    partitionStart := LONG[@buf + sd.MBR_PART_LBA_OFFSET]
     utils.evaluateBool(partitionStart == PARTITION_START, @"8192 (4MB aligned)", true)
 
     utils.startTest(@"Partition 1 size")
-    result := LONG[@buf + $1CA]
+    result := LONG[@buf + sd.MBR_PART_SIZE_OFFSET]
     ' Partition size should be card size minus partition start
     utils.evaluateBool(result > 0, @"Size > 0", true)
     debug("  Partition size: ", udec(result), " sectors")
@@ -149,7 +149,7 @@ PUB go() | result, dataStart, fat1Start, fat2Start, idx, mismatch, cardSectors
     utils.checkGuard(@buf_guard, @"buf guard")
 
     utils.startTest(@"VBR jump instruction")
-    ' Must start with $EB xx $90 or $E9 xx xx
+    ' EXPECTED VALUE: FAT VBR must start with JMP SHORT ($EB) or JMP FAR ($E9) boot jump instruction
     result := buf[0]
     utils.evaluateBool(result == $EB OR result == $E9, @"Jump ($EB or $E9)", true)
 

@@ -267,10 +267,12 @@ PUB go() | result, bytesRead, idx, fileSize, actualByte, handle
     utils.evaluateBool(handle >= 0, @"openFileRead()", true)
 
     utils.startTest(@"seek() beyond EOF should fail")
+    ' EXPECTED ERROR: seek beyond EOF must fail because the position would be past the file's data
     result := sd.seekHandle(handle, TEST_FILE_SIZE + 100)
     utils.evaluateBool(result < 0, @"seekHandle(beyond EOF) returns error", true)
 
     utils.startTest(@"seek() to exact EOF should succeed")
+    ' EXPECTED SUCCESS: seek to the last byte position (EOF-1) is valid as it positions at the end-of-file boundary
     result := sd.seekHandle(handle, TEST_FILE_SIZE - 1)
     utils.evaluateSingleValue(result, @"seekHandle(EOF-1)", sd.SUCCESS)
 

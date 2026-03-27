@@ -96,7 +96,9 @@ PUB go() | result
 ' ═══════════════════════════════════════════════════════════════════════════
 
 PRI runTest1_SetDateCreation() | handle, pEntry, hDir, wrtTime, wrtDate, expTime, expDate, found
-    ' Test 1: setDate produces correct creation timestamp
+' Verify setDate produces correct creation timestamp in the directory entry.
+'
+
     utils.startTest(@"setDate creates correct timestamp")
     utils.setCheckCountPerTest(3)
 
@@ -138,7 +140,9 @@ PRI runTest1_SetDateCreation() | handle, pEntry, hDir, wrtTime, wrtDate, expTime
 
 
 PRI runTest2_ModTimestampOnClose() | handle, pEntry, hDir, wrtTime, wrtDate, found
-    ' Test 2: Modification timestamp updated on close
+' Verify modification timestamp is updated on file close.
+'
+
     utils.startTest(@"Mod timestamp updated on close")
     utils.setCheckCountPerTest(2)
 
@@ -171,7 +175,9 @@ PRI runTest2_ModTimestampOnClose() | handle, pEntry, hDir, wrtTime, wrtDate, fou
 
 
 PRI runTest3_TimestampsAdvance() | handle, pEntry, hDir, stampA, stampB
-    ' Test 3: Timestamps advance over time
+' Verify timestamps advance over time by comparing two files created seconds apart.
+'
+
     utils.startTest(@"Timestamps advance over time")
     utils.setCheckCountPerTest(2)
 
@@ -217,10 +223,9 @@ PRI runTest3_TimestampsAdvance() | handle, pEntry, hDir, stampA, stampB
 
 
 PRI runTest4_DefaultTimestamp() | pEntry, hDir, wrtDate, month, day, year, found
-    ' Test 4: Default timestamp without setDate is valid
-    ' Note: We already called setDate, so this tests that the default
-    ' setDate(2009,1,27,7,0,0) at mount time produces valid results.
-    ' We verify the date fields are in plausible ranges.
+' Verify timestamp date fields (year, month, day) are in valid FAT32 ranges.
+'
+
     utils.startTest(@"Timestamp fields are valid ranges")
     utils.setCheckCountPerTest(3)
 
@@ -253,7 +258,9 @@ PRI runTest4_DefaultTimestamp() | pEntry, hDir, wrtDate, month, day, year, found
 
 
 PRI runTest5_GetDateRoundTrip() | result, year, month, day, hour, minute, second
-    ' Test 5: getDate round-trip matches setDate
+' Verify getDate returns the same values previously set via setDate.
+'
+
     utils.startTest(@"getDate round-trip matches setDate")
     utils.setCheckCountPerTest(6)
 
@@ -271,7 +278,9 @@ PRI runTest5_GetDateRoundTrip() | result, year, month, day, hour, minute, second
 
 
 PRI runTest6_GetDateAdvances() | year, month, day, hour, minute, second, sec1, sec2
-    ' Test 6: getDate advances after waiting
+' Verify getDate reports advancing time after a multi-second wait.
+'
+
     utils.startTest(@"getDate advances after 4 seconds")
     utils.setCheckCountPerTest(2)
 

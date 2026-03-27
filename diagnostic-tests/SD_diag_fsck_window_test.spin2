@@ -76,6 +76,18 @@ CON
     FAT_EOC             = $0FFFFFFF
     FAT_FREE            = $00000000
     FAT_MASK            = $0FFFFFFF
+    FAT_RESERVED_MASK   = $F000_0000
+
+    ' VBR field byte offsets (for raw sector reads)
+    VBR_SEC_PER_CLUS    = $0D
+    VBR_RESERVED_SEC    = $0E
+    VBR_NUM_FATS        = $10
+    VBR_TOTAL_SECTORS   = $20
+    VBR_SEC_PER_FAT     = $24
+
+    ' FAT entry calculations (128 entries per 512-byte sector)
+    FAT_ENTRY_SHIFT     = 7
+    FAT_ENTRY_MASK      = $7F
 
 ' Enable full driver features
 #ifdef __SPINTOOLS__
@@ -320,15 +332,15 @@ PRI readCardGeometry() | result, numFats
 
     ' Read MBR
     sd.readSectorRaw(0, @buf)
-    partStart := LONG[@buf + $1C6]
+    partStart := LONG[@buf + sd.MBR_PART_LBA_OFFSET]
 
     ' Read VBR
     sd.readSectorRaw(partStart, @buf)
-    secPerClus := buf[$0D]
-    resrvdSec := WORD[@buf + $0E]
-    numFats := buf[$10]
-    secPerFat := LONG[@buf + $24]
-    totClusters := LONG[@buf + $20]    ' totalSectors field
+    secPerClus := buf[VBR_SEC_PER_CLUS]
+    resrvdSec := WORD[@buf + VBR_RESERVED_SEC]
+    numFats := buf[VBR_NUM_FATS]
+    secPerFat := LONG[@buf + VBR_SEC_PER_FAT]
+    totClusters := LONG[@buf + VBR_TOTAL_SECTORS]    ' totalSectors field
 
     ' Compute derived values
     fat1Sec := partStart + resrvdSec
@@ -345,12 +357,12 @@ PRI writeFATEntry(cluster, value) | sector, offset, existing
 ' @param cluster - Cluster number
 ' @param value - New FAT entry value (lower 28 bits)
 
-    sector := fat1Sec + (cluster >> 7)
-    offset := (cluster & $7F) * 4
+    sector := fat1Sec + (cluster >> FAT_ENTRY_SHIFT)
+    offset := (cluster & FAT_ENTRY_MASK) * 4
 
     sd.readSectorRaw(sector, @buf)
     existing := LONG[@buf + offset]
-    LONG[@buf + offset] := (value & FAT_MASK) | (existing & $F0000000)
+    LONG[@buf + offset] := (value & FAT_MASK) | (existing & FAT_RESERVED_MASK)
     sd.writeSectorRaw(sector, @buf)
 
 

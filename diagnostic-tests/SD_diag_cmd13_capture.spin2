@@ -58,13 +58,15 @@ OBJ
 
 DAT
     testFilename    BYTE    "CMD13TST.BIN", 0
-    writeBuf        BYTE    0[512]
-    readBuf         BYTE    0[512]
-    multiBuf        BYTE    0[MULTI_SECTORS * 512]
+    writeBuf        BYTE    0[sd.SECTOR_SIZE]
+    readBuf         BYTE    0[sd.SECTOR_SIZE]
+    multiBuf        BYTE    0[MULTI_SECTORS * sd.SECTOR_SIZE]
     preCapBuf       BYTE    0[7]
     capBuf          BYTE    0[8]
 
-PUB go() | handle, result, warnings, iteration, ncrLen, bytesRead
+PUB go() | handle, status, warnings, iteration, ncrLen, bytesRead
+'' Capture CMD13 status register framing at multiple SPI speeds for problem card diagnosis.
+''
 
     debug("##############################################")
     debug("#  CMD13 Diagnostic Capture                  #")
@@ -78,8 +80,8 @@ PUB go() | handle, result, warnings, iteration, ncrLen, bytesRead
     debug("=== PHASE 1: Mount and Init-Time Probe ===")
     debug(" ")
 
-    result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    debug("  mount() returned: ", sdec(result))
+    status := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    debug("  mount() returned: ", sdec(status))
 
     warnings := sd.cardWarnings()
     debug("  cardWarnings(): $", uhex_byte_(warnings))
@@ -95,7 +97,7 @@ PUB go() | handle, result, warnings, iteration, ncrLen, bytesRead
     debug("--- Init-Time Probe Capture ---")
     dumpCmd13State(@"probeCmd13 (init)")
 
-    if result < 0
+    if status < 0
         debug(" ")
         debug("!! Mount FAILED - cannot continue post-mount tests")
         debug("!! The init-time probe capture above is the diagnostic data")
@@ -121,8 +123,8 @@ PUB go() | handle, result, warnings, iteration, ncrLen, bytesRead
         debug("  No test file found, creating one first...")
         handle := sd.createFileNew(@testFilename)
         if handle >= 0
-            bytefill(@writeBuf, $A5, 512)
-            sd.writeHandle(handle, @writeBuf, 512)
+            bytefill(@writeBuf, $A5, sd.SECTOR_SIZE)
+            sd.writeHandle(handle, @writeBuf, sd.SECTOR_SIZE)
             sd.closeFileHandle(handle)
             debug("  Test file created (512 bytes, pattern $A5)")
             debug(" ")
@@ -135,7 +137,7 @@ PUB go() | handle, result, warnings, iteration, ncrLen, bytesRead
             debug(" ")
             debug("--- Read iteration ", udec_(iteration), " of ", udec_(NUM_ITERATIONS), " ---")
             sd.seekHandle(handle, 0)
-            bytesRead := sd.readHandle(handle, @readBuf, 512)
+            bytesRead := sd.readHandle(handle, @readBuf, sd.SECTOR_SIZE)
             debug("  readHandle returned: ", sdec(bytesRead), " bytes")
             dumpCmd13State(@"post-readHandle")
 
@@ -159,9 +161,9 @@ PUB go() | handle, result, warnings, iteration, ncrLen, bytesRead
         repeat iteration from 1 to NUM_ITERATIONS
             debug(" ")
             debug("--- Write iteration ", udec_(iteration), " of ", udec_(NUM_ITERATIONS), " ---")
-            bytefill(@writeBuf, iteration, 512)
-            result := sd.writeHandle(handle, @writeBuf, 512)
-            debug("  writeHandle returned: ", sdec(result))
+            bytefill(@writeBuf, iteration, sd.SECTOR_SIZE)
+            status := sd.writeHandle(handle, @writeBuf, sd.SECTOR_SIZE)
+            debug("  writeHandle returned: ", sdec(status))
             dumpCmd13State(@"post-writeHandle")
 
         sd.closeFileHandle(handle)
@@ -182,7 +184,7 @@ PUB go() | handle, result, warnings, iteration, ncrLen, bytesRead
         repeat iteration from 1 to NUM_ITERATIONS
             debug(" ")
             debug("--- Verify-read iteration ", udec_(iteration), " of ", udec_(NUM_ITERATIONS), " ---")
-            bytesRead := sd.readHandle(handle, @readBuf, 512)
+            bytesRead := sd.readHandle(handle, @readBuf, sd.SECTOR_SIZE)
             debug("  readHandle returned: ", sdec(bytesRead), " bytes")
             dumpCmd13State(@"post-verify-read")
 
@@ -200,11 +202,11 @@ PUB go() | handle, result, warnings, iteration, ncrLen, bytesRead
     repeat iteration from 1 to NUM_ITERATIONS
         debug(" ")
         debug("--- Multi-block read iteration ", udec_(iteration), " of ", udec_(NUM_ITERATIONS), " ---")
-        result := sd.readSectorsRaw(0, MULTI_SECTORS, @multiBuf)
-        debug("  readSectorsRaw(sector 0, count ", udec_(MULTI_SECTORS), ") returned: ", sdec(result), " sectors")
+        status := sd.readSectorsRaw(0, MULTI_SECTORS, @multiBuf)
+        debug("  readSectorsRaw(sector 0, count ", udec_(MULTI_SECTORS), ") returned: ", sdec(status), " sectors")
 
         ' CMD18 diagnostics
-        debug("  CMD18: R1=$", uhex_byte_(sd.getLastCMD18R1()), " token=$", uhex_byte_(sd.getLastCMD18Token()), " result=", udec_(sd.getLastCMD18Result()), " failPath=", udec_(sd.getLastCMD18FailPath()), " sectorsRead=", udec_(sd.getLastCMD18SectorsRead()))
+        debug("  CMD18: R1=$", uhex_byte_(sd.getLastCMD18R1()), " token=$", uhex_byte_(sd.getLastCMD18Token()), " status=", udec_(sd.getLastCMD18Result()), " failPath=", udec_(sd.getLastCMD18FailPath()), " sectorsRead=", udec_(sd.getLastCMD18SectorsRead()))
 
         ' CMD12 diagnostics
         debug("  CMD12: R1=$", uhex_byte_(sd.getLastCMD12R1()), " busy=", udec_(sd.getLastCMD12Result()))

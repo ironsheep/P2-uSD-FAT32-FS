@@ -344,7 +344,9 @@ PUB go() | result, handle, h2, frags, bytesWritten, bytesRead, idx
 
 
 PRI cleanupAllFiles()
-' Delete all test files (ignore errors for files that don't exist)
+' Delete all test files (ignore errors for files that don't exist).
+'
+
     sd.deleteFile(@fileA)
     sd.deleteFile(@spacerFile)
     sd.deleteFile(@fileContig)
