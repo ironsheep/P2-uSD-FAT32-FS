@@ -100,7 +100,7 @@ PUB go() | result, h1, h2, bytesWritten, pLabel, idx, pEntry, wrtDate, wrtTime, 
 
     debug(" ")
     debug("==============================================")
-    debug("  SD Card Driver V3 - Volume Operation Tests")
+    debug("  SD Card Driver - Volume Operation Tests")
     debug("==============================================")
 
     ' Mount the card first
@@ -431,8 +431,8 @@ PUB go() | result, h1, h2, bytesWritten, pLabel, idx, pEntry, wrtDate, wrtTime, 
     result := (wrtTime >> 11) & $1F
     utils.evaluateSubValue(result, @"hour field (23)", 23)
 
-    ' Test: setDate via V3 createFileNew
-    utils.startTest(@"setDate() timestamp on V3 createFileNew")
+    ' Test: setDate via createFileNew
+    utils.startTest(@"setDate() timestamp on createFileNew")
     sd.setDate(2026, 6, 15, 10, 0, 0)
     sd.deleteFile(@vlDateFile)
     h1 := sd.createFileNew(@vlDateFile)
@@ -455,9 +455,9 @@ PUB go() | result, h1, h2, bytesWritten, pLabel, idx, pEntry, wrtDate, wrtTime, 
     utils.evaluateSubBool(found, @"file found in dir", true)
     ' Year=2026-1980=46, month=6
     result := (wrtDate >> 9) & $7F
-    utils.evaluateSubValue(result, @"V3 year field", 46)
+    utils.evaluateSubValue(result, @"year field", 46)
     result := (wrtDate >> 5) & $0F
-    utils.evaluateSubValue(result, @"V3 month field", 6)
+    utils.evaluateSubValue(result, @"month field", 6)
 
     ' Test: setDate on new directory
     utils.startTest(@"setDate() timestamp on new directory")

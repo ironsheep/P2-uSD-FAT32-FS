@@ -1,7 +1,7 @@
 '' =================================================================================================
 ''
 ''   File....... SD_RT_dirhandle_tests.spin2
-''   Purpose.... This object tests V3 directory handle enumeration API
+''   Purpose.... This object tests directory handle enumeration API
 ''   Author..... Stephen M Moraco
 ''               -- see below for terms of use
 ''   E-mail..... stephen@ironsheep.biz
@@ -10,7 +10,7 @@
 ''
 '' =================================================================================================
 ''
-'' Tests the V3 directory handle API:
+'' Tests the directory handle API:
 ''   - openDirectory() with various path arguments
 ''   - readDirectoryHandle() enumeration
 ''   - closeDirectoryHandle() resource release
@@ -70,11 +70,11 @@ readBuffer_guard BYTE   0[16]
 PUB go() | result, h1, h2, h3, h4, h5, hDir, hDir2, pEntry, pName, attrs, entryCount, foundFiles, foundDirs, bytesRead
 '' Main entry point for directory handle regression tests
 ''
-'' Tests V3 directory handle enumeration API
+'' Tests directory handle enumeration API
 
     debug(" ")
     debug("==============================================")
-    debug("  SD Card Driver V3 - Directory Handle Tests")
+    debug("  SD Card Driver - Directory Handle Tests")
     debug("==============================================")
 
     ' Mount the card first

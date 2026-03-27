@@ -3,7 +3,7 @@
 ''
 ''   File....... micro_sd_fat32_fs.spin2
 ''   Purpose.... High-performance FAT32 microSD card filesystem driver for P2
-''   Authors.... Chris Gadd (original), Stephen M Moraco (V3 handle-based API)
+''   Authors.... Chris Gadd (original), Stephen M Moraco (handle-based API)
 ''               -- Copyright (c) 2023 Chris Gadd
 ''               -- see below for terms of use
 ''   E-mail..... stephen@ironsheep.biz
@@ -15,9 +15,7 @@
 #define SD_INCLUDE_ASYNC
 #define SD_INCLUDE_DEFRAG
 
-' ═══════════════════════════════════════════════════════════════════════════════
 ' CONDITIONAL COMPILATION - Optional Feature Modules
-' ═══════════════════════════════════════════════════════════════════════════════
 ' Default: MINIMAL driver (core file operations only)
 ' To enable optional features, use #pragma exportdef in your top-level file:
 '
@@ -32,7 +30,6 @@
 '
 ' Or define SD_INCLUDE_ALL to include everything:
 '   #pragma exportdef SD_INCLUDE_ALL
-' ═══════════════════════════════════════════════════════════════════════════════
 
 #ifdef SD_INCLUDE_ALL
 #ifndef SD_INCLUDE_RAW
@@ -136,9 +133,7 @@ CON ' command codes for worker cog
   CMD_SET_SPI_SPEED        = 85                                               ' Set SPI clock frequency: param0=target Hz, returns data0=actual Hz
 #endif
 
-  ' ═══════════════════════════════════════════════════════════════════════════
-  ' V3 Handle-Based File Commands (multi-file support)
-  ' ═══════════════════════════════════════════════════════════════════════════
+  ' Handle-Based File Commands (multi-file support)
   CMD_OPEN_READ            = 30                                               ' Open file for reading: param0=path ptr, returns data0=handle
   CMD_OPEN_WRITE           = 31                                               ' Open file for writing (append): param0=path ptr, returns data0=handle
   CMD_CREATE               = 32                                               ' Create new file for writing: param0=path ptr, returns data0=handle
@@ -195,9 +190,7 @@ CON ' error codes
 #endif
   E_NO_LOCK                = -64                                              ' Couldn't allocate hardware lock
 
-  ' ═══════════════════════════════════════════════════════════════════════════
-  ' V3 Multi-File Handle Error Codes
-  ' ═══════════════════════════════════════════════════════════════════════════
+  ' Multi-File Handle Error Codes
   E_TOO_MANY_FILES         = -90                                              ' All file handles are in use
   E_INVALID_HANDLE         = -91                                              ' Handle out of range or not open
   E_FILE_ALREADY_OPEN      = -92                                              ' File is already open for writing (single-writer policy)
@@ -210,14 +203,12 @@ CON ' card warning/capability flags
   CW_CMD13_UNRELIABLE  = $01                                                  ' CMD13 probe failed at init; status checks disabled for this card
   CW_CMD23_SUPPORTED   = $02                                                  ' CMD23 (SET_BLOCK_COUNT) confirmed working in SPI mode
 
-CON ' V3 multi-file handle configuration
+CON ' Multi-file handle configuration
   {Spin2_Doc_CON}
-  ' ═══════════════════════════════════════════════════════════════════════════
-  ' FILE HANDLE SYSTEM - V3 supports multiple simultaneously open files
+  ' FILE HANDLE SYSTEM - supports multiple simultaneously open files
   ' User can override MAX_OPEN_FILES in their top-level CON section before OBJ
   ' Memory cost: 544 bytes per handle (32 bytes state + 512 bytes buffer)
   ' Default 6 covers 2-3 cogs with mixed file/directory operations
-  ' ═══════════════════════════════════════════════════════════════════════════
   MAX_OPEN_FILES  = 6                                                         ' Default number of handles (user-overridable)
 
   ' Handle state flags (stored in h_flags array)
@@ -373,10 +364,8 @@ CON ' Card initialization timing
   INIT_DUMMY_BYTES         = 10                                               ' Dummy bytes after smart pin init (80+ clocks)
   POST_INIT_DUMMY_REPS     = 8                                                ' Dummy transfers after speed change (64 clocks)
 
-  ' ═══════════════════════════════════════════════════════════════════════════
   ' Card Status Register (CSR) bits - returned by CMD13 (R2 response = R1 + status byte)
   ' Reference: SD Physical Layer Spec section 4.10.1
-  ' ═══════════════════════════════════════════════════════════════════════════
   ' R2 response is 2 bytes: first byte = R1, second byte = status flags
   ' Status byte bit definitions (directly from SD spec):
   CSR_CARD_IS_LOCKED       = $01                                              ' Bit 0: Card is locked
@@ -388,9 +377,7 @@ CON ' Card initialization timing
   CSR_ERASE_PARAM          = $40                                              ' Bit 6: Invalid erase parameter
   CSR_OUT_OF_RANGE         = $80                                              ' Bit 7: Out of range / CSD overwrite error
 
-  ' ═══════════════════════════════════════════════════════════════════════════
   ' SD SPI Data Tokens (reference: SD Physical Layer Spec section 7.3.3)
-  ' ═══════════════════════════════════════════════════════════════════════════
   TOKEN_START_BLOCK        = $FE                                              ' Start token for single-block read/write and multi-block read
   TOKEN_START_MULTI_WRITE  = $FC                                              ' Start token for each block in multi-block WRITE
   TOKEN_STOP_TRAN          = $FD                                              ' Stop token to terminate multi-block WRITE (not CMD12!)
@@ -403,11 +390,9 @@ CON ' Card initialization timing
 
 CON ' struct types - SD card register and FAT32 on-disk data structures
   {Spin2_Doc_CON}
-  ' ═══════════════════════════════════════════════════════════════════════════
   ' Struct type definitions for card registers, filesystem structures, and
   ' directory entries. Exported automatically to consumer objects via OBJ.
   ' All structs are packed (Spin2 default) - offsets match hardware/on-disk layouts.
-  ' ═══════════════════════════════════════════════════════════════════════════
 
   ' --- SD Card Registers ---
 
@@ -513,17 +498,13 @@ CON ' struct types - SD card register and FAT32 on-disk data structures
   LONG freeClusters, LONG nextFreeHint, BYTE reserved2[12], LONG trailSig)
 
 DAT  ' ---- Singleton Control ----
-        ' ═══════════════════════════════════════════════════════════════════════
         ' SINGLETON CONTROL - Must be initialized to "not started" state
-        ' ═══════════════════════════════════════════════════════════════════════
         cog_id                                  LONG    -1                       ' Worker cog ID (-1 = not started)
         api_lock                                LONG    -1                       ' Hardware lock ID (-1 = not allocated)
         driver_mode                             LONG    0                        ' Current mode: MODE_NONE, MODE_RAW, or MODE_FILESYSTEM
         last_init_error                         LONG    0                        ' Specific error from last initCard() failure
 
-        ' ═══════════════════════════════════════════════════════════════════════
         ' CMD13 STATUS STAGING - Preserved for diagnostic inspection
-        ' ═══════════════════════════════════════════════════════════════════════
         last_cmd13_r1                           BYTE    0                        ' Last R1 byte from CMD13
         last_cmd13_status                       BYTE    0                        ' Last STATUS byte from CMD13
         last_cmd13_error                        WORD    0                        ' Last non-zero R2 (preserved until next error)
@@ -548,9 +529,7 @@ DAT  ' ---- Singleton Control ----
         cmd13_capture_len                       BYTE    0                        ' Position of first non-$FF byte in cmd13_capture (NCR gap length)
         test_force_cmd13                        BYTE    FALSE                    ' Diagnostic: force CMD13 even on cards flagged unreliable
 
-        ' ═══════════════════════════════════════════════════════════════════════
         ' PARAMETER BLOCK - Communication between API and worker cog
-        ' ═══════════════════════════════════════════════════════════════════════
         pb_cmd                                  LONG    0                        ' Command (0 = idle/done)
         pb_status                               LONG    0                        ' Result status code
         pb_caller                               LONG    0                        ' Caller's cog ID (for COGATN signal)
@@ -561,9 +540,7 @@ DAT  ' ---- Singleton Control ----
         pb_data0                                LONG    0                        ' Result data 0 (handle, count, etc.)
         pb_data1                                LONG    0                        ' Result data 1
 
-        ' ═══════════════════════════════════════════════════════════════════════
         ' WORKER LOOP STATE (idle flush + clock tick)
-        ' ═══════════════════════════════════════════════════════════════════════
         idle_timer                              LONG    0                        ' getct() at last command completion
         idle_flush_clocks                       LONG    0                        ' Threshold in clock ticks (set at mount time)
         flush_done                              BYTE    false                    ' TRUE after idle flush completes (reset on next command)
@@ -573,25 +550,19 @@ DAT  ' ---- Singleton Control ----
         async_active                            BYTE    0                        ' TRUE when an async operation is in flight
         async_caller                            BYTE    0                        ' Cog ID of the async caller
 
-        ' ═══════════════════════════════════════════════════════════════════════
         ' WORKER COG STACK
-        ' ═══════════════════════════════════════════════════════════════════════
         cog_stack                               LONG    0[STACK_SIZE]            ' Worker cog stack
         cog_stack_guard                         LONG    0[STACK_GUARD_LONGS]     ' Stack overflow sentinel ($CC fill)
 
-        ' ═══════════════════════════════════════════════════════════════════════
         ' SPI PIN CONFIGURATION (set once at start)
-        ' ═══════════════════════════════════════════════════════════════════════
         cs                                      LONG    0                        ' Chip select pin
         mosi                                    LONG    0                        ' Master out, slave in pin
         miso                                    LONG    0                        ' Master in, slave out pin
         sck                                     LONG    0                        ' Serial clock pin
 
-        ' ═══════════════════════════════════════════════════════════════════════
         ' SMART PIN SPI CONFIGURATION (Phase 1 Performance Sprint)
         ' P_TRANSITION for clock, P_SYNC_TX for transmit, P_SYNC_RX for receive
         ' B-input offset links MOSI/MISO to SCK for synchronized operation
-        ' ═══════════════════════════════════════════════════════════════════════
         spi_clk_mode                            LONG    0                        ' P_PULSE | P_OE for SCK
         spi_tx_mode                             LONG    0                        ' P_SYNC_TX | P_OE for MOSI
         spi_rx_mode                             LONG    0                        ' P_SYNC_RX for MISO
@@ -600,9 +571,7 @@ DAT  ' ---- Singleton Control ----
         spi_event                               LONG    0                        ' Event config for waitse1 (%01_000000 | sck)
         sp_debug_ctr                            LONG    0                        ' Debug counter for sp_transfer_8
 
-        ' ═══════════════════════════════════════════════════════════════════════
         ' FILESYSTEM STATE (moved from VAR)
-        ' ═══════════════════════════════════════════════════════════════════════
         fat_sec                                 LONG    0                        ' Starting sector of FAT
         fat2_sec                                LONG    0                        ' Starting sector of FAT2 (mirror)
         sec_per_fat                             LONG    0                        ' Sectors per FAT
@@ -634,22 +603,16 @@ DAT  ' ---- Singleton Control ----
         vbr_sec                                 LONG    0                        ' Volume Boot Record sector
         ocr_value                               LONG    0                        ' Cached OCR register (from CMD58)
 
-        ' ═══════════════════════════════════════════════════════════════════════
         ' ADAPTIVE TIMING (Phase 2 - Card identification and speed adjustment)
-        ' ═══════════════════════════════════════════════════════════════════════
         card_mfr_id                             LONG    0                        ' Manufacturer ID from CID (byte 0)
         card_max_speed_hz                       LONG    0                        ' Maximum speed from CSD TRAN_SPEED (Hz)
         card_read_timeout_ms                    LONG    100                      ' Read timeout in ms (from CSD or spec default)
         card_write_timeout_ms                   LONG    500                      ' Write timeout in ms (from CSD or spec default)
 
-        ' ═══════════════════════════════════════════════════════════════════════
         ' PER-COG ERROR STORAGE (for thread-safe error reporting)
-        ' ═══════════════════════════════════════════════════════════════════════
         last_error                              LONG    0[8]                     ' One slot per possible cog
 
-        ' ═══════════════════════════════════════════════════════════════════════
         ' DIAGNOSTIC: Capture data inside readSector for debugging from test cog
-        ' ═══════════════════════════════════════════════════════════════════════
         diag_last_sector                        LONG    0                        ' Last sector read
         diag_last_buftype                       LONG    0                        ' Last buf_type used
         diag_last_token                         LONG    0                        ' Last start token received
@@ -671,30 +634,24 @@ DAT  ' ---- Singleton Control ----
         diag_crc_retries                        LONG    0                        ' Count of CRC retry attempts
         diag_crc_enabled                        BYTE    1                        ' CRC validation enabled (1=on, 0=off)
 
-        ' ═══════════════════════════════════════════════════════════════════════
         ' WRITE DIAGNOSTICS (set by writeSector, readable from any cog)
         ' Codes: 0=not called, 1=CMD24 fatal, 2=data-response timeout,
         '        3=data CRC reject, 4=data write-err reject, 5=data unknown reject,
         '        6=busy timeout, 7=success
-        ' ═══════════════════════════════════════════════════════════════════════
         diag_write_result                       LONG    0                        ' Outcome code of last writeSector call
         diag_write_r1                           LONG    0                        ' CMD24 R1 response byte
         diag_write_dresp                        LONG    0                        ' Data response token from card
         diag_write_sector                       LONG    0                        ' Sector number attempted
 
-        ' ═══════════════════════════════════════════════════════════════════════
         ' TEST HOOKS: Error injection for CRC validation testing
         ' Used by SD_RT_crc_validation_tests and SD_RT_recovery_tests
-        ' ═══════════════════════════════════════════════════════════════════════
         test_force_read_crc_error               BYTE    0                        ' Counter: force N read CRC mismatches
         test_force_write_crc_error              BYTE    0                        ' Flag: corrupt next write CRC (one-shot)
         test_error_count                        LONG    0                        ' Count of injected errors triggered
         test_max_clusters                       LONG    0                        ' Limit: max allocatable cluster number (0 = no limit)
 
-        ' ═══════════════════════════════════════════════════════════════════════
         ' BUFFERS (must be in DAT for worker cog access)
         ' DIAGNOSTIC: Separate buffers for each sector type to isolate conflicts
-        ' ═══════════════════════════════════════════════════════════════════════
         dir_buf                                 BYTE    0[512]                   ' Directory sector buffer
         fat_buf                                 BYTE    0[512]                   ' FAT sector buffer
         buf                                     BYTE    0[512]                   ' Data sector buffer
@@ -704,10 +661,8 @@ DAT  ' ---- Singleton Control ----
                                                 LONG    0                        ' fileSize
         vol_label                               BYTE    0[12]                    ' Volume label (11 chars + null)
 
-        ' ═══════════════════════════════════════════════════════════════════════════
-        ' V3 FILE HANDLE TABLE - 28 bytes per handle
+        ' FILE HANDLE TABLE - 28 bytes per handle
         ' Each handle tracks an independently open file with its own state
-        ' ═══════════════════════════════════════════════════════════════════════════
         h_flags                                 BYTE    0[MAX_OPEN_FILES]        ' Handle state: HF_FREE, HF_READ, HF_WRITE (| HF_DIRTY)
         h_attr                                  BYTE    0[MAX_OPEN_FILES]        ' FAT directory entry attributes byte
         h_dir_offset                            WORD    0[MAX_OPEN_FILES]        ' Offset of dir entry within sector (0-511)
@@ -718,11 +673,9 @@ DAT  ' ---- Singleton Control ----
         h_dir_sector                            LONG    0[MAX_OPEN_FILES]        ' Sector containing directory entry
         h_cluster                               LONG    0[MAX_OPEN_FILES]        ' Current cluster in FAT chain
 
-        ' ═══════════════════════════════════════════════════════════════════════════
-        ' V3 PER-HANDLE DATA BUFFERS - 512 bytes per handle
+        ' PER-HANDLE DATA BUFFERS - 512 bytes per handle
         ' Each handle has its own buffer to eliminate thrashing when switching files
         ' Cost: 512 bytes per handle, but provides significant performance benefit
-        ' ═══════════════════════════════════════════════════════════════════════════
         h_buf                                   BYTE    0[512 * MAX_OPEN_FILES]  ' Per-handle sector buffers
         h_buf_sector                            LONG    0[MAX_OPEN_FILES]        ' Sector currently in each buffer (-1 = invalid)
 #ifdef SD_INCLUDE_DEFRAG
@@ -855,7 +808,7 @@ PUB unmount() : status
 CON ' ---- File I/O ----
 
 PUB openFileRead(p_path) : handle
-'' Open file for reading (V3 multi-file) - opens existing file and returns handle.
+'' Open file for reading - opens existing file and returns handle.
 '' Multiple files can be open simultaneously with independent positions.
 '' Use closeFileHandle() when done.
 ''
@@ -871,7 +824,7 @@ PUB openFileRead(p_path) : handle
     set_error(handle)
 
 PUB openFileWrite(p_path) : handle
-'' Open file for writing/append (V3 multi-file) - opens for appending.
+'' Open file for writing/append - opens for appending.
 '' Position is set to end of file. Only one write handle per file allowed.
 '' Use closeFileHandle() when done to flush data.
 ''
@@ -887,7 +840,7 @@ PUB openFileWrite(p_path) : handle
     set_error(handle)
 
 PUB createFileNew(p_path) : handle
-'' Create new file for writing (V3 multi-file) - creates and opens for writing.
+'' Create new file for writing - creates and opens for writing.
 '' Returns error if file exists.
 '' Use closeFileHandle() when done to flush data and finalize size.
 ''
@@ -903,7 +856,7 @@ PUB createFileNew(p_path) : handle
     set_error(handle)
 
 PUB closeFileHandle(handle) : status
-'' Close file handle (V3 multi-file) - closes handle, flushing pending writes.
+'' Close file handle - closes handle, flushing pending writes.
 '' For write handles, updates directory with final file size.
 '' After close, handle is invalid and slot is available for reuse.
 ''
@@ -918,7 +871,7 @@ PUB closeFileHandle(handle) : status
     set_error(status)
 
 PUB readHandle(handle, p_buffer, count) : bytes_read
-'' Read from file handle (V3 multi-file) - reads up to count bytes into buffer.
+'' Read from file handle - reads up to count bytes into buffer.
 '' Returns actual bytes read (may be less at EOF). Returns 0 at EOF.
 '' Position advances by the number of bytes read.
 ''
@@ -934,7 +887,7 @@ PUB readHandle(handle, p_buffer, count) : bytes_read
     set_error(bytes_read)
 
 PUB writeHandle(handle, p_buffer, count) : bytes_written
-'' Write to file handle (V3 multi-file) - writes count bytes from buffer.
+'' Write to file handle - writes count bytes from buffer.
 '' File grows as needed with automatic cluster allocation.
 '' Position advances by the number of bytes written.
 ''
@@ -950,7 +903,7 @@ PUB writeHandle(handle, p_buffer, count) : bytes_written
     set_error(bytes_written)
 
 PUB seekHandle(handle, position) : status
-'' Seek to position in file (V3 multi-file) - seeks to absolute byte position.
+'' Seek to position in file - seeks to absolute byte position.
 '' Position must be <= file size (cannot seek past EOF).
 ''
 '' @param handle - Valid file handle
@@ -963,7 +916,7 @@ PUB seekHandle(handle, position) : status
     set_error(status)
 
 PUB tellHandle(handle) : position
-'' Get current position (V3 multi-file) - returns current byte position in file.
+'' Get current position - returns current byte position in file.
 ''
 '' @param handle - Valid file handle
 '' @returns position - Current position (0-based), negative on error
@@ -976,7 +929,7 @@ PUB tellHandle(handle) : position
     set_error(position)
 
 PUB eofHandle(handle) : is_eof
-'' Check if at end of file (V3 multi-file) - returns TRUE if at or past EOF.
+'' Check if at end of file - returns TRUE if at or past EOF.
 ''
 '' @param handle - Valid file handle
 '' @returns is_eof - TRUE if at EOF, FALSE if not, negative on error
@@ -989,7 +942,7 @@ PUB eofHandle(handle) : is_eof
     set_error(is_eof)
 
 PUB fileSizeHandle(handle) : size
-'' Get file size (V3 multi-file) - returns total size in bytes.
+'' Get file size - returns total size in bytes.
 '' For write handles, reflects current size including pending writes.
 ''
 '' @param handle - Valid file handle
@@ -1003,7 +956,7 @@ PUB fileSizeHandle(handle) : size
     set_error(size)
 
 PUB syncHandle(handle) : status
-'' Flush handle to disk (V3 multi-file) - flushes pending writes and updates directory.
+'' Flush handle to disk - flushes pending writes and updates directory.
 '' File remains open for further operations.
 ''
 '' @param handle - Valid file handle
@@ -1015,7 +968,7 @@ PUB syncHandle(handle) : status
     set_error(status)
 
 PUB syncAllHandles() : status
-'' Flush all handles to disk (V3 multi-file) - flushes all open write handles.
+'' Flush all handles to disk - flushes all open write handles.
 '' Useful before risky operations or for periodic safety.
 ''
 '' @returns status - SUCCESS (0) on success
@@ -2169,7 +2122,7 @@ PUB debugReadSectorSlow(sector, p_buffer) : status
 '' Requires worker cog to be running (SPI pins configured).
 ''
 '' NOTE: This runs in Cog0 and requires SPI smart pins to be configured for this cog.
-''       It will NOT work with the normal V3 driver architecture.
+''       It will NOT work with the normal driver architecture.
 ''       This is for DIAGNOSTIC USE ONLY.
 ''
 '' @param sector - Sector number to read
@@ -2358,9 +2311,7 @@ PRI fs_worker() | cur_cmd
 
     DEBUG[CH_API]("  [fs_worker] Received command ", udec_(cur_cmd))
 
-' ═══════════════════════════════════════════════════════════════════════
 ' MODE ENFORCEMENT: Reject commands invalid for current mode
-' ═══════════════════════════════════════════════════════════════════════
 ' File system commands require MODE_FILESYSTEM
 ' Raw sector commands are allowed in both MODE_RAW and MODE_FILESYSTEM
 ' Mode transitions (MOUNT, UNMOUNT, INIT_CARD_ONLY) have their own logic
@@ -2497,9 +2448,7 @@ PRI fs_worker() | cur_cmd
         pb_status := do_read_sd_status(pb_param0)
 #endif
 
-      ' ═══════════════════════════════════════════════════════════════════════
-      ' V3 Handle-Based File Commands
-      ' ═══════════════════════════════════════════════════════════════════════
+      ' Handle-Based File Commands
       CMD_OPEN_READ:
         pb_data0 := do_open_read(pb_param0)                                     ' Returns handle or error
         pb_status := pb_data0 < 0 ? pb_data0 : SUCCESS
@@ -2562,9 +2511,7 @@ PRI fs_worker() | cur_cmd
         else
           pb_status := E_INVALID_HANDLE
 
-      ' ═══════════════════════════════════════════════════════════════════════
-      ' V3 Directory Handle Commands
-      ' ═══════════════════════════════════════════════════════════════════════
+      ' Directory Handle Commands
       CMD_OPEN_DIR:
         pb_data0 := do_open_dir(pb_param0)                                      ' Returns handle or error
         pb_status := pb_data0 < 0 ? pb_data0 : SUCCESS
@@ -2984,7 +2931,7 @@ PRI do_mount() : status | reserved, pPart, pVBR, pFSI, idx, p_entry, cluster, se
   fat_sec_in_buf := -1
   sec_in_buf := -1
 
-  ' V3: Initialize handle table to clean state
+  ' Initialize handle table to clean state
   initHandleTable()
 
   ' Skip card init if already in RAW mode (card already initialized)
@@ -3118,7 +3065,7 @@ PRI do_unmount() : status
 '
 ' @returns status - SUCCESS on success
 
-' V3: Sync all open handles before unmount
+' Sync all open handles before unmount
 
   do_sync_all()
   do_close()
@@ -3166,7 +3113,7 @@ PRI do_close() : status
   flags := flags & !F_NEWDIR
 
 PRI do_open_read(p_path) : handle | start_cluster
-' Open file for reading (V3 handle) - opens existing file and returns handle.
+' Open file for reading - opens existing file and returns handle.
 ' Multiple files can be open simultaneously for reading.
 ' Each handle has its own position, enabling interleaved reads.
 '
@@ -3205,7 +3152,7 @@ PRI do_open_read(p_path) : handle | start_cluster
     DEBUG[CH_FILE]("  [do_open_read] Success: handle=", udec_(handle), " size=", udec_(h_size[handle]), " cluster=", udec_(start_cluster))
 
 PRI do_open_write(p_path) : handle | start_cluster, current_cluster, fat_addr, file_size, cluster_count
-' Open file for writing/append (V3 handle) - opens existing file for appending.
+' Open file for writing/append - opens existing file for appending.
 ' Enforces single-writer policy: only one write handle per file allowed.
 ' Position is set to end of file for appending.
 '
@@ -3271,7 +3218,7 @@ PRI do_open_write(p_path) : handle | start_cluster, current_cluster, fat_addr, f
     DEBUG[CH_FILE]("  [do_open_write] Success: handle=", udec_(handle), " size=", udec_(file_size), " pos=", udec_(h_position[handle]))
 
 PRI do_create(p_path) : handle | temp, first_cluster
-' Create new file (V3 handle) - creates empty file and opens for writing.
+' Create new file - creates empty file and opens for writing.
 ' If file already exists, returns error.
 '
 ' @param p_path - Pointer to null-terminated path string
@@ -3350,7 +3297,7 @@ PRI do_create(p_path) : handle | temp, first_cluster
           DEBUG[CH_FILE]("  [do_create] Success: handle=", udec_(handle), " cluster=", udec_(first_cluster))
 
 PRI do_close_h(handle) : status | p_buf
-' Close file handle (V3) - closes handle, flushing writes and updating directory.
+' Close file handle - closes handle, flushing writes and updating directory.
 ' For write handles, the directory entry is updated with the final file size.
 '
 ' @param handle - Handle to close
@@ -3395,7 +3342,7 @@ PRI do_close_h(handle) : status | p_buf
     freeHandle(handle)
 
 PRI do_read_h(handle, p_buffer, count) : bytes_read | p_hbuf, available, offset, to_read, cluster, fat_addr, next_cluster
-' Handle-based read (V3) - reads data from file handle into user buffer.
+' Handle-based read - reads data from file handle into user buffer.
 ' Uses per-handle buffer to avoid cache thrashing. Independent position per handle.
 '
 ' @param handle - Valid read handle
@@ -3496,7 +3443,7 @@ PRI do_read_h(handle, p_buffer, count) : bytes_read | p_hbuf, available, offset,
     DEBUG[CH_FILE]("  [do_read_h] Read ", udec_(bytes_read), " bytes, pos now ", udec_(h_position[handle]))
 
 PRI do_write_h(handle, p_buffer, count) : bytes_written | p_hbuf, offset, to_write, new_cluster
-' Handle-based write (V3) - writes data from user buffer to file handle.
+' Handle-based write - writes data from user buffer to file handle.
 ' Uses per-handle buffer with dirty tracking. File grows as needed.
 ' Clusters allocated when extending past current allocation.
 '
@@ -3633,7 +3580,7 @@ PRI do_write_h(handle, p_buffer, count) : bytes_written | p_hbuf, offset, to_wri
     DEBUG[CH_FILE]("  [do_write_h] Wrote ", udec_(bytes_written), " bytes, size now ", udec_(h_size[handle]))
 
 PRI do_seek_h(handle, position) : status | target_cluster_idx, cluster, idx, fat_addr, sector_in_cluster
-' Handle-based seek (V3) - seeks to absolute position in file.
+' Handle-based seek - seeks to absolute position in file.
 ' Position must be <= file size (no seeking past EOF).
 '
 ' @param handle - Valid file handle
@@ -3702,7 +3649,7 @@ PRI do_seek_h(handle, position) : status | target_cluster_idx, cluster, idx, fat
         DEBUG[CH_FILE]("  [do_seek_h] Seek complete: cluster=", udec_(cluster), " sector=", udec_(h_sector[handle]))
 
 PRI do_sync_h(handle) : status | p_buf
-' Sync handle buffer to disk (V3) - flushes pending writes and updates directory.
+' Sync handle buffer to disk - flushes pending writes and updates directory.
 ' Does NOT close handle - file remains open for further operations.
 '
 ' @param handle - Valid file handle
@@ -3755,7 +3702,7 @@ PRI do_idle_flush() | idx
   flush_done := true
 
 PRI do_sync_all() : status | idx
-' Sync all open write handles (V3) - flushes all write handles to disk.
+' Sync all open write handles - flushes all write handles to disk.
 ' Called by unmount() to ensure all data is written before stopping.
 '
 ' @returns status - SUCCESS (0) on success
@@ -3771,7 +3718,7 @@ PRI do_sync_all() : status | idx
   status := SUCCESS
 
 PRI do_open_dir(p_path) : handle | start_cluster
-' Open directory for enumeration (V3 handle) - returns handle for iterating entries.
+' Open directory for enumeration - returns handle for iterating entries.
 ' Directory handles share the existing handle pool with file handles.
 '
 ' @param p_path - Pointer to null-terminated path string ("." or "" for CWD)
@@ -3821,7 +3768,7 @@ PRI do_open_dir(p_path) : handle | start_cluster
       DEBUG[CH_DIR]("  [do_open_dir] Success: handle=", udec_(handle), " cluster=", udec_(start_cluster))
 
 PRI do_read_dir_h(handle) : status | p_hbuf, offset, char, attrib, cluster, fat_addr, next_cluster
-' Read next directory entry from handle (V3) - skips deleted and LFN entries.
+' Read next directory entry from handle - skips deleted and LFN entries.
 ' Copies valid entry into entry_buffer for caller to inspect via fileName()/attributes().
 '
 ' @param handle - Valid directory handle (must have HF_DIR flag)
@@ -3902,7 +3849,7 @@ PRI do_read_dir_h(handle) : status | p_hbuf, offset, char, attrib, cluster, fat_
       quit
 
 PRI do_close_dir_h(handle) : status
-' Close directory handle (V3) - releases handle back to pool.
+' Close directory handle - releases handle back to pool.
 '
 ' @param handle - Valid directory handle
 ' @returns status - SUCCESS on success, E_INVALID_HANDLE if invalid
@@ -5265,43 +5212,35 @@ PRI initSPIPins()
   DEBUG[CH_INIT]("    [initSPIPins]   spi_rx_mode=$", uhex_long(spi_rx_mode), " (P_SYNC_RX | P_PLUS3_B)")
   DEBUG[CH_INIT]("    [initSPIPins]   SCK=P", udec_(sck), " MOSI=P", udec_(mosi), " MISO=P", udec_(miso))
 
-  ' ════════════════════════════════════════════════════════════════════
   ' CS PIN: Standard GPIO (unchanged from bit-bang)
   ' CS is manually controlled - LOW = selected, HIGH = deselected
-  ' ════════════════════════════════════════════════════════════════════
   pinh(cs)                                              ' Start deselected
 
-  ' ════════════════════════════════════════════════════════════════════
   ' SCK PIN: P_TRANSITION mode for clock generation
   ' X register: half-period in clocks (time between transitions)
   ' Y register: Number of transitions (2 per bit) - loaded via WYPIN per transfer
   ' Configure with FLTL -> WRPIN, then WXPIN/DRVL in applySPISpeed()
-  ' ════════════════════════════════════════════════════════════════════
   pinfloat(sck)                                         ' FLTL - reset smart pin
   WRPIN(sck, spi_clk_mode)                              ' P_TRANSITION | P_OE | P_INVERT_OUTPUT
   ' X register (half-period) will be set by applySPISpeed()
   DEBUG[CH_INIT]("    [initSPIPins]   SCK configured: P_TRANSITION | P_OE (awaiting applySPISpeed)")
 
-  ' ════════════════════════════════════════════════════════════════════
   ' MOSI PIN: P_SYNC_TX mode for synchronized transmit
   ' B-input set via P_PLUS2_B (clock from SCK which is 2 pins higher)
   ' X register: %M_NNNNN where M=mode (1=start/stop), N=bits-1
   ' Y register: Data to transmit - loaded via WYPIN per transfer
   ' Configure with DIRL -> WRPIN -> WXPIN -> DIRH (no WYPIN yet)
-  ' ════════════════════════════════════════════════════════════════════
   pinfloat(mosi)                                        ' DIRL - reset smart pin
   WRPIN(mosi, spi_tx_mode)                              ' P_SYNC_TX | P_OE | P_PLUS2_B
   WXPIN(mosi, %1_00111)                                 ' Start-stop mode, 8 bits default
   pinh(mosi)                                            ' DIRH - enable smart pin
   DEBUG[CH_INIT]("    [initSPIPins]   MOSI configured: P_SYNC_TX | P_PLUS2_B (enabled)")
 
-  ' ════════════════════════════════════════════════════════════════════
   ' MISO PIN: P_SYNC_RX mode for synchronized receive
   ' B-input set via P_PLUS3_B (clock from SCK which is 3 pins higher)
   ' X register: %M_NNNNN where M=mode (1=post-edge for SPI mode 0), N=bits-1
   ' Z register: Received data - read via RDPIN per transfer
   ' Configure with DIRL -> WRPIN -> WXPIN -> DIRH (no WYPIN needed)
-  ' ════════════════════════════════════════════════════════════════════
   pinfloat(miso)                                        ' DIRL - reset smart pin
   WRPIN(miso, spi_rx_mode)                              ' P_SYNC_RX | P_PLUS3_B
   WXPIN(miso, %1_00111)                                 ' On-edge sample (SPI mode 0), 8 bits
@@ -5806,10 +5745,8 @@ PRI readSector(sector, buf_type) : status | _sck, _miso, data, loop_ctr, timeout
     init_phase := $4000_0000                                                    ' Sample mid-bit for stability
     align_delay := spi_period                                                   ' Wait one half-period before streamer
 
-    ' ══════════════════════════════════════════════════════════════════════════
     ' CRC RETRY LOOP: Re-read on CRC mismatch (industry standard practice)
     ' Card has no CRC-error state - it just sees another CMD17 on retry
-    ' ══════════════════════════════════════════════════════════════════════════
     repeat attempt from 1 TO MAX_READ_CRC_RETRIES
 
       ' Send CMD17 (READ_SINGLE_BLOCK)
@@ -5838,11 +5775,9 @@ PRI readSector(sector, buf_type) : status | _sck, _miso, data, loop_ctr, timeout
       if status < 0                                                             '  token error or timeout
         quit                                                                    '   exit retry loop
 
-      ' ════════════════════════════════════════════════════════════════════════
       ' STREAMER BULK TRANSFER: Receive 512 bytes from MISO to hub buffer
       ' Pattern: SETXFRQ -> WRFAST -> WYPIN(clk) -> WAITX -> XINIT -> WAITXFI
       ' CRITICAL: Must disable MISO smart pin before streamer capture!
-      ' ════════════════════════════════════════════════════════════════════════
 
       ' CRITICAL FIX: Disable MISO smart pin before streamer capture
       ' The smart pin interferes with streamer's direct pin reading
@@ -5858,9 +5793,7 @@ PRI readSector(sector, buf_type) : status | _sck, _miso, data, loop_ctr, timeout
       diag_before_b3 := BYTE[p_buf+3]
       diag_spi_period := spi_period
 
-      ' ════════════════════════════════════════════════════════════════════════
       ' STREAMER BULK TRANSFER: 512 bytes from MISO to hub via DMA
-      ' ════════════════════════════════════════════════════════════════════════
       ORG
               DIRL      _sck                            ' Reset SCK: counter stops, output LOW, Y=0
               DRVL      _sck                            ' Re-enable: DIR=1 restarts base period counter fresh
@@ -6140,10 +6073,8 @@ PRI writeSector(sector, buf_type) : status | _sck, _mosi, p_buf, stream_mode, cl
       DEBUG[CH_SECTOR]("  [writeSector] CMD24 warning: R1=$", uhex_byte_(resp), " (stale bits, proceeding)")
     sp_transfer_8($FE)                                                          ' Data start token
 
-    ' ══════════════════════════════════════════════════════════════════════════
     ' STREAMER BULK TRANSFER: Send 512 bytes from hub buffer to MOSI
     ' Pattern: SETXFRQ -> RDFAST -> XINIT -> WYPIN(clk) -> WAITXFI
-    ' ══════════════════════════════════════════════════════════════════════════
     ' Mode word format: base_mode | (pin << 17) | bit_count
     ' For 512 bytes: 512 * 8 = 4096 bits = $1000
     stream_mode := STREAM_TX_BASE | (_mosi << 17) | (SECTOR_SIZE * 8)           ' TX mode + MOSI pin + bit count

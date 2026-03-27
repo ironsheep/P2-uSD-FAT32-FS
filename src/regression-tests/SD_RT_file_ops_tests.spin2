@@ -1,7 +1,7 @@
 '' =================================================================================================
 ''
 ''   File....... SD_RT_file_ops_tests.spin2
-''   Purpose.... This object exercises file create/open/close/delete/rename operations using V3 handle API
+''   Purpose.... This object exercises file create/open/close/delete/rename operations
 ''   Author..... Stephen M Moraco
 ''               -- see below for terms of use
 ''   E-mail..... stephen@ironsheep.biz
@@ -10,7 +10,7 @@
 ''
 '' =================================================================================================
 ''
-'' Updated for V3 handle-based API:
+'' Handle-based API:
 ''   - Uses createFileNew() instead of newFile()
 ''   - Uses openFileRead() / openFileWrite() instead of openFile()
 ''   - Uses closeFileHandle(handle) instead of closeFile()
@@ -76,11 +76,11 @@ sectorBuffer_guard BYTE 0[16]
 PUB go() | result, handle, h1, h2, h3, fileSize, bytesWritten, bytesRead, root_sec, idx, d_sec, d_buftype, d_token, d_b0, d_b1, d_b2, d_b3, d_pbuf, d_bef0, d_bef1, d_bef2, d_bef3, d_spi
 '' Main entry point for file operations regression tests
 ''
-'' Tests file create, open, close, delete, rename using V3 handle API
+'' Tests file create, open, close, delete, rename
 
     debug(" ")
     debug("==============================================")
-    debug("  SD Card Driver V3 - File Operations Tests")
+    debug("  SD Card Driver - File Operations Tests")
     debug("  (Using Handle-Based API)")
     debug("==============================================")
 
@@ -143,7 +143,7 @@ PUB go() | result, handle, h1, h2, h3, fileSize, bytesWritten, bytesRead, root_s
     ' ----------------------------------
     ' TEST GROUP: File creation with handles
     ' ----------------------------------
-    utils.startTestGroup(@"File Creation (V3 Handle API)")
+    utils.startTestGroup(@"File Creation")
 
     ' Clean up any existing test files first
     sd.deleteFile(@testfile1)
@@ -227,7 +227,7 @@ PUB go() | result, handle, h1, h2, h3, fileSize, bytesWritten, bytesRead, root_s
     ' ----------------------------------
     ' TEST GROUP: File open/close with handles
     ' ----------------------------------
-    utils.startTestGroup(@"File Open/Close (V3 Handle API)")
+    utils.startTestGroup(@"File Open/Close")
 
     utils.startTest(@"openFileRead() opens existing file")
     handle := sd.openFileRead(@testfile1)
@@ -547,7 +547,7 @@ PUB go() | result, handle, h1, h2, h3, fileSize, bytesWritten, bytesRead, root_s
     utils.ShowTestEndCounts()
 
     debug(" ")
-    debug("* File Operations Tests Complete (V3 Handle API)")
+    debug("* File Operations Tests Complete")
     debug("END_SESSION")
 
 con { license }

@@ -1,7 +1,7 @@
 '' =================================================================================================
 ''
 ''   File....... SD_RT_testcard_validation.spin2
-''   Purpose.... Validate V3 driver can read pre-formatted test card (read-only test)
+''   Purpose.... Validate driver can read pre-formatted test card (read-only test)
 ''   Author..... Stephen M Moraco
 ''               -- see below for terms of use
 ''   E-mail..... stephen@ironsheep.biz

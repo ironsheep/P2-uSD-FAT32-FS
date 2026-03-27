@@ -1,7 +1,7 @@
 '' =================================================================================================
 ''
 ''   File....... SD_RT_multihandle_tests.spin2
-''   Purpose.... This object tests V3 multi-file handle functionality
+''   Purpose.... This object tests multi-file handle functionality
 ''   Author..... Stephen M Moraco
 ''               -- see below for terms of use
 ''   E-mail..... stephen@ironsheep.biz
@@ -10,7 +10,7 @@
 ''
 '' =================================================================================================
 ''
-'' Tests the V3 handle-based file API:
+'' Tests the handle-based file API:
 ''   - Multiple simultaneous file opens
 ''   - Per-handle independent positions
 ''   - Single-writer policy enforcement
@@ -62,11 +62,11 @@ readBuffer_guard BYTE   0[16]
 PUB go() | result, handle, h1, h2, h3, h4, h5, h6, hDir, hDir2, bytesRead, bytesWritten, size
 '' Main entry point for multi-handle regression tests
 ''
-'' Tests V3 handle-based file API with multiple simultaneous file handles
+'' Tests handle-based file API with multiple simultaneous file handles
 
     debug(" ")
     debug("==============================================")
-    debug("  SD Card Driver V3 - Multi-Handle Tests")
+    debug("  SD Card Driver - Multi-Handle Tests")
     debug("==============================================")
 
     ' Mount the card first

@@ -74,7 +74,7 @@ PUB go() | result, handle, dh, count, pEntry
 
     debug(" ")
     debug("==============================================")
-    debug("  SD Card Driver V3 - Subdirectory Ops Tests")
+    debug("  SD Card Driver - Subdirectory Ops Tests")
     debug("  (Cross-Buffer Cache + Edge Cases)")
     debug("==============================================")
 

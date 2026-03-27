@@ -86,9 +86,9 @@ PUB go() | result, pLabel, freeSpace, handle, bytesRead
     utils.evaluateSingleValue(freeSpace, @"freeSpace()", 0)
 
     ' ----------------------------------
-    ' TEST GROUP: Pre-Mount Error Validation (V3 Handle API)
+    ' TEST GROUP: Pre-Mount Error Validation
     ' ----------------------------------
-    utils.startTestGroup(@"Pre-Mount Error Validation (V3 Handle API)")
+    utils.startTestGroup(@"Pre-Mount Error Validation")
 
     utils.startTest(@"openFileRead() before mount returns E_NOT_MOUNTED")
     handle := sd.openFileRead(@testfile1)
