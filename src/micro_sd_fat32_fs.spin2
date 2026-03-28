@@ -1235,21 +1235,21 @@ PUB startReadHandle(handle, p_buffer, count) : status
 '' @returns status - PENDING (1) on success, negative error on failure
 
     if async_active
-        return set_error(E_ASYNC_BUSY)
-    if cog_id == -1
-        return set_error(E_NOT_MOUNTED)
+        status := set_error(E_ASYNC_BUSY)
+    elseif cog_id == -1
+        status := set_error(E_NOT_MOUNTED)
+    else
+        repeat until LOCKTRY(api_lock)
 
-    repeat until LOCKTRY(api_lock)
+        pb_caller := COGID()
+        pb_param0 := handle
+        pb_param1 := p_buffer
+        pb_param2 := count
+        pb_cmd := CMD_READ_H
 
-    pb_caller := COGID()
-    pb_param0 := handle
-    pb_param1 := p_buffer
-    pb_param2 := count
-    pb_cmd := CMD_READ_H
-
-    async_active := true
-    async_caller := COGID()
-    status := PENDING
+        async_active := true
+        async_caller := COGID()
+        status := PENDING
 
 PUB startWriteHandle(handle, p_buffer, count) : status
 '' Begin an asynchronous write. Returns immediately with PENDING.
@@ -1261,21 +1261,21 @@ PUB startWriteHandle(handle, p_buffer, count) : status
 '' @returns status - PENDING (1) on success, negative error on failure
 
     if async_active
-        return set_error(E_ASYNC_BUSY)
-    if cog_id == -1
-        return set_error(E_NOT_MOUNTED)
+        status := set_error(E_ASYNC_BUSY)
+    elseif cog_id == -1
+        status := set_error(E_NOT_MOUNTED)
+    else
+        repeat until LOCKTRY(api_lock)
 
-    repeat until LOCKTRY(api_lock)
+        pb_caller := COGID()
+        pb_param0 := handle
+        pb_param1 := p_buffer
+        pb_param2 := count
+        pb_cmd := CMD_WRITE_H
 
-    pb_caller := COGID()
-    pb_param0 := handle
-    pb_param1 := p_buffer
-    pb_param2 := count
-    pb_cmd := CMD_WRITE_H
-
-    async_active := true
-    async_caller := COGID()
-    status := PENDING
+        async_active := true
+        async_caller := COGID()
+        status := PENDING
 
 PUB isComplete() : done
 '' Check if the current async operation has completed.
@@ -1292,20 +1292,20 @@ PUB getResult() : byteCount
 '' @returns byteCount - Bytes read/written, or negative error code
 
     if NOT async_active
-        return set_error(E_NO_ASYNC_OP)
-
-    ' Wait for completion if not already done
-    repeat until pb_cmd == CMD_NONE
-
-    if pb_status < 0
-        byteCount := pb_status
-        set_error(pb_status)
+        byteCount := set_error(E_NO_ASYNC_OP)
     else
-        byteCount := pb_data0
+        ' Wait for completion if not already done
+        repeat until pb_cmd == CMD_NONE
 
-    async_active := false
-    if POLLATN()                                        ' Drain stale COGATN from worker completion
-    LOCKREL(api_lock)
+        if pb_status < 0
+            byteCount := pb_status
+            set_error(pb_status)
+        else
+            byteCount := pb_data0
+
+        async_active := false
+        if POLLATN()                                        ' Drain stale COGATN from worker completion
+        LOCKREL(api_lock)
 
 PUB cancelAsync() : status
 '' Cancel a pending async operation and release the lock.
@@ -1315,14 +1315,14 @@ PUB cancelAsync() : status
 '' @returns status - SUCCESS
 
     if NOT async_active
-        return set_error(E_NO_ASYNC_OP)
+        status := set_error(E_NO_ASYNC_OP)
+    else
+        repeat until pb_cmd == CMD_NONE
 
-    repeat until pb_cmd == CMD_NONE
-
-    async_active := false
-    if POLLATN()                                        ' Drain stale COGATN from worker completion
-    LOCKREL(api_lock)
-    status := SUCCESS
+        async_active := false
+        if POLLATN()                                        ' Drain stale COGATN from worker completion
+        LOCKREL(api_lock)
+        status := SUCCESS
 
 #endif                                                  ' SD_INCLUDE_ASYNC
 
@@ -3698,18 +3698,21 @@ PRI do_sync_h(handle) : status | p_buf
 
         DEBUG[CH_FILE]("  [do_sync_h] Sync complete")
 
-PRI do_idle_flush() | idx
+PRI do_idle_flush() | idx, bAborted
 ' Auto-flush dirty handles after idle period. Scans all handles for HF_DIRTY,
 ' syncs each, then updates FSInfo if needed. Checks pb_cmd between each handle
 ' sync to abort immediately if a command arrives.
 
+    bAborted := false
     repeat idx from 0 TO MAX_OPEN_FILES - 1
         if pb_cmd <> CMD_NONE
-            return                                      ' Command arrived, abort flush
+            bAborted := true                            ' Command arrived, abort flush
+            quit
         if h_flags[idx] & HF_DIRTY
             do_sync_h(idx)
-    updateFSInfo()
-    flush_done := true
+    if NOT bAborted
+        updateFSInfo()
+        flush_done := true
 
 PRI do_sync_all() : status | idx
 ' Sync all open write handles - flushes all write handles to disk.
@@ -4881,97 +4884,94 @@ PRI do_compact_file(p_path) : status | dir_sec, dir_off, start_cluster, file_siz
 
     if searchDirectory(p_path) == 0
         status := E_FILE_NOT_FOUND
-        return
-    dir_sec := entry_address >> SECTOR_SHIFT
-    dir_off := entry_address & SECTOR_OFFSET_MASK
-    start_cluster := firstCluster()
-    file_size := dirEntFileSize(@entry_buffer)
-
-    ' Step 2: Check file is not open
-    if isFileOpenAny(dir_sec, dir_off)
+    elseif isFileOpenAny(entry_address >> SECTOR_SHIFT, entry_address & SECTOR_OFFSET_MASK)
+        ' Step 2: Check file is not open
         status := E_FILE_OPEN_FOR_COMPACT
-        return
-
-    ' Step 3: Empty file — nothing to compact
-    if file_size == 0
+    elseif dirEntFileSize(@entry_buffer) == 0
+        ' Step 3: Empty file — nothing to compact
         status := SUCCESS
-        return
+    else
+        dir_sec := entry_address >> SECTOR_SHIFT
+        dir_off := entry_address & SECTOR_OFFSET_MASK
+        start_cluster := firstCluster()
+        file_size := dirEntFileSize(@entry_buffer)
 
-    ' Step 4: Count clusters and check fragmentation
-    frag_count := countFileFragments(start_cluster)
-    if frag_count == 1
-        status := SUCCESS                               '  already contiguous
-        return
-    ' Count clusters by walking the chain
-    cluster_count := 0
-    clus := start_cluster
-    repeat
-        cluster_count++
-        next_clus := LONG[readFat(clus)] & FAT32_ENTRY_MASK
-        if next_clus >= FAT32_EOC_MIN
-            quit
-        if next_clus < ROOT_CLUSTER
-            quit
-        clus := next_clus
+        ' Step 4: Count clusters and check fragmentation
+        frag_count := countFileFragments(start_cluster)
+        if frag_count == 1
+            status := SUCCESS                           '  already contiguous
+        else
+            ' Count clusters by walking the chain
+            cluster_count := 0
+            clus := start_cluster
+            repeat
+                cluster_count++
+                next_clus := LONG[readFat(clus)] & FAT32_ENTRY_MASK
+                if next_clus >= FAT32_EOC_MIN
+                    quit
+                if next_clus < ROOT_CLUSTER
+                    quit
+                clus := next_clus
 
-    ' Step 5: Find contiguous free space
-    new_first := findContiguousRun(cluster_count)
-    if new_first < 0
-        status := new_first                             '  E_NO_CONTIGUOUS_SPACE or E_IO_ERROR
-        return
+            ' Step 5: Find contiguous free space
+            new_first := findContiguousRun(cluster_count)
+            if new_first < 0
+                status := new_first                     '  E_NO_CONTIGUOUS_SPACE or E_IO_ERROR
+            else
+                ' Step 6: Copy phase — walk old chain, copy each cluster to new location
+                clus := start_cluster
+                idx := 0
+                status := SUCCESS
+                repeat
+                    status := copyClusterData(clus, new_first + idx)
+                    if status < 0
+                        quit                            '  E_IO_ERROR
+                    idx++
+                    next_clus := LONG[readFat(clus)] & FAT32_ENTRY_MASK
+                    if next_clus >= FAT32_EOC_MIN
+                        quit
+                    if next_clus < ROOT_CLUSTER
+                        quit
+                    clus := next_clus
 
-    ' Step 6: Copy phase — walk old chain, copy each cluster to new location
-    clus := start_cluster
-    idx := 0
-    repeat
-        status := copyClusterData(clus, new_first + idx)
-        if status < 0
-            return                                      '  E_IO_ERROR
-        idx++
-        next_clus := LONG[readFat(clus)] & FAT32_ENTRY_MASK
-        if next_clus >= FAT32_EOC_MIN
-            quit
-        if next_clus < ROOT_CLUSTER
-            quit
-        clus := next_clus
+                ' Step 7: Verify phase (Decision #5) — read-back compare every cluster
+                if status >= 0
+                    clus := start_cluster
+                    idx := 0
+                    repeat
+                        status := verifyClusterCopy(clus, new_first + idx)
+                        if status < 0
+                            quit                        '  E_VERIFY_FAILED
+                        idx++
+                        next_clus := LONG[readFat(clus)] & FAT32_ENTRY_MASK
+                        if next_clus >= FAT32_EOC_MIN
+                            quit
+                        if next_clus < ROOT_CLUSTER
+                            quit
+                        clus := next_clus
 
-    ' Step 7: Verify phase (Decision #5) — read-back compare every cluster
-    clus := start_cluster
-    idx := 0
-    repeat
-        status := verifyClusterCopy(clus, new_first + idx)
-        if status < 0
-            return                                      '  E_VERIFY_FAILED
-        idx++
-        next_clus := LONG[readFat(clus)] & FAT32_ENTRY_MASK
-        if next_clus >= FAT32_EOC_MIN
-            quit
-        if next_clus < ROOT_CLUSTER
-            quit
-        clus := next_clus
+                ' Step 8: Build new FAT chain
+                if status >= 0
+                    status := allocateContiguousChain(new_first, cluster_count)
 
-    ' Step 8: Build new FAT chain
-    status := allocateContiguousChain(new_first, cluster_count)
-    if status < 0
-        return
+                ' Step 9: Update directory entry to point to new first cluster
+                if status >= 0
+                    if readSector(dir_sec, BUF_DIR) < 0
+                        status := E_IO_ERROR
+                    else
+                        bytemove(@entry_buffer, @dir_buf + dir_off, DIR_ENTRY_SIZE)
+                        dirEntSetStartClus(@entry_buffer, new_first)
+                        bytemove(@dir_buf + dir_off, @entry_buffer, DIR_ENTRY_SIZE)
+                        writeSector(dir_sec, BUF_DIR)
 
-    ' Step 9: Update directory entry to point to new first cluster
-    if readSector(dir_sec, BUF_DIR) < 0
-        status := E_IO_ERROR
-        return
-    bytemove(@entry_buffer, @dir_buf + dir_off, DIR_ENTRY_SIZE)
-    dirEntSetStartClus(@entry_buffer, new_first)
-    bytemove(@dir_buf + dir_off, @entry_buffer, DIR_ENTRY_SIZE)
-    writeSector(dir_sec, BUF_DIR)
+                ' Step 10: Free old clusters
+                if status >= 0
+                    freeClusterChain(start_cluster)
 
-    ' Step 10: Free old clusters
-    freeClusterChain(start_cluster)
+                ' Step 11: Invalidate all caches
+                invalidateAllCaches()
 
-    ' Step 11: Invalidate all caches
-    invalidateAllCaches()
-
-    ' Step 12: Success
-    status := SUCCESS
+                ' Step 12: Success (status already set by each step)
 
 PRI do_file_fragments(p_path) : count | start_cluster
 ' Worker-side handler for CMD_FILE_FRAGMENTS.
@@ -4998,22 +4998,22 @@ PRI countFileFragments(first_cluster) : count | clus, next_clus, loop_count
 
     if first_cluster < ROOT_CLUSTER
         count := 0                                      '  empty or invalid chain
-        return
-    count := 1
-    clus := first_cluster
-    loop_count := 0
-    repeat
-        next_clus := LONG[readFat(clus)] & FAT32_ENTRY_MASK
-        if next_clus >= FAT32_EOC_MIN
-            quit                                        '  end of chain
-        if next_clus < ROOT_CLUSTER                     '  bad reference
-            quit
-        if next_clus <> clus + 1                        '  non-contiguous transition?
-            count++
-        clus := next_clus
-        loop_count++
-        if loop_count > 100000                          '  safety limit
-            quit
+    else
+        count := 1
+        clus := first_cluster
+        loop_count := 0
+        repeat
+            next_clus := LONG[readFat(clus)] & FAT32_ENTRY_MASK
+            if next_clus >= FAT32_EOC_MIN
+                quit                                    '  end of chain
+            if next_clus < ROOT_CLUSTER                 '  bad reference
+                quit
+            if next_clus <> clus + 1                    '  non-contiguous transition?
+                count++
+            clus := next_clus
+            loop_count++
+            if loop_count > 100000                      '  safety limit
+                quit
 
 PRI findContiguousRun(cluster_count) : first_cluster | fat_idx, entry, run_start, run_length
 ' Scan FAT for a contiguous run of N free clusters.
@@ -5032,23 +5032,23 @@ PRI findContiguousRun(cluster_count) : first_cluster | fat_idx, entry, run_start
             if readSector(fat_sec + fat_idx >> SECTOR_SHIFT, BUF_FAT) < 0       '   load next FAT sector
                 DEBUG[CH_SECTOR]("  [findContiguousRun] FAT read FAILED")
                 first_cluster := E_IO_ERROR
-                fat_sec_in_buf := -1
-                return
-        if test_max_clusters > 0 AND (fat_idx >> 2) >= test_max_clusters        '  test hook: artificial cluster limit
-            quit
-        entry := LONG[@fat_buf + (fat_idx & SECTOR_OFFSET_MASK)]
-        if (entry & FAT32_ENTRY_MASK) == 0                                      '  free cluster?
-            if run_length == 0
-                run_start := fat_idx >> 2                                       '   start new run
-            run_length++
-            if run_length >= cluster_count                                      '  found enough?
-                first_cluster := run_start
-                fat_sec_in_buf := -1
-                return
-        else
-            run_length := 0                                                     '  reset run
-        fat_idx += 4
-    first_cluster := E_NO_CONTIGUOUS_SPACE                                      '  no run found
+                quit
+        if first_cluster <> E_IO_ERROR
+            if test_max_clusters > 0 AND (fat_idx >> 2) >= test_max_clusters    '  test hook: artificial cluster limit
+                quit
+            entry := LONG[@fat_buf + (fat_idx & SECTOR_OFFSET_MASK)]
+            if (entry & FAT32_ENTRY_MASK) == 0                                  '  free cluster?
+                if run_length == 0
+                    run_start := fat_idx >> 2                                   '   start new run
+                run_length++
+                if run_length >= cluster_count                                  '  found enough?
+                    first_cluster := run_start
+                    quit
+            else
+                run_length := 0                                                 '  reset run
+            fat_idx += 4
+    if first_cluster <> E_IO_ERROR AND run_length < cluster_count
+        first_cluster := E_NO_CONTIGUOUS_SPACE                                  '  no run found
     fat_sec_in_buf := -1
 
 PRI allocateContiguousChain(first_cluster, count) : status | clus, fat_idx, buf_idx, high_bits, prev_fat_sector
@@ -5130,7 +5130,9 @@ PRI verifyClusterCopy(src_cluster, dst_cluster) : status | idx, byte_idx
             if BYTE[@buf][byte_idx] <> BYTE[@dir_buf][byte_idx]
                 DEBUG[CH_FILE]("  [verifyClusterCopy] Mismatch at sector ", udec_(idx), " byte ", udec_(byte_idx))
                 status := E_VERIFY_FAILED
-                return
+                quit
+        if status < 0
+            quit
 
 PRI invalidateAllCaches()
 ' Reset all three sector cache tracking variables to force re-reads.
@@ -6404,25 +6406,26 @@ PRI sendStopTransmission() : status | resp, idx, timeout
             cmd12_capture_len := idx
             DEBUG[CH_RECOVER]("  [sendStopTransmission] TIMEOUT waiting for R1")
             status := E_TIMEOUT
-            return
+            quit
 
-    ' Capture remaining bytes after R1 (for post-R1 framing analysis)
-    repeat while idx < 16
-        cmd12_capture[idx] := sp_transfer_8($FF)
-        idx++
+    if status == 0
+        ' Capture remaining bytes after R1 (for post-R1 framing analysis)
+        repeat while idx < 16
+            cmd12_capture[idx] := sp_transfer_8($FF)
+            idx++
 
-    ' Evaluate R1 response
-    if last_cmd12_r1 <> $00
-        last_cmd12_busy := 2                            ' R1 error
-        DEBUG[CH_RECOVER]("  [sendStopTransmission] R1 error: $", uhex_byte_(last_cmd12_r1))
-        status := E_IO_ERROR
-    else
-        ' Wait for busy to complete (card may still be finishing last block)
-        status := waitBusyComplete()
-        if status < 0
-            last_cmd12_busy := 3                        ' Busy timeout
+        ' Evaluate R1 response
+        if last_cmd12_r1 <> $00
+            last_cmd12_busy := 2                        ' R1 error
+            DEBUG[CH_RECOVER]("  [sendStopTransmission] R1 error: $", uhex_byte_(last_cmd12_r1))
+            status := E_IO_ERROR
         else
-            last_cmd12_busy := 0                        ' Success
+            ' Wait for busy to complete (card may still be finishing last block)
+            status := waitBusyComplete()
+            if status < 0
+                last_cmd12_busy := 3                    ' Busy timeout
+            else
+                last_cmd12_busy := 0                    ' Success
 
 PRI recoverToIdle() : status
 ' Force the card's SPI state machine back to idle by deasserting CS and clocking.
@@ -6494,25 +6497,26 @@ PRI sendCmd13Transaction() : r1, status | idx, resp, timeout
             quit
         if GETCT() - timeout > 0
             cmd13_capture_len := idx
-            pinh(cs)
             last_cmd13_r1 := $FF
-            return                                      '  r1 stays -1, status stays 0
+            quit                                        '  r1 stays -1, status stays 0
 
-    ' Capture remaining bytes after R1 (STATUS byte + extra for analysis)
-    repeat while idx < 8
-        cmd13_capture[idx] := sp_transfer_8($FF)
-        idx++
+    if r1 >= 0
+        ' Capture remaining bytes after R1 (STATUS byte + extra for analysis)
+        repeat while idx < 8
+            cmd13_capture[idx] := sp_transfer_8($FF)
+            idx++
 
-    ' STATUS byte is immediately after R1
-    status := cmd13_capture[cmd13_capture_len]
+        ' STATUS byte is immediately after R1
+        status := cmd13_capture[cmd13_capture_len]
 
     pinh(cs)                                            '  deselect card
 
     ' Stage CMD13 results for diagnostic getters
     last_cmd13_r1 := r1
-    last_cmd13_status := status
-    if r1 <> 0 OR status <> 0
-        last_cmd13_error := (r1 << 8) | status
+    if r1 >= 0
+        last_cmd13_status := status
+        if r1 <> 0 OR status <> 0
+            last_cmd13_error := (r1 << 8) | status
 
 PRI probeCmd13() | r1, status
 ' Probe CMD13 reliability at end of initCard().
@@ -6536,23 +6540,18 @@ PRI probeCmd13() | r1, status
         DEBUG[CH_STATUS]("    [probeCmd13] TIMEOUT - marking CMD13 unreliable")
         cmd13_reliable := FALSE
         card_warning_flags |= CW_CMD13_UNRELIABLE
-        return
-
     ' Check 2: R1 bit 7 must be 0 per SD spec
-    if r1 & $80
+    elseif r1 & $80
         DEBUG[CH_STATUS]("    [probeCmd13] R1 bit 7 set - marking CMD13 unreliable")
         cmd13_reliable := FALSE
         card_warning_flags |= CW_CMD13_UNRELIABLE
-        return
-
     ' Check 3: 3+ error bits in STATUS on an idle card = garbage data
-    if ONES status >= 3
+    elseif ONES status >= 3
         DEBUG[CH_STATUS]("    [probeCmd13] STATUS has ", udec_(ONES status), " error bits - marking CMD13 unreliable")
         cmd13_reliable := FALSE
         card_warning_flags |= CW_CMD13_UNRELIABLE
-        return
-
-    DEBUG[CH_STATUS]("    [probeCmd13] CMD13 OK (R1=$", uhex_byte_(r1), " STATUS=$", uhex_byte_(status), ")")
+    else
+        DEBUG[CH_STATUS]("    [probeCmd13] CMD13 OK (R1=$", uhex_byte_(r1), " STATUS=$", uhex_byte_(status), ")")
 
 PRI probeCmd23() | scr[2], cmd_support, resp
 ' Probe CMD23 support at init time.
@@ -6599,40 +6598,38 @@ PRI checkCardStatus(caller) : status | r1, cmd_status
 
 ' Skip CMD13 on cards with broken implementation (unless diagnostic override is set)
 
-    if NOT cmd13_reliable AND NOT test_force_cmd13
-        return
+    if cmd13_reliable OR test_force_cmd13
+        r1, cmd_status := sendCmd13Transaction()
 
-    r1, cmd_status := sendCmd13Transaction()
+        ' Log pre-capture for diagnostic visibility
+        DEBUG[CH_STATUS]("  [checkCardStatus] ", zstr_(caller), ": pre=[", uhex_byte_(cmd13_pre_capture[0]), " ", uhex_byte_(cmd13_pre_capture[1]), " ", uhex_byte_(cmd13_pre_capture[2]), " ", uhex_byte_(cmd13_pre_capture[3]), " ", uhex_byte_(cmd13_pre_capture[4]), " ", uhex_byte_(cmd13_pre_capture[5]), "] NCR=", udec_(cmd13_capture_len), " R1=$", uhex_byte_(r1), " ST=$", uhex_byte_(cmd_status))
 
-    ' Log pre-capture for diagnostic visibility
-    DEBUG[CH_STATUS]("  [checkCardStatus] ", zstr_(caller), ": pre=[", uhex_byte_(cmd13_pre_capture[0]), " ", uhex_byte_(cmd13_pre_capture[1]), " ", uhex_byte_(cmd13_pre_capture[2]), " ", uhex_byte_(cmd13_pre_capture[3]), " ", uhex_byte_(cmd13_pre_capture[4]), " ", uhex_byte_(cmd13_pre_capture[5]), "] NCR=", udec_(cmd13_capture_len), " R1=$", uhex_byte_(r1), " ST=$", uhex_byte_(cmd_status))
-
-    ' Check for errors
-    if r1 == -1
-        DEBUG[CH_STATUS]("  [checkCardStatus] ", zstr_(caller), ": TIMEOUT waiting for R1")
-        status := E_TIMEOUT
-    elseif r1 <> $00
-        DEBUG[CH_STATUS]("  [checkCardStatus] ", zstr_(caller), ": R1 error=$", uhex_byte_(r1))
-        status := E_IO_ERROR
-    elseif cmd_status <> $00
-        DEBUG[CH_STATUS]("  [checkCardStatus] ", zstr_(caller), ": STATUS error=$", uhex_byte_(cmd_status))
-        if cmd_status & CSR_OUT_OF_RANGE
-            DEBUG[CH_STATUS]("    -> OUT_OF_RANGE")
-        if cmd_status & CSR_ERASE_PARAM
-            DEBUG[CH_STATUS]("    -> ERASE_PARAM")
-        if cmd_status & CSR_WP_VIOLATION
-            DEBUG[CH_STATUS]("    -> WP_VIOLATION")
-        if cmd_status & CSR_CARD_ECC_FAILED
-            DEBUG[CH_STATUS]("    -> CARD_ECC_FAILED")
-        if cmd_status & CSR_CC_ERROR
-            DEBUG[CH_STATUS]("    -> CC_ERROR")
-        if cmd_status & CSR_ERROR
-            DEBUG[CH_STATUS]("    -> ERROR")
-        if cmd_status & CSR_WP_ERASE_SKIP
-            DEBUG[CH_STATUS]("    -> WP_ERASE_SKIP")
-        if cmd_status & CSR_CARD_IS_LOCKED
-            DEBUG[CH_STATUS]("    -> CARD_IS_LOCKED")
-        status := E_IO_ERROR
+        ' Check for errors
+        if r1 == -1
+            DEBUG[CH_STATUS]("  [checkCardStatus] ", zstr_(caller), ": TIMEOUT waiting for R1")
+            status := E_TIMEOUT
+        elseif r1 <> $00
+            DEBUG[CH_STATUS]("  [checkCardStatus] ", zstr_(caller), ": R1 error=$", uhex_byte_(r1))
+            status := E_IO_ERROR
+        elseif cmd_status <> $00
+            DEBUG[CH_STATUS]("  [checkCardStatus] ", zstr_(caller), ": STATUS error=$", uhex_byte_(cmd_status))
+            if cmd_status & CSR_OUT_OF_RANGE
+                DEBUG[CH_STATUS]("    -> OUT_OF_RANGE")
+            if cmd_status & CSR_ERASE_PARAM
+                DEBUG[CH_STATUS]("    -> ERASE_PARAM")
+            if cmd_status & CSR_WP_VIOLATION
+                DEBUG[CH_STATUS]("    -> WP_VIOLATION")
+            if cmd_status & CSR_CARD_ECC_FAILED
+                DEBUG[CH_STATUS]("    -> CARD_ECC_FAILED")
+            if cmd_status & CSR_CC_ERROR
+                DEBUG[CH_STATUS]("    -> CC_ERROR")
+            if cmd_status & CSR_ERROR
+                DEBUG[CH_STATUS]("    -> ERROR")
+            if cmd_status & CSR_WP_ERASE_SKIP
+                DEBUG[CH_STATUS]("    -> WP_ERASE_SKIP")
+            if cmd_status & CSR_CARD_IS_LOCKED
+                DEBUG[CH_STATUS]("    -> CARD_IS_LOCKED")
+            status := E_IO_ERROR
 
 PRI transfer(data,bits) : rxData | _cs, _mosi, _miso, _sck, delay
 ' Transfer data to/from SD card - bit-bang fallback for unsupported sizes.
