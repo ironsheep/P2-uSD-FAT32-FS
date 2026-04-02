@@ -68,6 +68,13 @@ genFileName     BYTE    0[16]
 readBuf         BYTE    0[32]
 readBuf_guard   BYTE    0[16]
 
+' Stale cluster test names and buffers
+staleDir        BYTE    "STALE", 0
+stalePolluter   BYTE    "STPOLL.TXT", 0
+staleBuf        BYTE    0[512]
+staleBuf_guard  BYTE    0[16]
+staleGenName    BYTE    0[16]
+
 PUB go() | result, pEntry, pFilename, attrs, fileCount, idx, handle, bytesRead
 '' Main entry point for directory regression tests
 ''
@@ -415,6 +422,88 @@ PUB go() | result, pEntry, pFilename, attrs, fileCount, idx, handle, bytesRead
     sd.deleteFile(@deepDir1)
 
     ' ----------------------------------
+    ' TEST GROUP: Stale Cluster Directory Test
+    ' ----------------------------------
+    ' Regression test for stale directory cluster bug: do_newdir() must
+    ' clearCluster() the new directory's data cluster so that stale data
+    ' from a previously-used cluster does not masquerade as directory entries.
+    utils.startTestGroup(@"Stale Cluster Directory Test")
+
+    utils.startTest(@"Create dir in recycled cluster, files span sectors")
+    utils.setCheckCountPerTest(7)
+
+    ' (a) Create polluter file and fill with $AA (non-zero, non-$E5)
+    sd.changeDirectory(@"/")
+    utils.fillBufferWithValue(@staleBuf, 512, $AA)
+    utils.initGuard(@staleBuf_guard)
+    handle := sd.createFileNew(@stalePolluter)
+    utils.evaluateSubBool(handle >= 0, @"create polluter", true)
+    if handle >= 0
+        ' Write 32 KB of $AA fill (covers cluster sizes up to 64 sectors)
+        repeat 64
+            sd.writeHandle(handle, @staleBuf, 512)
+        sd.closeFileHandle(handle)
+    utils.checkGuard(@staleBuf_guard, @"staleBuf guard")
+
+    ' (b) Delete polluter to free its cluster(s) with stale $AA data
+    result := sd.deleteFile(@stalePolluter)
+    utils.evaluateSubBool(result == sd.SUCCESS, @"delete polluter", true)
+
+    ' (c) Create STALE directory (should get recycled cluster)
+    result := sd.newDirectory(@staleDir)
+    utils.evaluateSubBool(result == sd.SUCCESS, @"create STALE dir", true)
+
+    ' (d) Create 20 files in STALE (forces entries past first sector)
+    sd.changeDirectory(@staleDir)
+    result := true
+    repeat idx from 1 to 20
+        buildStaleFileName(idx)
+        handle := sd.createFileNew(@staleGenName)
+        if handle >= 0
+            sd.writeHandle(handle, @staleGenName, strsize(@staleGenName))
+            sd.closeFileHandle(handle)
+        else
+            debug("  createFileNew failed at STR", udec_(idx))
+            result := false
+            quit
+    utils.evaluateSubBool(result, @"create 20 files", true)
+
+    ' (e) Enumerate directory - expect 22 (20 files + . + ..)
+    fileCount := 0
+    idx := 0
+    repeat
+        pEntry := sd.readDirectory(idx)
+        if pEntry == 0
+            quit
+        fileCount++
+        idx++
+    debug("  Stale dir entry count: ", udec_(fileCount))
+    utils.evaluateSubValue(fileCount, @"count == 22 (20+.+..)", 22)
+
+    ' (f) Verify STR15.TXT is openable and readable (overflow region file)
+    buildStaleFileName(15)
+    handle := sd.openFileRead(@staleGenName)
+    if handle >= 0
+        bytefill(@readBuf, 0, 32)
+        utils.initGuard(@readBuf_guard)
+        bytesRead := sd.readHandle(handle, @readBuf, 32)
+        utils.checkGuard(@readBuf_guard, @"readBuf guard")
+        sd.closeFileHandle(handle)
+        utils.evaluateSubBool(bytesRead > 0, @"STR15.TXT readable", true)
+    else
+        utils.evaluateSubBool(false, @"STR15.TXT readable", true)
+
+    ' (g) Clean up: delete files, remove directory
+    repeat idx from 1 to 20
+        buildStaleFileName(idx)
+        sd.deleteFile(@staleGenName)
+    sd.changeDirectory(@"/")
+    result := sd.deleteFile(@staleDir)
+    utils.evaluateSubBool(result == sd.SUCCESS, @"STALE removed", true)
+
+    utils.showSubTestResults()
+
+    ' ----------------------------------
     ' Cleanup
     ' ----------------------------------
     debug(" ")
@@ -444,6 +533,8 @@ PRI buildFileName(fileNum) | d10, d1
 ' Build filename "FILEnn.TXT" in genFileName buffer
 '
 ' @param fileNum - File number 1..99
+' @local d10 - Tens digit of file number
+' @local d1 - Ones digit of file number
 
   d10 := fileNum / 10
   d1 := fileNum // 10
@@ -452,6 +543,22 @@ PRI buildFileName(fileNum) | d10, d1
   BYTE[@genFileName + 5] := "0" + d1
   bytemove(@genFileName + 6, @".TXT", 4)
   BYTE[@genFileName + 10] := 0
+
+
+PRI buildStaleFileName(fileNum) | d10, d1
+' Build filename "STRnn.TXT" in staleGenName buffer
+'
+' @param fileNum - File number 1..99
+' @local d10 - Tens digit of file number
+' @local d1 - Ones digit of file number
+
+  d10 := fileNum / 10
+  d1 := fileNum // 10
+  bytemove(@staleGenName, @"STR", 3)
+  BYTE[@staleGenName + 3] := "0" + d10
+  BYTE[@staleGenName + 4] := "0" + d1
+  bytemove(@staleGenName + 5, @".TXT", 4)
+  BYTE[@staleGenName + 9] := 0
 
 
 PRI cleanupTestItems()

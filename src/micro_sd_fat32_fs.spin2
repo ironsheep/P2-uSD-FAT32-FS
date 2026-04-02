@@ -1109,6 +1109,14 @@ PUB freeSpace() : sectorCount
     if send_command(CMD_FREESPACE, 0, 0, 0, 0) == SUCCESS
         sectorCount := pb_data0
 
+PUB sectorsPerCluster() : count
+'' Get the number of sectors per cluster for the mounted filesystem.
+'' Returns 0 if no card is mounted.
+''
+'' @returns count - Sectors per cluster (power of 2: 1, 2, 4, 8, 16, 32, 64, or 128)
+
+    count := sec_per_clus
+
 PUB setDate(year, month, day, hour, minute, second) : status
 '' Set the current date and time for file timestamps.
 '' Starts the auto-incrementing clock (CT1-based, 2-second tick).
@@ -3929,6 +3937,7 @@ PRI do_newdir(name_ptr) : status | temp
                 clearCluster(temp)
 
         temp := allocateCluster(0)
+        clearCluster(temp)                              '  zero all sectors in new directory cluster
         dirEntSetAttr(@entry_buffer, ATTR_DIRECTORY)    ' Directory attribute
         dirEntSetCreateStamp(@entry_buffer, date_stamp)
         dirEntSetStartClus(@entry_buffer, temp)
