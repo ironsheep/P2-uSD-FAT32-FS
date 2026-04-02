@@ -6,9 +6,9 @@
 
 ## 1. Executive Summary
 
-The regression test suite validates the `micro_sd_fat32_fs.spin2` — a Propeller 2 SD card driver that uses smart pins for SPI communication, the P2 streamer for bulk data transfer, and a dedicated worker cog for all card I/O. The suite currently contains **25 test files** producing **464 test assertions**. The original 10 core files are joined by 15 additional files covering directory handles, volume operations, register access, speed/CMD6, CRC diagnostics, subdirectory operations, error handling, CRC error injection validation, recovery scenarios, inter-cog FIFO infrastructure, per-cog CWD isolation, concurrent stress testing, live timestamps, non-blocking async I/O, and defragmentation.
+The regression test suite validates the `micro_sd_fat32_fs.spin2` — a Propeller 2 SD card driver that uses smart pins for SPI communication, the P2 streamer for bulk data transfer, and a dedicated worker cog for all card I/O. The suite currently contains **25 test files** producing **465 test assertions**. The original 10 core files are joined by 15 additional files covering directory handles, volume operations, register access, speed/CMD6, CRC diagnostics, subdirectory operations, error handling, CRC error injection validation, recovery scenarios, inter-cog FIFO infrastructure, per-cog CWD isolation, concurrent stress testing, live timestamps, non-blocking async I/O, and defragmentation.
 
-**Verified on hardware (2026-03-25):** All 25 suites totaling **464 tests** — all passing.
+**Verified on hardware (2026-04-01):** All 25 suites totaling **465 tests** — all passing.
 
 The tests exercise the driver from low-level raw sector I/O through the full FAT32 filesystem stack, including multi-cog concurrent access, multi-handle file operations, and card formatting validation. Every test runs on real hardware (P2 Edge + physical SD card) via the `run_test.sh` headless test runner.
 
@@ -77,14 +77,14 @@ Each test is identified by:
 
 ## 3. Test Suite Overview
 
-### 3.1 Test Files (464 tests — verified 2026-03-25)
+### 3.1 Test Files (465 tests — verified 2026-04-01)
 
 | # | Test File | Tests | Focus Area | Driver API Category |
 |---|-----------|:-----:|------------|---------------------|
 | 1 | `SD_RT_mount_tests.spin2` | 29 | Mount/unmount lifecycle, card detection, post-unmount error states, double-mount | Lifecycle |
 | 2 | `SD_RT_file_ops_tests.spin2` | 26 | File create, open, close, delete, rename, move, filename edge cases | File Operations |
 | 3 | `SD_RT_read_write_tests.spin2` | 48 | Read/write data integrity, boundaries, constant patterns, tellHandle/EOF, large multi-cluster | Data I/O |
-| 4 | `SD_RT_directory_tests.spin2` | 29 | Directory create, navigate, enumerate, nesting, many-file stress | Directory Operations |
+| 4 | `SD_RT_directory_tests.spin2` | 30 | Directory create, navigate, enumerate, nesting, many-file stress, stale cluster | Directory Operations |
 | 5 | `SD_RT_seek_tests.spin2` | 37 | Seek, tell, position tracking, cross-sector seeks | File Positioning |
 | 6 | `SD_RT_multicog_tests.spin2` | 14 | Multi-cog singleton, concurrent access, stress test | Multi-Cog Safety |
 | 7 | `SD_RT_multihandle_tests.spin2` | 21 | V3 handle API, use-after-close, pool recycling, limits, errors | Multi-Handle |
@@ -106,7 +106,7 @@ Each test is identified by:
 | 23 | `SD_RT_timestamp_tests.spin2` | 6 | setDate/getDate round-trip, live clock advance, creation/modification stamps | Timestamps |
 | 24 | `SD_RT_async_tests.spin2` | 6 | Non-blocking read/write, isComplete polling, cancelAsync, multi-cog interleave | Async I/O |
 | 25 | `SD_RT_defrag_tests.spin2` | 12 | fileFragments, isFileContiguous, compactFile, createFileContiguous, next-fit | Defragmentation |
-| | **Total** | **464** | | |
+| | **Total** | **465** | | |
 
 ### 3.2 Diagnostic Test Files (in `diagnostic-tests/`)
 
@@ -274,7 +274,7 @@ Verifies that repeated `start()` calls return the same cog ID, not allocate new 
 
 ---
 
-### 4.4 SD_RT_directory_tests.spin2 (29 tests)
+### 4.4 SD_RT_directory_tests.spin2 (30 tests)
 
 **Purpose:** Validate directory creation, navigation, enumeration, and cleanup across nested structures up to 5 levels deep.
 
@@ -1220,7 +1220,7 @@ All critical gaps identified in the original analysis have been addressed:
 | SD_RT_mount_tests | 29 | 29 pass |
 | SD_RT_file_ops_tests | 26 | 26 pass |
 | SD_RT_read_write_tests | 48 | 48 pass |
-| SD_RT_directory_tests | 29 | 29 pass |
+| SD_RT_directory_tests | 30 | 30 pass |
 | SD_RT_seek_tests | 37 | 37 pass |
 | SD_RT_multicog_tests | 14 | 14 pass |
 | SD_RT_multihandle_tests | 21 | 21 pass |
@@ -1242,7 +1242,7 @@ All critical gaps identified in the original analysis have been addressed:
 | SD_RT_timestamp_tests | 6 | 6 pass |
 | SD_RT_async_tests | 6 | 6 pass |
 | SD_RT_defrag_tests | 12 | 12 pass |
-| **Total** | **464** | **464 pass** |
+| **Total** | **465** | **465 pass** |
 
 ---
 
@@ -1309,6 +1309,6 @@ cd /path/to/P2-uSD-FAT32-FS/tools
 
 ---
 
-*Document updated: 2026-03-17*
+*Document updated: 2026-04-01*
 *Based on: micro_sd_fat32_fs.spin2 (100+ public methods, 46 worker cog commands)*
-*Test suite: 25 test files, 464 assertions — all verified passing on hardware*
+*Test suite: 25 test files, 465 assertions — all verified passing on hardware*

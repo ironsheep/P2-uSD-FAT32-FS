@@ -4,14 +4,14 @@ Automated regression test suite for the P2 SD Card Driver. All tests execute on 
 
 ## Test Summary
 
-### Core Test Suites (verified 2026-03-25)
+### Core Test Suites (verified 2026-04-01)
 
 | Test Suite | Description | Tests |
 |------------|-------------|-------|
 | **Mount Tests** | Card initialization, mounting, unmounting, pre/post-mount errors, double-mount | 29 |
 | **File Operations** | Create, open, close, delete, rename, filename edge cases (V3 handle API) | 26 |
 | **Read/Write Tests** | Data integrity, sector/cluster boundaries, constant patterns, tellHandle/EOF, multi-cluster, large files | 48 |
-| **Directory Tests** | Directory listing, navigation, deep nesting, boundaries, many-file stress | 29 |
+| **Directory Tests** | Directory listing, navigation, deep nesting, boundaries, many-file stress, stale cluster | 30 |
 | **Seek Tests** | Random access, cross-sector seeks, seek boundaries | 37 |
 | **Multicog Tests** | Singleton pattern, concurrent access, lock serialization | 14 |
 | **Multihandle Tests** | Multiple simultaneous file handles, use-after-close, pool recycling | 21 |
@@ -19,7 +19,7 @@ Automated regression test suite for the P2 SD Card Driver. All tests execute on 
 | **Raw Sector Tests** | Direct sector read/write, large LBA addressing | 14 |
 | **Format Tests** | FAT32 structure validation, cross-OS compatibility | 46 |
 | **Subdirectory Ops Tests** | Cross-buffer cache coherence, empty files, subdir operations | 18 |
-| **Core Total** | | **288** |
+| **Core Total** | | **289** |
 
 ### Additional Test Suites
 
@@ -40,7 +40,7 @@ Automated regression test suite for the P2 SD Card Driver. All tests execute on 
 | **Async I/O Tests** | Non-blocking read/write, isComplete polling, cancelAsync, multi-cog interleave | 6 |
 | **Defrag Tests** | fileFragments, isFileContiguous, compactFile, createFileContiguous, next-fit allocation | 12 |
 | | **Additional Total** | **176** |
-| | **Grand Total (25 suites)** | **464** |
+| | **Grand Total (25 suites)** | **465** |
 
 ## Prerequisites
 

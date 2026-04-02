@@ -1,6 +1,6 @@
 # Regression Test Suite
 
-Automated hardware-verified test suite for the P2 SD Card Driver. All 25 test suites (464 tests) execute on real Propeller 2 hardware with a physical SD card.
+Automated hardware-verified test suite for the P2 SD Card Driver. All 25 test suites (465 tests) execute on real Propeller 2 hardware with a physical SD card.
 
 ## Running Tests
 

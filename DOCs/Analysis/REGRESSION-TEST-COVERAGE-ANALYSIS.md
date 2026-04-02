@@ -3,7 +3,7 @@
 An analysis of the P2-uSD-FAT32-FS regression test suite against the principles in [REGRESSION-TESTING-BEST-PRACTICES.md](../Decisions/REGRESSION-TESTING-BEST-PRACTICES.md).
 
 **Date:** 2026-03-25
-**Suite Version:** v1.4.1 (25 suites, 464 tests, all passing)
+**Suite Version:** v1.4.2 (25 suites, 465 tests, all passing)
 
 ---
 
