@@ -108,7 +108,7 @@ jobs:
           cp src/UTILS/isp_string_fifo.spin2 "${DEST}/src/UTILS/"
           cp src/UTILS/SD_card_identify.spin2 "${DEST}/src/UTILS/"
 
-          # src/regression-tests/ - test suites and framework (24 suites)
+          # src/regression-tests/ - test suites and framework (25 suites)
           mkdir -p "${DEST}/src/regression-tests"
           cp src/regression-tests/README.md "${DEST}/src/regression-tests/"
           cp src/regression-tests/THEORY-OF-OPERATIONS.md "${DEST}/src/regression-tests/"
@@ -136,6 +136,7 @@ jobs:
           cp src/regression-tests/SD_RT_timestamp_tests.spin2 "${DEST}/src/regression-tests/"
           cp src/regression-tests/SD_RT_stress_tests.spin2 "${DEST}/src/regression-tests/"
           cp src/regression-tests/SD_RT_async_tests.spin2 "${DEST}/src/regression-tests/"
+          cp src/regression-tests/SD_RT_defrag_tests.spin2 "${DEST}/src/regression-tests/"
           cp src/regression-tests/SD_RT_format_tests.spin2 "${DEST}/src/regression-tests/"
 
           # Remove any macOS artifacts

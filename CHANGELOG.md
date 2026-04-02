@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-04-02
+
+**Stale directory cluster fix, new API, always-on async and defrag, documentation refresh.**
+
+### Bug Fixes
+
+- `newDirectory()`: New directory cluster zeroed before use, preventing stale data from masquerading as directory entries on recycled clusters
+
+### New Features
+
+- `sectorsPerCluster()`: Public getter for filesystem cluster size
+- `SD_INCLUDE_ASYNC` and `SD_INCLUDE_DEFRAG` included by `SD_INCLUDE_ALL`
+
+### Tests
+
+- Stale cluster regression test: pollutes clusters with non-zero fill, verifies 20-file directory survives recycled cluster
+- Disk-full write test dynamically adapts to cluster size via `sectorsPerCluster()`
+- 25 suites, 465 tests, all passing on hardware
+
+### Documentation
+
+- Conditional Compilation Guide, Tutorial, Theory of Operations updated for ASYNC/DEFRAG feature flags
+- Memory Sizing Guide re-measured with pnut-ts v1.53.2 (core: 21 KB, ALL: 26 KB)
+- Bug analysis: stale directory cluster data corruption documented
+
 ## [1.4.2] - 2026-03-26
 
 **Audit fix, allocator wrap-around fix, theory doc updated.**
@@ -286,7 +311,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Initial testing release** -- driver, utilities, demo shell, and 263+ regression tests.
 
-[Unreleased]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.4.2...v1.5.0
+[1.4.2]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.4.1...v1.4.2
+[1.4.1]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.3.2...v1.4.0
 [1.3.2]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.3.1...v1.3.2
 [1.3.1]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.3.0...v1.3.1

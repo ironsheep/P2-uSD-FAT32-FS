@@ -12,26 +12,36 @@
 ''
 '' =================================================================================================
 
-#define SD_INCLUDE_ASYNC
-#define SD_INCLUDE_DEFRAG
-
 ' CONDITIONAL COMPILATION - Optional Feature Modules
 ' Default: MINIMAL driver (core file operations only)
 ' To enable optional features, use #pragma exportdef in your top-level file:
 '
+'   Application features:
+'   #pragma exportdef SD_INCLUDE_ASYNC      ' Non-blocking file I/O: startReadHandle, startWriteHandle, isComplete, getResult
+'   #pragma exportdef SD_INCLUDE_DEFRAG     ' Defragmentation: fileFragments, compactFile, createFileContiguous
+'
+'   Utility features:
 '   #pragma exportdef SD_INCLUDE_RAW        ' Raw sector access
 '   #pragma exportdef SD_INCLUDE_REGISTERS  ' Card register access (CID/CSD/SCR)
 '   #pragma exportdef SD_INCLUDE_SPEED      ' High-speed mode control (requires SD_INCLUDE_REGISTERS)
+'
+'   Diagnostic features:
 '   #pragma exportdef SD_INCLUDE_DEBUG      ' Debug/diagnostic methods & CRC getters
-'   #pragma exportdef SD_INCLUDE_DEFRAG     ' Defragmentation: fileFragments, compactFile, createFileContiguous
+'   #pragma exportdef SD_INCLUDE_STACK_CHECK ' Worker cog stack depth measurement
 '
 '   OBJ
 '       sd : "micro_sd_fat32_fs"
 '
-' Or define SD_INCLUDE_ALL to include everything:
+' Or define SD_INCLUDE_ALL to include everything (except STACK_CHECK):
 '   #pragma exportdef SD_INCLUDE_ALL
 
 #ifdef SD_INCLUDE_ALL
+#ifndef SD_INCLUDE_ASYNC
+#define SD_INCLUDE_ASYNC
+#endif
+#ifndef SD_INCLUDE_DEFRAG
+#define SD_INCLUDE_DEFRAG
+#endif
 #ifndef SD_INCLUDE_RAW
 #define SD_INCLUDE_RAW
 #endif
@@ -43,9 +53,6 @@
 #endif
 #ifndef SD_INCLUDE_DEBUG
 #define SD_INCLUDE_DEBUG
-#endif
-#ifndef SD_INCLUDE_DEFRAG
-#define SD_INCLUDE_DEFRAG
 #endif
 #endif
 

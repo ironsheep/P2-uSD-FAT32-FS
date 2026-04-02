@@ -1355,7 +1355,7 @@ These methods are always available in the core driver (no feature flags required
 | `unmount()` | Unmount card cleanly |
 | `stop()` | Stop worker cog |
 | `error()` | Last error code for calling cog |
-| `checkStackGuard()` | Verify worker cog stack integrity |
+| `checkStackGuard()` | Verify worker cog stack integrity (requires `SD_INCLUDE_STACK_CHECK`) |
 
 ### Handle-Based File Operations
 | Method | Description |
@@ -1399,6 +1399,7 @@ These methods are always available in the core driver (no feature flags required
 | `volumeLabel()` | Card volume label |
 | `setVolumeLabel(label)` | Set volume label |
 | `freeSpace()` | Free sectors on card |
+| `sectorsPerCluster()` | Sectors per cluster (power of 2: 1..128) |
 | `setDate(y,m,d,h,mi,s)` | Set date/time, starts auto-incrementing clock |
 | `getDate()` | Get current clock (returns year, month, day, hour, minute, second) |
 | `getSPIFrequency()` | Current SPI clock in Hz |

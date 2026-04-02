@@ -53,7 +53,7 @@ With no feature flags, the driver provides all standard filesystem operations:
 - `closeFileHandle()` / `syncHandle()`
 - `deleteFile()` / `renameFile()` / `moveFile()`
 - `makeDirectory()` / `changeDirectory()` / `readDirectory()`
-- `fileSize()` / `freeSpace()` / `error()`
+- `fileSize()` / `freeSpace()` / `sectorsPerCluster()` / `error()`
 
 This is sufficient for the vast majority of applications. The example programs (`src/EXAMPLES/`) use no feature flags at all.
 
@@ -350,10 +350,16 @@ Inside the driver (`micro_sd_fat32_fs.spin2`), each optional feature is complete
 
 ### SD_INCLUDE_ALL Expansion
 
-The driver expands `SD_INCLUDE_ALL` into the four individual flags:
+The driver expands `SD_INCLUDE_ALL` into all six individual flags:
 
 ```spin2
 #ifdef SD_INCLUDE_ALL
+#ifndef SD_INCLUDE_ASYNC
+#define SD_INCLUDE_ASYNC
+#endif
+#ifndef SD_INCLUDE_DEFRAG
+#define SD_INCLUDE_DEFRAG
+#endif
 #ifndef SD_INCLUDE_RAW
 #define SD_INCLUDE_RAW
 #endif

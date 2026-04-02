@@ -2,8 +2,8 @@
 
 An analysis of the P2-uSD-FAT32-FS regression test suite against the principles in [REGRESSION-TESTING-BEST-PRACTICES.md](../Decisions/REGRESSION-TESTING-BEST-PRACTICES.md).
 
-**Date:** 2026-03-25
-**Suite Version:** v1.4.2 (25 suites, 465 tests, all passing)
+**Date:** 2026-04-01
+**Suite Version:** v1.4.2+ (25 suites, 465 tests, all passing)
 
 ---
 
@@ -38,21 +38,21 @@ These gaps represent opportunities, not urgent defects. The existing suite catch
 
 | # | Suite File | Focus | Tests | Groups | Guards | Cleanup |
 |---|-----------|-------|-------|--------|--------|---------|
-| 1 | SD_RT_mount_tests | Mount/unmount lifecycle | 21 | 6 | Yes | N/A |
+| 1 | SD_RT_mount_tests | Mount/unmount lifecycle | 29 | 6 | Yes | N/A |
 | 2 | SD_RT_format_tests | Format and VBR validation | 46 | 8 | Yes | N/A |
-| 3 | SD_RT_volume_tests | Volume label, free space, sync | 23 | 5 | Yes | Yes |
-| 4 | SD_RT_file_ops_tests | Create/delete/rename/open | 22 | 7 | Yes | Yes |
-| 5 | SD_RT_read_write_tests | Read/write round-trip | 38 | 9 | Yes | Yes |
+| 3 | SD_RT_volume_tests | Volume label, free space, sync | 31 | 5 | Yes | Yes |
+| 4 | SD_RT_file_ops_tests | Create/delete/rename/open | 26 | 7 | Yes | Yes |
+| 5 | SD_RT_read_write_tests | Read/write round-trip | 48 | 9 | Yes | Yes |
 | 6 | SD_RT_seek_tests | Seek/tell/position | 37 | 8 | Yes | Yes |
-| 7 | SD_RT_directory_tests | readDirectory, newDirectory, cd | 29 | 8 | No | Yes |
+| 7 | SD_RT_directory_tests | readDirectory, newDirectory, cd, stale cluster | 30 | 9 | No | Yes |
 | 8 | SD_RT_subdir_ops_tests | Subdirectory file operations | 18 | 6 | No | Yes |
-| 9 | SD_RT_dirhandle_tests | openDirectory handle-based API | 22 | 5 | Yes | Yes |
-| 10 | SD_RT_multihandle_tests | Multi-file concurrent access | 19 | 9 | Yes | Yes |
+| 9 | SD_RT_dirhandle_tests | openDirectory handle-based API | 25 | 5 | Yes | Yes |
+| 10 | SD_RT_multihandle_tests | Multi-file concurrent access | 21 | 9 | Yes | Yes |
 | 11 | SD_RT_multicog_tests | Multi-cog concurrent access | 14 | 6 | Yes | Yes |
-| 12 | SD_RT_error_handling_tests | Error paths and misuse | 10 | 6 | Yes | Yes |
+| 12 | SD_RT_error_handling_tests | Error paths and misuse | 14 | 6 | Yes | Yes |
 | 13 | SD_RT_recovery_tests | CRC fault injection + recovery | 7 | 4 | Yes | Yes |
-| 14 | SD_RT_raw_sector_tests | Raw sector read/write | -- | -- | Yes | N/A |
-| 15 | SD_RT_multiblock_tests | Multi-block CMD18/CMD25 | -- | -- | Yes | N/A |
+| 14 | SD_RT_raw_sector_tests | Raw sector read/write | 14 | 3 | Yes | N/A |
+| 15 | SD_RT_multiblock_tests | Multi-block CMD18/CMD25 | 6 | 2 | Yes | N/A |
 | 16 | SD_RT_register_tests | CID/CSD/SCR/SD Status | 10 | 2 | Yes | N/A |
 | 17 | SD_RT_speed_tests | High-speed mode, setSPISpeed | 15 | 3 | Yes | Yes |
 | 18 | SD_RT_crc_validation_tests | CRC match/mismatch counters | 6 | 3 | Yes | Yes |
@@ -64,7 +64,7 @@ These gaps represent opportunities, not urgent defects. The existing suite catch
 | 24 | SD_RT_async_tests | Non-blocking async I/O | 6 | 3 | Yes | Yes |
 | 25 | SD_RT_defrag_tests | Defrag: fragments, compact, contiguous | 12 | 4 | Yes | Yes |
 
-**Totals:** ~464 `startTest()` calls, 120 `startTestGroup()` calls, 271 sub-assertions, 214 guard init/check calls across 20 suites.
+**Totals:** 465 `startTest()` calls across 25 suites.
 
 ---
 
@@ -408,28 +408,33 @@ Temporarily introduce deliberate bugs in the driver (off-by-one in cluster alloc
 
 | Suite | startTest() | startTestGroup() | Sub-Assertions | Guard Calls |
 |-------|------------|-----------------|----------------|-------------|
-| mount_tests | 26 | 7 | 3 | 4 |
+| mount_tests | 29 | 7 | 3 | 4 |
 | format_tests | 46 | 8 | 0 | 20 |
-| volume_tests | 23 | 5 | 26 | 6 |
-| file_ops_tests | 22 | 7 | 19 | 16 |
-| read_write_tests | 44 | 9 | 61 | 47 |
+| volume_tests | 31 | 5 | 26 | 6 |
+| file_ops_tests | 26 | 7 | 19 | 16 |
+| read_write_tests | 48 | 9 | 61 | 47 |
 | seek_tests | 37 | 8 | 9 | 30 |
-| directory_tests | 29 | 8 | 14 | 2 |
+| directory_tests | 30 | 9 | 21 | 4 |
 | subdir_ops_tests | 18 | 6 | 19 | 0 |
 | dirhandle_tests | 25 | 5 | 35 | 2 |
 | multihandle_tests | 21 | 11 | 60 | 18 |
 | multicog_tests | 14 | 6 | 0 | 6 |
 | error_handling_tests | 14 | 6 | 11 | 4 |
 | recovery_tests | 7 | 4 | 14 | 16 |
-| raw_sector_tests | -- | -- | 0 | 12 |
-| multiblock_tests | -- | -- | 0 | 9 |
+| raw_sector_tests | 14 | 3 | 0 | 12 |
+| multiblock_tests | 6 | 2 | 0 | 9 |
 | register_tests | 10 | 2 | 6 | 4 |
 | speed_tests | 15 | 3 | 6 | 6 |
 | crc_validation_tests | 6 | 3 | 11 | 10 |
 | crc_diag_tests | 14 | 4 | 5 | 10 |
 | fifo_tests | 21 | 8 | 0 | 0 |
-| **Totals** | **431** | **123** | **300** | **222** |
+| cog_cwd_tests | 5 | 2 | 0 | 0 |
+| stress_tests | 4 | 2 | 0 | 0 |
+| timestamp_tests | 6 | 3 | 0 | 0 |
+| async_tests | 6 | 3 | 0 | 0 |
+| defrag_tests | 12 | 4 | 0 | 0 |
+| **Totals** | **465** | **156** | **307** | **222** |
 
 ---
 
-*Analysis produced 2026-03-05 against REGRESSION-TESTING-BEST-PRACTICES.md (2026-03-04). No code changes made.*
+*Analysis originally produced 2026-03-05, updated 2026-04-01 with current test counts (465 tests, 25 suites).*

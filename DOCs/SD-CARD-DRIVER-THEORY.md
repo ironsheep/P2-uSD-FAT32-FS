@@ -111,13 +111,13 @@ The driver uses `#ifdef` / `#endif` blocks to exclude optional features from min
 
 | Flag | Features Included |
 |------|-------------------|
+| `SD_INCLUDE_ASYNC` | Non-blocking file I/O: `startReadHandle()`, `startWriteHandle()`, `isComplete()`, `getResult()` |
+| `SD_INCLUDE_DEFRAG` | Defragmentation: `fileFragments()`, `compactFile()`, `createFileContiguous()` |
 | `SD_INCLUDE_RAW` | Raw sector read/write, `initCardOnly()`, multi-block (CMD18/CMD25) |
 | `SD_INCLUDE_REGISTERS` | CID, CSD, SCR, SD Status register access, OCR, VBR read |
 | `SD_INCLUDE_SPEED` | CMD6 high-speed mode query and switch (50 MHz) |
 | `SD_INCLUDE_DEBUG` | Debug getters, CRC diagnostic methods, display utilities, test hooks |
-| `SD_INCLUDE_DEFRAG` | Defragmentation: `fileFragments()`, `compactFile()`, `createFileContiguous()` |
-| `SD_INCLUDE_ASYNC` | Non-blocking file I/O: `startReadHandle()`, `startWriteHandle()`, `isComplete()`, `getResult()` |
-| `SD_INCLUDE_ALL` | Enables RAW, REGISTERS, SPEED, DEBUG, and DEFRAG (not ASYNC) |
+| `SD_INCLUDE_ALL` | Enables all of the above (not STACK_CHECK) |
 
 ### Enabling Flags
 
@@ -140,12 +140,12 @@ OBJ
   sd : "micro_sd_fat32_fs"
 ```
 
-### Build Sizes (approximate, with DEBUG enabled)
+### Build Sizes (v1.5.0, code/data only)
 
 | Configuration | Size |
 |---------------|------|
-| Core only (no flags) | ~24 KB |
-| `SD_INCLUDE_ALL` | ~49 KB |
+| Core (no flags) | ~21 KB |
+| `SD_INCLUDE_ALL` | ~26 KB |
 
 ## Worker Cog and Command Protocol
 
@@ -777,12 +777,14 @@ All structs are packed (Spin2 default) with offsets matching their respective ha
 | Method | Description |
 |--------|-------------|
 | `freeSpace() : sectors` | Free space in 512-byte sectors |
+| `sectorsPerCluster() : count` | Sectors per cluster (power of 2: 1..128), 0 if not mounted |
 | `volumeLabel() : pStr` | Pointer to volume label string |
 | `setVolumeLabel(pLabel) : result` | Set volume label |
 | `fileName() : pStr` | Name from last directory read |
 | `fileSize() : size` | File size from last directory read |
 | `attributes() : attr` | Attributes from last directory read |
 | `setDate(y,m,d,h,mi,s)` | Set date/time for new files |
+| `getDate() : y, m, d, h, mi, s` | Get current clock (auto-increments from last `setDate()`) |
 | `getSPIFrequency() : hz` | Current SPI clock frequency |
 | `getCardMaxSpeed() : hz` | Card's reported max speed from CSD |
 | `getManufacturerID() : mid` | Card manufacturer ID byte |
