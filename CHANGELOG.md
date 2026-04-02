@@ -9,28 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.5.0] - 2026-04-02
 
-**Stale directory cluster fix, new API, always-on async and defrag, documentation refresh.**
+**Stale directory cluster fix, new API, feature flag reorganization.**
 
 ### Bug Fixes
 
-- `newDirectory()`: New directory cluster zeroed before use, preventing stale data from masquerading as directory entries on recycled clusters
+- `newDirectory()`: New directory cluster zeroed before use on recycled clusters
 
 ### New Features
 
 - `sectorsPerCluster()`: Public getter for filesystem cluster size
-- `SD_INCLUDE_ASYNC` and `SD_INCLUDE_DEFRAG` included by `SD_INCLUDE_ALL`
+- `SD_INCLUDE_ASYNC` and `SD_INCLUDE_DEFRAG`: application-level feature flags included by `SD_INCLUDE_ALL`
 
 ### Tests
 
-- Stale cluster regression test: pollutes clusters with non-zero fill, verifies 20-file directory survives recycled cluster
+- Stale cluster regression test: 20-file directory in recycled cluster with non-zero fill data
 - Disk-full write test dynamically adapts to cluster size via `sectorsPerCluster()`
 - 25 suites, 465 tests, all passing on hardware
-
-### Documentation
-
-- Conditional Compilation Guide, Tutorial, Theory of Operations updated for ASYNC/DEFRAG feature flags
-- Memory Sizing Guide re-measured with pnut-ts v1.53.2 (core: 21 KB, ALL: 26 KB)
-- Bug analysis: stale directory cluster data corruption documented
 
 ## [1.4.2] - 2026-03-26
 
