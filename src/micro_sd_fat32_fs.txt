@@ -1,0 +1,712 @@
+ =================================================================================================
+   File....... micro_sd_fat32_fs.spin2
+   Purpose.... High-performance FAT32 microSD card filesystem driver for P2
+   Authors.... Chris Gadd (original), Stephen M Moraco (handle-based API)
+               -- Copyright (c) 2023 Chris Gadd
+               -- see below for terms of use
+   E-mail..... stephen@ironsheep.biz
+   Started.... 2023
+   Updated.... MAR 2026
+ =================================================================================================
+
+Object "micro_sd_fat32_fs" Interface:
+  (Requires Spin2 Language v47)
+
+── Public Constants ────────────────────────────────────────────
+
+  SUCCESS, E_TIMEOUT, E_NO_RESPONSE, E_BAD_RESPONSE, E_CRC_ERROR, E_WRITE_REJECTED, E_CARD_BUSY,
+  E_IO_ERROR, E_NO_CARD, E_NOT_MOUNTED, E_INIT_FAILED, E_NOT_FAT32, E_BAD_SECTOR_SIZE,
+  E_FILE_NOT_FOUND, E_FILE_EXISTS, E_NOT_A_FILE, E_NOT_A_DIR, E_FILE_NOT_OPEN, E_END_OF_FILE,
+  E_DISK_FULL, E_NO_CONTIGUOUS_SPACE, E_FILE_OPEN_FOR_COMPACT, E_VERIFY_FAILED, E_NO_LOCK,
+  E_TOO_MANY_FILES, E_INVALID_HANDLE, E_FILE_ALREADY_OPEN, E_NOT_A_DIR_HANDLE, E_INVALID_PARAM,
+  CW_NONE, CW_CMD13_UNRELIABLE, CW_CMD23_SUPPORTED, MAX_OPEN_FILES, HF_FREE, HF_READ, HF_WRITE,
+  HF_DIR, HF_DIRTY, SECTOR_SIZE, ATTR_READONLY, ATTR_HIDDEN, ATTR_SYSTEM, ATTR_VOLUME_ID,
+  ATTR_DIRECTORY, ATTR_ARCHIVE, ATTR_LFN, DIR_ENTRY_DELETED, DIR_ENTRY_SIZE, MBR_PARTITION_OFFSET,
+  MBR_PART_TYPE_OFFSET, MBR_PART_LBA_OFFSET, MBR_PART_SIZE_OFFSET, BOOT_SIGNATURE, BOOT_SIG_OFFSET,
+  PART_TYPE_FAT32_LBA28, PART_TYPE_FAT32_LBA, FAT_EPOCH_YEAR, DE_ATTR_OFFSET, DE_CRT_TIME_OFFSET,
+  DE_CLUS_HI_OFFSET, DE_WRT_TIME_OFFSET, DE_CLUS_LO_OFFSET, DE_FILESIZE_OFFSET, PENDING,
+  E_ASYNC_BUSY, E_NO_ASYNC_OP
+
+── Public Structures ───────────────────────────────────────────
+
+  STRUCT cid_t(BYTE mid, BYTE oid[2], BYTE pnm[5], BYTE prv, BYTE psn[4], BYTE mdt[2], BYTE crc)
+  STRUCT scr_t(BYTE sdSpec, BYTE sdSecurity, BYTE sdSpec3Ext, BYTE sdSpecXLo, BYTE reserved[4])
+
+── Public Methods ──────────────────────────────────────────────
+
+PUB null()
+PUB start(_cs, _mosi, _miso, _sck) : workerCogId
+PUB stop()
+PUB mount(_cs, _mosi, _miso, _sck) : status
+PUB unmount() : status
+PUB openFileRead(p_path) : handle
+PUB openFileWrite(p_path) : handle
+PUB createFileNew(p_path) : handle
+PUB closeFileHandle(handle) : status
+PUB readHandle(handle, p_buffer, count) : bytes_read
+PUB writeHandle(handle, p_buffer, count) : bytes_written
+PUB seekHandle(handle, position) : status
+PUB tellHandle(handle) : position
+PUB eofHandle(handle) : is_eof
+PUB fileSizeHandle(handle) : size
+PUB syncHandle(handle) : status
+PUB syncAllHandles() : status
+PUB sync() : status
+PUB openDirectory(p_path) : handle
+PUB readDirectoryHandle(handle) : p_entry
+PUB closeDirectoryHandle(handle)
+PUB readDirectory(entry) : pEntry
+PUB newDirectory(name_ptr) : status
+PUB changeDirectory(name_ptr) : status
+PUB deleteFile(name_ptr) : status
+PUB rename(old_name, new_name) : status
+PUB moveFile(name_ptr, dest_folder) : status
+PUB freeSpace() : sectorCount
+PUB sectorsPerCluster() : count
+PUB setDate(year, month, day, hour, minute, second) : status
+PUB getDate() : year, month, day, hour, minute, second
+PUB fileFragments(p_path) : fragment_count
+PUB isFileContiguous(p_path) : bContiguous
+PUB createFileContiguous(p_path, file_size) : handle
+PUB compactFile(p_path) : status
+PUB startReadHandle(handle, p_buffer, count) : status
+PUB startWriteHandle(handle, p_buffer, count) : status
+PUB isComplete() : done
+PUB getResult() : byteCount
+PUB cancelAsync() : status
+PUB fileName() : pName
+PUB fileSize() : size
+PUB attributes() : attrByte
+PUB volumeLabel() : pLabel
+PUB setVolumeLabel(p_label) : status
+PUB syncDirCache()
+PUB ERROR() : status
+PUB cardWarnings() : warning_flags
+PUB checkStackGuard() : bIntact
+PUB getSPIFrequency() : hz
+PUB getCardMaxSpeed() : hz
+PUB getManufacturerID() : mid
+PUB getReadTimeout() : ms
+PUB getWriteTimeout() : ms
+PUB isHighSpeedActive() : active
+
+
+
+── Constant Details ────────────────────────────────────────────
+
+Error Codes
+___________
+  SUCCESS                 =   0
+  E_TIMEOUT               =  -1    Card didn't respond in time
+  E_NO_RESPONSE           =  -2    Card not responding
+  E_BAD_RESPONSE          =  -3    Unexpected response from card
+  E_CRC_ERROR             =  -4    Data CRC mismatch
+  E_WRITE_REJECTED        =  -5    Card rejected write operation
+  E_CARD_BUSY             =  -6    Card busy
+  E_IO_ERROR              =  -7    General I/O error during read/write
+  E_NO_CARD               =  -8    No card detected in slot (MISO idle during CMD0 probe)
+  E_NOT_MOUNTED           = -20    Filesystem not mounted
+  E_INIT_FAILED           = -21    Card initialization failed
+  E_NOT_FAT32             = -22    Card not formatted as FAT32
+  E_BAD_SECTOR_SIZE       = -23    Sector size not 512 bytes
+  E_FILE_NOT_FOUND        = -40    File doesn't exist
+  E_FILE_EXISTS           = -41    File already exists
+  E_NOT_A_FILE            = -42    Expected file, found directory
+  E_NOT_A_DIR             = -43    Expected directory, found file
+  E_FILE_NOT_OPEN         = -45    File not open
+  E_END_OF_FILE           = -46    Read past end of file
+  E_DISK_FULL             = -60    No free clusters
+  E_NO_CONTIGUOUS_SPACE   = -61    No contiguous run of sufficient length
+  E_FILE_OPEN_FOR_COMPACT = -62    File is open (cannot compact while open)
+  E_VERIFY_FAILED         = -63    Read-back verification failed after compact
+  E_NO_LOCK               = -64    Couldn't allocate hardware lock
+  Multi-File Handle Error Codes
+  E_TOO_MANY_FILES        = -90    All file handles are in use
+  E_INVALID_HANDLE        = -91    Handle out of range or not open
+  E_FILE_ALREADY_OPEN     = -92    File is already open for writing (single-writer policy)
+  E_NOT_A_DIR_HANDLE      = -93    Handle is not a directory handle (or vice versa)
+  E_INVALID_PARAM         = -94    Parameter value out of valid range
+
+Card Warning/Capability Flags
+_____________________________
+  CW_NONE             = $00    No warnings or capabilities
+  CW_CMD13_UNRELIABLE = $01    CMD13 probe failed at init; status checks disabled for this card
+  CW_CMD23_SUPPORTED  = $02    CMD23 (SET_BLOCK_COUNT) confirmed working in SPI mode
+
+Multi-File Handle Configuration
+_______________________________
+  FILE HANDLE SYSTEM - supports multiple simultaneously open files
+  User can override MAX_OPEN_FILES in their top-level CON section before OBJ
+  Memory cost: 544 bytes per handle (32 bytes state + 512 bytes buffer)
+  Default 6 covers 2-3 cogs with mixed file/directory operations
+  MAX_OPEN_FILES =   6    Default number of handles (user-overridable)
+  Handle state flags (stored in h_flags array):
+  HF_FREE  (0)   - Handle slot is available for allocation
+  HF_READ  (1)   - Handle is open for reading
+  HF_WRITE (2)   - Handle is open for writing
+  HF_DIR   (4)   - Handle is a directory enumeration handle
+  HF_DIRTY ($80) - Handle buffer has pending writes (OR'd with mode)
+  HF_FREE        =   0
+  HF_READ        =   1
+  HF_WRITE       =   2
+  HF_DIR         =   4
+  HF_DIRTY       = $80
+
+Sector Geometry
+_______________
+  SECTOR_SIZE = 512    Bytes per sector (FAT32 standard)
+
+FAT32 Directory Entry Attribute Flags
+_____________________________________
+  ATTR_READONLY  = $01    File is read-only
+  ATTR_HIDDEN    = $02    File is hidden
+  ATTR_SYSTEM    = $04    System file
+  ATTR_VOLUME_ID = $08    Volume label entry
+  ATTR_DIRECTORY = $10    Directory entry
+  ATTR_ARCHIVE   = $20    Archive flag (set on write)
+  ATTR_LFN       = $0F    Long filename entry (RO+HID+SYS+VOL)
+
+FAT32 Directory Entry Markers
+_____________________________
+  DIR_ENTRY_DELETED = $E5    First byte marks deleted entry
+  DIR_ENTRY_SIZE    =  32    Bytes per directory entry
+
+---- MBR/VBR Structure Constants ----
+_____________________________________
+  MBR_PARTITION_OFFSET  =  $1BE    Byte offset of first partition entry in MBR
+  MBR_PART_TYPE_OFFSET  =  $1C2    Byte offset of partition 1 type in MBR
+  MBR_PART_LBA_OFFSET   =  $1C6    Byte offset of partition 1 LBA start in MBR
+  MBR_PART_SIZE_OFFSET  =  $1CA    Byte offset of partition 1 size in sectors
+  BOOT_SIGNATURE        = $AA55    MBR/VBR boot signature
+  BOOT_SIG_OFFSET       =  $1FE    Byte offset of boot signature in sector
+  PART_TYPE_FAT32_LBA28 =   $0B    FAT32 partition type (CHS/LBA < 2TB)
+  PART_TYPE_FAT32_LBA   =   $0C    FAT32 partition type (LBA)
+  FAT_EPOCH_YEAR        =  1980    FAT timestamp base year
+
+Directory Entry Field Byte Offsets
+__________________________________
+  DE_ATTR_OFFSET     = 11    Attributes byte
+  DE_CRT_TIME_OFFSET = 14    Creation timestamp (long)
+  DE_CLUS_HI_OFFSET  = 20    Start cluster high word
+  DE_WRT_TIME_OFFSET = 22    Write/modification timestamp (long)
+  DE_CLUS_LO_OFFSET  = 26    Start cluster low word
+  DE_FILESIZE_OFFSET = 28    File size in bytes (long)
+
+---- Non-Blocking File I/O ----
+_______________________________
+  PENDING       =   1    Returned by start*() to indicate operation launched
+  E_ASYNC_BUSY  = -95    An async operation is already in flight
+  E_NO_ASYNC_OP = -96    No async operation to get result from
+
+
+
+── Structure Details ───────────────────────────────────────────
+
+STRUCT cid_t (16 bytes)
+_______________________
+  CID register (16 bytes, big-endian from card):
+  mid      - Manufacturer ID (1 byte)
+  oid[2]   - OEM/Application ID (2 bytes ASCII)
+  pnm[5]   - Product name (5 bytes ASCII)
+  prv      - Product revision (1 byte, BCD: high=major, low=minor)
+  psn[4]   - Product serial number (4 bytes)
+  mdt[2]   - Manufacturing date (2 bytes: year offset from 2000, month)
+  crc      - CRC7 checksum (1 byte)
+
+  STRUCT cid_t Members:
+    BYTE  mid
+    BYTE  oid[2]
+    BYTE  pnm[5]
+    BYTE  prv
+    BYTE  psn[4]
+    BYTE  mdt[2]
+    BYTE  crc
+
+STRUCT scr_t (8 bytes)
+______________________
+  SCR register (8 bytes, big-endian from card):
+  sdSpec       - SD spec version (4 bits)
+  sdSecurity   - Security protocol support (4 bits)
+  sdSpec3Ext   - Spec 3.0 extended fields
+  sdSpecXLo    - Spec extensions (lower bits)
+  reserved[4]  - Reserved bytes
+
+  STRUCT scr_t Members:
+    BYTE  sdSpec
+    BYTE  sdSecurity
+    BYTE  sdSpec3Ext
+    BYTE  sdSpecXLo
+    BYTE  reserved[4]
+
+
+
+── Method Details ──────────────────────────────────────────────
+
+__________
+PUB null()
+
+ This is not a top-level object - placeholder to indicate driver must be instantiated as OBJ.
+
+________________________________________________
+PUB start(_cs, _mosi, _miso, _sck) : workerCogId
+
+ Start worker cog (singleton) - initialize SD card driver and launch dedicated worker cog.
+ This method is idempotent - calling multiple times is safe.
+ @param _cs - Chip select pin number
+ @param _mosi - Master Out Slave In pin number
+ @param _miso - Master In Slave Out pin number
+ @param _sck - Serial clock pin number
+ @returns workerCogId - Cog ID (0-7) on success, -1 on failure
+
+__________
+PUB stop()
+
+ Stop worker cog - cleanly shut down the worker cog and release resources.
+ Safe to call even if not started.
+
+___________________________________________
+PUB mount(_cs, _mosi, _miso, _sck) : status
+
+ Mount SD card (multi-cog safe) - starts worker cog and mounts filesystem.
+ Supports MODE_RAW -> MODE_FILESYSTEM upgrade (card already initialized).
+ @param _cs - Chip select pin number
+ @param _mosi - Master Out Slave In pin number
+ @param _miso - Master In Slave Out pin number
+ @param _sck - Serial clock pin number
+ @returns status - SUCCESS (0) on success, negative error code on failure
+
+______________________
+PUB unmount() : status
+
+ Unmount SD card (multi-cog safe) - cleanly unmounts, flushing data and updating FSInfo.
+ @returns status - SUCCESS (0) on success, negative error code on failure
+
+_________________________________
+PUB openFileRead(p_path) : handle
+
+ Open file for reading - opens existing file and returns handle.
+ Multiple files can be open simultaneously with independent positions.
+ Use closeFileHandle() when done.
+ @param p_path - Pointer to null-terminated path string
+ @returns handle - File handle (0 to MAX_OPEN_FILES-1) on success, negative error code on failure
+
+__________________________________
+PUB openFileWrite(p_path) : handle
+
+ Open file for writing/append - opens for appending.
+ Position is set to end of file. Only one write handle per file allowed.
+ Use closeFileHandle() when done to flush data.
+ @param p_path - Pointer to null-terminated path string
+ @returns handle - File handle (0 to MAX_OPEN_FILES-1) on success, negative error code on failure
+
+__________________________________
+PUB createFileNew(p_path) : handle
+
+ Create new file for writing - creates and opens for writing.
+ Returns error if file exists.
+ Use closeFileHandle() when done to flush data and finalize size.
+ @param p_path - Pointer to null-terminated path string
+ @returns handle - File handle (0 to MAX_OPEN_FILES-1) on success, negative error code on failure
+
+____________________________________
+PUB closeFileHandle(handle) : status
+
+ Close file handle - closes handle, flushing pending writes.
+ For write handles, updates directory with final file size.
+ After close, handle is invalid and slot is available for reuse.
+ @param handle - File handle to close
+ @returns status - SUCCESS (0) on success, negative error code on failure
+
+____________________________________________________
+PUB readHandle(handle, p_buffer, count) : bytes_read
+
+ Read from file handle - reads up to count bytes into buffer.
+ Returns actual bytes read (may be less at EOF). Returns 0 at EOF.
+ Position advances by the number of bytes read.
+ @param handle - Valid read handle
+ @param p_buffer - Pointer to destination buffer
+ @param count - Number of bytes to read
+ @returns bytes_read - Number of bytes actually read (0 at EOF), negative on error
+
+________________________________________________________
+PUB writeHandle(handle, p_buffer, count) : bytes_written
+
+ Write to file handle - writes count bytes from buffer.
+ File grows as needed with automatic cluster allocation.
+ Position advances by the number of bytes written.
+ @param handle - Valid write handle
+ @param p_buffer - Pointer to source data buffer
+ @param count - Number of bytes to write
+ @returns bytes_written - Number of bytes written, negative on error
+
+_________________________________________
+PUB seekHandle(handle, position) : status
+
+ Seek to position in file - seeks to absolute byte position.
+ Position must be <= file size (cannot seek past EOF).
+ @param handle - Valid file handle
+ @param position - Absolute byte position to seek to
+ @returns status - SUCCESS (0) on success, negative error code on failure
+
+_________________________________
+PUB tellHandle(handle) : position
+
+ Get current position - returns current byte position in file.
+ @param handle - Valid file handle
+ @returns position - Current position (0-based), negative on error
+
+______________________________
+PUB eofHandle(handle) : is_eof
+
+ Check if at end of file - returns TRUE if at or past EOF.
+ @param handle - Valid file handle
+ @returns is_eof - TRUE if at EOF, FALSE if not, negative on error
+
+_________________________________
+PUB fileSizeHandle(handle) : size
+
+ Get file size - returns total size in bytes.
+ For write handles, reflects current size including pending writes.
+ @param handle - Valid file handle
+ @returns size - File size in bytes, negative on error
+
+_______________________________
+PUB syncHandle(handle) : status
+
+ Flush handle to disk - flushes pending writes and updates directory.
+ File remains open for further operations.
+ @param handle - Valid file handle
+ @returns status - SUCCESS (0) on success, negative error code on failure
+
+_____________________________
+PUB syncAllHandles() : status
+
+ Flush all handles to disk - flushes all open write handles.
+ Useful before risky operations or for periodic safety.
+ @returns status - SUCCESS (0) on success
+
+___________________
+PUB sync() : status
+
+ Flush buffers (multi-cog safe) - flushes pending writes without closing file.
+ Use to checkpoint data during long operations.
+ @returns status - SUCCESS (0) on success, negative error code on failure
+
+__________________________________
+PUB openDirectory(p_path) : handle
+
+ Open directory for enumeration (multi-cog safe) - returns handle for iterating entries.
+ Use readDirectoryHandle() to get entries, closeDirectoryHandle() when done.
+ Pass "" or "." to enumerate calling cog's current working directory.
+ Handles share the existing file handle pool (MAX_OPEN_FILES total).
+ @param p_path - Pointer to null-terminated path string
+ @returns handle - Handle (0 to MAX_OPEN_FILES-1) on success, negative error code on failure
+
+_________________________________________
+PUB readDirectoryHandle(handle) : p_entry
+
+ Read next entry from directory handle (multi-cog safe) - returns pointer to entry data.
+ Skips deleted, LFN, and hidden/system entries automatically.
+ After each call, use fileName() and attributes() to inspect the returned entry.
+ @param handle - Directory handle from openDirectory()
+ @returns p_entry - Pointer to entry_buffer on success, 0 at end of directory
+
+________________________________
+PUB closeDirectoryHandle(handle)
+
+ Close directory handle (multi-cog safe) - releases handle back to pool.
+ @param handle - Directory handle from openDirectory()
+
+_________________________________
+PUB readDirectory(entry) : pEntry
+
+ Read directory entry (multi-cog safe) - iterates through directory entries.
+ @param entry - Entry index to read (0-based)
+ @returns pEntry - Pointer to entry_buffer on success, 0 if entry doesn't exist
+
+___________________________________
+PUB newDirectory(name_ptr) : status
+
+ Create a new directory (multi-cog safe) in current directory.
+ @param name_ptr - Pointer to null-terminated directory name string
+ @returns status - SUCCESS (0) on success, negative error code on failure
+
+______________________________________
+PUB changeDirectory(name_ptr) : status
+
+ Change directory (multi-cog safe) - changes current directory.
+ @param name_ptr - Pointer to null-terminated directory name string
+ @returns status - SUCCESS (0) on success, negative error code on failure
+
+_________________________________
+PUB deleteFile(name_ptr) : status
+
+ Delete file (multi-cog safe) - deletes file from current directory.
+ @param name_ptr - Pointer to null-terminated filename string
+ @returns status - SUCCESS (0) on success, negative error code on failure
+
+_______________________________________
+PUB rename(old_name, new_name) : status
+
+ Rename file or directory (multi-cog safe).
+ @param old_name - Pointer to current filename string
+ @param new_name - Pointer to new filename string
+ @returns status - SUCCESS (0) on success, negative error code on failure
+
+____________________________________________
+PUB moveFile(name_ptr, dest_folder) : status
+
+ Move file to another directory (multi-cog safe).
+ @param name_ptr - Pointer to null-terminated filename to move
+ @param dest_folder - Pointer to null-terminated destination folder name
+ @returns status - SUCCESS (0) on success, negative error code on failure
+
+_____________________________
+PUB freeSpace() : sectorCount
+
+ Get free space in sectors (multi-cog safe).
+ This may take a while on large cards.
+ @returns sectorCount - Number of free sectors on the card
+
+_______________________________
+PUB sectorsPerCluster() : count
+
+ Get the number of sectors per cluster for the mounted filesystem.
+ Returns 0 if no card is mounted.
+ @returns count - Sectors per cluster (power of 2: 1, 2, 4, 8, 16, 32, 64, or 128)
+
+____________________________________________________________
+PUB setDate(year, month, day, hour, minute, second) : status
+
+ Set the current date and time for file timestamps.
+ Starts the auto-incrementing clock (CT1-based, 2-second tick).
+ @param year - Year (1980-2107)
+ @param month - Month (1-12)
+ @param day - Day (1-31)
+ @param hour - Hour (0-23)
+ @param minute - Minute (0-59)
+ @param second - Second (0-59)
+ @returns status - SUCCESS (0) or E_INVALID_PARAM
+
+______________________________________________________
+PUB getDate() : year, month, day, hour, minute, second
+
+ Get the current date and time as the driver knows it.
+ Returns the live clock value maintained by the worker cog CT1 tick.
+ If setDate() was never called, returns the default timestamp.
+ @returns year - Year (e.g., 2026)
+ @returns month - Month (1-12)
+ @returns day - Day (1-31)
+ @returns hour - Hour (0-23)
+ @returns minute - Minute (0-59)
+ @returns second - Second (0-58, even values only)
+
+__________________________________________
+PUB fileFragments(p_path) : fragment_count
+
+ Count the number of non-contiguous fragments in a file's cluster chain.
+ A contiguous file returns 1. An empty file returns 0.
+ @param p_path - Pointer to null-terminated filename string
+ @returns fragment_count - Fragment count (1 = contiguous), 0 if empty, or negative error code
+
+__________________________________________
+PUB isFileContiguous(p_path) : bContiguous
+
+ Check if a file's clusters are stored contiguously on disk.
+ Convenience wrapper around fileFragments() (Decision #6).
+ @param p_path - Pointer to null-terminated filename string
+ @returns bContiguous - TRUE if contiguous (fragment_count == 1), FALSE otherwise, or negative error
+ code
+
+____________________________________________________
+PUB createFileContiguous(p_path, file_size) : handle
+
+ Create a new file with a pre-allocated contiguous cluster chain.
+ The file's clusters are allocated upfront so writeHandle() never fragments.
+ If insufficient contiguous space exists, returns E_NO_CONTIGUOUS_SPACE.
+ @param p_path - Pointer to null-terminated filename string
+ @param file_size - Expected file size in bytes (determines cluster count)
+ @returns handle - Handle (0 to MAX_OPEN_FILES-1) on success, or negative error code
+
+________________________________
+PUB compactFile(p_path) : status
+
+ Relocate a file's clusters into a contiguous chain on disk.
+ The file must not be open (no active handles). If already contiguous, returns SUCCESS (no-op).
+ Uses copy-then-free strategy: file is always readable during compaction.
+ Read-back verification is performed after every copy (Decision #5).
+ @param p_path - Pointer to null-terminated filename string
+ @returns status - SUCCESS, E_FILE_NOT_FOUND, E_FILE_OPEN_FOR_COMPACT, E_NO_CONTIGUOUS_SPACE,
+ E_VERIFY_FAILED, E_IO_ERROR
+
+_____________________________________________________
+PUB startReadHandle(handle, p_buffer, count) : status
+
+ Begin an asynchronous read. Returns immediately with PENDING.
+ Caller must call isComplete()/getResult() to get the data.
+ The api_lock is held until getResult() or cancelAsync() is called.
+ @param handle - Valid read handle
+ @param p_buffer - Pointer to destination buffer
+ @param count - Number of bytes to read
+ @returns status - PENDING (1) on success, negative error on failure
+
+______________________________________________________
+PUB startWriteHandle(handle, p_buffer, count) : status
+
+ Begin an asynchronous write. Returns immediately with PENDING.
+ Caller must call isComplete()/getResult() to get the result.
+ @param handle - Valid write handle
+ @param p_buffer - Pointer to source data
+ @param count - Number of bytes to write
+ @returns status - PENDING (1) on success, negative error on failure
+
+_______________________
+PUB isComplete() : done
+
+ Check if the current async operation has completed.
+ Does NOT release the lock or consume the result.
+ @returns done - TRUE if complete, FALSE if still in progress
+
+___________________________
+PUB getResult() : byteCount
+
+ Get the result of a completed async operation and release the lock.
+ After this call, new commands can be issued.
+ @returns byteCount - Bytes read/written, or negative error code
+
+__________________________
+PUB cancelAsync() : status
+
+ Cancel a pending async operation and release the lock.
+ Waits for the worker to finish (cannot interrupt SPI mid-transfer),
+ then discards the result.
+ @returns status - SUCCESS
+
+______________________
+PUB fileName() : pName
+
+ Return the 8.3 filename of the currently opened file.
+ @returns pName - Pointer to filename string
+
+_____________________
+PUB fileSize() : size
+
+ Return the size of the currently opened file in bytes.
+ @returns size - File size from directory entry
+
+___________________________
+PUB attributes() : attrByte
+
+ Return the attribute byte of the currently opened file.
+ @returns attrByte - FAT attribute byte
+
+__________________________
+PUB volumeLabel() : pLabel
+
+ Return pointer to volume label string.
+ @returns pLabel - Pointer to volume label (11 chars + null)
+
+____________________________________
+PUB setVolumeLabel(p_label) : status
+
+ Set the volume label on the mounted SD card.
+ Updates both the BPB and root directory volume label entry.
+ @param p_label - Pointer to new volume label string (max 11 chars)
+ @returns status - SUCCESS (0) on success, negative error code on failure
+
+__________________
+PUB syncDirCache()
+
+ Force directory cache invalidation - invalidates the directory sector cache.
+ The next read will re-fetch from card.
+ Use after file operations to ensure consistency when multiple files are accessed.
+ This is safe to call from any cog (just sets a DAT variable to -1).
+
+____________________
+PUB ERROR() : status
+
+ Get last error for this cog - returns the error code from the most recent operation.
+ Thread-safe: each cog has its own error slot.
+ @returns status - Error code from the most recent operation on this cog
+
+__________________________________
+PUB cardWarnings() : warning_flags
+
+ Get card capability and advisory flags discovered during mount.
+ Returns bitmask of conditions probed at init time.
+ Check after mount() to learn what the card actually supports in SPI mode.
+   CW_CMD13_UNRELIABLE ($01) - CMD13 status checks disabled (broken SPI implementation)
+   CW_CMD23_SUPPORTED  ($02) - CMD23 SET_BLOCK_COUNT confirmed working in SPI mode
+ @returns warning_flags - Bitmask of CW_* constants (CW_NONE if no flags set)
+
+_______________________________
+PUB checkStackGuard() : bIntact
+
+ Verify worker cog stack guard is intact.
+ Returns TRUE if all guard bytes are $CC (no overflow detected).
+ Returns FALSE and reports via debug if any guard byte is corrupted.
+ @returns bIntact - TRUE if stack guard is intact, FALSE if overflow detected
+
+__________________________
+PUB getSPIFrequency() : hz
+
+ Get current SPI clock frequency in Hz.
+ @returns hz - Current SPI clock frequency in Hz
+
+__________________________
+PUB getCardMaxSpeed() : hz
+
+ Get card's reported maximum speed from CSD TRAN_SPEED field.
+ @returns hz - Card's maximum speed in Hz
+
+_____________________________
+PUB getManufacturerID() : mid
+
+ Get card manufacturer ID (MID) from CID register.
+ Common IDs: $03=SanDisk, $1D=PNY/AData, $27=Samsung.
+ @returns mid - Manufacturer ID byte
+
+_________________________
+PUB getReadTimeout() : ms
+
+ Get read timeout from CSD register in milliseconds.
+ SDHC/SDXC: Fixed 100ms per spec. SDSC: Calculated from TAAC/NSAC.
+ @returns ms - Read timeout in milliseconds
+
+__________________________
+PUB getWriteTimeout() : ms
+
+ Get write timeout from CSD register in milliseconds.
+ SDHC/SDXC: Fixed 250ms per spec. SDSC: Read timeout * R2W_FACTOR.
+ @returns ms - Write timeout in milliseconds
+
+________________________________
+PUB isHighSpeedActive() : active
+
+ Check if high-speed mode is active (running at 50 MHz).
+ @returns active - TRUE if running at 50 MHz or higher
+
+ -------------------------------------------------------------------------------------------------
+  MIT License
+
+  Copyright (c) 2023 Chris Gadd
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+ =================================================================================================
