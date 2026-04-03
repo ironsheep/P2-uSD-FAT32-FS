@@ -207,6 +207,7 @@ _relpath() {
 SRC_PATH="$(_relpath "$PROJECT_ROOT/src" "$REGTEST_DIR")"
 UTILS_PATH="$(_relpath "$PROJECT_ROOT/src/UTILS" "$REGTEST_DIR")"
 DEMO_PATH="$(_relpath "$PROJECT_ROOT/src/DEMO" "$REGTEST_DIR")"
+CACHE_DIR="$PROJECT_ROOT/.pnut-cache"
 
 # --- Phase 1: Compile tests (from START_INDEX onward) ---
 DRIVER_SRC="$PROJECT_ROOT/src/micro_sd_fat32_fs.spin2"
@@ -241,13 +242,13 @@ if [[ "$RUN_ONLY" == true ]]; then
         BASENAME="${FILE%.spin2}"
 
         if _needs_compile "$FILE"; then
-            if pnut-ts -d -I "$SRC_PATH" -I "$UTILS_PATH" -I "$DEMO_PATH" -I . "$FILE" >/dev/null 2>&1; then
+            if pnut-ts -d --cache --cache-dir "$CACHE_DIR" -I "$SRC_PATH" -I "$UTILS_PATH" -I "$DEMO_PATH" -I . "$FILE" >/dev/null 2>&1; then
                 SIZE=$(wc -c < "${BASENAME}.bin" | tr -d ' ')
                 echo -e "  ${GREEN}OK${NC}: $FILE (${SIZE} bytes) [recompiled]"
                 COMPILE_PASS=$((COMPILE_PASS + 1))
             else
                 echo -e "  ${RED}FAIL${NC}: $FILE"
-                pnut-ts -d -I "$SRC_PATH" -I "$UTILS_PATH" -I "$DEMO_PATH" -I . "$FILE" 2>&1 | grep -i error || true
+                pnut-ts -d --cache --cache-dir "$CACHE_DIR" -I "$SRC_PATH" -I "$UTILS_PATH" -I "$DEMO_PATH" -I . "$FILE" 2>&1 | grep -i error || true
                 COMPILE_FAIL=$((COMPILE_FAIL + 1))
                 COMPILE_FAILED_FILES+=("$FILE")
             fi
@@ -300,13 +301,13 @@ else
         fi
 
         BASENAME="${FILE%.spin2}"
-        if pnut-ts -d -I "$SRC_PATH" -I "$UTILS_PATH" -I "$DEMO_PATH" -I . "$FILE" >/dev/null 2>&1; then
+        if pnut-ts -d --cache --cache-dir "$CACHE_DIR" -I "$SRC_PATH" -I "$UTILS_PATH" -I "$DEMO_PATH" -I . "$FILE" >/dev/null 2>&1; then
             SIZE=$(wc -c < "${BASENAME}.bin" | tr -d ' ')
             echo -e "  ${GREEN}OK${NC}: $FILE (${SIZE} bytes)"
             COMPILE_PASS=$((COMPILE_PASS + 1))
         else
             echo -e "  ${RED}FAIL${NC}: $FILE"
-            pnut-ts -d -I "$SRC_PATH" -I "$UTILS_PATH" -I "$DEMO_PATH" -I . "$FILE" 2>&1 | grep -i error || true
+            pnut-ts -d --cache --cache-dir "$CACHE_DIR" -I "$SRC_PATH" -I "$UTILS_PATH" -I "$DEMO_PATH" -I . "$FILE" 2>&1 | grep -i error || true
             COMPILE_FAIL=$((COMPILE_FAIL + 1))
             COMPILE_FAILED_FILES+=("$FILE")
         fi

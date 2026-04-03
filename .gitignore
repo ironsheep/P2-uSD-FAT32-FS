@@ -11,6 +11,9 @@ logs/
 *.map
 *.obj
 
+# Compiler cache (pnut-ts --cache)
+.pnut-cache/
+
 # Generated documentation
 src/*.txt
 
