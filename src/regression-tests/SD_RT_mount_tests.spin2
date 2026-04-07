@@ -109,6 +109,19 @@ PUB go() | result, pLabel, freeSpace, handle, bytesRead
     utils.evaluateSingleValue(result, @"changeDirectory()", sd.E_NOT_MOUNTED)
 
     ' ----------------------------------
+    ' TEST GROUP: Pin offset validation
+    ' ----------------------------------
+    utils.startTestGroup(@"Pin offset validation (B-input ±3 limit)")
+
+    utils.startTest(@"mount() with SCK too far from MOSI (offset=+5)")
+    result := sd.mount(SD_CS, 10, SD_MISO, 15)
+    utils.evaluateSingleValue(result, @"mount(bad pins)", sd.E_BAD_PIN_CONFIG)
+
+    utils.startTest(@"mount() with SCK too far from MISO (offset=-4)")
+    result := sd.mount(SD_CS, SD_MOSI, 20, 16)
+    utils.evaluateSingleValue(result, @"mount(bad pins)", sd.E_BAD_PIN_CONFIG)
+
+    ' ----------------------------------
     ' TEST GROUP: Mount card
     ' ----------------------------------
     utils.startTestGroup(@"Mount SD card")

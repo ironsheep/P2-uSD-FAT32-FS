@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Bug Fixes
+
+- SPI smart pin B-input clock offset computed dynamically from pin assignments (was hardcoded for default P2 Edge layout)
+- `mount()` / `initCardOnly()` propagate specific error code on `start()` failure
+
+### New Features
+
+- `E_BAD_PIN_CONFIG` (-9): Mount fails early when SCK is more than ±3 pins from MOSI or MISO
+
+### Tests
+
+- Pin offset validation tests in mount suite
+
 ## [1.5.0] - 2026-04-02
 
 **Stale directory cluster fix, new API, feature flag reorganization.**

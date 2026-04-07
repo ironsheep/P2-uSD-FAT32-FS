@@ -183,6 +183,7 @@ CON ' error codes
   E_CARD_BUSY              = -6                                               ' Card busy
   E_IO_ERROR               = -7                                               ' General I/O error during read/write
   E_NO_CARD                = -8                                               ' No card detected in slot (MISO idle during CMD0 probe)
+  E_BAD_PIN_CONFIG         = -9                                               ' SPI pins too far apart (SCK must be within ±3 of MOSI and MISO)
   E_NOT_MOUNTED            = -20                                              ' Filesystem not mounted
   E_INIT_FAILED            = -21                                              ' Card initialization failed
   E_NOT_FAT32              = -22                                              ' Card not formatted as FAT32
@@ -727,6 +728,13 @@ PUB start(_cs, _mosi, _miso, _sck) : workerCogId
     ' Store pin configuration
     longmove(@cs, @_cs, 4)
 
+    ' Validate pin offsets: smart pin B-input selector supports ±3 pins max
+    if ABS(_sck - _mosi) > 3 OR ABS(_sck - _miso) > 3
+      DEBUG[CH_API]("  [start] FAIL: SPI pins too far apart (SCK must be within +/-3 of MOSI and MISO)")
+      DEBUG[CH_API]("  [start]   SCK=P", udec_(_sck), " MOSI=P", udec_(_mosi), " (offset=", sdec_(_sck - _mosi), ") MISO=P", udec_(_miso), " (offset=", sdec_(_sck - _miso), ")")
+      workerCogId := set_error(E_BAD_PIN_CONFIG)
+      return
+
     ' Allocate hardware lock for API serialization
     api_lock := LOCKNEW()
     if api_lock == -1
@@ -803,9 +811,9 @@ PUB mount(_cs, _mosi, _miso, _sck) : status
 
     ' Start worker cog if not already running (MODE_NONE case)
     if cog_id == -1
-      if start(_cs, _mosi, _miso, _sck) == -1
+      if start(_cs, _mosi, _miso, _sck) < 0
         DEBUG[CH_API]("  [mount] Failed to start worker cog")
-        status := E_NO_LOCK
+        status := error()
 
     ' Send mount command to worker (only if no error so far)
     if status == 0
@@ -1482,9 +1490,9 @@ PUB initCardOnly(_cs, _mosi, _miso, _sck) : status
   else
     ' Start worker cog if not already running
     if cog_id == -1
-      if start(_cs, _mosi, _miso, _sck) == -1
+      if start(_cs, _mosi, _miso, _sck) < 0
         DEBUG[CH_INIT]("  [initCardOnly] FAIL: Could not start worker cog")
-        status := E_NO_LOCK
+        status := error()
     ' Send init command to worker (only if cog started OK)
     if status == 0
       status := send_command(CMD_INIT_CARD_ONLY, 0, 0, 0, 0)
@@ -5215,24 +5223,28 @@ PRI initSPIPins()
 ' MISO uses P_SYNC_RX for synchronized receive (clocked by SCK)
 ' CS remains standard GPIO (manual control)
 
-' Smart pin mode configuration using compiler constants
+' Smart pin mode configuration
 ' P_TRANSITION: clock generation with X = half-period (transitions toggle output)
 ' P_SYNC_TX: synchronized serial transmit (clocked by B-input)
 ' P_SYNC_RX: synchronized serial receive (clocked by B-input)
-' P_PLUS2_B, P_PLUS3_B: B-input pin selector for clock source
+' B-input pin selector: computed dynamically from actual pin assignments
+'   WRPIN mode bits [26:24] encode signed offset from data pin to clock pin
+'   Encoding: +1=%001, +2=%010, +3=%011, -1=%111, -2=%110, -3=%101
+'   Formula: ((sck - data_pin) & 7) << 24
+'   Hardware constraint: SCK must be within ±3 pins of MOSI and MISO
 ' Reference: ManAtWork SpiFlash.spin2 (OBEX 2872) - working smart pin SPI
 ' CRITICAL: Do NOT use P_INVERT_OUTPUT for SD card SPI mode 0!
 ' ManAtWork's flash uses different polarity. SD cards need clock idle LOW.
 
   spi_clk_mode := P_TRANSITION | P_OE                   ' Transition mode, idle LOW for SPI mode 0
-  spi_tx_mode := P_SYNC_TX | P_OE | P_PLUS2_B           ' Sync TX, clock from pin+2 (SCK)
-  spi_rx_mode := P_SYNC_RX | P_PLUS3_B                  ' Sync RX, clock from pin+3 (SCK)
+  spi_tx_mode := P_SYNC_TX | P_OE | (((sck - mosi) & 7) << 24)  ' Sync TX, B-input routed to SCK
+  spi_rx_mode := P_SYNC_RX | (((sck - miso) & 7) << 24)         ' Sync RX, B-input routed to SCK
 
   DEBUG[CH_INIT]("    [initSPIPins] Setting up smart pins (ManAtWork pattern)...")
   DEBUG[CH_INIT]("    [initSPIPins] Mode values:")
   DEBUG[CH_INIT]("    [initSPIPins]   spi_clk_mode=$", uhex_long(spi_clk_mode), " (P_TRANSITION | P_OE, idle LOW)")
-  DEBUG[CH_INIT]("    [initSPIPins]   spi_tx_mode=$", uhex_long(spi_tx_mode), " (P_SYNC_TX | P_OE | P_PLUS2_B)")
-  DEBUG[CH_INIT]("    [initSPIPins]   spi_rx_mode=$", uhex_long(spi_rx_mode), " (P_SYNC_RX | P_PLUS3_B)")
+  DEBUG[CH_INIT]("    [initSPIPins]   spi_tx_mode=$", uhex_long(spi_tx_mode), " (P_SYNC_TX, SCK offset=", sdec_(sck - mosi), ")")
+  DEBUG[CH_INIT]("    [initSPIPins]   spi_rx_mode=$", uhex_long(spi_rx_mode), " (P_SYNC_RX, SCK offset=", sdec_(sck - miso), ")")
   DEBUG[CH_INIT]("    [initSPIPins]   SCK=P", udec_(sck), " MOSI=P", udec_(mosi), " MISO=P", udec_(miso))
 
   ' CS PIN: Standard GPIO (unchanged from bit-bang)
@@ -5244,31 +5256,31 @@ PRI initSPIPins()
   ' Y register: Number of transitions (2 per bit) - loaded via WYPIN per transfer
   ' Configure with FLTL -> WRPIN, then WXPIN/DRVL in applySPISpeed()
   pinfloat(sck)                                         ' FLTL - reset smart pin
-  WRPIN(sck, spi_clk_mode)                              ' P_TRANSITION | P_OE | P_INVERT_OUTPUT
+  WRPIN(sck, spi_clk_mode)                              ' P_TRANSITION | P_OE
   ' X register (half-period) will be set by applySPISpeed()
   DEBUG[CH_INIT]("    [initSPIPins]   SCK configured: P_TRANSITION | P_OE (awaiting applySPISpeed)")
 
   ' MOSI PIN: P_SYNC_TX mode for synchronized transmit
-  ' B-input set via P_PLUS2_B (clock from SCK which is 2 pins higher)
+  ' B-input routed to SCK (offset computed dynamically from pin assignments)
   ' X register: %M_NNNNN where M=mode (1=start/stop), N=bits-1
   ' Y register: Data to transmit - loaded via WYPIN per transfer
   ' Configure with DIRL -> WRPIN -> WXPIN -> DIRH (no WYPIN yet)
   pinfloat(mosi)                                        ' DIRL - reset smart pin
-  WRPIN(mosi, spi_tx_mode)                              ' P_SYNC_TX | P_OE | P_PLUS2_B
+  WRPIN(mosi, spi_tx_mode)                              ' P_SYNC_TX | P_OE | B-input->SCK
   WXPIN(mosi, %1_00111)                                 ' Start-stop mode, 8 bits default
   pinh(mosi)                                            ' DIRH - enable smart pin
-  DEBUG[CH_INIT]("    [initSPIPins]   MOSI configured: P_SYNC_TX | P_PLUS2_B (enabled)")
+  DEBUG[CH_INIT]("    [initSPIPins]   MOSI configured: P_SYNC_TX, B-input->SCK (enabled)")
 
   ' MISO PIN: P_SYNC_RX mode for synchronized receive
-  ' B-input set via P_PLUS3_B (clock from SCK which is 3 pins higher)
+  ' B-input routed to SCK (offset computed dynamically from pin assignments)
   ' X register: %M_NNNNN where M=mode (1=post-edge for SPI mode 0), N=bits-1
   ' Z register: Received data - read via RDPIN per transfer
   ' Configure with DIRL -> WRPIN -> WXPIN -> DIRH (no WYPIN needed)
   pinfloat(miso)                                        ' DIRL - reset smart pin
-  WRPIN(miso, spi_rx_mode)                              ' P_SYNC_RX | P_PLUS3_B
+  WRPIN(miso, spi_rx_mode)                              ' P_SYNC_RX | B-input->SCK
   WXPIN(miso, %1_00111)                                 ' On-edge sample (SPI mode 0), 8 bits
   pinh(miso)                                            ' DIRH - enable smart pin
-  DEBUG[CH_INIT]("    [initSPIPins]   MISO configured: P_SYNC_RX | P_PLUS3_B (enabled)")
+  DEBUG[CH_INIT]("    [initSPIPins]   MISO configured: P_SYNC_RX, B-input->SCK (enabled)")
 
   ' Configure event SE1 for efficient waiting on SCK completion
   ' Event format: D[5:0]=pin, D[7:6]=%01 for positive edge on IN
@@ -5839,7 +5851,7 @@ PRI readSector(sector, buf_type) : status | _sck, _miso, data, loop_ctr, timeout
       diag_buf_byte3 := BYTE[p_buf+3]
 
       ' Re-enable MISO smart pin for CRC reads (sp_transfer_8 needs it)
-      WRPIN(_miso, spi_rx_mode)                                                 ' P_SYNC_RX | P_PLUS3_B
+      WRPIN(_miso, spi_rx_mode)                                                 ' P_SYNC_RX | B-input->SCK
       WXPIN(_miso, %1_00111)                                                    ' On-edge sample, 8 bits
       pinh(_miso)                                                               ' DIRH - enable smart pin
 
@@ -6140,7 +6152,7 @@ PRI writeSector(sector, buf_type) : status | _sck, _mosi, p_buf, stream_mode, cl
     END
 
     ' Rebuild MOSI smart pin for CRC and response byte transfers
-    WRPIN(_mosi, spi_tx_mode)                                                   ' P_SYNC_TX | P_OE | P_PLUS2_B
+    WRPIN(_mosi, spi_tx_mode)                                                   ' P_SYNC_TX | P_OE | B-input->SCK
     WXPIN(_mosi, %1_00111)                                                      ' Start-stop mode, 8 bits
     pinh(_mosi)                                                                 ' DIRH - enable smart pin
 
