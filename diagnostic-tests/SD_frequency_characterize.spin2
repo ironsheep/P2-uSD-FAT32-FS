@@ -12,20 +12,35 @@
    the driver's multi-block operations fail. The goal is to identify timing-sensitive
    frequency ranges and quantization boundaries.
 
-   Test Matrix (from SYSCLK-TIMING-ANALYSIS.md):
-     320 MHz - hp=7, PASS (baseline verified)
-     310 MHz - hp=7
-     305 MHz - hp=7 (boundary, hp changes 7->6 below this)
-     300 MHz - hp=6, exact 25 MHz SPI
-     295 MHz - hp=6
-     290 MHz - hp=6
-     280 MHz - hp=6
-     270 MHz - hp=6, FAIL (verified)
-     260 MHz - hp=6
-     255 MHz - hp=6 (boundary, hp changes 6->5 below this)
-     250 MHz - hp=5, HDMI target
-     240 MHz - hp=5
+   Test Matrix (ascending sweep, 200 -> 350 MHz):
      200 MHz - hp=4, exact division
+     220 MHz - hp=5
+     240 MHz - hp=5
+     250 MHz - hp=5, HDMI target
+     255 MHz - hp=6 (boundary, hp changes 5->6 above this)
+     260 MHz - hp=6
+     270 MHz - hp=6, FAIL (verified)
+     280 MHz - hp=6
+     290 MHz - hp=6
+     295 MHz - hp=6
+     300 MHz - hp=6, exact 25 MHz SPI
+     305 MHz - hp=7 (boundary, hp changes 6->7 above this)
+     310 MHz - hp=7
+     320 MHz - hp=7
+     330 MHz - hp=7
+     340 MHz - hp=7
+     350 MHz - hp=7, P2 absolute max (overclock)
+
+   Encoding (per p2kbPasm2Hubset):
+     D[24]    = 1 (PLL enable)
+     D[23:18] = XDIV - 1   (PLL input divider, 6 bits)
+     D[17:8]  = XMUL - 1   (VCO multiplier, 10 bits)
+     D[7:4]   = PPPP       (post divider: 0=/1, 1=/2, 3=/4, 5=/6, ...)
+     D[3:2]   = 01         (15pF caps for 20 MHz crystal)
+     D[1:0]   = 11         (PLL source)
+
+   Each entry chooses XDIV and XMUL so VCO equals target (post=1), keeping
+   VCO at or below the P2's ~350 MHz absolute max so the PLL stays in spec.
 
    The test runs writeSectorsRaw(8) + readSectorsRaw(8) and checks data integrity.
    This is the exact operation that fails at 270 MHz.
@@ -34,8 +49,11 @@
 
 CON
 
-    ' Start at 320 MHz for initial mount
-    _CLKFREQ        = 270_000_000
+    ' Boot at 200 MHz (lowest, safest in our sweep range)
+    _CLKFREQ        = 200_000_000
+
+    ' Lock DEBUG terminal baud so it survives sysclk changes
+    DEBUG_BAUD      = 2_000_000
 
     ' P2 Edge module SD slot pins
     SD_CS   = 60
@@ -48,10 +66,10 @@ CON
     TEST_COUNT       = 8                ' 8 sectors = 4KB
     CLK_SETTLE_MS    = 10               ' Clock stabilization delay after frequency change
 
-    ' Frequency test points (in MHz)
-    #0, FREQ_320, FREQ_310, FREQ_305, FREQ_300, FREQ_295, FREQ_290
-    #6, FREQ_280, FREQ_270, FREQ_260, FREQ_255, FREQ_250, FREQ_240
-    #12, FREQ_220, FREQ_200, FREQ_COUNT
+    ' Frequency test points (ascending order, 200 -> 350 MHz)
+    #0, FREQ_200, FREQ_220, FREQ_240, FREQ_250, FREQ_255, FREQ_260
+    #6, FREQ_270, FREQ_280, FREQ_290, FREQ_295, FREQ_300, FREQ_305
+    #12, FREQ_310, FREQ_320, FREQ_330, FREQ_340, FREQ_350, FREQ_COUNT
 
 ' Enable full driver features for this utility
 #ifdef __SPINTOOLS__
@@ -67,27 +85,30 @@ OBJ
     sd : "micro_sd_fat32_fs"
 
 DAT
-    ' Test frequencies in Hz
-    freq_table      long    320_000_000     ' FREQ_320 - hp=7, baseline
-                    long    310_000_000     ' FREQ_310 - hp=7
-                    long    305_000_000     ' FREQ_305 - hp=7 (boundary)
-                    long    300_000_000     ' FREQ_300 - hp=6, exact 25 MHz
-                    long    295_000_000     ' FREQ_295 - hp=6
-                    long    290_000_000     ' FREQ_290 - hp=6
-                    long    280_000_000     ' FREQ_280 - hp=6
-                    long    270_000_000     ' FREQ_270 - hp=6 (known fail)
-                    long    260_000_000     ' FREQ_260 - hp=6
-                    long    255_000_000     ' FREQ_255 - hp=6 (boundary)
-                    long    250_000_000     ' FREQ_250 - hp=5, HDMI target
-                    long    240_000_000     ' FREQ_240 - hp=5
+    ' Test frequencies in Hz (ascending order, 200 -> 350 MHz)
+    freq_table      long    200_000_000     ' FREQ_200 - hp=4
                     long    220_000_000     ' FREQ_220 - hp=5
-                    long    200_000_000     ' FREQ_200 - hp=4, exact
+                    long    240_000_000     ' FREQ_240 - hp=5
+                    long    250_000_000     ' FREQ_250 - hp=5, HDMI target
+                    long    255_000_000     ' FREQ_255 - hp=6 (boundary 5->6)
+                    long    260_000_000     ' FREQ_260 - hp=6
+                    long    270_000_000     ' FREQ_270 - hp=6 (known fail)
+                    long    280_000_000     ' FREQ_280 - hp=6
+                    long    290_000_000     ' FREQ_290 - hp=6
+                    long    295_000_000     ' FREQ_295 - hp=6
+                    long    300_000_000     ' FREQ_300 - hp=6, exact 25 MHz
+                    long    305_000_000     ' FREQ_305 - hp=7 (boundary 6->7)
+                    long    310_000_000     ' FREQ_310 - hp=7
+                    long    320_000_000     ' FREQ_320 - hp=7
+                    long    330_000_000     ' FREQ_330 - hp=7
+                    long    340_000_000     ' FREQ_340 - hp=7
+                    long    350_000_000     ' FREQ_350 - hp=7, P2 absolute max
 
-    ' Expected half_period for each frequency (for reference)
-    hp_table        byte    7, 7, 7         ' 320, 310, 305
-                    byte    6, 6, 6, 6, 6, 6, 6   ' 300-255 range
-                    byte    5, 5, 5         ' 250, 240, 220
-                    byte    4               ' 200
+    ' Expected half_period for each frequency (sysclk / (2 * 25 MHz), rounded up)
+    hp_table        byte    4               ' 200
+                    byte    5, 5, 5         ' 220, 240, 250
+                    byte    6, 6, 6, 6, 6, 6, 6   ' 255-300 range
+                    byte    7, 7, 7, 7, 7, 7      ' 305, 310, 320, 330, 340, 350
 
     ' Results storage: 0=untested, 1=PASS, 2=FAIL
     results         byte    0[FREQ_COUNT]
@@ -109,12 +130,13 @@ PUB go() | result, freq_idx, test_freq, errors, hp
     debug("  Purpose: Find sysclk frequencies where streamer timing fails")
     debug("  Test: writeSectorsRaw(8) + readSectorsRaw(8) + verify")
     debug(" ")
+    debug("Boot clkfreq = ", udec_long_(clkfreq), "  clkmode = $", uhex_long_(clkmode))
 
     pass_count := 0
     fail_count := 0
 
-    ' Mount at 320 MHz first (known working)
-    debug("Initial mount at 320 MHz...")
+    ' Mount at boot freq (200 MHz, slow and safe)
+    debug("Initial mount at ", udec_(clkfreq / 1_000_000), " MHz...")
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
     if result >= 0
         debug("Card mounted successfully")
@@ -123,52 +145,41 @@ PUB go() | result, freq_idx, test_freq, errors, hp
         ' Fill write buffer with test pattern
         fillTestPattern()
 
-        ' Run baseline test at 320 MHz
-        debug("--- BASELINE TEST @ 320 MHz ---")
-        errors := runTest(320_000_000)
-        if errors == 0
-            debug("  -> PASS (baseline verified)")
-            results[FREQ_320] := 1
-            pass_count++
+        debug("============================================================")
+        debug("  FREQUENCY SWEEP (ascending: 200 -> 350 MHz)")
+        debug("============================================================")
+
+        ' Sweep through all test frequencies in linear ascending order
+        repeat freq_idx from 0 to FREQ_COUNT - 1
+            test_freq := long[@freq_table][freq_idx]
+            hp := byte[@hp_table][freq_idx]
 
             debug(" ")
-            debug("============================================================")
-            debug("  FREQUENCY SWEEP")
-            debug("============================================================")
+            debug("--- ", udec_(test_freq / 1_000_000), " MHz (hp=", udec_(hp), ") ---")
 
-            ' Sweep through all test frequencies
-            repeat freq_idx from 1 to FREQ_COUNT - 1
-                test_freq := long[@freq_table][freq_idx]
-                hp := byte[@hp_table][freq_idx]
+            ' Change system clock
+            changeFrequency(test_freq)
 
-                debug(" ")
-                debug("--- ", udec_(test_freq / 1_000_000), " MHz (hp=", udec_(hp), ") ---")
+            ' Small delay for clock to stabilize
+            waitms(CLK_SETTLE_MS)
 
-                ' Change system clock
-                changeFrequency(test_freq)
+            ' Verify frequency change
+            debug("  clkfreq = ", udec_(clkfreq))
 
-                ' Small delay for clock to stabilize
-                waitms(CLK_SETTLE_MS)
+            ' Run the critical test
+            errors := runTest(test_freq)
 
-                ' Verify frequency change
-                debug("  clkfreq = ", udec_(clkfreq))
+            if errors == 0
+                debug("  -> PASS")
+                results[freq_idx] := 1
+                pass_count++
+            else
+                debug("  -> FAIL: ", udec_(errors), " byte errors")
+                results[freq_idx] := 2
+                fail_count++
 
-                ' Run the critical test
-                errors := runTest(test_freq)
-
-                if errors == 0
-                    debug("  -> PASS")
-                    results[freq_idx] := 1
-                    pass_count++
-                else
-                    debug("  -> FAIL: ", udec_(errors), " byte errors")
-                    results[freq_idx] := 2
-                    fail_count++
-        else
-            debug("  -> FAIL: ", udec_(errors), " errors at baseline - ABORTING")
-
-        ' Return to 320 MHz for summary
-        changeFrequency(320_000_000)
+        ' Return to safe boot freq before reporting
+        changeFrequency(200_000_000)
         waitms(CLK_SETTLE_MS)
 
         ' Print summary
@@ -244,70 +255,75 @@ PRI runTest(freq) : errors | written, readCt, idx, sector
                     errors++
 
 
-PRI changeFrequency(target_freq) | xi, div, mode
+PRI changeFrequency(target_freq)
 ' Change system clock to target frequency using PLL.
-' Uses same crystal (20 MHz) and adjusts PLL multiplier.
+'
+' Encoding (verified against compiler-emitted CLKMODE for _CLKFREQ=200_000_000
+' which produced $0100_09FB):
+'   D[24]    = 1            (PLL enable)
+'   D[23:18] = XDIV - 1     (PLL input divider)
+'   D[17:8]  = XMUL - 1     (VCO multiplier)
+'   D[7:4]   = PPPP         (post divider: %1111 = /1, %0000 = /2, %0001 = /4, ...)
+'   D[3:2]   = %10          (15pF caps for 20 MHz crystal)
+'   D[1:0]   = %11          (PLL source)
+'
+' Each target chooses XDIV and XMUL so VCO == target with post=1, keeping VCO at
+' or below the P2's ~350 MHz absolute max so the PLL stays within spec.
 '
 ' @param target_freq - Target frequency in Hz
 
-    ' Calculate PLL settings for target frequency
-    ' P2 uses: sysclk = xtalfreq * pll_mult / div
-    ' With 20 MHz crystal:
-    '   320 MHz = 20 * 16 / 1
-    '   310 MHz = 20 * 31 / 2
-    '   305 MHz = 20 * 61 / 4 (approximation)
-    '   300 MHz = 20 * 15 / 1
-    '   etc.
-
-    ' For simplicity, use RCFAST-based calculations
-    ' Actually, we need to be careful here. Let me use the proper clkset approach.
-
-    ' The P2 clkset value encodes: [31:24]=XDIV, [23:16]=MULT, [15:8]=POST, [7:0]=MODE
-    ' Mode $FC = PLL enabled, XI enabled
-
     case target_freq
-        320_000_000:
-            ' 20 MHz * 16 = 320 MHz
-            clkset(%1_000001_0000001111_10_11, target_freq)
-        310_000_000:
-            ' 20 MHz * 31 / 2 = 310 MHz
-            clkset(%1_000001_0000011110_10_11, target_freq)
-        305_000_000:
-            ' 20 MHz * 61 / 4 = 305 MHz (close)
-            clkset(%1_000010_0000111100_10_11, target_freq)
-        300_000_000:
-            ' 20 MHz * 15 = 300 MHz
-            clkset(%1_000001_0000001110_10_11, target_freq)
-        295_000_000:
-            ' 20 MHz * 59 / 4 = 295 MHz (close)
-            clkset(%1_000010_0000111010_10_11, target_freq)
-        290_000_000:
-            ' 20 MHz * 29 / 2 = 290 MHz
-            clkset(%1_000001_0000011100_10_11, target_freq)
-        280_000_000:
-            ' 20 MHz * 14 = 280 MHz
-            clkset(%1_000001_0000001101_10_11, target_freq)
-        270_000_000:
-            ' 20 MHz * 27 / 2 = 270 MHz
-            clkset(%1_000001_0000011010_10_11, target_freq)
-        260_000_000:
-            ' 20 MHz * 13 = 260 MHz
-            clkset(%1_000001_0000001100_10_11, target_freq)
-        255_000_000:
-            ' 20 MHz * 51 / 4 = 255 MHz (close)
-            clkset(%1_000010_0000110010_10_11, target_freq)
-        250_000_000:
-            ' 20 MHz * 25 / 2 = 250 MHz
-            clkset(%1_000001_0000011000_10_11, target_freq)
-        240_000_000:
-            ' 20 MHz * 12 = 240 MHz
-            clkset(%1_000001_0000001011_10_11, target_freq)
-        220_000_000:
-            ' 20 MHz * 11 = 220 MHz
-            clkset(%1_000001_0000001010_10_11, target_freq)
         200_000_000:
-            ' 20 MHz * 10 = 200 MHz
-            clkset(%1_000001_0000001001_10_11, target_freq)
+            ' 20/1 * 10 = 200 MHz, VCO=200
+            clkset(%1_000000_0000001001_1111_10_11, target_freq)
+        220_000_000:
+            ' 20/1 * 11 = 220 MHz, VCO=220
+            clkset(%1_000000_0000001010_1111_10_11, target_freq)
+        240_000_000:
+            ' 20/1 * 12 = 240 MHz, VCO=240
+            clkset(%1_000000_0000001011_1111_10_11, target_freq)
+        250_000_000:
+            ' 20/2 * 25 = 250 MHz, VCO=250
+            clkset(%1_000001_0000011000_1111_10_11, target_freq)
+        255_000_000:
+            ' 20/4 * 51 = 255 MHz, VCO=255
+            clkset(%1_000011_0000110010_1111_10_11, target_freq)
+        260_000_000:
+            ' 20/1 * 13 = 260 MHz, VCO=260
+            clkset(%1_000000_0000001100_1111_10_11, target_freq)
+        270_000_000:
+            ' 20/2 * 27 = 270 MHz, VCO=270
+            clkset(%1_000001_0000011010_1111_10_11, target_freq)
+        280_000_000:
+            ' 20/1 * 14 = 280 MHz, VCO=280
+            clkset(%1_000000_0000001101_1111_10_11, target_freq)
+        290_000_000:
+            ' 20/2 * 29 = 290 MHz, VCO=290
+            clkset(%1_000001_0000011100_1111_10_11, target_freq)
+        295_000_000:
+            ' 20/4 * 59 = 295 MHz, VCO=295
+            clkset(%1_000011_0000111010_1111_10_11, target_freq)
+        300_000_000:
+            ' 20/1 * 15 = 300 MHz, VCO=300
+            clkset(%1_000000_0000001110_1111_10_11, target_freq)
+        305_000_000:
+            ' 20/4 * 61 = 305 MHz, VCO=305
+            clkset(%1_000011_0000111100_1111_10_11, target_freq)
+        310_000_000:
+            ' 20/2 * 31 = 310 MHz, VCO=310
+            clkset(%1_000001_0000011110_1111_10_11, target_freq)
+        320_000_000:
+            ' 20/1 * 16 = 320 MHz, VCO=320
+            clkset(%1_000000_0000001111_1111_10_11, target_freq)
+        330_000_000:
+            ' 20/2 * 33 = 330 MHz, VCO=330
+            clkset(%1_000001_0000100000_1111_10_11, target_freq)
+        340_000_000:
+            ' 20/1 * 17 = 340 MHz, VCO=340
+            clkset(%1_000000_0000010000_1111_10_11, target_freq)
+        350_000_000:
+            ' 20/2 * 35 = 350 MHz, VCO=350
+            clkset(%1_000001_0000100010_1111_10_11, target_freq)
 
 
 PRI analyzeBoundaries() | idx, prev_result, curr_result, prev_freq, curr_freq, prev_hp, curr_hp
