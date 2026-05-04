@@ -11,3 +11,4 @@ Theory of operations for each standalone utility program in `src/UTILS/`.
 | [SD-FAT32-FSCK-THEORY.md](SD-FAT32-FSCK-THEORY.md) | Filesystem check and repair |
 | [SD-FORMAT-UTILITY-THEORY.md](SD-FORMAT-UTILITY-THEORY.md) | FAT32 card formatter |
 | [SD-SPEED-CHARACTERIZE-THEORY.md](SD-SPEED-CHARACTERIZE-THEORY.md) | Maximum SPI speed tester |
+| [SD-FREQUENCY-CHARACTERIZE-THEORY.md](SD-FREQUENCY-CHARACTERIZE-THEORY.md) | sysclk sweep across 200-350 MHz with three-mode methodology |

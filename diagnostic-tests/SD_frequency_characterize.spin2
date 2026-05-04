@@ -71,6 +71,9 @@ CON
     #6, FREQ_270, FREQ_280, FREQ_290, FREQ_295, FREQ_300, FREQ_305
     #12, FREQ_310, FREQ_320, FREQ_330, FREQ_340, FREQ_350, FREQ_COUNT
 
+    ' Test mode selectors for runSweepPass()
+    #0, MODE_C, MODE_A, MODE_B
+
 ' Enable full driver features for this utility
 #ifdef __SPINTOOLS__
 #define SD_INCLUDE_ALL
@@ -110,8 +113,13 @@ DAT
                     byte    6, 6, 6, 6, 6, 6, 6   ' 255-300 range
                     byte    7, 7, 7, 7, 7, 7      ' 305, 310, 320, 330, 340, 350
 
-    ' Results storage: 0=untested, 1=PASS, 2=FAIL
-    results         byte    0[FREQ_COUNT]
+    ' Results storage per mode: 0=untested, 1=PASS, 2=FAIL
+    '   C = no-fix: SPI hp set at boot mount, drifts as sysclk rises (SPI overclocks)
+    '   A = sysclk isolation: setSPISpeed(25 MHz) after each clkset
+    '   B = full remount: unmount + mount at this sysclk (driver picks fresh hp)
+    results_c       byte    0[FREQ_COUNT]
+    results_a       byte    0[FREQ_COUNT]
+    results_b       byte    0[FREQ_COUNT]
 
 VAR
     BYTE    write_buf[TEST_COUNT * sd.SECTOR_SIZE]
@@ -119,7 +127,7 @@ VAR
     LONG    pass_count
     LONG    fail_count
 
-PUB go() | result, freq_idx, test_freq, errors, hp
+PUB go() | result, freq_idx, test_freq, errors, hp, lbl_c, lbl_a, lbl_b
 '' Main entry point - runs sysclk frequency sweep test.
 '' Dynamically changes sysclk to find where streamer timing fails.
 
@@ -135,84 +143,154 @@ PUB go() | result, freq_idx, test_freq, errors, hp
     pass_count := 0
     fail_count := 0
 
-    ' Mount at boot freq (200 MHz, slow and safe)
-    debug("Initial mount at ", udec_(clkfreq / 1_000_000), " MHz...")
-    result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if result >= 0
-        debug("Card mounted successfully")
-        debug(" ")
+    debug("============================================================")
+    debug("  FREQUENCY SWEEP (200 -> 350 MHz, 3 modes per frequency)")
+    debug("============================================================")
+    debug("    Mode C: SPI hp from boot mount, never re-touched")
+    debug("            (sysclk rises, SPI hp does not -> SPI overclocks)")
+    debug("            Documents what a user-without-driver-help sees.")
+    debug("    Mode A: setSPISpeed(25 MHz) after each clkset")
+    debug("            (sysclk-isolation: SPI held at 25 MHz, only sysclk varies)")
+    debug("    Mode B: unmount + mount at this sysclk before each test")
+    debug("            (full re-init: exercises mount path at this sysclk)")
+    debug(" ")
+    debug("  Each mode is its own pass with its own boot-anchored mount,")
+    debug("  so per-mode semantics stay clean (Mode C truly stale, etc.).")
 
-        ' Fill write buffer with test pattern
-        fillTestPattern()
+    ' --- PASS 1: Mode C (no fix, boot-mount hp drifts) ---
+    debug(" ")
+    debug("============================================================")
+    debug("  PASS 1: Mode C (boot-mount hp, no driver re-touch)")
+    debug("============================================================")
+    runSweepPass(@results_c, MODE_C)
 
-        debug("============================================================")
-        debug("  FREQUENCY SWEEP (ascending: 200 -> 350 MHz)")
-        debug("============================================================")
+    ' --- PASS 2: Mode A (setSPISpeed(25 MHz) at each freq) ---
+    debug(" ")
+    debug("============================================================")
+    debug("  PASS 2: Mode A (sysclk isolation, SPI held at 25 MHz)")
+    debug("============================================================")
+    runSweepPass(@results_a, MODE_A)
 
-        ' Sweep through all test frequencies in linear ascending order
-        repeat freq_idx from 0 to FREQ_COUNT - 1
-            test_freq := long[@freq_table][freq_idx]
-            hp := byte[@hp_table][freq_idx]
+    ' --- PASS 3: Mode B (full remount at each freq) ---
+    debug(" ")
+    debug("============================================================")
+    debug("  PASS 3: Mode B (full unmount + mount at each freq)")
+    debug("============================================================")
+    runSweepPass(@results_b, MODE_B)
 
-            debug(" ")
-            debug("--- ", udec_(test_freq / 1_000_000), " MHz (hp=", udec_(hp), ") ---")
+    ' Return to safe boot freq before reporting
+    changeFrequency(200_000_000)
+    waitms(CLK_SETTLE_MS)
+    sd.unmount()
 
-            ' Change system clock
-            changeFrequency(test_freq)
+    ' Print summary
+    debug(" ")
+    debug("============================================================")
+    debug("  FREQUENCY SWEEP RESULTS")
+    debug("============================================================")
+    debug(" ")
+    debug("  Freq    hp   ModeC  ModeA  ModeB")
+    debug("  ------  ---  -----  -----  -----")
 
-            ' Small delay for clock to stabilize
-            waitms(CLK_SETTLE_MS)
+    repeat freq_idx from 0 to FREQ_COUNT - 1
+        test_freq := long[@freq_table][freq_idx]
+        hp := byte[@hp_table][freq_idx]
+        lbl_c := resultLabel(results_c[freq_idx])
+        lbl_a := resultLabel(results_a[freq_idx])
+        lbl_b := resultLabel(results_b[freq_idx])
+        debug("  ", udec_long_(test_freq / 1_000_000), " MHz  ", udec_(hp), "   ", zstr_(lbl_c), "   ", zstr_(lbl_a), "   ", zstr_(lbl_b))
 
-            ' Verify frequency change
-            debug("  clkfreq = ", udec_(clkfreq))
+    debug(" ")
+    debug("  Total tests: ", udec_(pass_count), " PASS, ", udec_(fail_count), " FAIL")
+    debug(" ")
 
-            ' Run the critical test
-            errors := runTest(test_freq)
-
-            if errors == 0
-                debug("  -> PASS")
-                results[freq_idx] := 1
-                pass_count++
-            else
-                debug("  -> FAIL: ", udec_(errors), " byte errors")
-                results[freq_idx] := 2
-                fail_count++
-
-        ' Return to safe boot freq before reporting
-        changeFrequency(200_000_000)
-        waitms(CLK_SETTLE_MS)
-
-        ' Print summary
-        debug(" ")
-        debug("============================================================")
-        debug("  FREQUENCY SWEEP RESULTS")
-        debug("============================================================")
-        debug(" ")
-        debug("  Freq    hp   Result")
-        debug("  ------  ---  ------")
-
-        repeat freq_idx from 0 to FREQ_COUNT - 1
-            test_freq := long[@freq_table][freq_idx]
-            hp := byte[@hp_table][freq_idx]
-            case results[freq_idx]
-                1: debug("  ", udec_long_(test_freq / 1_000_000), " MHz  ", udec_(hp), "   PASS")
-                2: debug("  ", udec_long_(test_freq / 1_000_000), " MHz  ", udec_(hp), "   FAIL")
-                other: debug("  ", udec_long_(test_freq / 1_000_000), " MHz  ", udec_(hp), "   ???")
-
-        debug(" ")
-        debug("  Total: ", udec_(pass_count), " PASS, ", udec_(fail_count), " FAIL")
-        debug(" ")
-
-        ' Identify boundaries
-        debug("============================================================")
-        debug("  BOUNDARY ANALYSIS")
-        debug("============================================================")
-        analyzeBoundaries()
-    else
-        debug("ERROR: Initial mount failed!")
+    ' Identify boundaries (Mode A only - the canonical sysclk-isolation result)
+    debug("============================================================")
+    debug("  BOUNDARY ANALYSIS (Mode A - sysclk isolation)")
+    debug("============================================================")
+    analyzeBoundaries()
 
     debug(" ")
     debug("END_SESSION")
+
+
+PRI runSweepPass(results_ptr, mode) | freq_idx, test_freq, hp, errors, mount_status
+' Run one mode's full sweep across all frequencies.
+'
+' Each pass is self-contained: boots at 200 MHz, mounts once at 200 MHz, then
+' for each target sysclk applies the mode-specific action and runs writeSectorsRaw
+' + readSectorsRaw + verify. This isolates each mode's semantics so Mode C truly
+' tests "stale boot-mount hp" without interference from Mode B remounts.
+'
+' @param results_ptr - Address of byte array to record results in
+' @param mode        - MODE_C, MODE_A, or MODE_B
+
+    ' Anchor every pass at 200 MHz with a fresh mount
+    changeFrequency(200_000_000)
+    waitms(CLK_SETTLE_MS)
+    mount_status := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    if mount_status < 0
+        debug("  ERROR: boot-anchor mount failed (", udec_(mount_status), ")")
+        return
+    fillTestPattern()
+
+    repeat freq_idx from 0 to FREQ_COUNT - 1
+        test_freq := long[@freq_table][freq_idx]
+        hp := byte[@hp_table][freq_idx]
+
+        debug(" ")
+        debug("--- ", udec_(test_freq / 1_000_000), " MHz (hp=", udec_(hp), ") ---")
+        changeFrequency(test_freq)
+        waitms(CLK_SETTLE_MS)
+        debug("  clkfreq = ", udec_(clkfreq))
+
+        case mode
+            MODE_C:
+                ' No driver re-touch - SPI hp left from 200 MHz boot mount.
+                ' SPI rate physically rises with sysclk: SPI = clkfreq/(2*hp_boot).
+            MODE_A:
+                sd.setSPISpeed(25_000_000)
+            MODE_B:
+                sd.unmount()
+                mount_status := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+                if mount_status < 0
+                    debug("    Mode B mount FAILED (", udec_(mount_status), ")")
+                    byte[results_ptr][freq_idx] := 2
+                    fail_count++
+                    next
+
+        errors := runTest(test_freq)
+        recordPassResult(results_ptr, freq_idx, errors)
+
+    sd.unmount()
+
+
+PRI recordPassResult(results_ptr, freq_idx, errors)
+' Record a per-pass test result and bump global counters.
+
+    if errors == 0
+        byte[results_ptr][freq_idx] := 1
+        debug("    -> PASS")
+        pass_count++
+    else
+        byte[results_ptr][freq_idx] := 2
+        debug("    -> FAIL: ", udec_(errors), " byte errors")
+        fail_count++
+
+
+PRI resultLabel(code) : label_ptr
+' Map a result code (0=untested, 1=PASS, 2=FAIL) to a printable label.
+
+    case code
+        1:     label_ptr := @str_pass
+        2:     label_ptr := @str_fail
+        other: label_ptr := @str_skip
+
+
+DAT
+    str_pass    byte    "PASS", 0
+    str_fail    byte    "FAIL", 0
+    str_skip    byte    " -- ", 0
 
 
 PRI fillTestPattern() | idx
@@ -329,12 +407,12 @@ PRI changeFrequency(target_freq)
 PRI analyzeBoundaries() | idx, prev_result, curr_result, prev_freq, curr_freq, prev_hp, curr_hp
 ' Identify where PASS->FAIL and FAIL->PASS transitions occur.
 
-    prev_result := results[0]
+    prev_result := results_a[0]
     prev_freq := long[@freq_table][0] / 1_000_000
     prev_hp := byte[@hp_table][0]
 
     repeat idx from 1 to FREQ_COUNT - 1
-        curr_result := results[idx]
+        curr_result := results_a[idx]
         curr_freq := long[@freq_table][idx] / 1_000_000
         curr_hp := byte[@hp_table][idx]
 
