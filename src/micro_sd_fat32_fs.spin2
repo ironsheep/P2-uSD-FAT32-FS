@@ -112,6 +112,7 @@ CON ' command codes for worker cog
 #ifdef SD_INCLUDE_DEBUG
   CMD_DEBUG_SLOW_READ      = 25                                               ' DEBUG: Byte-by-byte sector read (no streamer)
   CMD_DEBUG_CLEAR_ROOT     = 26                                               ' DEBUG: Clear root directory (fixes corruption)
+  CMD_DEBUG_ERASE_BLOCK    = 27                                               ' DEBUG: Erase one erase-block region: param0=start_sector
 #endif
 #ifdef SD_INCLUDE_STACK_CHECK
   CMD_STACK_DEPTH          = 50                                               ' DIAG: Report stack depth used
@@ -344,6 +345,9 @@ CON ' SD SPI command numbers (SD Physical Layer Spec)
   CMD23   = 23                                                                ' SET_BLOCK_COUNT - pre-define sector count for CMD18/CMD25
   CMD24   = 24                                                                ' WRITE_BLOCK
   CMD25   = 25                                                                ' WRITE_MULTIPLE_BLOCK - write consecutive sectors
+  CMD32   = 32                                                                ' ERASE_WR_BLK_START_ADDR - first sector of erase range
+  CMD33   = 33                                                                ' ERASE_WR_BLK_END_ADDR - last sector of erase range
+  CMD38   = 38                                                                ' ERASE - perform erase on selected range
   ACMD41  = 41                                                                ' SD_SEND_OP_COND (requires CMD55 prefix)
   ACMD51  = 51                                                                ' SEND_SCR (requires CMD55 prefix)
   CMD55   = 55                                                                ' APP_CMD prefix
@@ -668,6 +672,7 @@ DAT  ' ---- Singleton Control ----
         card_max_speed_hz                       LONG    0                        ' Maximum speed from CSD TRAN_SPEED (Hz)
         card_read_timeout_ms                    LONG    100                      ' Read timeout in ms (from CSD or spec default)
         card_write_timeout_ms                   LONG    500                      ' Write timeout in ms (from CSD or spec default)
+        card_erase_block_sectors                LONG    128                      ' Erase block size in sectors (from CSD SECTOR_SIZE+1; default 128 = SDHC)
 
         ' PER-COG ERROR STORAGE (for thread-safe error reporting)
         last_error                              LONG    0[8]                     ' One slot per possible cog
@@ -1863,6 +1868,20 @@ PUB getWriteTimeout() : ms
 
   ms := card_write_timeout_ms
 
+PUB eraseBlockSectors() : sectors
+'' Get erase block size in sectors as reported by the card's CSD SECTOR_SIZE field.
+'' Useful for application logic that wants to align writes to erase boundaries
+'' for reduced wear and improved write throughput.
+''
+'' Typical values:
+''   SDSC (CSD v1.0):           32 sectors (16 KB block)
+''   SDHC/SDXC (CSD v2.0):     128 sectors (64 KB block)
+''
+'' @returns sectors - Number of 512-byte sectors per erase block.
+''                    Returns the default (128) if CSD has not been parsed.
+
+  sectors := card_erase_block_sectors
+
 PUB isHighSpeedActive() : active
 '' Check if high-speed mode is active (running at 50 MHz).
 ''
@@ -2392,6 +2411,27 @@ PUB debugReadSectorSlow(sector, p_buffer) : status
 
   status := send_command(CMD_DEBUG_SLOW_READ, sector, p_buffer, 0, 0)
 
+PUB debugEraseBlock(start_sector) : status
+'' DIAGNOSTIC ONLY: Erase one erase-block region starting at start_sector.
+''
+'' Sequence: CMD32 (ERASE_WR_BLK_START_ADDR), CMD33 (ERASE_WR_BLK_END_ADDR),
+'' CMD38 (ERASE), then waits for busy completion. End address is computed as
+'' start_sector + eraseBlockSectors() - 1 so exactly one erase block is erased.
+''
+'' Used by erase-then-write recovery tests (Phase D3 of macca diagnostic) to
+'' distinguish "card flash is recoverable" from "card flash is failing."
+''
+'' Production code MUST NOT call this. The SD spec discourages explicit erase
+'' for normal block writes — the controller handles erase internally on RMW.
+'' Misuse can corrupt the FAT32 filesystem if start_sector falls within
+'' filesystem-occupied space.
+''
+'' @param start_sector - First sector of the erase block (caller responsible
+''                       for erase-block alignment; no alignment check is done)
+'' @returns status - 0 on success, negative error code on timeout/IO error
+
+  status := send_command(CMD_DEBUG_ERASE_BLOCK, start_sector, 0, 0, 0)
+
 PUB debugGetReadSectorDiag(p_sector, p_buftype, p_token, p_b0, p_b1, p_b2, p_b3, p_pbuf)
 '' DEBUG: Get readSector diagnostic data - copies diagnostic data from last readSector call.
 '' Call this after readSectorRaw() to see what happened inside readSector.
@@ -2641,6 +2681,10 @@ PRI fs_worker() | cur_cmd
           pb_status := SUCCESS
         else
           pb_status := E_IO_ERROR
+
+      CMD_DEBUG_ERASE_BLOCK:
+        ' DEBUG: Erase one erase-block-sized region starting at param0
+        pb_status := do_erase_block(pb_param0)
 #endif
 
       CMD_READ_SECTOR_RAW:
@@ -6297,7 +6341,7 @@ PRI readSectors(start_sector, count, p_buffer) : sectors_read | _sck, _miso, p_b
             DEBUG[CH_SECTOR]("  [readSectors] CMD13 status check FAILED")
             sectors_read := 0                                                   ' Card reports error - data can't be trusted
 
-PRI writeSector(sector, buf_type) : status | _sck, _mosi, p_buf, stream_mode, clk_count, xfrq, resp, p_cache, align_delay
+PRI writeSector(sector, buf_type) : status | _sck, _mosi, p_buf, stream_mode, clk_count, xfrq, resp, p_cache
 ' Write buffer into a sector using P2 streamer - hardware DMA for bulk 512-byte transfer.
 ' Reference: flash_loader.spin2 pattern for SPI writes
 '
@@ -6321,7 +6365,6 @@ PRI writeSector(sector, buf_type) : status | _sck, _mosi, p_buf, stream_mode, cl
 ' @local xfrq - Streamer NCO frequency
 ' @local resp - Response byte
 ' @local p_cache - Pointer to cache variable
-' @local align_delay - Alignment delay before streamer
 
 ' Select buffer and cache based on type
 
@@ -6380,33 +6423,28 @@ PRI writeSector(sector, buf_type) : status | _sck, _mosi, p_buf, stream_mode, cl
     xfrq := $4000_0000 / spi_period                                             ' One output per full clock period
     if ($4000_0000 // spi_period) == 0                                          ' Exact division (power-of-2 hp)?
       xfrq -= 1                                                                 ' Ensure 1-cycle late rollover like truncated values
-    align_delay := spi_period - 2                                               ' NCO ramp delay minus 2 instruction cycles
 
     pinclear(_mosi)                                                             ' Clear smart pin mode (WRPIN=0, DIR=0)
     pinl(_mosi)                                                                 ' Drive pin low (DIR=1, output mode)
 
     ' Streamer TX with deterministic clock alignment:
-    '   1. dirl/pinl on SCK resets the P_TRANSITION base-period counter to a known state
-    '      (DIR=0 resets counter, output, Y without clearing WRPIN/WXPIN config)
+    '   1. dirl/drvl on SCK resets the P_TRANSITION base-period counter to a known state
+    '      (DIR=0 resets counter, output, Y without clearing WRPIN/WXPIN config;
+    '       drvl sets DIR=1 with OUT=0 so smart pin is enabled and ready)
     '   2. xinit starts streamer NCO from phase=0
-    '   3. waitx gives NCO time to output first data bit before first SCK edge
-    '   4. wypin starts clock - base period counter phase is now deterministic
-    '      (not dependent on free-running counter from init)
+    '   3. wypin starts clock - base period counter phase is deterministic from drvl
     '
-    ' Timing (all relative to pinl, each PASM instruction = 2 sysclk cycles):
-    '   T=0:  pinl (SCK counter starts fresh)
-    '   T=2:  setxfrq
-    '   T=4:  rdfast
-    '   T=6:  xinit (streamer NCO starts; first data bit at T=6 + 2*spi_period)
-    '   T=8:  waitx begins (waits align_delay cycles)
-    '   T=8+align_delay: wypin (clock starts; first edge at next base period boundary)
+    ' v1.5.2 (2026-05-05): WAITX align_delay removed. The dirl/drvl SCK reset
+    ' (added in commit 797f913) gives the smart-pin counter a deterministic phase
+    ' from wypin onward; combined with smart-pin start latency, the streamer's
+    ' first NCO output naturally settles before the first SCK edge with no explicit
+    ' wait. Verified by freq-sweep on 4 originally-failing cards (200-350 MHz).
     ORG
               DIRL      _sck                            ' Reset SCK: counter stops, output LOW, Y=0
               DRVL      _sck                            ' Re-enable: DIR=1 restarts base period counter fresh
               SETXFRQ   xfrq                            ' Set streamer bit rate
               RDFAST    #0, p_buf                       ' Setup RDFAST from hub buffer
               XINIT     stream_mode, #0                 ' Start streamer; NCO ramps from zero
-              WAITX     align_delay                     ' Wait for NCO to output first data bit
               WYPIN     clk_count, _sck                 ' Start clock - deterministic phase from drvl
               WAITXFI                                   ' Wait for streamer to complete
     END
@@ -6469,7 +6507,7 @@ PRI writeSector(sector, buf_type) : status | _sck, _mosi, p_buf, stream_mode, cl
       if checkCardStatus(@"writeSector") < 0
         status := E_IO_ERROR
 
-PRI writeSectors(start_sector, count, p_buffer) : sectors_written | _sck, _mosi, p_buf, stream_mode, clk_count, xfrq, resp, align_delay
+PRI writeSectors(start_sector, count, p_buffer) : sectors_written | _sck, _mosi, p_buf, stream_mode, clk_count, xfrq, resp
 ' Write multiple consecutive sectors using CMD25 (WRITE_MULTIPLE_BLOCK).
 ' More efficient than individual writeSector() calls because:
 ' - Only one CMD25 command instead of N CMD24 commands
@@ -6493,7 +6531,6 @@ PRI writeSectors(start_sector, count, p_buffer) : sectors_written | _sck, _mosi,
 ' @local clk_count - Number of clock transitions
 ' @local xfrq - Streamer NCO frequency
 ' @local resp - Response byte
-' @local align_delay - Alignment delay before streamer
 
   if count > 0
     ' Setup variables for streamer
@@ -6504,7 +6541,6 @@ PRI writeSectors(start_sector, count, p_buffer) : sectors_written | _sck, _mosi,
     xfrq := $4000_0000 / spi_period                                             ' One output per full clock period
     if ($4000_0000 // spi_period) == 0                                          ' Exact division (power-of-2 hp)?
       xfrq -= 1                                                                 ' Ensure 1-cycle late rollover like truncated values
-    align_delay := spi_period - 2                                               ' NCO ramp delay minus 2 instruction cycles
 
     ' Send CMD25 (WRITE_MULTIPLE_BLOCK) with starting sector
     ' Note: cmd() handles CS assertion and returns R1 response
@@ -6525,14 +6561,14 @@ PRI writeSectors(start_sector, count, p_buffer) : sectors_written | _sck, _mosi,
         pinl(_mosi)                                                             ' Drive pin low (output mode)
 
         ' Streamer TX with deterministic clock alignment (see writeSector for full rationale)
-        ' dirl/drvl resets SCK base-period counter; wypin then starts clock in known phase
+        ' dirl/drvl resets SCK base-period counter; wypin then starts clock in known phase.
+        ' v1.5.2: WAITX align_delay removed (see writeSector for verification details).
         ORG
               DIRL      _sck                            ' Reset SCK: counter stops, output LOW, Y=0
               DRVL      _sck                            ' Re-enable: DIR=1 restarts base period counter fresh
               SETXFRQ   xfrq
               RDFAST    #0, p_buf
               XINIT     stream_mode, #0                 ' Start streamer; NCO ramps from zero
-              WAITX     align_delay                     ' Wait for NCO to output first bit
               WYPIN     clk_count, _sck                 ' Start clock - deterministic phase from drvl
               WAITXFI
         END
@@ -7074,10 +7110,11 @@ PRI parseMfrId(p_cid) : mfr_id
   mfr_id := BYTE[p_cid]
   DEBUG[CH_IDENT]("  [parseMfrId] Manufacturer ID=$", uhex_byte_(mfr_id))
 
-PRI parseTimeouts(p_csd) | csd_ver, taac, nsac, r2w_factor, read_timeout_ns, time_val, time_unit
+PRI parseTimeouts(p_csd) | csd_ver, taac, nsac, r2w_factor, read_timeout_ns, time_val, time_unit, sector_size_field
 ' Extract timeout values from CSD register - sets card_read_timeout_ms and card_write_timeout_ms.
 ' SDHC/SDXC: Fixed values (100ms read, 250ms write).
 ' SDSC: Calculated from TAAC, NSAC, and R2W_FACTOR.
+' Also sets card_erase_block_sectors from CSD SECTOR_SIZE (same field for both CSD v1.0 and v2.0).
 '
 ' @param p_csd - Pointer to CSD register data
 ' @local csd_ver - CSD structure version
@@ -7087,8 +7124,16 @@ PRI parseTimeouts(p_csd) | csd_ver, taac, nsac, r2w_factor, read_timeout_ns, tim
 ' @local read_timeout_ns - Read timeout in nanoseconds
 ' @local time_val - Time value multiplier
 ' @local time_unit - Time unit in nanoseconds
+' @local sector_size_field - Raw SECTOR_SIZE field from CSD (encoded as N-1)
 
   csd_ver := BYTE[p_csd] >> 6                                                     ' CSD_STRUCTURE in bits [7:6] of byte 0
+
+  ' SECTOR_SIZE [45:39] is at the same byte/bit position for both CSD v1.0 (SDSC)
+  ' and v2.0 (SDHC/SDXC): top 6 bits = byte 10 [5:0], bottom 1 bit = byte 11 [7].
+  ' Encoded as (sectors_per_erase_block - 1).
+  sector_size_field := ((BYTE[p_csd + 10] & $3F) << 1) | (BYTE[p_csd + 11] >> 7)
+  card_erase_block_sectors := sector_size_field + 1
+  DEBUG[CH_IDENT]("  [parseTimeouts] Erase block: ", udec_(card_erase_block_sectors), " sectors (", udec_(card_erase_block_sectors << 9), " bytes)")
 
   if csd_ver == 1
     ' CSD Version 2.0 (SDHC/SDXC): Use generous timeouts
@@ -7338,6 +7383,54 @@ PRI readSectorSlow(sector, p_buffer) : status | data, idx, timeout
         DEBUG[CH_SECTOR]("  [readSectorSlow] CRC MISMATCH! recv=$", uhex_(diag_recv_crc), " calc=$", uhex_(diag_calc_crc))
 
   pinh(cs)                                              '  Deselect card
+
+PRI do_erase_block(start_sector) : status | resp, end_sector, timeout
+' DEBUG: Erase one erase-block-sized region via CMD32/CMD33/CMD38 sequence.
+' End address is computed as start_sector + (eraseBlockSectors - 1) so exactly
+' one erase block is erased. After CMD38 we wait for MISO to return to $FF
+' (busy completion) using card_write_timeout_ms.
+'
+' @param start_sector - First sector of erase block (caller alignment-responsible)
+' @returns status - 0 on success, negative error code on timeout/IO error
+' @local resp - R1 response from card
+' @local end_sector - Last sector address in the range
+' @local timeout - Timeout deadline
+
+  end_sector := start_sector + card_erase_block_sectors - 1
+
+' CMD32: ERASE_WR_BLK_START_ADDR
+
+  resp := cmd(CMD32, start_sector << hcs)
+  if resp <> $00
+    DEBUG[CH_SECTOR]("  [do_erase_block] CMD32 R1=$", uhex_byte_(resp))
+    pinh(cs)
+    status := E_BAD_RESPONSE
+  else
+    ' CMD33: ERASE_WR_BLK_END_ADDR
+    resp := cmd(CMD33, end_sector << hcs)
+    if resp <> $00
+      DEBUG[CH_SECTOR]("  [do_erase_block] CMD33 R1=$", uhex_byte_(resp))
+      pinh(cs)
+      status := E_BAD_RESPONSE
+    else
+      ' CMD38: ERASE
+      resp := cmd(CMD38, 0)
+      if resp <> $00
+        DEBUG[CH_SECTOR]("  [do_erase_block] CMD38 R1=$", uhex_byte_(resp))
+        pinh(cs)
+        status := E_BAD_RESPONSE
+      else
+        ' Wait for busy completion (MISO returns to $FF)
+        status := E_TIMEOUT
+        timeout := GETCT() + (clkfreq / 1000) * card_write_timeout_ms
+        repeat
+          if sp_transfer_8($FF) == $FF
+            status := 0
+            quit
+          if GETCT() - timeout > 0
+            DEBUG[CH_SECTOR]("  [do_erase_block] busy timeout")
+            quit
+        pinh(cs)
 
 #endif
 

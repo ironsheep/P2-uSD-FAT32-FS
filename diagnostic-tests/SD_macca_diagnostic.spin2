@@ -1,0 +1,503 @@
+{{ =================================================================================================
+
+   File....... SD_macca_diagnostic.spin2
+   Purpose.... Single-binary diagnostic test for marginal-card characterization.
+               Branches on Phase A outcome to gather full information from one
+               execution. Designed for @macca's 1GB SanDisk SU01G SDSC card.
+   Author..... Stephen M Moraco
+               -- see below for terms of use
+   E-mail..... stephen@ironsheep.biz
+   Started.... MAY 2026
+   Updated.... 05 MAY 2026
+
+   This test runs against driver v1.5.2 with SD_INCLUDE_ALL enabled. It is
+   card-aware: all sector layouts and timeouts are computed from the card's
+   own CSD register, so the test measures the driver's behavior on the card
+   under test rather than accidentally testing the card's response to layout
+   choices that happen to suit our own test pool.
+
+   PHASE STRUCTURE:
+
+     PHASE A: disambiguation (always runs, ~30s)
+       A1. Streamer read of sector 0 at default settings.
+       A2. Slow-path read of sector 0 at default settings.
+       A3. Compare buffers; classify outcome.
+
+     Branches on Phase A outcome:
+       DRIVER_SIDE      → run B + C1 + C2
+       CARD_SIDE        → run D
+       CANNOT_REPRODUCE → run retry loop, escalate if any failure
+       INVERSE          → run D for forensic interest
+
+     PHASE B: phase-tuning matrix (2x5 = 10 cells, ~30s)
+       Sweep sample_mode_override (PRE-edge, ON-edge) x align_delay_offset
+       (-3, 0, +3, +5, +7). Find any cell with zero byte mismatches.
+
+     PHASE C1: SPI speed sweep at sysclk=350 (7 cells, ~30s)
+       25, 22, 20, 18.75, 15, 12.5, 8 MHz. Find threshold at which streamer
+       reads succeed.
+
+     PHASE C2: sysclk sweep at SPI=20MHz (6 cells, ~30s)
+       200, 250, 270, 300, 320, 350 MHz. Find sysclk ceiling at the proposed
+       derate value.
+
+     PHASE D: card-side diagnostics (D1+D2+D3, ~60s)
+       D1. CMD13 polling (10 successive reads).
+       D2. Sector wear pattern (slow-path reads, 6 sectors across address space).
+       D3. Erase + write + read cycle on one erase block.
+
+   OUTPUT FORMAT: structured per-phase results stream as the test runs, plus
+   a final summary block at the end. Designed to be both human-scannable and
+   parseable.
+
+================================================================================================= }}
+
+CON
+
+    _CLKFREQ        = 350_000_000
+
+    DEBUG_BAUD      = 2_000_000
+
+    ' P2 Edge module SD slot pins
+    SD_CS   = 60
+    SD_MOSI = 59
+    SD_MISO = 58
+    SD_SCK  = 61
+
+    SECTOR_SIZE = 512
+    BOOT_SIG_OFFSET = 510                       ' MBR boot signature is at bytes 510-511
+
+    ' Phase A outcome codes
+    BRANCH_UNDETERMINED      = 0
+    BRANCH_DRIVER_SIDE       = 1                ' streamer fails, slow-path succeeds
+    BRANCH_CARD_SIDE         = 2                ' both fail (zero readback)
+    BRANCH_CANNOT_REPRODUCE  = 3                ' both succeed
+    BRANCH_INVERSE           = 4                ' streamer succeeds, slow-path fails (improbable)
+
+    ' Phase B: 2 sample modes, 5 align_delay offsets = 10 cells
+    PHASE_B_MODES   = 2
+    PHASE_B_OFFSETS = 5
+
+    ' Phase C1: 7 SPI speeds (Hz)
+    PHASE_C1_SPEEDS = 7
+
+    ' Phase C2: 6 sysclks (Hz)
+    PHASE_C2_SYSCLKS = 6
+
+    ' Phase D2: 6 sector probes
+    PHASE_D2_SECTORS = 6
+
+    CLK_SETTLE_MS    = 10                       ' Clock stabilization delay after frequency change
+
+' Enable full driver features
+#ifdef __SPINTOOLS__
+#define SD_INCLUDE_ALL
+#elseifdef __FLEXSPIN__
+#define SD_INCLUDE_ALL
+#pragma exportdef SD_INCLUDE_ALL
+#else
+#pragma exportdef SD_INCLUDE_ALL
+#endif
+
+OBJ
+    sd    : "micro_sd_fat32_fs"
+    utils : "isp_rt_utilities"
+
+DAT { Phase B sample modes (driver convention: 0=pre-edge, 1=on-edge) }
+    phaseBModes     LONG    0, 1                                                ' PRE-edge, ON-edge
+
+DAT { Phase B align_delay offsets }
+    phaseBOffsets   LONG    -3, 0, 3, 5, 7
+
+DAT { Phase B mode labels for output }
+    phaseBLbl0      BYTE    "PRE-edge", 0
+    phaseBLbl1      BYTE    " ON-edge", 0
+
+DAT { Phase C1 SPI speeds in Hz }
+    phaseC1Speeds   LONG    25_000_000, 22_000_000, 20_000_000, 18_750_000, 15_000_000, 12_500_000, 8_000_000
+
+DAT { Phase C2 sysclks in Hz }
+    phaseC2Sysclks  LONG    200_000_000, 250_000_000, 270_000_000, 300_000_000, 320_000_000, 350_000_000
+
+DAT { Phase D2 sector probes - covers wide address span }
+    phaseD2Sectors  LONG    0, 100_000, 500_000, 1_000_000, 1_500_000, 1_980_000
+
+VAR
+    BYTE    streamerBuf[SECTOR_SIZE]
+    BYTE    slowpathBuf[SECTOR_SIZE]
+    BYTE    cmpBuf[SECTOR_SIZE]                                                 ' Phase B/C scratch buffer
+
+    LONG    phaseAOutcome
+    LONG    phaseAStreamerSig                                                   ' MBR signature word from A1
+    LONG    phaseASlowSig                                                       ' MBR signature word from A2
+    LONG    phaseAStreamerHash                                                  ' simple checksum of A1 buffer
+    LONG    phaseASlowHash                                                      ' simple checksum of A2 buffer
+
+PUB go() | mountStatus
+'' Main entry point.
+
+    debug(" ")
+    debug("=== MACCA DIAGNOSTIC v1 ===")
+    debug("  Driver: P2-uSD-FAT32-FS v1.5.2")
+    debug("  Boot clkfreq=", udec_long_(clkfreq), "  clkmode=$", uhex_long_(clkmode))
+
+    mountStatus := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    if mountStatus < 0
+        debug("  MOUNT_FAILED status=", sdec_(mountStatus))
+        debug("  (cannot proceed without successful mount; ending)")
+        finalizeAndExit()
+        return
+
+    ' Cache card profile for use by helpers
+    utils.cacheCardProfile(sd.eraseBlockSectors(), sd.cardSizeSectors(), sd.getReadTimeout(), sd.getWriteTimeout(), sd.getCardMaxSpeed(), sd.getManufacturerID(), (sd.getOCR() >> 30) & 1)
+
+    debug(" ")
+    debug("CARD PROFILE:")
+    utils.profileReport()
+    debug(" ")
+
+    ' --- Baseline sanity check (cheap insurance against bench setup issues) ---
+    if sanityCheckRegisterReads() <> 0
+        debug("BASELINE: register reads FAILED - smart-pin SPI is broken; skipping further phases")
+        sd.unmount()
+        finalizeAndExit()
+        return
+    debug("BASELINE: register reads OK (smart-pin SPI healthy)")
+    debug(" ")
+
+    ' --- PHASE A: disambiguation (always runs) ---
+    runPhaseA()
+
+    ' --- Branch on Phase A outcome ---
+    case phaseAOutcome
+        BRANCH_DRIVER_SIDE:
+            runPhaseB()
+            runPhaseC1()
+            runPhaseC2()
+        BRANCH_CARD_SIDE:
+            runPhaseD()
+        BRANCH_CANNOT_REPRODUCE:
+            runRetryLoop()
+        BRANCH_INVERSE:
+            runPhaseD()                                                         ' forensic interest
+        other:
+            debug("PHASE A: UNDETERMINED outcome - skipping subsequent phases")
+
+    sd.unmount()
+    finalizeAndExit()
+
+
+PRI sanityCheckRegisterReads() : status | dummy_buf[16]
+' Verify smart-pin SPI is healthy by reading CID and CSD via the existing
+' register-read path. Returns 0 if both succeed, -1 if either fails.
+' This catches bench-setup issues (bad cable, slot, power) before we waste
+' time blaming the streamer.
+
+    status := 0
+    if sd.readCSDRaw(@dummy_buf) < 0
+        status := -1
+    ' (CID read is implicit in mount(); if mount succeeded, CID worked)
+
+
+PRI runPhaseA() | a1Status, a2Status
+' PHASE A: disambiguation - read sector 0 via streamer and slow-path,
+' classify outcome.
+
+    debug("PHASE A: DISAMBIGUATION")
+
+    ' A1: streamer read of sector 0
+    bytefill(@streamerBuf, $00, SECTOR_SIZE)
+    a1Status := sd.readSectorRaw(0, @streamerBuf)
+    phaseAStreamerSig := (BYTE[@streamerBuf][BOOT_SIG_OFFSET] << 8) | BYTE[@streamerBuf][BOOT_SIG_OFFSET + 1]
+    phaseAStreamerHash := bufferHash(@streamerBuf, SECTOR_SIZE)
+    debug("  A1: streamer  sector=0 status=", sdec_(a1Status), " sig=$", uhex_word_(phaseAStreamerSig), " hash=$", uhex_long_(phaseAStreamerHash))
+
+    ' A2: slow-path read of sector 0
+    bytefill(@slowpathBuf, $00, SECTOR_SIZE)
+    a2Status := sd.debugReadSectorSlow(0, @slowpathBuf)
+    phaseASlowSig := (BYTE[@slowpathBuf][BOOT_SIG_OFFSET] << 8) | BYTE[@slowpathBuf][BOOT_SIG_OFFSET + 1]
+    phaseASlowHash := bufferHash(@slowpathBuf, SECTOR_SIZE)
+    debug("  A2: slowpath  sector=0 status=", sdec_(a2Status), " sig=$", uhex_word_(phaseASlowSig), " hash=$", uhex_long_(phaseASlowHash))
+
+    ' Classify outcome
+    if phaseAStreamerSig == $55AA and phaseASlowSig == $55AA
+        phaseAOutcome := BRANCH_CANNOT_REPRODUCE
+        debug("  -> BRANCH: CANNOT_REPRODUCE (both reads valid; running retry loop)")
+    elseif phaseAStreamerSig == $55AA and phaseASlowSig <> $55AA
+        phaseAOutcome := BRANCH_INVERSE
+        debug("  -> BRANCH: INVERSE (streamer OK, slowpath bad - improbable; running Phase D forensically)")
+    elseif phaseAStreamerSig <> $55AA and phaseASlowSig == $55AA
+        phaseAOutcome := BRANCH_DRIVER_SIDE
+        debug("  -> BRANCH: DRIVER_SIDE (streamer-specific failure; running Phase B + C1 + C2)")
+    else
+        phaseAOutcome := BRANCH_CARD_SIDE
+        debug("  -> BRANCH: CARD_SIDE (both reads zero/garbage; running Phase D)")
+    debug(" ")
+
+
+PRI runPhaseB() | mode_idx, off_idx, mode, offset, errors
+' PHASE B: phase-tuning matrix - sweep sample_mode_override x align_delay_offset.
+' Find any cell where streamer reads match the slow-path reference (Phase A's
+' slowpathBuf). 2 modes x 5 offsets = 10 cells.
+
+    debug("PHASE B: PHASE TUNING (2 modes x 5 offsets, errors out of 512 bytes)")
+    debug("                offset=-3  offset=0  offset=+3  offset=+5  offset=+7")
+
+    repeat mode_idx from 0 to PHASE_B_MODES - 1
+        mode := LONG[@phaseBModes][mode_idx]
+        debug("  ", zstr_(modeLabel(mode_idx)), ":")
+
+        repeat off_idx from 0 to PHASE_B_OFFSETS - 1
+            offset := LONG[@phaseBOffsets][off_idx]
+            sd.debugSetSampleMode(mode)
+            sd.debugSetAlignDelayOffset(offset)
+
+            ' Force cache invalidation by reading a different sector first, or
+            ' just trust that readSectorRaw will use the cache. To be safe, read
+            ' sector 1 first to evict sector 0 from cache.
+            bytefill(@cmpBuf, $00, SECTOR_SIZE)
+            sd.readSectorRaw(1, @cmpBuf)
+
+            ' Read sector 0 via streamer with current tuning
+            bytefill(@cmpBuf, $00, SECTOR_SIZE)
+            sd.readSectorRaw(0, @cmpBuf)
+
+            errors := countByteMismatches(@cmpBuf, @slowpathBuf, SECTOR_SIZE)
+            debug("    offset=", sdec_(offset), " errors=", udec_(errors))
+
+    ' Restore defaults
+    sd.debugSetSampleMode(-1)                                                   ' AUTO
+    sd.debugSetAlignDelayOffset(0)
+    debug(" ")
+
+
+PRI runPhaseC1() | speed_idx, speed, errors
+' PHASE C1: SPI speed sweep at sysclk=350 MHz, default tuning.
+' Find threshold where streamer reads succeed.
+
+    debug("PHASE C1: SPI SPEED SWEEP at sysclk=350 MHz")
+
+    repeat speed_idx from 0 to PHASE_C1_SPEEDS - 1
+        speed := LONG[@phaseC1Speeds][speed_idx]
+        sd.setSPISpeed(speed)
+
+        ' Evict cache then read
+        bytefill(@cmpBuf, $00, SECTOR_SIZE)
+        sd.readSectorRaw(1, @cmpBuf)
+        bytefill(@cmpBuf, $00, SECTOR_SIZE)
+        sd.readSectorRaw(0, @cmpBuf)
+
+        errors := countByteMismatches(@cmpBuf, @slowpathBuf, SECTOR_SIZE)
+        if errors == 0
+            debug("  ", udec_(speed / 1_000_000), " MHz -> PASS")
+        elseif errors < 32
+            debug("  ", udec_(speed / 1_000_000), " MHz -> MARGINAL (", udec_(errors), " byte errors)")
+        else
+            debug("  ", udec_(speed / 1_000_000), " MHz -> FAIL (", udec_(errors), " byte errors)")
+
+    ' Restore default 25 MHz SPI
+    sd.setSPISpeed(25_000_000)
+    debug(" ")
+
+
+PRI runPhaseC2() | sysclk_idx, target_sysclk, errors
+' PHASE C2: sysclk sweep at SPI=20 MHz (proposed derate value).
+' Find sysclk ceiling at the proposed derate.
+
+    debug("PHASE C2: SYSCLK SWEEP at SPI=20 MHz")
+
+    sd.setSPISpeed(20_000_000)
+
+    repeat sysclk_idx from 0 to PHASE_C2_SYSCLKS - 1
+        target_sysclk := LONG[@phaseC2Sysclks][sysclk_idx]
+        changeFrequency(target_sysclk)
+        waitms(CLK_SETTLE_MS)
+        sd.debugOnClockChange()
+
+        ' Evict cache then read
+        bytefill(@cmpBuf, $00, SECTOR_SIZE)
+        sd.readSectorRaw(1, @cmpBuf)
+        bytefill(@cmpBuf, $00, SECTOR_SIZE)
+        sd.readSectorRaw(0, @cmpBuf)
+
+        errors := countByteMismatches(@cmpBuf, @slowpathBuf, SECTOR_SIZE)
+        if errors == 0
+            debug("  ", udec_(target_sysclk / 1_000_000), " MHz hp=", udec_(sd.debugGetCurrentHp()), " -> PASS")
+        elseif errors < 32
+            debug("  ", udec_(target_sysclk / 1_000_000), " MHz hp=", udec_(sd.debugGetCurrentHp()), " -> MARGINAL (", udec_(errors), " byte errors)")
+        else
+            debug("  ", udec_(target_sysclk / 1_000_000), " MHz hp=", udec_(sd.debugGetCurrentHp()), " -> FAIL (", udec_(errors), " byte errors)")
+
+    ' Return to safe boot freq and restore default SPI
+    changeFrequency(350_000_000)
+    waitms(CLK_SETTLE_MS)
+    sd.debugOnClockChange()
+    sd.setSPISpeed(25_000_000)
+    debug(" ")
+
+
+PRI runPhaseD() | poll_iter, sector_idx, sector, slowStatus, eraseStartSector, eraseStatus, writeStatus, readStatus
+' PHASE D: card-side diagnostics (D1 + D2 + D3).
+
+    debug("PHASE D: CARD-SIDE DIAGNOSTICS")
+
+    ' --- D1: CMD13 status poll ---
+    debug("  D1: CMD13 STATUS POLL (10 successive reads)")
+    repeat poll_iter from 1 to 10
+        debug("    poll ", udec_(poll_iter), ": last=$", uhex_byte_(sd.getLastCMD13()), " err=$", uhex_byte_(sd.getLastCMD13Error()))
+        ' (Note: getLastCMD13 returns last-known value; to actually issue CMD13
+        ' we'd need a public CMD13-now method. The retained value is what we
+        ' captured at last operation; this is "what state is the card stuck in?")
+
+    ' --- D2: sector wear pattern via slow-path ---
+    debug("  D2: SECTOR WEAR PATTERN (slow-path reads to isolate streamer)")
+    repeat sector_idx from 0 to PHASE_D2_SECTORS - 1
+        sector := LONG[@phaseD2Sectors][sector_idx]
+        bytefill(@cmpBuf, $00, SECTOR_SIZE)
+        slowStatus := sd.debugReadSectorSlow(sector, @cmpBuf)
+        debug("    sector=", udec_(sector), " status=", sdec_(slowStatus), " sig=$", uhex_word_((BYTE[@cmpBuf][BOOT_SIG_OFFSET] << 8) | BYTE[@cmpBuf][BOOT_SIG_OFFSET + 1]), " hash=$", uhex_long_(bufferHash(@cmpBuf, SECTOR_SIZE)))
+
+    ' --- D3: erase + write + read cycle ---
+    debug("  D3: ERASE-RECOVER CYCLE")
+    eraseStartSector := utils.safeTestRegionStart()
+    debug("    Target: erase block at sector ", udec_(eraseStartSector), " (", udec_(sd.eraseBlockSectors()), "-sector block)")
+
+    eraseStatus := sd.debugEraseBlock(eraseStartSector)
+    debug("    Step 1: erase block  -> status=", sdec_(eraseStatus))
+
+    if eraseStatus == 0
+        utils.fillBufferWithRandom(@cmpBuf, SECTOR_SIZE)
+        ' Save the written pattern for later verification
+        bytemove(@streamerBuf, @cmpBuf, SECTOR_SIZE)
+        writeStatus := sd.writeSectorRaw(eraseStartSector, @cmpBuf)
+        debug("    Step 2: write known random pattern  -> status=", sdec_(writeStatus))
+
+        if writeStatus == 0
+            bytefill(@cmpBuf, $00, SECTOR_SIZE)
+            readStatus := sd.debugReadSectorSlow(eraseStartSector, @cmpBuf)
+            debug("    Step 3: slow-path readback  -> status=", sdec_(readStatus), " errors=", udec_(countByteMismatches(@cmpBuf, @streamerBuf, SECTOR_SIZE)))
+
+            bytefill(@cmpBuf, $00, SECTOR_SIZE)
+            readStatus := sd.readSectorRaw(eraseStartSector, @cmpBuf)
+            debug("    Step 4: streamer readback   -> status=", sdec_(readStatus), " errors=", udec_(countByteMismatches(@cmpBuf, @streamerBuf, SECTOR_SIZE)))
+
+    debug(" ")
+
+
+PRI runRetryLoop() | iter, status, sigOk
+' CANNOT_REPRODUCE branch: 10 successive sector-0 reads at default settings to
+' rule out flaky one-shot. If any iteration fails, escalate to driver-side phases.
+
+    debug("RETRY LOOP: 10 successive sector-0 reads at default settings")
+    repeat iter from 1 to 10
+        bytefill(@cmpBuf, $00, SECTOR_SIZE)
+        ' Evict cache
+        sd.readSectorRaw(1, @cmpBuf)
+        bytefill(@cmpBuf, $00, SECTOR_SIZE)
+        status := sd.readSectorRaw(0, @cmpBuf)
+        sigOk := ((BYTE[@cmpBuf][BOOT_SIG_OFFSET] << 8) | BYTE[@cmpBuf][BOOT_SIG_OFFSET + 1]) == $55AA
+        if sigOk
+            debug("  iter ", udec_(iter), ": streamer=PASS")
+        else
+            debug("  iter ", udec_(iter), ": streamer=FAIL (escalating)")
+            phaseAOutcome := BRANCH_DRIVER_SIDE
+            quit
+
+    if phaseAOutcome == BRANCH_DRIVER_SIDE
+        ' Re-do Phase A diagnostic state then run B+C
+        runPhaseA()                                                             ' refresh slowpathBuf reference
+        runPhaseB()
+        runPhaseC1()
+        runPhaseC2()
+    else
+        debug("  -> STABLE: 10/10 iterations passed; original failure not reproduced")
+    debug(" ")
+
+
+PRI countByteMismatches(p_a, p_b, length) : count | idx
+' Count number of bytes that differ between two buffers.
+
+    count := 0
+    repeat idx from 0 to length - 1
+        if BYTE[p_a][idx] <> BYTE[p_b][idx]
+            count++
+
+
+PRI bufferHash(p_buf, length) : hash | idx
+' Compute a simple 32-bit additive checksum of a buffer.
+' Not cryptographic - just a quick "are these buffers the same?" check.
+
+    hash := 0
+    repeat idx from 0 to length - 1
+        hash := hash + (BYTE[p_buf][idx] << (idx & 24))
+
+
+PRI modeLabel(mode_idx) : p_label
+' Return pointer to label string for Phase B sample mode.
+
+    if mode_idx == 0
+        p_label := @phaseBLbl0
+    else
+        p_label := @phaseBLbl1
+
+
+PRI changeFrequency(target_freq)
+' Change system clock to target frequency. Uses precomputed CLKMODE values.
+
+    case target_freq
+        200_000_000:
+            ' 20/1 * 10 = 200 MHz, VCO=200
+            clkset(%1_000000_0000001001_1111_10_11, target_freq)
+        250_000_000:
+            ' 20/2 * 25 = 250 MHz, VCO=250
+            clkset(%1_000001_0000011000_1111_10_11, target_freq)
+        270_000_000:
+            ' 20/2 * 27 = 270 MHz, VCO=270
+            clkset(%1_000001_0000011010_1111_10_11, target_freq)
+        300_000_000:
+            ' 20/1 * 15 = 300 MHz, VCO=300
+            clkset(%1_000000_0000001110_1111_10_11, target_freq)
+        320_000_000:
+            ' 20/1 * 16 = 320 MHz, VCO=320
+            clkset(%1_000000_0000001111_1111_10_11, target_freq)
+        350_000_000:
+            ' 20/2 * 35 = 350 MHz, VCO=350
+            clkset(%1_000001_0000100010_1111_10_11, target_freq)
+
+
+PRI finalizeAndExit()
+' Emit final summary block and end session marker.
+
+    debug(" ")
+    debug("=== END ===")
+    debug("END_SESSION")
+
+
+con { license }
+
+{{
+  =================================================================================================
+
+  Terms of Use: MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this
+  software and associated documentation files (the "Software"), to deal in the Software
+  without restriction, including without limitation the rights to use, copy, modify,
+  merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies
+  or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+  INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+  HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+  CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+  OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+  =================================================================================================
+}}

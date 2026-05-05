@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.2] - 2026-05-05
+
+**SPI phase-margin improvements (write path); card-aware test infrastructure.**
+
+This release completes the phase-margin work begun in v1.5.1 by applying the analogous improvement to the bulk-write streamer path, and adds the test infrastructure to characterize marginal cards in a single diagnostic session. The write-path improvement was deferred from v1.5.1 pending field verification of the read-path fix; that verification is now complete and the write-path change ships here. The release also adds an `eraseBlockSectors()` getter to the production API and a card-aware test framework that prevents tests from accidentally measuring card-physics issues (erase-block stress, slow-card timeouts) when they intended to measure driver behavior.
+
+Validated by: 4-card frequency-sweep across 200-350 MHz (originally-failing cards from the v1.5.1 read-path validation set) showing no regression vs v1.5.1 baseline.
+
+### Bug Fixes
+
+- **Bulk-write clock alignment improvement.** The explicit `WAITX align_delay` instruction in the bulk-write streamer block (`writeSector` and `writeSectors`) is removed. The earlier SCK reset sequence and smart-pin start latency together produce the correct alignment without an explicit wait — the streamer's first NCO output naturally settles before the first SCK edge in all observed conditions. Mirror change applied to both single-block (CMD24) and multi-block (CMD25) write paths.
+
+### New Features
+
+- **`eraseBlockSectors()`**: production getter returning the card's reported erase block size in sectors (from CSD `SECTOR_SIZE` field). Useful for application-level write-batching and log-rotation strategies that align with flash erase boundaries. Typical values: 32 sectors (SDSC) or 128 sectors (SDHC/SDXC).
+
+### Diagnostic API (gated by `SD_INCLUDE_DEBUG`, NOT FOR PRODUCTION USE)
+
+- **`debugEraseBlock(start_sector)`**: erase one erase-block-sized region via CMD32/CMD33/CMD38 sequence. For diagnostic tools that need to distinguish recoverable card flash from failing card flash. Production code must not call this — the SD spec discourages explicit erase for normal block writes (the controller handles erase internally on RMW), and misuse risks filesystem corruption.
+
+### Tests
+
+- **Card-aware test helpers in `isp_rt_utilities.spin2`**: `cacheCardProfile()`, `safeTestRegionStart()`, `nonAdjacentSectors()`, `blockAlignedRange()`, `cardAdjustedTimeoutMs()`, `profileReport()`. Tests can now compute sector layouts from the card's actual erase-block size, avoiding accidental flash-stress measurements when a test was meant to measure driver behavior.
+- **New `diagnostic-tests/SD_macca_diagnostic.spin2`**: single-binary card characterization with decision-tree branching. Phase A disambiguates between streamer-side and card-side failures via streamer-vs-slow-path comparison. Subsequent phases run conditionally based on Phase A's outcome: phase-tuning matrix (Phase B, 10 cells), SPI-speed sweep (Phase C1, 7 cells), sysclk sweep at proposed derate (Phase C2, 6 cells), or card-side diagnostics including CMD13 polling, sector-wear pattern, and erase-recover cycle (Phase D). All sector layouts and timeouts are computed from the card's CSD via the new `cacheCardProfile()` helper.
+- **`diagnostic-tests/SD_frequency_characterize.spin2`**: multi-block sector count bumped from 8 to 32, structured ramp pattern replaced with deterministic xorshift32 (high-entropy bytes not maskable by 1-bit-shift framing errors), single-block (CMD24) leg added alongside the existing multi-block (CMD25) leg so both write streamer paths are exercised at every cell.
+
+### Documentation
+
+- `DOCs/cards/sandisk-su01g-1gb.md`: full register decode and test results for the SanDisk SU01G 1GB SDSC (the only SDSC card in the catalog).
+- `DOCs/cards/CARD-CATALOG.md`: new speed rating "E" (SDSC class, recommend ≤ 12.5 MHz) plus catalog entry for the SU01G.
+- `DOCs/User-Reports/2026-05-05-macca-v151-test-results.md`: @macca's v1.5.1 test results showing streamer-specific failure mode on his SDSC card.
+- `DOCs/Plans/2026-05-05-macca-diagnostic-design.md`: design doc for the macca diagnostic test, including the principle that tests should be card-aware by default.
+
 ## [1.5.1] - 2026-05-05
 
 **SPI phase-margin improvements (read path) for marginal cards.**

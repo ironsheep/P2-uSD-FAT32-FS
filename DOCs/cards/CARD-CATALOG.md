@@ -124,6 +124,7 @@ This section documents ALL fields available from SD card registers and indicates
 - **B** = Fast (Premium brand, SD 4.xx spec, 25 MHz)
 - **C** = Standard (SD 3.0x spec, 25 MHz)
 - **D** = Limited (MID $27 triggers 20 MHz SPI limit)
+- **E** = SDSC class (CSD v1.0, pre-2010 architecture, recommend ≤ 12.5 MHz)
 
 | Card ID | Manufacturer | Product | Capacity | Speed | Test Status |
 |---------|-------------|---------|----------|:-----:|-------------|
@@ -150,6 +151,7 @@ This section documents ALL fields available from SD card registers and indicates
 | SanDisk_WX64G_8.0_EEBAD6C0_202403 | SanDisk ($03) — WD subsidiary | WX64G | 64 GB | **A** | PASS |
 | Phison_SD16G_3.0_01CD5CF5_201808 | PNY (Phison $27) | SD16G | 16 GB | **D** | PASS |
 | Phison_SD16G_3.0_DA00094B_201610 | Sony (Phison $27) - Taiwan | SD16G | 16 GB | **D** | PASS |
+| SanDisk_SU01G_8.0_006CD5B2_200706 | SanDisk ($03) — Industrial SDSC | SU01G | 1 GB | **E** | **FAIL** (v1.5.1, 350 MHz) |
 
 ---
 

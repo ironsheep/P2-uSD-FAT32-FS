@@ -63,8 +63,13 @@ CON
 
     ' Test parameters
     TEST_SECTOR_BASE = 200_100          ' Different from other tests to avoid collisions
-    TEST_COUNT       = 8                ' 8 sectors = 4KB
+    TEST_COUNT       = 32               ' Multi-block sector count: 32 sectors = 16 KB
+    PRNG_SEED        = $DEAD_BEEF       ' xorshift32 seed for deterministic random fill
     CLK_SETTLE_MS    = 10               ' Clock stabilization delay after frequency change
+
+    ' Sector layout per cell:
+    '   TEST_SECTOR_BASE              -> single-block leg (writeSectorRaw / CMD24)
+    '   TEST_SECTOR_BASE + 1 .. + N   -> multi-block leg  (writeSectorsRaw / CMD25)
 
     ' Frequency test points (ascending order, 200 -> 350 MHz)
     #0, FREQ_200, FREQ_220, FREQ_240, FREQ_250, FREQ_255, FREQ_260
@@ -122,7 +127,9 @@ DAT
     results_b       byte    0[FREQ_COUNT]
 
 VAR
-    BYTE    write_buf[TEST_COUNT * sd.SECTOR_SIZE]
+    BYTE    single_write_buf[sd.SECTOR_SIZE]                       ' Single-block leg (CMD24 path)
+    BYTE    single_read_buf[sd.SECTOR_SIZE]
+    BYTE    write_buf[TEST_COUNT * sd.SECTOR_SIZE]                 ' Multi-block leg (CMD25 path)
     BYTE    read_buf[TEST_COUNT * sd.SECTOR_SIZE]
     LONG    pass_count
     LONG    fail_count
@@ -136,7 +143,10 @@ PUB go() | result, freq_idx, test_freq, errors, hp, lbl_c, lbl_a, lbl_b
     debug("  SD Frequency Sweep Test (V2 Driver)")
     debug("============================================================")
     debug("  Purpose: Find sysclk frequencies where streamer timing fails")
-    debug("  Test: writeSectorsRaw(8) + readSectorsRaw(8) + verify")
+    debug("  Test (per cell):")
+    debug("    1. writeSectorRaw  + readSectorRaw  + verify  (CMD24 path)")
+    debug("    2. writeSectorsRaw + readSectorsRaw + verify  (CMD25 path, ", udec_(TEST_COUNT), " sectors)")
+    debug("  Data fill: deterministic xorshift32 (seed=$DEAD_BEEF)")
     debug(" ")
     debug("Boot clkfreq = ", udec_long_(clkfreq), "  clkmode = $", uhex_long_(clkmode))
 
@@ -238,7 +248,7 @@ PRI runSweepPass(results_ptr, mode) | freq_idx, test_freq, hp, errors, mount_sta
     if mount_status < 0
         debug("  ERROR: boot-anchor mount failed (", udec_(mount_status), ")")
         return
-    fillTestPattern()
+    fillTestRandom()
 
     repeat freq_idx from 0 to FREQ_COUNT - 1
         test_freq := long[@freq_table][freq_idx]
@@ -307,44 +317,72 @@ DAT
     str_skip    byte    " -- ", 0
 
 
-PRI fillTestPattern() | idx
-' Fill write buffer with deterministic pattern.
-' Pattern: each byte = (sector_num * 17 + byte_offset) & $FF
+PRI fillTestRandom() | idx, state
+' Fill both single-block and multi-block buffers with deterministic xorshift32 bytes.
+' Same seed each call -> identical data pre-change vs post-change for clean A/B comparison.
+' xorshift32 produces high-entropy bytes that won't be masked by 1-bit-shift framing errors
+' (unlike the prior structured ramp pattern, which a single-bit shift could mimic by accident).
 
+    state := PRNG_SEED
+    repeat idx from 0 to sd.SECTOR_SIZE - 1
+        state ^= state << 13
+        state ^= state >> 17
+        state ^= state << 5
+        single_write_buf[idx] := state & $FF
     repeat idx from 0 to (TEST_COUNT * sd.SECTOR_SIZE) - 1
-        write_buf[idx] := ((idx / sd.SECTOR_SIZE) * 17 + (idx // sd.SECTOR_SIZE)) & $FF
+        state ^= state << 13
+        state ^= state >> 17
+        state ^= state << 5
+        write_buf[idx] := state & $FF
 
 
-PRI runTest(freq) : errors | written, readCt, idx, sector
-' Run the critical test: writeSectorsRaw + readSectorsRaw + verify.
-' This is exactly what fails at 270 MHz.
+PRI runTest(freq) : errors | written, readCt, idx, status, single_errors
+' Run the critical test at this sysclk:
+'   1. writeSectorRaw  + readSectorRaw  + verify  (single-block / CMD24 streamer)
+'   2. writeSectorsRaw + readSectorsRaw + verify  (multi-block / CMD25 streamer)
+' Both legs exercise streamer-write blocks. Errors from either leg fail the cell.
 '
 ' @param freq - Current sysclk frequency (for logging)
-' @returns errors - Number of byte errors (0 = pass)
+' @returns errors - Number of byte errors (0 = pass; -1 = API-level failure)
 
     errors := -1
-    sector := TEST_SECTOR_BASE
 
-    ' Write 8 sectors
-    written := sd.writeSectorsRaw(sector, TEST_COUNT, @write_buf)
-    if written <> TEST_COUNT
-        debug("  writeSectorsRaw returned ", udec_(written))
+    ' --- Leg 1: single-block (writeSectorRaw / CMD24) ---
+    status := sd.writeSectorRaw(TEST_SECTOR_BASE, @single_write_buf)
+    if status < 0
+        debug("  writeSectorRaw failed: ", sdec_(status))
     else
-        ' Clear read buffer
-        bytefill(@read_buf, $00, TEST_COUNT * sd.SECTOR_SIZE)
-
-        ' Read 8 sectors
-        readCt := sd.readSectorsRaw(sector, TEST_COUNT, @read_buf)
-        if readCt <> TEST_COUNT
-            debug("  readSectorsRaw returned ", udec_(readCt))
+        bytefill(@single_read_buf, $00, sd.SECTOR_SIZE)
+        status := sd.readSectorRaw(TEST_SECTOR_BASE, @single_read_buf)
+        if status < 0
+            debug("  readSectorRaw failed: ", sdec_(status))
         else
-            ' Verify all bytes
-            errors := 0
-            repeat idx from 0 to (TEST_COUNT * sd.SECTOR_SIZE) - 1
-                if read_buf[idx] <> write_buf[idx]
-                    if errors < 3
-                        debug("  byte ", udec_(idx), ": exp=$", uhex_byte_(write_buf[idx]), " got=$", uhex_byte_(read_buf[idx]))
-                    errors++
+            single_errors := 0
+            repeat idx from 0 to sd.SECTOR_SIZE - 1
+                if single_read_buf[idx] <> single_write_buf[idx]
+                    if single_errors < 3
+                        debug("  [single] byte ", udec_(idx), ": exp=$", uhex_byte_(single_write_buf[idx]), " got=$", uhex_byte_(single_read_buf[idx]))
+                    single_errors++
+
+            if single_errors > 0
+                errors := single_errors
+            else
+                ' --- Leg 2: multi-block (writeSectorsRaw / CMD25) ---
+                written := sd.writeSectorsRaw(TEST_SECTOR_BASE + 1, TEST_COUNT, @write_buf)
+                if written <> TEST_COUNT
+                    debug("  writeSectorsRaw returned ", udec_(written))
+                else
+                    bytefill(@read_buf, $00, TEST_COUNT * sd.SECTOR_SIZE)
+                    readCt := sd.readSectorsRaw(TEST_SECTOR_BASE + 1, TEST_COUNT, @read_buf)
+                    if readCt <> TEST_COUNT
+                        debug("  readSectorsRaw returned ", udec_(readCt))
+                    else
+                        errors := 0
+                        repeat idx from 0 to (TEST_COUNT * sd.SECTOR_SIZE) - 1
+                            if read_buf[idx] <> write_buf[idx]
+                                if errors < 6
+                                    debug("  [multi] byte ", udec_(idx), ": exp=$", uhex_byte_(write_buf[idx]), " got=$", uhex_byte_(read_buf[idx]))
+                                errors++
 
 
 PRI changeFrequency(target_freq)

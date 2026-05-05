@@ -29,6 +29,17 @@ VAR { test stats vars }
 
   LONG    varSignature      ' Sentinel value for detecting uninitialized state
 
+VAR { card profile cache - populated by cacheCardProfile() }
+
+  LONG    profileCachedFlag             ' 0 = not yet cached
+  LONG    profileEraseBlockSectors      ' Card-reported erase block size in sectors
+  LONG    profileCapacitySectors        ' Total card capacity in sectors
+  LONG    profileReadTimeoutMs          ' Card-reported read timeout (ms)
+  LONG    profileWriteTimeoutMs         ' Card-reported write timeout (ms)
+  LONG    profileMaxSpiHz               ' Card-reported max SPI speed (Hz)
+  LONG    profileMfrId                  ' Card manufacturer ID byte
+  LONG    profileCardClass              ' 0=SDSC, 1=SDHC/SDXC (from OCR.CCS)
+
 PUB null()
 '' This is not an application
 ''
@@ -477,6 +488,127 @@ PUB initAndCheckGuard(pGuardStart, pMessage) : bIntact
 
     bIntact := checkGuard(pGuardStart, pMessage)
     initGuard(pGuardStart)
+
+con { card-aware test helpers }
+
+' Card-aware test helpers prevent tests from accidentally testing card-physics
+' issues (erase-block stress, wrong timeouts) when they intend to test driver
+' behavior. Tests should call cacheCardProfile() once after mount, then use
+' the helpers below to compute card-appropriate sector layouts and timeouts.
+'
+' This pattern decouples test correctness from card class. A test that strides
+' across erase blocks works correctly on SDSC (32-sector blocks) and SDHC
+' (128-sector blocks) without any card-class-specific code in the test.
+
+PUB cacheCardProfile(eraseBlk, capacity, readTimeoutMs, writeTimeoutMs, maxSpiHz, mfrId, cardClass)
+'' Cache card characteristics for use by card-aware helpers below.
+'' Call once after mount, before any helper that consumes profile data.
+''
+'' Tests typically gather values from the driver:
+''   utils.cacheCardProfile(sd.eraseBlockSectors(), sd.cardSizeSectors(),
+''                          sd.getReadTimeout(), sd.getWriteTimeout(),
+''                          sd.getCardMaxSpeed(), sd.getManufacturerID(),
+''                          (sd.getOCR() >> 30) & 1)
+''
+'' @param eraseBlk - sectors per erase block (e.g., sd.eraseBlockSectors())
+'' @param capacity - total card capacity in sectors (e.g., sd.cardSizeSectors())
+'' @param readTimeoutMs - card-reported read timeout
+'' @param writeTimeoutMs - card-reported write timeout
+'' @param maxSpiHz - card-reported max SPI speed
+'' @param mfrId - card manufacturer ID byte
+'' @param cardClass - 0=SDSC, 1=SDHC/SDXC
+
+    profileEraseBlockSectors := eraseBlk
+    profileCapacitySectors   := capacity
+    profileReadTimeoutMs     := readTimeoutMs
+    profileWriteTimeoutMs    := writeTimeoutMs
+    profileMaxSpiHz          := maxSpiHz
+    profileMfrId             := mfrId
+    profileCardClass         := cardClass
+    profileCachedFlag        := 1
+
+PUB safeTestRegionStart() : sector
+'' Return first erase-block-aligned sector in the "safe" test region — past
+'' FAT32 metadata (root dir, FAT tables typically reside in the first 1024
+'' to 40000 sectors). Picks sector 100,000 rounded up to the next erase
+'' block boundary, clamped to never exceed half of card capacity.
+''
+'' Requires cacheCardProfile() called first.
+''
+'' @returns sector - first sector of safe test region, erase-block-aligned
+
+    sector := 100_000
+    if profileEraseBlockSectors > 0
+        ' Round up to next erase block boundary
+        sector := ((sector + profileEraseBlockSectors - 1) / profileEraseBlockSectors) * profileEraseBlockSectors
+    if profileCapacitySectors > 0 and sector > profileCapacitySectors / 2
+        ' Clamp: don't exceed half of card capacity
+        sector := (profileCapacitySectors / 2) / profileEraseBlockSectors * profileEraseBlockSectors
+
+PUB nonAdjacentSectors(count, p_dest) : returnedCount | base, idx, candidate
+'' Fill p_dest (LONG array of size count) with sector numbers, each in a
+'' different erase block. First sector is safeTestRegionStart(); subsequent
+'' sectors stride by profileEraseBlockSectors so each lands in its own block.
+''
+'' If count would exceed available strides before card capacity, returns
+'' fewer entries (returnedCount < count). Caller should check the return.
+''
+'' Requires cacheCardProfile() called first.
+''
+'' @param count - desired number of non-adjacent sectors
+'' @param p_dest - pointer to LONG array of at least `count` entries
+'' @returns returnedCount - actual number of sectors written
+
+    base := safeTestRegionStart()
+    returnedCount := 0
+    repeat idx from 0 to count - 1
+        candidate := base + idx * profileEraseBlockSectors
+        if profileCapacitySectors > 0 and candidate >= profileCapacitySectors
+            quit
+        LONG[p_dest][idx] := candidate
+        returnedCount++
+
+PUB blockAlignedRange(sectorCount) : startSector
+'' Return start of an erase-block-aligned range that contains at least
+'' `sectorCount` sectors. For tests that want to write a complete erase
+'' block (whole-block-erase fast path on the card) or a multiple of one.
+''
+'' Requires cacheCardProfile() called first.
+''
+'' @param sectorCount - desired range size in sectors (informational; the
+''                      returned start is just block-aligned)
+'' @returns startSector - first sector of the aligned range
+
+    startSector := safeTestRegionStart()
+
+PUB cardAdjustedTimeoutMs(baseMs) : adjustedMs
+'' Scale a base timeout (suitable for typical SDHC) up if the card profile
+'' indicates slower behavior (SDSC class). For SDSC the multiplier is
+'' larger because TAAC and R2W_FACTOR can produce much longer real-world
+'' timeouts than SDHC's spec-mandated constants.
+''
+'' Requires cacheCardProfile() called first.
+''
+'' @param baseMs - base timeout in milliseconds
+'' @returns adjustedMs - max(baseMs, profile-derived minimum)
+
+    if profileCardClass == 0
+        ' SDSC: scale by 4x and floor at the card's reported read timeout
+        adjustedMs := baseMs * 4
+        if adjustedMs < profileReadTimeoutMs
+            adjustedMs := profileReadTimeoutMs
+    else
+        ' SDHC/SDXC: scale by 2x as a safety margin
+        adjustedMs := baseMs * 2
+
+PUB profileReport()
+'' Format-print the cached card profile to debug output. Useful at the start
+'' of a test for reproducibility — the log shows what card characteristics
+'' the test ran against.
+
+    debug("  [profile] eraseBlock=", udec_(profileEraseBlockSectors), " sectors  capacity=", udec_(profileCapacitySectors), " sectors")
+    debug("  [profile] readTimeout=", udec_(profileReadTimeoutMs), "ms  writeTimeout=", udec_(profileWriteTimeoutMs), "ms")
+    debug("  [profile] maxSpi=", udec_(profileMaxSpiHz / 1_000_000), " MHz  mfrId=$", uhex_byte_(profileMfrId), "  class=", udec_(profileCardClass), " (0=SDSC, 1=SDHC/SDXC)")
 
 con { license }
 
