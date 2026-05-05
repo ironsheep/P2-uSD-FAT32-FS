@@ -149,7 +149,13 @@ UTILS_PATH="$(_relpath "$PROJECT_ROOT/src/UTILS" "$TEST_DIR")/"
 DEMO_PATH="$(_relpath "$PROJECT_ROOT/src/DEMO" "$TEST_DIR")/"
 REGTEST_PATH="$(_relpath "$PROJECT_ROOT/src/regression-tests" "$TEST_DIR")/"
 CACHE_DIR="$PROJECT_ROOT/.pnut-cache"
-COMPILE_CMD="pnut-ts -d --cache --cache-dir $CACHE_DIR -I $SRC_PATH -I $UTILS_PATH -I $DEMO_PATH -I $REGTEST_PATH $BASENAME.spin2"
+# Cache toggle: set USE_CACHE=1 to enable pnut-ts object cache. Default: disabled.
+if [[ "$USE_CACHE" == "1" ]]; then
+    CACHE_FLAGS="--cache --cache-dir $CACHE_DIR"
+else
+    CACHE_FLAGS=""
+fi
+COMPILE_CMD="pnut-ts -d $CACHE_FLAGS -I $SRC_PATH -I $UTILS_PATH -I $DEMO_PATH -I $REGTEST_PATH $BASENAME.spin2"
 echo "  Command: $COMPILE_CMD"
 
 if ! $COMPILE_CMD; then
