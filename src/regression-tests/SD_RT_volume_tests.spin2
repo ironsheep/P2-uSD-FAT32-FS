@@ -21,7 +21,7 @@
 
 CON
 
-     _CLKFREQ        = 270_000_000
+     _CLKFREQ        = 350_000_000
 
      ' P2 Edge module SD slot pins
      SD_CS   = 60
