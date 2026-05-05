@@ -146,7 +146,7 @@ PUB go() | result, freq_idx, test_freq, errors, hp, lbl_c, lbl_a, lbl_b
     debug("============================================================")
     debug("  FREQUENCY SWEEP (200 -> 350 MHz, 3 modes per frequency)")
     debug("============================================================")
-    debug("    Mode C: SPI hp from boot mount, never re-touched")
+    debug("    Mode C: host runtime timing isolated via debugOnClockChange()")
     debug("            (sysclk rises, SPI hp does not -> SPI overclocks)")
     debug("            Documents what a user-without-driver-help sees.")
     debug("    Mode A: setSPISpeed(25 MHz) after each clkset")
@@ -157,10 +157,16 @@ PUB go() | result, freq_idx, test_freq, errors, hp, lbl_c, lbl_a, lbl_b
     debug("  Each mode is its own pass with its own boot-anchored mount,")
     debug("  so per-mode semantics stay clean (Mode C truly stale, etc.).")
 
-    ' --- PASS 1: Mode C (no fix, boot-mount hp drifts) ---
+    ' --- PASS 1: Mode C (host runtime timing isolated via debugOnClockChange) ---
+    ' Per S.3 + S.4 of the SPI Phase-Margin sprint plan, Mode C now exercises the
+    ' host-side runtime timing in isolation: after each clkset() we call
+    ' sd.debugOnClockChange() which recomputes host-side state (spi_period, MISO
+    ' sample mode, idle/tick thresholds, SCK WXPIN) without re-initializing the
+    ' card. This requires SD_INCLUDE_DEBUG to be exportdef'd by this consumer
+    ' (we exportdef SD_INCLUDE_ALL above, which includes DEBUG).
     debug(" ")
     debug("============================================================")
-    debug("  PASS 1: Mode C (boot-mount hp, no driver re-touch)")
+    debug("  PASS 1: Mode C (host runtime timing via debugOnClockChange)")
     debug("============================================================")
     runSweepPass(@results_c, MODE_C)
 
@@ -246,8 +252,16 @@ PRI runSweepPass(results_ptr, mode) | freq_idx, test_freq, hp, errors, mount_sta
 
         case mode
             MODE_C:
-                ' No driver re-touch - SPI hp left from 200 MHz boot mount.
-                ' SPI rate physically rises with sysclk: SPI = clkfreq/(2*hp_boot).
+                ' S.4: recompute host-side sysclk-dependent state (spi_period,
+                ' miso_wxpin, idle_flush_clocks, ct_tick_clocks, SCK WXPIN)
+                ' WITHOUT re-initializing the card. This isolates host-side
+                ' runtime timing as the test variable. Requires SD_INCLUDE_DEBUG.
+                ' Returns 0 on success or E_BAD_RESPONSE if worker is busy.
+                if sd.debugOnClockChange() <> 0
+                    debug("    Mode C: debugOnClockChange aborted (worker busy)")
+                    byte[results_ptr][freq_idx] := 2
+                    fail_count++
+                    next
             MODE_A:
                 sd.setSPISpeed(25_000_000)
             MODE_B:

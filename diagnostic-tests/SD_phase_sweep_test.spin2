@@ -1,0 +1,233 @@
+'' =================================================================
+''   SD Phase Sweep Test (Phase 4 of SPI margin-improvement sprint)
+''
+''   Walks the diagnostic tuning knobs added by Phase 2 (debugSetSampleMode)
+''   and Phase 3 (debugSetAlignDelayOffset) over a fixed grid at one compile-time
+''   sysclk, exercising both Path A (smart-pin direct via CSD read) and
+''   Path B (streamer DMA via sector 0 read with $55 $AA signature check).
+''
+''   Sweep grid: 2 sample modes x 12 align_delay offsets = 24 cells.
+''   Sample modes: 0 = pre-edge, 1 = on-edge.
+''   Align-delay offsets: -3 to +8 (range justified by p2kbArchIoPinTiming
+''   host-side I/O ring round trip of 5-6 sysclks plus card-side margin).
+''
+''   The test is READ-ONLY. No writes are issued to the card during sweep.
+''
+''   Default _CLKFREQ is 250_000_000 to match @macca's failing case.
+''   Recompile with a different _CLKFREQ to test other sysclks.
+''
+''   Per Phase 4 §4.5, output includes margin-summary post-processing
+''   identifying the largest contiguous passing-band per sample mode.
+''
+''   Author: sprint task #12 (Phase 4 task A)
+''   Date:   2026-05-04
+'' =================================================================
+
+CON
+    _CLKFREQ        = 250_000_000               ' Configurable per build
+    _XTLFREQ        = 20_000_000
+
+    SD_CS           = 60                        ' P2 Edge default pin layout
+    SD_MOSI         = 59
+    SD_MISO         = 58
+    SD_SCK          = 61
+
+    DEBUG_BAUD      = 2_000_000
+
+    OFFSET_MIN      = -3                        ' Sweep range low
+    OFFSET_MAX      = 8                         ' Sweep range high
+    OFFSET_COUNT    = 12                        ' OFFSET_MAX - OFFSET_MIN + 1
+    MODE_COUNT      = 2                         ' pre-edge + on-edge
+
+    PATH_A_PASS     = 1
+    PATH_A_FAIL     = 0
+    PATH_B_PASS     = 1
+    PATH_B_FAIL     = 0
+
+
+#pragma exportdef SD_INCLUDE_ALL                ' Need RAW + REGISTERS + DEBUG
+
+
+OBJ
+    sd : "micro_sd_fat32_fs"
+
+
+DAT
+    ' 2D result matrix: result_b[mode * OFFSET_COUNT + (offset - OFFSET_MIN)]
+    ' Path A is reported separately as a binary categorical per mode (since
+    ' the sample-mode axis IS the Path A knob, the Path B offset axis does
+    ' not affect Path A directly).
+    result_b        BYTE    0[MODE_COUNT * OFFSET_COUNT]
+    result_a        BYTE    0[MODE_COUNT]       ' Indexed by sample mode
+
+    ' Sector-0 readback buffer
+    sec_buf         BYTE    0[512]
+
+    ' CSD readback buffer (16 bytes)
+    csd_buf         BYTE    0[16]
+
+
+PUB go() | mode, offset, status
+'' Entry point. Mounts the card, walks the 2x12 grid, prints per-cell results,
+'' then runs §4.5 margin-measurement post-processing.
+
+    waitms(50)                                                                  '  power-on settle
+    debug(" ")
+    debug("============================================================")
+    debug("  SD Phase Sweep Test (Phase 4 / sprint task #12)")
+    debug("============================================================")
+    debug("  sysclk = ", udec_(clkfreq), " Hz (", udec_(clkfreq / 1_000_000), " MHz)")
+    debug("  Sweep grid: ", udec_(MODE_COUNT), " modes x ", udec_(OFFSET_COUNT), " offsets = ", udec_(MODE_COUNT * OFFSET_COUNT), " cells")
+    debug("  Path A: smart-pin direct (CSD read; sample-mode axis only)")
+    debug("  Path B: streamer DMA (sector 0; both axes)")
+    debug("  READ-ONLY: no writes to the card.")
+    debug(" ")
+
+    status := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    if status < 0
+        debug("FATAL: mount failed (", sdec_(status), ")")
+        debug("END_SESSION")
+        return
+
+    debug("  Mount OK. hp = ", udec_(sd.debugGetCurrentHp()))
+    debug(" ")
+    debug("============================================================")
+    debug("  Per-cell sweep")
+    debug("============================================================")
+    debug(" ")
+
+    repeat mode from 0 to MODE_COUNT - 1
+        sd.debugSetSampleMode(mode)
+        ' Path A is determined by sample mode alone; test once per mode
+        result_a[mode] := test_path_a()
+        debug("  --- mode=", udec_(mode), " (",  zstr_((mode == 0) ? @str_preedge : @str_onedge), ") path_a=",  zstr_((result_a[mode] == PATH_A_PASS) ? @str_pass : @str_fail), " ---")
+        repeat offset from OFFSET_MIN to OFFSET_MAX
+            sd.debugSetAlignDelayOffset(offset)
+            status := test_path_b()
+            result_b[mode * OFFSET_COUNT + (offset - OFFSET_MIN)] := status
+            debug("    sysclk=", udec_(clkfreq / 1_000_000), " hp=", udec_(sd.debugGetCurrentHp()), " mode=", udec_(mode), " offset=", sdec_(offset), " path_b=",  zstr_((status == PATH_B_PASS) ? @str_pass : @str_fail))
+
+    debug(" ")
+    sd.unmount()
+
+    ' §4.5 margin-summary post-processing
+    print_margin_summary()
+
+    debug(" ")
+    debug("============================================================")
+    debug("  END")
+    debug("============================================================")
+    debug("END_SESSION")
+
+
+PRI test_path_a() : status | read_status, csd_struct
+' Path A test: read CSD via sd.readCSDRaw and verify it looks valid.
+' On a healthy card, CSD byte 0 has CSD_STRUCTURE in bits [7:6]: 00=v1.0, 01=v2.0.
+' We accept either as valid. Returns PATH_A_PASS or PATH_A_FAIL.
+' This exercises sp_transfer_8 (Path A) for the entire CSD readback sequence.
+
+    bytefill(@csd_buf, $EE, 16)                                                 '  sentinel
+    read_status := sd.readCSDRaw(@csd_buf)
+    if read_status < 0
+        return PATH_A_FAIL
+    csd_struct := (csd_buf[0] >> 6) & $03
+    if csd_struct == $03 OR csd_struct == $02                                   '  reserved values
+        return PATH_A_FAIL
+    if csd_buf[0] == $EE                                                        '  buffer untouched -> read silently failed
+        return PATH_A_FAIL
+    return PATH_A_PASS
+
+
+PRI test_path_b() : status | read_status, sig
+' Path B test: read sector 0 via sd.readSectorRaw and verify the boot signature
+' $55 $AA at offsets 510-511. Returns PATH_B_PASS or PATH_B_FAIL.
+' This exercises the streamer-DMA bulk path for the entire 512-byte transfer.
+
+    bytefill(@sec_buf, $EE, 512)                                                '  sentinel
+    read_status := sd.readSectorRaw(0, @sec_buf)
+    if read_status < 0
+        return PATH_B_FAIL
+    sig := (sec_buf[511] << 8) | sec_buf[510]
+    if sig <> sd.BOOT_SIGNATURE
+        return PATH_B_FAIL
+    return PATH_B_PASS
+
+
+PRI print_margin_summary() | mode, offset, run_start, run_end, run_width, best_start, best_end, best_width, in_run, idx, plateau_count, plateau_starts[OFFSET_COUNT]
+' §4.5 margin-summary post-processing.
+' For each sample mode, find the largest contiguous run of passing
+' align_delay_offset values (the "passing band"). Detect §3 falsification
+' triggers: no band, multiple plateaus, or center far from predicted +5..+7.
+
+    debug(" ")
+    debug("============================================================")
+    debug("  Margin summary (Phase 4 §4.5)")
+    debug("============================================================")
+
+    repeat mode from 0 to MODE_COUNT - 1
+        debug(" ")
+        debug("  --- mode=", udec_(mode), " (", zstr_((mode == 0) ? @str_preedge : @str_onedge), ") ---")
+
+        ' Path A categorical (binary axis)
+        debug("    Path A: ", zstr_((result_a[mode] == PATH_A_PASS) ? @str_pass : @str_fail))
+
+        ' Path B passing-band analysis
+        best_start := 0
+        best_end := -1
+        best_width := 0
+        run_start := 0
+        run_end := -1
+        run_width := 0
+        in_run := 0
+        plateau_count := 0
+
+        repeat offset from OFFSET_MIN to OFFSET_MAX
+            idx := mode * OFFSET_COUNT + (offset - OFFSET_MIN)
+            if result_b[idx] == PATH_B_PASS
+                if NOT in_run
+                    run_start := offset
+                    in_run := 1
+                run_end := offset
+                run_width := run_end - run_start + 1
+            else
+                if in_run
+                    if run_width > best_width
+                        best_start := run_start
+                        best_end := run_end
+                        best_width := run_width
+                    plateau_starts[plateau_count] := run_start
+                    plateau_count++
+                    in_run := 0
+        ' Final run if it ended at OFFSET_MAX
+        if in_run
+            if run_width > best_width
+                best_start := run_start
+                best_end := run_end
+                best_width := run_width
+            plateau_starts[plateau_count] := run_start
+            plateau_count++
+
+        ' Report findings + §3 falsification triggers
+        if best_width == 0
+            debug("    Path B: NO PASSING BAND -- model violation suspected")
+            debug("            (no offset in [", sdec_(OFFSET_MIN), "..", sdec_(OFFSET_MAX), "] passed for this mode)")
+        else
+            ' Path B passing-band found
+            idx := (best_start + best_end) / 2                                  ' reuse idx as center
+            debug("    Path B: passing band [", sdec_(best_start), "..", sdec_(best_end), "], width=", udec_(best_width), ", center=", sdec_(idx))
+            ' Trigger: multiple disjoint plateaus
+            if plateau_count > 1
+                debug("            WARNING: ", udec_(plateau_count), " disjoint plateaus -- model expected single bathtub")
+            ' Trigger: center far from predicted +5..+7 range
+            ' Per p2kbArchIoPinTiming the predicted optimum is host-side
+            ' round-trip 5-6 sysclks plus card t_OD 0-2 sysclks. Allow +-2
+            ' sysclks of leeway -> warn if center outside [+3, +9].
+            if idx < 3 OR idx > 9
+                debug("            WARNING: band center outside predicted [+3..+9] -- investigate model")
+
+
+DAT
+    str_pass        BYTE    "PASS", 0
+    str_fail        BYTE    "FAIL", 0
+    str_preedge     BYTE    "pre-edge", 0
+    str_onedge     BYTE    "on-edge", 0

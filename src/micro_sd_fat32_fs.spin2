@@ -593,6 +593,44 @@ DAT  ' ---- Singleton Control ----
         spi_event                               LONG    0                        ' Event config for waitse1 (%01_000000 | sck)
         sp_debug_ctr                            LONG    0                        ' Debug counter for sp_transfer_8
 
+        ' PHASE 2 -- Adaptive Path A sample-mode tuning (WXPIN[5] for MISO)
+        ' miso_wxpin holds the current X value used at every MISO WXPIN call site.
+        ' sample_mode_override: -1=auto-by-hp (default), 0=force pre-edge, 1=force on-edge.
+        ' pre_edge_threshold: in auto mode, hp <= threshold uses pre-edge (%0_00111),
+        ' otherwise on-edge (%1_00111). Default 5 is conservative: only hp=4 and hp=5
+        ' use pre-edge, preserving on-edge behavior at hp >= 6 (sysclk >= 255 MHz at
+        ' 25 MHz target). Set by applySPISpeed; consumed by every WXPIN(_miso, ...) site.
+        miso_wxpin                              LONG    %1_00111                 ' X value for MISO WXPIN (default on-edge)
+        sample_mode_override                    LONG    -1                       ' -1 = auto-by-hp, 0 = pre-edge, 1 = on-edge
+        pre_edge_threshold                      LONG    5                        ' hp <= this -> pre-edge in auto mode
+
+        ' S.3 -- Cached target SPI rate for debugOnClockChange() recompute path.
+        ' applySPISpeed sets this on every call so debugOnClockChange() knows
+        ' what target frequency to recompute against after a runtime clkset().
+        ' Default 25_000_000 matches the historical post-init rate; the actual
+        ' value is overwritten on the first applySPISpeed call during init.
+        current_spi_target_hz                   LONG    25_000_000               ' Most recent applySPISpeed target (Hz)
+
+        ' PHASE 3 -- Adaptive Path B alignment tuning (streamer DMA align_delay)
+        ' align_delay_offset is added to spi_period (= hp) at every streamer-burst
+        ' site to produce the actual WAITX value before XINIT. Default 0 preserves
+        ' current align_delay = hp behavior, giving byte-identical output at
+        ' sysclk=350 MHz default-settings regression.
+        '
+        ' Why default 0 (not -2 as some earlier draft notes suggested):
+        '   (i)  preserves byte-identical pre-Phase-3 behavior under regression;
+        '   (ii) per p2kbArchIoPinTiming the host-side I/O ring round trip is
+        '        5-6 sysclks (smart-pin output 1.5-3 sysclks plus registered
+        '        input 3-4 sysclks), so the optimal offset post-Phase-1.5 is
+        '        at POSITIVE values in the +5 to +7 range, not negative;
+        '   (iii) the production default is set after the empirical sweep tells
+        '        us the actual optimum per card class.
+        '
+        ' Floor: align_delay must be >= 2 (cog needs at least 2 sysclks to execute
+        ' WAITX before XINIT). At hp=4 with align_delay_offset=-2 this lands
+        ' exactly on the floor; below that the floor clamp engages.
+        align_delay_offset                      LONG    0                        ' Signed integer; sweep range [-3, +8]
+
         ' FILESYSTEM STATE (moved from VAR)
         fat_sec                                 LONG    0                        ' Starting sector of FAT
         fat2_sec                                LONG    0                        ' Starting sector of FAT2 (mirror)
@@ -1836,6 +1874,72 @@ CON ' ---- Debug / Diagnostics [SD_INCLUDE_DEBUG] ----
 
 #ifdef SD_INCLUDE_DEBUG
 
+PUB debugOnClockChange() : status
+'' DIAGNOSTIC ONLY: Recompute host-side sysclk-dependent state after a
+'' caller-initiated clkset(). Use only when investigating sysclk-dependent
+'' card behavior (e.g., the three-mode test pattern in
+'' diagnostic-tests/SD_frequency_characterize.spin2).
+''
+'' Production applications must NOT call this. Production guidance after a
+'' clkset() is to unmount() and mount() again. Calling this method in
+'' production constitutes undefined behavior.
+''
+'' Caller is responsible for ensuring no SD operation is in flight at the
+'' time of the call. The worker cog's command mailbox is checked; if a
+'' command is mid-dispatch, this method returns E_BAD_RESPONSE without
+'' modifying state.
+''
+'' Recomputes:
+''   - spi_period (smart-pin half-period, derived from new clkfreq)
+''   - WXPIN(sck, spi_period) so the smart pin uses the new period
+''   - miso_wxpin (Phase 2 sample mode reflects new hp)
+''   - WXPIN(miso, miso_wxpin) so MISO uses the new sample mode
+''   - idle_flush_clocks (auto-flush threshold in new sysclks)
+''   - ct_tick_clocks (clock-tick threshold in new sysclks)
+''
+'' Does NOT re-initialize the card. The card's internal state (CMD0/CMD8/
+'' ACMD41/CMD58 results) is preserved across the call. Card register
+'' caches (CID/CSD/SCR) are also preserved.
+''
+'' @returns status - 0 on success, E_BAD_RESPONSE if a command is in flight
+
+  if pb_cmd <> CMD_NONE
+    status := E_BAD_RESPONSE                                                '  Worker is busy; refuse to touch state
+    return
+  recompute_clock_state()
+  status := 0
+
+PRI recompute_clock_state() | half_period
+' S.3 helper: recompute host-side sysclk-dependent state against the new
+' clkfreq, using the cached current_spi_target_hz to drive the SPI rate
+' calculation. Same formula as applySPISpeed (ceiling division clamped to >=4).
+
+  ' Recompute spi_period (= hp) from new clkfreq against cached SPI target
+  half_period := (clkfreq + (current_spi_target_hz * 2) - 1) / (current_spi_target_hz * 2)
+  if half_period < 4
+    half_period := 4
+  spi_period := half_period
+  spi_freq := clkfreq / (half_period * 2)
+
+  ' Recompute Phase 2 miso_wxpin against the new hp
+  case sample_mode_override
+    0:        miso_wxpin := %0_00111
+    1:        miso_wxpin := %1_00111
+    other:                                                                  '  -1 = auto
+      if half_period <= pre_edge_threshold
+        miso_wxpin := %0_00111
+      else
+        miso_wxpin := %1_00111
+
+  ' Apply new period and sample mode to smart pins (live-update is safe per
+  ' p2kbArchSmartPins live-update behavior for WXPIN with DIR=1)
+  WXPIN(sck, half_period)
+  WXPIN(miso, miso_wxpin)
+
+  ' Recompute worker-cog timing thresholds against new clkfreq
+  idle_flush_clocks := clkfreq / 1000 * IDLE_FLUSH_MS
+  ct_tick_clocks := clkfreq * 2
+
 PUB getWriteDiag() : result_code, r1_resp, data_resp, sector_num
 '' Get diagnostic info from last writeSector call.
 '' Codes: 0=not called, 1=CMD24 fatal, 2=data-response timeout,
@@ -2060,6 +2164,130 @@ PUB setCRCValidation(enabled)
 '' @param enabled - TRUE (non-zero) enables CRC checking, FALSE (0) disables
 
   diag_crc_enabled := (enabled <> 0) ? 1 : 0
+
+#ifdef SD_INCLUDE_DEBUG
+
+PUB debugSetSampleMode(mode)
+'' DIAGNOSTIC ONLY: select MISO sample mode for the smart-pin direct (Path A)
+'' read path. This affects every sp_transfer_8 call and any byte-by-byte MISO
+'' read. For the streamer-DMA bulk path (Path B), see debugSetAlignDelayOffset.
+''
+'' Production applications must NOT call this. The driver computes the right
+'' sample mode internally based on hp; this knob is exposed only for diagnostic
+'' tools (e.g., diagnostic-tests/SD_phase_sweep_test.spin2) that walk the
+'' parameter grid to characterize marginal cards.
+''
+'' Modes:
+''   -1 = auto-by-hp (default): pre-edge when hp <= pre_edge_threshold,
+''        else on-edge. The default threshold of 5 means hp=4 and hp=5 use
+''        pre-edge, hp >= 6 uses on-edge.
+''    0 = force pre-edge (%0_00111): sample ~1 sysclk before SCK rising edge.
+''        More tolerant of slow / older cards with long t_OD.
+''    1 = force on-edge (%1_00111): sample ~2 sysclks past SCK rising edge.
+''        Optimal for modern fast cards; this is the historical default.
+''
+'' Out-of-range modes are silently ignored. Mode change re-applies WXPIN to
+'' MISO immediately so subsequent transfers use the new value.
+''
+'' @param mode - -1 (auto), 0 (pre-edge), or 1 (on-edge)
+
+  if mode < -1 or mode > 1
+    return                                                                  '  silently ignore invalid input
+  sample_mode_override := mode
+  ' Recompute miso_wxpin against current half-period
+  case sample_mode_override
+    0:        miso_wxpin := %0_00111
+    1:        miso_wxpin := %1_00111
+    other:                                                                  '  -1 = auto
+      if spi_period <= pre_edge_threshold
+        miso_wxpin := %0_00111
+      else
+        miso_wxpin := %1_00111
+  ' Re-apply to MISO smart pin so the next byte-by-byte transfer uses it.
+  ' WXPIN is safe to write while the smart pin is running (DIR=1) per
+  ' p2kbArchSmartPins live-update behavior.
+  WXPIN(miso, miso_wxpin)
+
+PUB debugSetPreEdgeThreshold(hp_thresh)
+'' DIAGNOSTIC ONLY: set the half-period threshold at and below which auto-mode
+'' chooses pre-edge sampling. Default 5 (hp=4 and hp=5 use pre-edge in auto
+'' mode). Only effective when sample_mode_override = -1 (auto). Forced modes
+'' ignore. Production applications must NOT call this.
+''
+'' Range 4..32: hp values are clamped to >=4 by applySPISpeed, and hp=32
+'' represents an extreme low-sysclk case far beyond practical SD use.
+'' Out-of-range thresholds are silently ignored.
+''
+'' @param hp_thresh - threshold half-period value (4..32)
+
+  if hp_thresh < 4 or hp_thresh > 32
+    return                                                                  '  silently ignore invalid input
+  pre_edge_threshold := hp_thresh
+  ' Recompute miso_wxpin in case current hp is near the new threshold
+  if sample_mode_override == -1
+    if spi_period <= pre_edge_threshold
+      miso_wxpin := %0_00111
+    else
+      miso_wxpin := %1_00111
+    WXPIN(miso, miso_wxpin)
+
+PUB debugGetEffectiveSampleMode() : mode
+'' DIAGNOSTIC ONLY: return the actual MISO WXPIN value currently in use (the X
+'' register value applied to the MISO smart pin). %1_00111 means on-edge,
+'' %0_00111 means pre-edge. Production applications must NOT call this.
+''
+'' @returns mode - the current miso_wxpin value (one of %1_00111 or %0_00111)
+
+  mode := miso_wxpin
+
+PUB debugGetCurrentHp() : hp
+'' DIAGNOSTIC ONLY: return the current SPI half-period in sysclks (the value
+'' the SCK P_TRANSITION smart pin uses for its base period). Equals spi_period.
+'' Production applications must NOT call this.
+''
+'' @returns hp - current half-period in sysclks
+
+  hp := spi_period
+
+PUB debugSetAlignDelayOffset(offset)
+'' DIAGNOSTIC ONLY: set the signed integer offset added to spi_period (= hp)
+'' to compute the streamer-DMA align_delay at every streamer-burst site.
+''
+'' This affects ONLY streamer-driven 512-byte sector transfers (Path B). It
+'' does NOT affect single-byte transfers -- for Path A see debugSetSampleMode.
+'' Production applications must NOT call this. The driver will bake in the
+'' correct value once sweep results identify the production default.
+''
+'' Default 0 preserves the historical align_delay = hp behavior. Per
+'' p2kbArchIoPinTiming the host-side I/O ring round trip is 5-6 sysclks
+'' (smart-pin output 1.5-3 + registered input 3-4), so the optimal offset
+'' post-Phase-1.5 is at positive values in the +5 to +7 range, not negative.
+''
+'' Floor: align_delay is clamped to >= 2 at use site (cog needs 2 sysclks
+'' to execute WAITX before XINIT). At hp=4 with offset=-2 this lands exactly
+'' on the floor.
+''
+'' Range: caller may pass [-8, +8]. Out-of-range values are silently ignored.
+''
+'' @param offset - signed integer offset added to spi_period
+
+  if offset < -8 or offset > 8
+    return                                                                  '  silently ignore invalid input
+  align_delay_offset := offset
+
+PUB debugGetEffectiveAlignDelay() : delay
+'' DIAGNOSTIC ONLY: return the streamer-DMA align_delay value that will be
+'' used on the next streamer-driven sector transfer (Path B). Computed as
+'' spi_period plus align_delay_offset, clamped to a minimum of 2 (the WAITX
+'' floor). Production applications must NOT call this.
+''
+'' @returns delay - the effective WAITX value in sysclks
+
+  delay := spi_period + align_delay_offset
+  if delay < 2
+    delay := 2
+
+#endif                                                  ' SD_INCLUDE_DEBUG (Phase 2/3 diagnostic tuning APIs)
 
 PUB setTestForceReadError(count)
 '' Set CRC error injection counter for reads. Each sector read will see a
@@ -5278,7 +5506,7 @@ PRI initSPIPins()
   ' Configure with DIRL -> WRPIN -> WXPIN -> DIRH (no WYPIN needed)
   pinfloat(miso)                                        ' DIRL - reset smart pin
   WRPIN(miso, spi_rx_mode)                              ' P_SYNC_RX | B-input->SCK
-  WXPIN(miso, %1_00111)                                 ' On-edge sample (SPI mode 0), 8 bits
+  WXPIN(miso, miso_wxpin)                               ' Phase 2: adaptive sample mode (computed by applySPISpeed)
   pinh(miso)                                            ' DIRH - enable smart pin
   DEBUG[CH_INIT]("    [initSPIPins]   MISO configured: P_SYNC_RX, B-input->SCK (enabled)")
 
@@ -5334,13 +5562,30 @@ PRI applySPISpeed(freq) | half_period, actual_freq
   ' Store in DAT variables for debugging/monitoring
   spi_period := half_period
   spi_freq := actual_freq
+  current_spi_target_hz := freq                                                 ' S.3: cache target for debugOnClockChange()
+
+  ' Phase 2: compute MISO WXPIN value based on hp and sample_mode_override.
+  ' This value is consumed by every WXPIN(_miso, ...) call site in the driver.
+  ' At default settings (sample_mode_override = -1, pre_edge_threshold = 5) and
+  ' hp >= 6, miso_wxpin = %1_00111 (on-edge), preserving pre-Phase-2 behavior
+  ' at sysclk >= 255 MHz with 25 MHz SPI target.
+  case sample_mode_override
+    0:                                                  ' Force pre-edge
+      miso_wxpin := %0_00111
+    1:                                                  ' Force on-edge
+      miso_wxpin := %1_00111
+    other:                                              ' -1 (auto) or any other = auto-by-hp
+      if half_period <= pre_edge_threshold
+        miso_wxpin := %0_00111                          ' Narrow bit cell -> pre-edge for trailing margin
+      else
+        miso_wxpin := %1_00111                          ' Wide bit cell -> on-edge (current default)
 
   ' Configure SCK smart pin X register and enable with DRVL
   WXPIN(sck, half_period)                               ' Set transition period
   pinl(sck)                                             ' DRVL enables smart pin (ManAtWork pattern)
 
   DEBUG[CH_INIT]("    [applySPISpeed] Target=", udec_(freq/1000), " kHz, Actual=", udec_(actual_freq/1000), " kHz")
-  DEBUG[CH_INIT]("    [applySPISpeed] Half-period=", udec_(half_period), " clocks")
+  DEBUG[CH_INIT]("    [applySPISpeed] Half-period=", udec_(half_period), " clocks, miso_wxpin=$", uhex_byte_(miso_wxpin))
 
 PRI calcDataCRC(pData, len) : crc | raw
 ' Calculate CRC-16-CCITT for SD card data - hardware-accelerated using P2's GETCRC instruction.
@@ -5511,8 +5756,11 @@ PRI initCard() : bSuccess | timeout, resp, card_version, acmd41_arg, got_respons
   ' If no card is present, MISO reads $FF (pulled high by P2 internal resistor)
   ' If card is present, card drives MISO (easily overpowers 15K pull-up)
   ' Pull-up is cleared later when initSPIPins() configures MISO for smart pin SPI
-  WRPIN(miso, P_HIGH_15K)
-  pinf(miso)                                                                    '  MISO as input with pull-up active
+  ' Order DIRL -> WRPIN per p2kbArchSmartPins canonical sequence (smart pin must
+  ' be reset before WRPIN). On re-mount, MISO may be in active smart-pin state
+  ' from a prior initSPIPins; pinf() ensures DIR=0 before the WRPIN.
+  pinf(miso)                                                                    '  DIRL: reset MISO smart pin (input mode)
+  WRPIN(miso, P_HIGH_15K)                                                       '  Configure 15K pull-up for card-presence detection
   waitus(10)                                                                    '  Let pull-up settle
 
   DEBUG[CH_INIT]("    [initCard] Pins: CS=", udec_(pinr(cs)), " MOSI=", udec_(pinr(mosi)), " MISO=", udec_(pinr(miso)), " SCK=", udec_(pinr(sck)))
@@ -5778,7 +6026,9 @@ PRI readSector(sector, buf_type) : status | _sck, _miso, data, loop_ctr, timeout
     clk_count := SECTOR_SIZE * 8 * 2                                            ' 8192 clock transitions
     xfrq := $4000_0000 / spi_period                                             ' One sample per full clock period
     init_phase := $4000_0000                                                    ' Sample mid-bit for stability
-    align_delay := spi_period                                                   ' Wait one half-period before streamer
+    align_delay := spi_period + align_delay_offset                              ' Phase 3: tunable streamer phase
+    if align_delay < 2                                                          '  WAITX floor (cog needs 2 sysclks min)
+      align_delay := 2
 
     ' CRC RETRY LOOP: Re-read on CRC mismatch (industry standard practice)
     ' Card has no CRC-error state - it just sees another CMD17 on retry
@@ -5829,13 +6079,21 @@ PRI readSector(sector, buf_type) : status | _sck, _miso, data, loop_ctr, timeout
       diag_spi_period := spi_period
 
       ' STREAMER BULK TRANSFER: 512 bytes from MISO to hub via DMA
+      ' Phase 1.5 reorder (per @evanh, KB-verified against
+      ' p2kbArchSmartPin00101TransitionOutput): WYPIN must execute before the
+      ' first base-period boundary after DIR-rise on _sck, otherwise the first
+      ' SCK transition slips by a full half-period when hp <= 6. Setup
+      ' instructions (WRFAST, SETXFRQ) moved BEFORE DIR-rise; FLTL replaces
+      ' DIRL+DRVL pair; WYPIN immediately follows DIRH with no instructions
+      ' between, so Y is written 2 sysclks after DIR-rise (always less than
+      ' hp=4 minimum) and the first SCK transition lands at tick hp.
       ORG
-              DIRL      _sck                            ' Reset SCK: counter stops, output LOW, Y=0
-              DRVL      _sck                            ' Re-enable: DIR=1 restarts base period counter fresh
-              SETXFRQ   xfrq                            ' Set streamer NCO rate
-              WRFAST    #0, p_buf                       ' Setup WRFAST to hub buffer
-              WYPIN     clk_count, _sck                 ' Start clock transitions
-              WAITX     align_delay                     ' Wait one half-period to align with first rising edge
+              WRFAST    #0, p_buf                       ' Setup WRFAST to hub buffer (before DIR-rise)
+              SETXFRQ   xfrq                            ' Set streamer NCO rate (before DIR-rise)
+              FLTL      _sck                            ' Reset SCK smart pin (replaces DIRL+DRVL)
+              DIRH      _sck                            ' DIR=1 -- internal counter starts cycling at hp
+              WYPIN     clk_count, _sck                 ' Y written 2 sysclks after DIRH (within first hp)
+              WAITX     align_delay                     ' Wait to align streamer with first SCK rising edge
               XINIT     stream_mode, init_phase         ' Start streamer with phase offset
               WAITXFI                                   ' Wait for streamer to complete
       END
@@ -5852,7 +6110,7 @@ PRI readSector(sector, buf_type) : status | _sck, _miso, data, loop_ctr, timeout
 
       ' Re-enable MISO smart pin for CRC reads (sp_transfer_8 needs it)
       WRPIN(_miso, spi_rx_mode)                                                 ' P_SYNC_RX | B-input->SCK
-      WXPIN(_miso, %1_00111)                                                    ' On-edge sample, 8 bits
+      WXPIN(_miso, miso_wxpin)                                                  ' Phase 2: adaptive sample mode
       pinh(_miso)                                                               ' DIRH - enable smart pin
 
       ' Read and capture 2 CRC bytes (high byte first per SD protocol)
@@ -5924,7 +6182,9 @@ PRI readSectors(start_sector, count, p_buffer) : sectors_read | _sck, _miso, p_b
     clk_count := SECTOR_SIZE * 8 * 2                                            ' 8192 clock transitions
     xfrq := $4000_0000 / spi_period                                             ' One sample per full clock period
     init_phase := $4000_0000                                                    ' Sample mid-bit for stability
-    align_delay := spi_period                                                   ' Wait one half-period before streamer
+    align_delay := spi_period + align_delay_offset                              ' Phase 3: tunable streamer phase
+    if align_delay < 2                                                          '  WAITX floor (cog needs 2 sysclks min)
+      align_delay := 2
 
     ' Send CMD23 (SET_BLOCK_COUNT) if card supports it (verified at init by probeCmd23)
     last_cmd18_fail := 0                                                        ' Clear failure path
@@ -5975,7 +6235,7 @@ PRI readSectors(start_sector, count, p_buffer) : sectors_read | _sck, _miso, p_b
 
         ' Re-enable MISO smart pin for CRC reads
         WRPIN(_miso, spi_rx_mode)
-        WXPIN(_miso, %1_00111)
+        WXPIN(_miso, miso_wxpin)                                                ' Phase 2: adaptive sample mode
         pinh(_miso)
 
         ' Read and capture 2 CRC bytes, validate against calculated CRC

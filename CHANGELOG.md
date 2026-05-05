@@ -7,18 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-05-05
+
+**SPI phase-margin improvements (read path) for marginal cards.**
+
+This release addresses driver behavior on cards with tight timing margins, particularly older or slower SD cards that may have shown intermittent failures at certain system clock frequencies. The read path now adapts its MISO sampling strategy to the system-clock-to-SCK ratio, and a clock-alignment bug in the bulk-read sequence is corrected. The write path's analogous improvement is held for a follow-up release after field validation. A new diagnostic API (gated behind `SD_INCLUDE_DEBUG`) is provided for tooling that needs to characterize marginal cards.
+
+Validated by: 25/25 regression suites at sysclk=350 MHz; 51/51 freq-sweep cells across 200-350 MHz in three modes (sysclk isolation, runtime clkset+remount, and runtime clkset with diagnostic clock-state refresh).
+
 ### Bug Fixes
 
-- SPI smart pin B-input clock offset computed dynamically from pin assignments (was hardcoded for default P2 Edge layout)
-- `mount()` / `initCardOnly()` propagate specific error code on `start()` failure
+- SPI clock pins are now wired up for any pin layout, not just the default P2 Edge layout (the routing is computed from the actual pin assignments).
+- `mount()` and `initCardOnly()` now propagate a specific error code when the worker cog fails to start, instead of returning a generic error.
+- **Bulk-read clock alignment fix at low system clocks.** On certain system-clock frequencies, the first SCK pulse of a bulk sector read could arrive a full half-period later than intended, causing the streamer to begin sampling MISO before the card had started clocking out data. The driver now arranges its setup so the first SCK pulse always lands on schedule regardless of system clock. Bulk writes are unchanged in this release pending field verification — they will be addressed in a follow-up after the read-side fix is validated.
+- **SD-card init-sequence hygiene.** Reordered one step in card initialization so the MISO pin's smart-pin state is reset before its mode is configured. No observable behavior change on a first mount; eliminates a subtle mis-order that could surface only on re-mount paths.
 
 ### New Features
 
-- `E_BAD_PIN_CONFIG` (-9): Mount fails early when SCK is more than ±3 pins from MOSI or MISO
+- `E_BAD_PIN_CONFIG` (-9): mount fails early when SCK is more than ±3 pins from MOSI or MISO.
+- **Adaptive MISO sampling for slower system clocks.** The driver now varies how it samples MISO based on the system-clock-to-SCK ratio. At higher system clocks (with a wide SCK bit cell) it samples on the SCK edge for best fast-card behavior; at lower system clocks (where the bit cell is narrow) it samples slightly before the edge for more margin against slower or older cards. This is fully internal to the driver — no application changes required, and existing applications get the new behavior automatically. Default behavior at high system clocks is byte-identical to prior releases.
+- **Tunable internal alignment for bulk transfers.** The streamer's first-sample alignment for 512-byte sector reads is now controlled by an internal offset (default 0, preserving prior behavior). The default may be revised to a non-zero value in a future release once field measurements identify the optimum across cards. Production applications do not tune this directly; the right value is baked into the driver.
+
+### Diagnostic API (gated by `SD_INCLUDE_DEBUG`, NOT FOR PRODUCTION USE)
+
+The following methods are exposed only when the consumer adds `#pragma exportdef SD_INCLUDE_DEBUG` (or `SD_INCLUDE_ALL`). They exist to support diagnostic tooling that probes the driver's phase-margin tuning when investigating cards that misbehave. Production applications must NOT call them — the production driver picks the right values internally. These methods are subject to change without notice as the production tuning logic evolves.
+
+- **`debugSetSampleMode(mode)`**: override how MISO is sampled (auto, before-edge, or on-edge).
+- **`debugSetPreEdgeThreshold(hp_thresh)`**: change the system-clock-to-SCK ratio at which auto-mode switches between sampling strategies.
+- **`debugGetEffectiveSampleMode()`**: read back which sampling mode is currently in effect.
+- **`debugGetCurrentHp()`**: read back the current SPI half-period (in system clocks).
+- **`debugSetAlignDelayOffset(offset)`**: shift the streamer's first-sample alignment for bulk transfers by a signed number of system clocks.
+- **`debugGetEffectiveAlignDelay()`**: read back the bulk-transfer alignment value the driver will use next.
+- **`debugOnClockChange()`**: refresh the driver's clock-dependent state after the application has changed the system clock at runtime, without forcing a full card re-initialization. Production guidance for runtime clock changes remains: `unmount()`, then `clkset()`, then `mount()` again. This method is provided only so diagnostic tools can isolate host-side runtime timing as a test variable.
 
 ### Tests
 
 - Pin offset validation tests in mount suite
+- New `diagnostic-tests/SD_phase_sweep_test.spin2`: 2 × 12 grid sweep (sample mode × align_delay offset) per compile-time sysclk, with §4.5 margin-summary post-processing identifying largest contiguous passing-band per mode plus three falsification triggers (no band / multiple plateaus / band center outside predicted [+3, +9]).
+- `diagnostic-tests/SD_frequency_characterize.spin2` Mode C now calls `debugOnClockChange()` after each `clkset()`, isolating host-side runtime timing from card-init state.
+
+### Documentation
+
+- `DOCs/Plans/PLAN-SPI-PHASE-MARGIN-IMPROVEMENT.md`: full sprint plan (4 phases + 4 side-fixes + auxiliary track) with KB-grounded sweep prediction model.
+- `DOCs/Analysis/2026-05-04-spi-clock-divisor-margin-table.md`: foundational analysis (divisor table, sample-point deviation, knob inventory, before/after correction tables).
+- `DOCs/Analysis/2026-05-04-spi-pin-setup-order-audit.md`: per-site pin-setup ordering audit against P2KB invariants.
+- `DOCs/User-Reports/2026-05-04-macca-1GB-card-clock-sensitivity.md`: end-user reports + KB-verified analysis.
+- `DOCs/User-Reports/2026-05-04-evanh-streamer-stability-feedback.md`: community feedback (verified against `p2kbPasm2Wrfast`, `p2kbArchSmartPin00101TransitionOutput`, `p2kbArchIoPinTiming`).
 
 ## [1.5.0] - 2026-04-02
 
