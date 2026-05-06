@@ -233,6 +233,7 @@ tools/bible_verse.spin2
 tools/archive/
 USER-REPORTs/
 *.gz
+*.zip
 DOCs/procedures/
 
 # Devcontainer local overrides (user-specific mounts)

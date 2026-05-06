@@ -1,0 +1,384 @@
+{{ =================================================================================================
+
+   File....... SD_macca_diagnostic_v2.spin2
+   Purpose.... Mount-free read/write channel certification for marginal-card
+               characterization. Sweeps sysclk x SPI speed via initCardOnly()
+               so cards that fail mount can still be diagnosed.
+   Author..... Stephen M Moraco
+               -- see below for terms of use
+   E-mail..... stephen@ironsheep.biz
+   Started.... MAY 2026
+   Updated.... 06 MAY 2026
+
+   Designed in response to v1 diagnostic feedback from @macca: the v1 diagnostic
+   gated on sd.mount() as a precondition, which prevented testing on cards whose
+   mount fails. v2 uses sd.initCardOnly() instead — gets the card to addressable
+   state without touching the filesystem, sufficient for raw read/write channel
+   characterization across the sysclk/SPI envelope.
+
+   THE TEST:
+
+     PHASE 0: baseline at boot settings — confirms the card responds at all
+              and captures the expected-data hash for cross-cell comparison.
+
+     PHASE 1: sysclk x SPI matrix — for each (sysclk, SPI) cell:
+              changeFrequency() -> initCardOnly() -> setSPISpeed() ->
+              write random pattern -> read back -> byte-exact verify.
+
+              The matrix includes a 400 kHz SPI column. This is unusual —
+              normal driver operation only uses 400 kHz during init reads,
+              never writes. The column specifically certifies v1.5.2's
+              write-path streamer at very large hp values (hp~438 at
+              sysclk=350/SPI=400k). v1.5.2 removed the WAITX align_delay
+              between XINIT and WYPIN; that removal was validated only
+              at hp=4-7. The 400 kHz column tells us whether the removal
+              is safe at slow SPI speeds, addressing a hypothesis about
+              v1.5.2 write-path behavior raised after macca's first run.
+
+              Each cell is INSTRUMENTED in two ways:
+                a. Write/read elapsed time measured per cell (ms). If a
+                   write fails near 1000ms, that points at the driver's
+                   SDSC write-timeout clamp being too aggressive.
+                b. On E_CARD_BUSY, the test waits 5 seconds then re-reads
+                   the sector. If the data is on disk, the card actually
+                   finished the write and the driver gave up too early.
+                   This is reported as outcome F (false fail) - distinct
+                   from outcome B (genuine busy timeout, data not on disk).
+
+     SUMMARY: ASCII pass/fail matrix delineating the card's safe operating
+              envelope plus diagnostic insight into the write-timeout clamp.
+
+   IMPORTANT: Sector 100,032 (erase-block-aligned for SDSC and SDHC) is
+   overwritten in every cell. Card data is destroyed. Run only on a card
+   whose data is expendable.
+
+================================================================================================= }}
+
+CON
+
+    _CLKFREQ        = 350_000_000
+
+    DEBUG_BAUD      = 2_000_000
+
+    ' P2 Edge module SD slot pins
+    SD_CS   = 60
+    SD_MOSI = 59
+    SD_MISO = 58
+    SD_SCK  = 61
+
+    SECTOR_SIZE = 512
+
+    ' Test sector — erase-block-aligned for both SDSC (32-sector blocks) and
+    ' SDHC (128-sector blocks). 100_032 mod 32 = 0; 100_032 mod 128 = 64.
+    ' For SDSC alignment is exact; for SDHC the sector is mid-block but
+    ' that's fine for write/read round-trip.
+    TEST_SECTOR     = 100_032
+
+    PRNG_SEED       = $DEAD_BEEF                                                 ' xorshift32 seed for deterministic random fill
+
+    NUM_SYSCLKS     = 6
+    NUM_SPI_SPEEDS  = 6
+
+    CLK_SETTLE_MS   = 10
+
+    ' Cell outcome codes (single byte for compact matrix)
+    OUT_PASS        = "P"
+    OUT_INIT_FAIL   = "I"
+    OUT_WRITE_FAIL  = "W"                                                       ' E_IO_ERROR / E_TIMEOUT / other on write
+    OUT_BUSY_TIMEOUT = "B"                                                      ' E_CARD_BUSY confirmed: data NOT on disk after retry-read
+    OUT_FALSE_FAIL  = "F"                                                       ' E_CARD_BUSY but data IS on disk - driver gave up too early
+    OUT_READ_FAIL   = "R"
+    OUT_VERIFY_FAIL = "V"
+    OUT_SKIPPED     = "."
+
+    ' SD driver error codes we care about for instrumentation
+    E_CARD_BUSY     = -6                                                        ' Mirrors driver's E_CARD_BUSY constant
+
+    ' Time to wait after E_CARD_BUSY before attempting confirm-via-read
+    POST_BUSY_WAIT_MS = 5000
+
+' Enable raw access and debug API
+#ifdef __SPINTOOLS__
+#define SD_INCLUDE_ALL
+#elseifdef __FLEXSPIN__
+#define SD_INCLUDE_ALL
+#pragma exportdef SD_INCLUDE_ALL
+#else
+#pragma exportdef SD_INCLUDE_ALL
+#endif
+
+OBJ
+    sd : "micro_sd_fat32_fs"
+
+DAT { sysclk values in Hz }
+    sysclks         LONG    200_000_000, 250_000_000, 270_000_000, 300_000_000, 320_000_000, 350_000_000
+
+DAT { SPI speed values in Hz }
+    ' 400 kHz is included specifically to test v1.5.2's write-path streamer at
+    ' very large hp values (hp~438 at sysclk=350/SPI=400k). v1.5.2 removed the
+    ' WAITX align_delay between XINIT and WYPIN; the removal was validated only
+    ' at hp=4-7 (25 MHz SPI on SDHC cards). The 400 kHz column certifies whether
+    ' the WAITX removal is safe at the slow SPI speeds used during card init.
+    spiSpeeds       LONG    25_000_000, 18_750_000, 15_000_000, 12_500_000, 8_000_000, 400_000
+
+DAT { Result matrix - one byte per (sysclk, SPI) cell }
+    resultMatrix    BYTE    OUT_SKIPPED[NUM_SYSCLKS * NUM_SPI_SPEEDS]
+
+VAR
+    BYTE    writeBuf[SECTOR_SIZE]
+    BYTE    readBuf[SECTOR_SIZE]
+
+PUB go() | sysclk_idx, spi_idx, target_sysclk, target_spi, baseline_status
+'' Main entry point.
+
+    debug(" ")
+    debug("=== MACCA DIAGNOSTIC v2 (mount-free read/write channel cert) ===")
+    debug("  Driver: P2-uSD-FAT32-FS v1.5.2+")
+    debug("  Test sector: ", udec_(TEST_SECTOR), " (will be overwritten each cell)")
+    debug(" ")
+
+    ' --- PHASE 0: baseline at boot settings ---
+    debug("PHASE 0: BASELINE at boot settings (sysclk=", udec_(clkfreq / 1_000_000), " MHz, SPI=card default)")
+    baseline_status := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    if baseline_status < 0
+        debug("  initCardOnly FAILED at boot settings (status=", sdec_(baseline_status), ")")
+        debug("  -> SPI/card link is broken at boot; sweep results would be meaningless")
+        debug("=== END ===")
+        debug("END_SESSION")
+        return
+
+    debug("  initCardOnly OK")
+    debug("  card profile: cls=", udec_((sd.getOCR() >> 30) & 1), " (0=SDSC,1=SDHC) erase=", udec_(sd.eraseBlockSectors()), " maxSpi=", udec_(sd.getCardMaxSpeed() / 1_000_000), "MHz")
+
+    if runRoundTripCell(clkfreq, sd.getCardMaxSpeed())
+        debug("  -> baseline write/read PASSES at default")
+    else
+        debug("  -> baseline write/read FAILS at default; sweep will show ranges")
+    debug(" ")
+
+    ' --- PHASE 1: sysclk x SPI matrix ---
+    debug("PHASE 1: SYSCLK x SPI MATRIX")
+    debug("  Each cell: changeFreq -> initCardOnly -> setSPISpeed -> write random -> read -> verify")
+    debug("  Cell codes: P=pass  I=init_fail  W=write_fail  R=read_fail  V=verify_fail  .=skipped")
+    debug(" ")
+
+    repeat sysclk_idx from 0 to NUM_SYSCLKS - 1
+        target_sysclk := LONG[@sysclks][sysclk_idx]
+        repeat spi_idx from 0 to NUM_SPI_SPEEDS - 1
+            target_spi := LONG[@spiSpeeds][spi_idx]
+            BYTE[@resultMatrix][sysclk_idx * NUM_SPI_SPEEDS + spi_idx] := runFullCell(target_sysclk, target_spi)
+
+    ' --- SUMMARY ---
+    debug(" ")
+    debug("=== SUMMARY MATRIX ===")
+    printSummaryMatrix()
+
+    ' Restore boot sysclk so debug terminal stays connected
+    changeFrequency(350_000_000)
+    waitms(CLK_SETTLE_MS)
+
+    debug(" ")
+    debug("=== END ===")
+    debug("END_SESSION")
+
+
+PRI runFullCell(target_sysclk, target_spi) : outcome | initStatus
+' Run one cell of the matrix: change sysclk, re-init the card, set SPI speed,
+' do write+read+verify round-trip. Returns single-byte outcome code.
+
+    debug(" ")
+    debug("  CELL sysclk=", udec_(target_sysclk / 1_000_000), "MHz spi=", udec_(target_spi / 1_000_000), "MHz")
+
+    ' Change sysclk and let it settle
+    changeFrequency(target_sysclk)
+    waitms(CLK_SETTLE_MS)
+
+    ' Re-initialize the card from scratch (fresh state)
+    initStatus := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    if initStatus < 0
+        debug("    init FAILED (status=", sdec_(initStatus), ")")
+        outcome := OUT_INIT_FAIL
+        return
+
+    ' Set the requested SPI speed (overrides the speed set by initCardOnly)
+    sd.setSPISpeed(target_spi)
+
+    ' Run instrumented write/read round-trip
+    outcome := runRoundTripCell(target_sysclk, target_spi)
+
+
+PRI runRoundTripCell(sysclk_for_log, spi_for_log) : outcome | writeStatus, readStatus, errors, write_start, read_start, write_ms, read_ms, post_busy_errors
+' Instrumented single sector write+read+verify cycle. Returns outcome code.
+'
+' Two instrumentation features address the SDSC write-timeout-clamp issue:
+'
+'   1. Measure actual write/read elapsed time per cell. The driver clamps
+'      SDSC write_timeout at 1000ms regardless of CSD spec; if a write
+'      takes ~1000ms before failing, that's very likely the clamp biting,
+'      not a real card failure.
+'
+'   2. Confirm-via-read after E_CARD_BUSY. If write returns E_CARD_BUSY
+'      (driver gave up waiting for busy completion), wait additional time
+'      then read the same sector. If the read returns the data we tried to
+'      write, the card actually finished the write - the driver was too
+'      impatient. We code this as OUT_FALSE_FAIL so it is distinguishable
+'      from a genuine BUSY_TIMEOUT (data not on disk).
+
+    fillRandom(@writeBuf, SECTOR_SIZE)
+
+    ' Time the write
+    write_start := GETCT()
+    writeStatus := sd.writeSectorRaw(TEST_SECTOR, @writeBuf)
+    write_ms := (GETCT() - write_start) / (clkfreq / 1000)
+
+    if writeStatus < 0
+        debug("    WRITE FAILED status=", sdec_(writeStatus), " elapsed=", udec_(write_ms), "ms")
+
+        if writeStatus == E_CARD_BUSY
+            ' Run confirm-via-read: did the card actually finish writing despite
+            ' the driver giving up? Wait additional time, then attempt read.
+            debug("    [confirm-via-read: E_CARD_BUSY hit; waiting ", udec_(POST_BUSY_WAIT_MS), "ms then re-reading to check if data is on disk]")
+            waitms(POST_BUSY_WAIT_MS)
+            bytefill(@readBuf, $00, SECTOR_SIZE)
+            readStatus := sd.readSectorRaw(TEST_SECTOR, @readBuf)
+            if readStatus < 0
+                debug("    [confirm-via-read: read also failed status=", sdec_(readStatus), " - data not recoverable]")
+                outcome := OUT_BUSY_TIMEOUT
+            else
+                post_busy_errors := countByteMismatches(@writeBuf, @readBuf, SECTOR_SIZE)
+                if post_busy_errors == 0
+                    debug("    [confirm-via-read: data IS on disk - driver clamp biting, write actually succeeded]")
+                    outcome := OUT_FALSE_FAIL
+                else
+                    debug("    [confirm-via-read: data partially or fully missing (", udec_(post_busy_errors), " byte errors) - genuine busy timeout]")
+                    outcome := OUT_BUSY_TIMEOUT
+        else
+            ' Other write error (not BUSY); not a clamp issue
+            outcome := OUT_WRITE_FAIL
+        return
+
+    ' Write succeeded; now read back
+    bytefill(@readBuf, $00, SECTOR_SIZE)
+    read_start := GETCT()
+    readStatus := sd.readSectorRaw(TEST_SECTOR, @readBuf)
+    read_ms := (GETCT() - read_start) / (clkfreq / 1000)
+
+    if readStatus < 0
+        debug("    READ FAILED status=", sdec_(readStatus), " (write was ", udec_(write_ms), "ms)")
+        outcome := OUT_READ_FAIL
+        return
+
+    errors := countByteMismatches(@writeBuf, @readBuf, SECTOR_SIZE)
+    if errors == 0
+        debug("    PASS  write=", udec_(write_ms), "ms  read=", udec_(read_ms), "ms")
+        outcome := OUT_PASS
+    else
+        debug("    VERIFY FAIL (", udec_(errors), " byte errors)  write=", udec_(write_ms), "ms  read=", udec_(read_ms), "ms")
+        outcome := OUT_VERIFY_FAIL
+
+
+PRI fillRandom(p_buf, length) | idx, state
+' Fill buffer with deterministic xorshift32 bytes. Same seed each call so the
+' write/read round-trip uses the same data pattern at every cell - any
+' corruption is purely the write path's, not test-input variance.
+
+    state := PRNG_SEED
+    repeat idx from 0 to length - 1
+        state ^= state << 13
+        state ^= state >> 17
+        state ^= state << 5
+        BYTE[p_buf][idx] := state & $FF
+
+
+PRI countByteMismatches(p_a, p_b, length) : count | idx
+' Count number of bytes that differ between two buffers.
+
+    count := 0
+    repeat idx from 0 to length - 1
+        if BYTE[p_a][idx] <> BYTE[p_b][idx]
+            count++
+
+
+VAR
+    BYTE rowStr[32]                                                              ' Scratch buffer for matrix row formatting (NUM_SPI_SPEEDS*4 + null)
+
+PRI printSummaryMatrix() | sysclk_idx, spi_idx, target_sysclk
+' Print pass/fail matrix as ASCII grid. Rows are sysclks, columns are SPI speeds.
+' Each cell shows P/I/W/R/V/. (5 chars per row, separated by spaces).
+
+    debug(" ")
+    debug("              SPI=25M  18.75M  15M    12.5M  8M     400k")
+    repeat sysclk_idx from 0 to NUM_SYSCLKS - 1
+        target_sysclk := LONG[@sysclks][sysclk_idx]
+        ' Build "C   C   C   C   C\0" (each cell + 3 spaces, then last cell + null)
+        repeat spi_idx from 0 to NUM_SPI_SPEEDS - 1
+            BYTE[@rowStr][spi_idx * 4 + 0] := BYTE[@resultMatrix][sysclk_idx * NUM_SPI_SPEEDS + spi_idx]
+            BYTE[@rowStr][spi_idx * 4 + 1] := " "
+            BYTE[@rowStr][spi_idx * 4 + 2] := " "
+            BYTE[@rowStr][spi_idx * 4 + 3] := " "
+        BYTE[@rowStr][NUM_SPI_SPEEDS * 4] := 0                                  ' Null-terminate
+        debug("  sysclk=", udec_(target_sysclk / 1_000_000), "MHz:    ", zstr_(@rowStr))
+
+    debug(" ")
+    debug("Legend:")
+    debug("  P = PASS (write + read + byte-exact verify all succeeded)")
+    debug("  I = INIT_FAIL (initCardOnly failed at this sysclk)")
+    debug("  W = WRITE_FAIL (write returned error other than E_CARD_BUSY)")
+    debug("  B = BUSY_TIMEOUT (E_CARD_BUSY confirmed - data NOT on disk after 5s wait)")
+    debug("  F = FALSE_FAIL (E_CARD_BUSY but data IS on disk - driver clamp biting)")
+    debug("  R = READ_FAIL (write OK, read returned error)")
+    debug("  V = VERIFY_FAIL (write OK, read OK, data mismatch)")
+    debug("  . = SKIPPED")
+    debug(" ")
+    debug("F cells indicate the driver's 1000ms SDSC write-timeout clamp is biting.")
+    debug("Real card writes are completing but the driver returns E_CARD_BUSY too early.")
+    debug("Per-cell write/read elapsed times in ms appear above each cell's outcome.")
+
+
+PRI changeFrequency(target_freq)
+' Change system clock to target frequency. Precomputed CLKMODE values matching
+' the SD_frequency_characterize encoding (validated 2026-05-04).
+
+    case target_freq
+        200_000_000:
+            clkset(%1_000000_0000001001_1111_10_11, target_freq)
+        250_000_000:
+            clkset(%1_000001_0000011000_1111_10_11, target_freq)
+        270_000_000:
+            clkset(%1_000001_0000011010_1111_10_11, target_freq)
+        300_000_000:
+            clkset(%1_000000_0000001110_1111_10_11, target_freq)
+        320_000_000:
+            clkset(%1_000000_0000001111_1111_10_11, target_freq)
+        350_000_000:
+            clkset(%1_000001_0000100010_1111_10_11, target_freq)
+
+
+con { license }
+
+{{
+  =================================================================================================
+
+  Terms of Use: MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this
+  software and associated documentation files (the "Software"), to deal in the Software
+  without restriction, including without limitation the rights to use, copy, modify,
+  merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies
+  or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+  INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+  HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+  CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+  OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+  =================================================================================================
+}}

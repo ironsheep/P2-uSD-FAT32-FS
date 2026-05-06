@@ -1,0 +1,569 @@
+{{ =================================================================================================
+
+   File....... SD_macca_diagnostic_v3.spin2
+   Purpose.... Comprehensive single-session card characterization for marginal-
+               card field triage. Extends v2 with conditional retries that
+               explore sample-mode and phase-tuning axes for failing cells,
+               plus sustained-load and multi-block CMD25 phases. Designed as
+               insurance-grade data collection in case alternative SDSC cards
+               are unavailable for bench testing.
+   Author..... Stephen M Moraco
+               -- see below for terms of use
+   E-mail..... stephen@ironsheep.biz
+   Started.... MAY 2026
+   Updated.... 06 MAY 2026
+
+   v3 ENHANCEMENTS over v2:
+
+     1. Conditional retry on failing cells: sample-mode overrides (forced
+        ON-edge, forced PRE-edge) tried before recording cell as failed.
+        Tells us whether failures are sample-edge mismatch vs hard timing.
+
+     2. align_delay_offset sweep on cells that fail even with sample-mode
+        override. Tells us whether the streamer's first-sample alignment
+        is tunable for this card.
+
+     3. New Phase 3: sustained-load test. 32 sequential writes at a known-
+        good cell config; replicates the stress pattern that broke macca's
+        v1.5.1 raw_sector_tests. Identifies sustained-stress thresholds
+        invisible to single-write-per-cell testing.
+
+     4. New Phase 4: multi-block CMD25 test. Tests writeSectorsRaw at a
+        known-good cell config. Identifies single-block-vs-multi-block
+        divergence the matrix can not show.
+
+     5. Enriched cell outcomes: P (pass default), O (pass via ON-edge),
+        E (pass via pre-Edge), A (pass via Align_delay tuning), plus all
+        v2 outcome codes (I/W/B/F/R/V).
+
+   IMPORTANT: Sectors 100,032-100,063 are overwritten across phases. Card
+   data is destroyed. Run only on a card whose data is expendable.
+
+================================================================================================= }}
+
+CON
+
+    _CLKFREQ        = 350_000_000
+
+    DEBUG_BAUD      = 2_000_000
+
+    ' P2 Edge module SD slot pins
+    SD_CS   = 60
+    SD_MOSI = 59
+    SD_MISO = 58
+    SD_SCK  = 61
+
+    SECTOR_SIZE     = 512
+
+    ' Test sectors. SDSC erase blocks are 32 sectors; SDHC are 128.
+    ' 100,032 is aligned to both. Phase 1 uses just sector 100,032.
+    ' Phase 3 stresses sectors 100,032..100,063 (one full SDSC erase block).
+    ' Phase 4 multi-block uses sectors 100,128..100,135 (next region; avoids
+    ' overlap with Phase 3 in case retries leave Phase 3 in mixed state).
+    TEST_SECTOR     = 100_032
+    PHASE3_START    = 100_032
+    PHASE3_COUNT    = 32
+    PHASE4_START    = 100_128
+    PHASE4_COUNT    = 8
+
+    PRNG_SEED       = $DEAD_BEEF
+
+    NUM_SYSCLKS     = 6
+    NUM_SPI_SPEEDS  = 6
+
+    CLK_SETTLE_MS   = 10
+
+    ' Sample mode codes (driver convention via debugSetSampleMode)
+    SAMPLE_AUTO     = -1
+    SAMPLE_PRE_EDGE = 0
+    SAMPLE_ON_EDGE  = 1
+
+    ' Cell outcome codes (single byte for compact matrix). Capital letters
+    ' mean "pass via that retry"; lowercase letters reserved for variants.
+    OUT_PASS         = "P"                                                       ' Pass at default config
+    OUT_PASS_ON      = "O"                                                       ' Pass via forced ON-edge sample
+    OUT_PASS_PRE     = "E"                                                       ' Pass via forced PRE-edge sample
+    OUT_PASS_ALIGN   = "A"                                                       ' Pass via align_delay_offset adjustment
+    OUT_INIT_FAIL    = "I"
+    OUT_WRITE_FAIL   = "W"
+    OUT_BUSY_TIMEOUT = "B"
+    OUT_FALSE_FAIL   = "F"
+    OUT_READ_FAIL    = "R"
+    OUT_VERIFY_FAIL  = "V"
+    OUT_SKIPPED      = "."
+
+    E_CARD_BUSY      = -6                                                        ' Mirrors driver constant
+
+    POST_BUSY_WAIT_MS = 5000
+
+    ' align_delay_offset values to sweep on persistent fails
+    NUM_ALIGN_OFFSETS = 4
+    ' Values: -3, +3, +5, +7 (skip 0 since that's the default already tried)
+
+' Enable raw access and debug API
+#ifdef __SPINTOOLS__
+#define SD_INCLUDE_ALL
+#elseifdef __FLEXSPIN__
+#define SD_INCLUDE_ALL
+#pragma exportdef SD_INCLUDE_ALL
+#else
+#pragma exportdef SD_INCLUDE_ALL
+#endif
+
+OBJ
+    sd : "micro_sd_fat32_fs"
+
+DAT { sysclk values in Hz }
+    sysclks         LONG    200_000_000, 250_000_000, 270_000_000, 300_000_000, 320_000_000, 350_000_000
+
+DAT { SPI speed values in Hz }
+    spiSpeeds       LONG    25_000_000, 18_750_000, 15_000_000, 12_500_000, 8_000_000, 400_000
+
+DAT { align_delay offsets to retry on persistent fails }
+    alignOffsets    LONG    -3, 3, 5, 7
+
+DAT { Result matrix - one byte per (sysclk, SPI) cell }
+    resultMatrix    BYTE    OUT_SKIPPED[NUM_SYSCLKS * NUM_SPI_SPEEDS]
+
+VAR
+    BYTE    writeBuf[SECTOR_SIZE]
+    BYTE    readBuf[SECTOR_SIZE]
+    BYTE    rowStr[40]                                                           ' Scratch for matrix row formatting
+
+    ' Tracking for "known-good cell" used by Phases 3+4
+    LONG    knownGoodSysclk
+    LONG    knownGoodSpi
+    LONG    knownGoodFound
+
+    ' Multi-block buffers (Phase 4)
+    BYTE    multiWriteBuf[PHASE4_COUNT * SECTOR_SIZE]
+    BYTE    multiReadBuf[PHASE4_COUNT * SECTOR_SIZE]
+
+
+PUB go() | sysclk_idx, spi_idx, target_sysclk, target_spi, baseline_status
+'' Main entry point.
+
+    debug(" ")
+    debug("=== MACCA DIAGNOSTIC v3 (mount-free, retry-augmented, multi-phase) ===")
+    debug("  Driver: P2-uSD-FAT32-FS v1.5.2+")
+    debug("  Test sectors: ", udec_(PHASE3_START), "..", udec_(PHASE3_START + PHASE3_COUNT - 1), " (Phase 1+3); ", udec_(PHASE4_START), "..", udec_(PHASE4_START + PHASE4_COUNT - 1), " (Phase 4)")
+    debug(" ")
+
+    knownGoodFound := 0
+
+    ' --- PHASE 0: baseline at boot settings ---
+    debug("PHASE 0: BASELINE at boot settings (sysclk=", udec_(clkfreq / 1_000_000), " MHz)")
+    baseline_status := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    if baseline_status < 0
+        debug("  initCardOnly FAILED at boot settings (status=", sdec_(baseline_status), ")")
+        debug("  -> SPI/card link is broken at boot; sweep results would be meaningless")
+        finishAndExit()
+        return
+    debug("  initCardOnly OK")
+    debug("  card profile: cls=", udec_((sd.getOCR() >> 30) & 1), " (0=SDSC,1=SDHC)  erase=", udec_(sd.eraseBlockSectors()), " sectors  cap=", udec_(sd.cardSizeSectors()), " sectors  maxSpi=", udec_(sd.getCardMaxSpeed() / 1_000_000), "MHz")
+    debug("  read timeout=", udec_(sd.getReadTimeout()), "ms  write timeout=", udec_(sd.getWriteTimeout()), "ms")
+    debug(" ")
+
+    ' --- PHASE 1: sysclk x SPI matrix with conditional retries ---
+    debug("PHASE 1: SYSCLK x SPI MATRIX (with conditional sample-mode + align_delay retries)")
+    debug("  Each cell starts at default config (auto sample mode, offset=0).")
+    debug("  On non-busy failure, retries: forced ON-edge, forced PRE-edge,")
+    debug("  then align_delay_offset = -3/+3/+5/+7. Records first config that passes.")
+    debug(" ")
+
+    repeat sysclk_idx from 0 to NUM_SYSCLKS - 1
+        target_sysclk := LONG[@sysclks][sysclk_idx]
+        repeat spi_idx from 0 to NUM_SPI_SPEEDS - 1
+            target_spi := LONG[@spiSpeeds][spi_idx]
+            BYTE[@resultMatrix][sysclk_idx * NUM_SPI_SPEEDS + spi_idx] := runFullCell(target_sysclk, target_spi)
+
+    ' --- SUMMARY MATRIX ---
+    debug(" ")
+    debug("=== PHASE 1 SUMMARY MATRIX ===")
+    printSummaryMatrix()
+
+    ' --- PHASE 3: sustained-load test ---
+    if knownGoodFound
+        debug(" ")
+        debug("PHASE 3: SUSTAINED-LOAD TEST")
+        debug("  Using known-good config: sysclk=", udec_(knownGoodSysclk / 1_000_000), "MHz spi=", udec_(knownGoodSpi / 1_000_000), "MHz")
+        debug("  Writes ", udec_(PHASE3_COUNT), " sequential sectors (sectors ", udec_(PHASE3_START), "..", udec_(PHASE3_START + PHASE3_COUNT - 1), ")")
+        debug("  This is one full SDSC erase block; replicates raw_sector_tests stress pattern.")
+        runSustainedLoadPhase()
+    else
+        debug(" ")
+        debug("PHASE 3: SKIPPED (no PASS cell found in Phase 1; no known-good config to use)")
+
+    ' --- PHASE 4: multi-block CMD25 test ---
+    if knownGoodFound
+        debug(" ")
+        debug("PHASE 4: MULTI-BLOCK CMD25 TEST")
+        debug("  Using known-good config: sysclk=", udec_(knownGoodSysclk / 1_000_000), "MHz spi=", udec_(knownGoodSpi / 1_000_000), "MHz")
+        debug("  Writes ", udec_(PHASE4_COUNT), " sectors via CMD25 multi-block, reads via CMD18, verifies byte-exact.")
+        runMultiBlockPhase()
+    else
+        debug(" ")
+        debug("PHASE 4: SKIPPED (no PASS cell found in Phase 1; no known-good config to use)")
+
+    ' Restore boot sysclk so debug terminal stays connected
+    changeFrequency(350_000_000)
+    waitms(CLK_SETTLE_MS)
+
+    finishAndExit()
+
+
+PRI runFullCell(target_sysclk, target_spi) : outcome | initStatus, cellOutcome
+' Run one cell of the matrix with conditional retries.
+
+    debug(" ")
+    debug("  CELL sysclk=", udec_(target_sysclk / 1_000_000), "MHz spi=", udec_(target_spi / 1_000_000), "MHz")
+
+    ' Change sysclk and let it settle
+    changeFrequency(target_sysclk)
+    waitms(CLK_SETTLE_MS)
+
+    ' Re-initialize the card from scratch (fresh state)
+    initStatus := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    if initStatus < 0
+        debug("    init FAILED (status=", sdec_(initStatus), ")")
+        outcome := OUT_INIT_FAIL
+        return
+
+    ' Set the requested SPI speed (overrides initCardOnly's chosen speed)
+    sd.setSPISpeed(target_spi)
+
+    ' Reset to default tuning before this cell's first attempt
+    sd.debugSetSampleMode(SAMPLE_AUTO)
+    sd.debugSetAlignDelayOffset(0)
+
+    ' Try default config
+    cellOutcome := runRoundTrip(@"default")
+    if cellOutcome == OUT_PASS
+        ' Track first PASS as the known-good config for Phases 3+4
+        if knownGoodFound == 0
+            knownGoodSysclk := target_sysclk
+            knownGoodSpi := target_spi
+            knownGoodFound := 1
+            debug("    [marked as known-good config for Phase 3 + Phase 4]")
+        outcome := OUT_PASS
+        return
+
+    ' If it was a card-busy outcome (B/F), no point retrying with sample-mode
+    ' overrides — the issue is timeout-related, not sample-edge.
+    if cellOutcome == OUT_BUSY_TIMEOUT or cellOutcome == OUT_FALSE_FAIL
+        outcome := cellOutcome
+        return
+
+    ' Otherwise retry with sample-mode overrides
+    debug("    [retry: forcing ON-edge sample mode]")
+    sd.debugSetSampleMode(SAMPLE_ON_EDGE)
+    sd.debugSetAlignDelayOffset(0)
+    if runRoundTrip(@"force-ON-edge") == OUT_PASS
+        outcome := OUT_PASS_ON
+        return
+
+    debug("    [retry: forcing PRE-edge sample mode]")
+    sd.debugSetSampleMode(SAMPLE_PRE_EDGE)
+    sd.debugSetAlignDelayOffset(0)
+    if runRoundTrip(@"force-PRE-edge") == OUT_PASS
+        outcome := OUT_PASS_PRE
+        return
+
+    ' Sample-mode override didn't help; sweep align_delay_offset under auto mode
+    outcome := tryAlignOffsetSweep()
+    if outcome == OUT_PASS_ALIGN
+        return
+
+    ' Nothing worked; record the original failure outcome
+    outcome := cellOutcome
+
+
+PRI tryAlignOffsetSweep() : outcome | offset_idx, offset_val
+' Try align_delay_offset values (-3, +3, +5, +7) under auto sample mode.
+' Returns OUT_PASS_ALIGN on first success, OUT_VERIFY_FAIL otherwise.
+
+    sd.debugSetSampleMode(SAMPLE_AUTO)
+
+    repeat offset_idx from 0 to NUM_ALIGN_OFFSETS - 1
+        offset_val := LONG[@alignOffsets][offset_idx]
+        debug("    [retry: align_delay_offset=", sdec_(offset_val), "]")
+        sd.debugSetAlignDelayOffset(offset_val)
+        if runRoundTrip(@"align-offset") == OUT_PASS
+            debug("    -> PASSED with align_delay_offset=", sdec_(offset_val))
+            outcome := OUT_PASS_ALIGN
+            return
+
+    outcome := OUT_VERIFY_FAIL
+
+
+PRI runRoundTrip(label) : outcome | writeStatus, readStatus, errors, write_start, read_start, write_ms, read_ms, post_busy_errors
+' Single instrumented write/read/verify cycle. Returns outcome code.
+'
+' Instrumentation:
+'   - elapsed write/read time per cycle (ms)
+'   - confirm-via-read on E_CARD_BUSY (distinguishes B from F)
+
+    fillRandom(@writeBuf, SECTOR_SIZE)
+
+    write_start := GETCT()
+    writeStatus := sd.writeSectorRaw(TEST_SECTOR, @writeBuf)
+    write_ms := (GETCT() - write_start) / (clkfreq / 1000)
+
+    if writeStatus < 0
+        debug("    [", zstr_(label), "] WRITE FAILED status=", sdec_(writeStatus), " elapsed=", udec_(write_ms), "ms")
+
+        if writeStatus == E_CARD_BUSY
+            debug("    [", zstr_(label), "] confirm-via-read: waiting ", udec_(POST_BUSY_WAIT_MS), "ms then re-reading")
+            waitms(POST_BUSY_WAIT_MS)
+            bytefill(@readBuf, $00, SECTOR_SIZE)
+            readStatus := sd.readSectorRaw(TEST_SECTOR, @readBuf)
+            if readStatus < 0
+                debug("    [", zstr_(label), "] confirm-via-read: read also failed status=", sdec_(readStatus))
+                outcome := OUT_BUSY_TIMEOUT
+            else
+                post_busy_errors := countByteMismatches(@writeBuf, @readBuf, SECTOR_SIZE)
+                if post_busy_errors == 0
+                    debug("    [", zstr_(label), "] confirm-via-read: data IS on disk - driver clamp biting")
+                    outcome := OUT_FALSE_FAIL
+                else
+                    debug("    [", zstr_(label), "] confirm-via-read: data missing/corrupt (", udec_(post_busy_errors), " byte errors)")
+                    outcome := OUT_BUSY_TIMEOUT
+        else
+            outcome := OUT_WRITE_FAIL
+        return
+
+    bytefill(@readBuf, $00, SECTOR_SIZE)
+    read_start := GETCT()
+    readStatus := sd.readSectorRaw(TEST_SECTOR, @readBuf)
+    read_ms := (GETCT() - read_start) / (clkfreq / 1000)
+
+    if readStatus < 0
+        debug("    [", zstr_(label), "] READ FAILED status=", sdec_(readStatus), " (write was ", udec_(write_ms), "ms)")
+        outcome := OUT_READ_FAIL
+        return
+
+    errors := countByteMismatches(@writeBuf, @readBuf, SECTOR_SIZE)
+    if errors == 0
+        debug("    [", zstr_(label), "] PASS  write=", udec_(write_ms), "ms  read=", udec_(read_ms), "ms")
+        outcome := OUT_PASS
+    else
+        debug("    [", zstr_(label), "] VERIFY FAIL (", udec_(errors), " byte errors)  write=", udec_(write_ms), "ms  read=", udec_(read_ms), "ms")
+        outcome := OUT_VERIFY_FAIL
+
+
+PRI runSustainedLoadPhase() | initStatus, sector_idx, target_sector, writeStatus, readStatus, errors, total_write_ms, write_start, write_ms, pass_count, fail_count
+' Sustained-load: 32 sequential single-sector writes followed by 32 reads,
+' all in one erase block. Replicates the raw_sector_tests stress pattern.
+
+    changeFrequency(knownGoodSysclk)
+    waitms(CLK_SETTLE_MS)
+    initStatus := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    if initStatus < 0
+        debug("  PHASE 3: init FAILED at known-good config (status=", sdec_(initStatus), ")")
+        return
+    sd.setSPISpeed(knownGoodSpi)
+    sd.debugSetSampleMode(SAMPLE_AUTO)
+    sd.debugSetAlignDelayOffset(0)
+
+    ' --- Sustained writes ---
+    debug("  --- 32 sequential writes ---")
+    pass_count := 0
+    fail_count := 0
+    total_write_ms := 0
+    repeat sector_idx from 0 to PHASE3_COUNT - 1
+        target_sector := PHASE3_START + sector_idx
+        ' Use a unique pattern per sector by re-seeding xorshift32 with sector#
+        fillRandomSeeded(@writeBuf, SECTOR_SIZE, PRNG_SEED ^ target_sector)
+        write_start := GETCT()
+        writeStatus := sd.writeSectorRaw(target_sector, @writeBuf)
+        write_ms := (GETCT() - write_start) / (clkfreq / 1000)
+        total_write_ms += write_ms
+        if writeStatus == 0
+            pass_count++
+        else
+            fail_count++
+            debug("    sector ", udec_(target_sector), ": WRITE_FAIL status=", sdec_(writeStatus), " elapsed=", udec_(write_ms), "ms")
+
+    debug("  Writes: ", udec_(pass_count), " pass / ", udec_(fail_count), " fail.  total elapsed=", udec_(total_write_ms), "ms  avg=", udec_(total_write_ms / PHASE3_COUNT), "ms/sector")
+
+    ' --- Sustained reads + verify ---
+    debug("  --- 32 sequential reads + verify ---")
+    pass_count := 0
+    fail_count := 0
+    repeat sector_idx from 0 to PHASE3_COUNT - 1
+        target_sector := PHASE3_START + sector_idx
+        fillRandomSeeded(@writeBuf, SECTOR_SIZE, PRNG_SEED ^ target_sector)         ' Regenerate expected pattern
+        bytefill(@readBuf, $00, SECTOR_SIZE)
+        readStatus := sd.readSectorRaw(target_sector, @readBuf)
+        if readStatus == 0
+            errors := countByteMismatches(@writeBuf, @readBuf, SECTOR_SIZE)
+            if errors == 0
+                pass_count++
+            else
+                fail_count++
+                debug("    sector ", udec_(target_sector), ": VERIFY_FAIL ", udec_(errors), " byte errors")
+        else
+            fail_count++
+            debug("    sector ", udec_(target_sector), ": READ_FAIL status=", sdec_(readStatus))
+
+    debug("  Reads: ", udec_(pass_count), " pass / ", udec_(fail_count), " fail.")
+    if pass_count == PHASE3_COUNT
+        debug("  -> SUSTAINED-LOAD PASSES (32/32 single-block writes + reads OK at known-good config)")
+    else
+        debug("  -> SUSTAINED-LOAD FAILURES detected (", udec_(fail_count), "/", udec_(PHASE3_COUNT), " failed)")
+
+
+PRI runMultiBlockPhase() | initStatus, written, readCount, idx, errors
+' Multi-block CMD25 write + CMD18 read at known-good config. 8 sectors.
+
+    changeFrequency(knownGoodSysclk)
+    waitms(CLK_SETTLE_MS)
+    initStatus := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    if initStatus < 0
+        debug("  PHASE 4: init FAILED at known-good config (status=", sdec_(initStatus), ")")
+        return
+    sd.setSPISpeed(knownGoodSpi)
+    sd.debugSetSampleMode(SAMPLE_AUTO)
+    sd.debugSetAlignDelayOffset(0)
+
+    ' Fill the 8-sector buffer with a deterministic pattern
+    fillRandomSeeded(@multiWriteBuf, PHASE4_COUNT * SECTOR_SIZE, PRNG_SEED)
+
+    written := sd.writeSectorsRaw(PHASE4_START, PHASE4_COUNT, @multiWriteBuf)
+    if written <> PHASE4_COUNT
+        debug("  CMD25 multi-block write returned ", udec_(written), " (expected ", udec_(PHASE4_COUNT), ")")
+        debug("  -> MULTI-BLOCK FAILS at write step")
+        return
+
+    bytefill(@multiReadBuf, $00, PHASE4_COUNT * SECTOR_SIZE)
+    readCount := sd.readSectorsRaw(PHASE4_START, PHASE4_COUNT, @multiReadBuf)
+    if readCount <> PHASE4_COUNT
+        debug("  CMD18 multi-block read returned ", udec_(readCount), " (expected ", udec_(PHASE4_COUNT), ")")
+        debug("  -> MULTI-BLOCK FAILS at read step (write succeeded)")
+        return
+
+    errors := countByteMismatches(@multiWriteBuf, @multiReadBuf, PHASE4_COUNT * SECTOR_SIZE)
+    if errors == 0
+        debug("  -> MULTI-BLOCK PASSES (CMD25 write + CMD18 read + byte-exact verify all OK)")
+    else
+        debug("  -> MULTI-BLOCK VERIFY FAIL (", udec_(errors), " byte errors out of ", udec_(PHASE4_COUNT * SECTOR_SIZE), ")")
+
+
+PRI fillRandom(p_buf, length)
+' Fill buffer with deterministic xorshift32 bytes using the global PRNG_SEED.
+' Same seed each call - identical pattern at every cell.
+
+    fillRandomSeeded(p_buf, length, PRNG_SEED)
+
+
+PRI fillRandomSeeded(p_buf, length, seed) | idx, state
+' Fill buffer with deterministic xorshift32 bytes using a caller-supplied seed.
+' Used by Phase 3 to generate per-sector unique patterns.
+
+    state := seed
+    if state == 0
+        state := PRNG_SEED                                                       ' xorshift32 stays at 0 if state is 0
+    repeat idx from 0 to length - 1
+        state ^= state << 13
+        state ^= state >> 17
+        state ^= state << 5
+        BYTE[p_buf][idx] := state & $FF
+
+
+PRI countByteMismatches(p_a, p_b, length) : count | idx
+' Count number of bytes that differ between two buffers.
+
+    count := 0
+    repeat idx from 0 to length - 1
+        if BYTE[p_a][idx] <> BYTE[p_b][idx]
+            count++
+
+
+PRI printSummaryMatrix() | sysclk_idx, spi_idx, target_sysclk
+' Print pass/fail matrix as ASCII grid.
+
+    debug(" ")
+    debug("              SPI=25M  18.75M  15M    12.5M  8M     400k")
+    repeat sysclk_idx from 0 to NUM_SYSCLKS - 1
+        target_sysclk := LONG[@sysclks][sysclk_idx]
+        repeat spi_idx from 0 to NUM_SPI_SPEEDS - 1
+            BYTE[@rowStr][spi_idx * 4 + 0] := BYTE[@resultMatrix][sysclk_idx * NUM_SPI_SPEEDS + spi_idx]
+            BYTE[@rowStr][spi_idx * 4 + 1] := " "
+            BYTE[@rowStr][spi_idx * 4 + 2] := " "
+            BYTE[@rowStr][spi_idx * 4 + 3] := " "
+        BYTE[@rowStr][NUM_SPI_SPEEDS * 4] := 0
+        debug("  sysclk=", udec_(target_sysclk / 1_000_000), "MHz:    ", zstr_(@rowStr))
+
+    debug(" ")
+    debug("Legend:")
+    debug("  P = PASS at default config (auto sample mode, offset=0)")
+    debug("  O = pass via forced ON-edge sample mode")
+    debug("  E = pass via forced PRE-Edge sample mode")
+    debug("  A = pass via Align_delay_offset adjustment (-3/+3/+5/+7)")
+    debug("  I = INIT_FAIL (initCardOnly failed at this sysclk)")
+    debug("  W = WRITE_FAIL (write returned error other than E_CARD_BUSY)")
+    debug("  B = BUSY_TIMEOUT (E_CARD_BUSY confirmed - data NOT on disk)")
+    debug("  F = FALSE_FAIL (E_CARD_BUSY but data IS on disk - driver clamp biting)")
+    debug("  R = READ_FAIL (write OK, read returned error)")
+    debug("  V = VERIFY_FAIL (write OK, read OK, data mismatch)")
+    debug("  . = SKIPPED")
+    debug(" ")
+    debug("Cells O/E/A indicate this card has a config preference; v1.5.3 could adapt.")
+    debug("Cells F indicate the driver's 1000ms SDSC write-timeout clamp is biting.")
+    debug("Per-cell write/read elapsed times (ms) appear above each cell's outcome.")
+
+
+PRI changeFrequency(target_freq)
+' Change system clock to target frequency.
+
+    case target_freq
+        200_000_000:
+            clkset(%1_000000_0000001001_1111_10_11, target_freq)
+        250_000_000:
+            clkset(%1_000001_0000011000_1111_10_11, target_freq)
+        270_000_000:
+            clkset(%1_000001_0000011010_1111_10_11, target_freq)
+        300_000_000:
+            clkset(%1_000000_0000001110_1111_10_11, target_freq)
+        320_000_000:
+            clkset(%1_000000_0000001111_1111_10_11, target_freq)
+        350_000_000:
+            clkset(%1_000001_0000100010_1111_10_11, target_freq)
+
+
+PRI finishAndExit()
+' Emit end markers.
+
+    debug(" ")
+    debug("=== END ===")
+    debug("END_SESSION")
+
+
+con { license }
+
+{{
+  =================================================================================================
+
+  Terms of Use: MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this
+  software and associated documentation files (the "Software"), to deal in the Software
+  without restriction, including without limitation the rights to use, copy, modify,
+  merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies
+  or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+  INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+  HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+  CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+  OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+  =================================================================================================
+}}
