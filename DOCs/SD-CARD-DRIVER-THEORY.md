@@ -790,6 +790,7 @@ All structs are packed (Spin2 default) with offsets matching their respective ha
 | `getManufacturerID() : mid` | Card manufacturer ID byte |
 | `getReadTimeout() : ms` | Read timeout from CSD |
 | `getWriteTimeout() : ms` | Write timeout from CSD |
+| `eraseBlockSectors() : sectors` | Erase block size from CSD (32=SDSC, 128=SDHC/SDXC typical) |
 | `isHighSpeedActive() : bool` | True if running at 50 MHz |
 
 **Utilities:**
@@ -857,6 +858,7 @@ All structs are packed (Spin2 default) with offsets matching their respective ha
 | `debugDumpRootDir()` | Print root entries to debug |
 | `debugClearRootDir() : result` | Zero root directory (destructive) |
 | `debugReadSectorSlow(sector, pBuf) : result` | Byte-by-byte read (no streamer) |
+| `debugEraseBlock(start_sector) : result` | Erase one erase-block region via CMD32/33/38 |
 | `debugGetReadSectorDiag(...)` | Last readSector diagnostic data |
 | `debugGetReadSectorDiagExt(...)` | Extended diagnostic data |
 | `displaySector()` | Hex dump of sector buffer |

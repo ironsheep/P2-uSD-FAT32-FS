@@ -199,6 +199,18 @@ PUB testExample()
 | `setCheckCountPerTest(n)` | Set expected sub-checks for current test |
 | `ShowTestEndCounts()` | Display final pass/fail summary |
 
+**Card-Aware Test Helpers (v1.5.2+):**
+| Function | Purpose |
+|----------|---------|
+| `cacheCardProfile(eraseBlk, capacity, readT, writeT, maxSpiHz, mfrId, cardClass)` | Cache card characteristics from driver getters; call once after mount |
+| `safeTestRegionStart()` | First erase-block-aligned sector past FAT32 metadata |
+| `nonAdjacentSectors(count, p_dest)` | Fill array with sectors each in a different erase block |
+| `blockAlignedRange(sectorCount)` | Erase-block-aligned start sector for a range |
+| `cardAdjustedTimeoutMs(baseMs)` | Scale a base timeout for SDSC vs SDHC class |
+| `profileReport()` | Format-print cached profile for test reproducibility |
+
+These helpers prevent tests from accidentally measuring card-physics issues (erase-block stress, slow-card timeouts) when they intend to measure driver behavior.
+
 ---
 
 ## Hardware Configuration

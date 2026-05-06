@@ -14,3 +14,4 @@ Internal-only test programs for characterizing SD card behavior and debugging dr
 | `SD_stack_depth_test.spin2` | Worker cog stack high-water mark measurement |
 | `SD_speed_characterize.spin2` | Maximum SPI speed tester (moved from src/UTILS/) |
 | `SD_frequency_characterize.spin2` | Sysclk frequency tester (moved from src/UTILS/) |
+| `SD_macca_diagnostic.spin2` | Single-binary marginal-card diagnostic with decision-tree branching (Phase A disambiguation, B phase tuning, C speed/sysclk sweeps, D card-side diagnostics) |
