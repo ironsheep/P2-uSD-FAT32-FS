@@ -25,10 +25,6 @@ Validated by: SDHC regression suites continue to pass at all tested sysclks; @ma
 
 The bug was identified by @macca through careful debugging of a 1GB SanDisk SU01G SDSC card. He observed that mount succeeded at the driver's slow init speed (400 kHz) but failed after the driver's post-init speed bump to 25 MHz, traced the failure to the timeout calculation, and confirmed the fix by replacing the GETCT-based math with GETMS-based math. Many thanks for the detective work.
 
-### Documentation
-
-- `DOCs/User-Reports/2026-05-06-macca-v152-test-results.md`: full diagnostic chronology including the v1/v2/v3/v4 test sequence that ultimately led to the overflow discovery.
-
 ## [1.5.2] - 2026-05-05
 
 **SPI phase-margin improvements (write path); card-aware test infrastructure.**
