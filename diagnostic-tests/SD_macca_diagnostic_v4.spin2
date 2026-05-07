@@ -1,0 +1,600 @@
+{{ =================================================================================================
+
+   File....... SD_macca_diagnostic_v4.spin2
+   Purpose.... Verify-regardless-of-status diagnostic for the cranky-controller
+               hypothesis. For each test, examines the data on disk directly,
+               independent of the driver's status code interpretation. Tells us
+               whether the card actually completes writes when the driver says
+               it didn't, and whether SPI speed has a measurable effect on
+               write correctness on this specific card.
+   Author..... Stephen M Moraco
+               -- see below for terms of use
+   E-mail..... stephen@ironsheep.biz
+   Started.... MAY 2026
+   Updated.... 06 MAY 2026
+
+   THE HYPOTHESIS THIS TESTS:
+
+     macca's card may have an old controller that sets CMD13 status bits
+     (specifically CC_ERROR) for benign conditions that modern controllers
+     don't flag. Our driver treats any non-zero R2 status byte as fatal,
+     surfacing E_IO_ERROR. The card's writes may actually be persisting
+     correctly while the driver rejects them as failures.
+
+     The data on disk is the source of truth, not the driver's status code.
+
+   THE TEST METHOD:
+
+     Phase 0: Baseline init + card profile
+     Phase 1: Read-only sanity at 8 sectors via streamer AND slow-path
+              (includes sector 100,032 from v3 - if v3 writes persisted
+              despite reported failures, the data will match v3's seed)
+     Phase 2: Write/verify at 6 sectors at default SPI (25 MHz)
+              Categorize each cell into outcome A through F based on
+              what the driver reports vs what data is actually on disk
+     Phase 2.5: Conditional retry at slower SPI (12.5/8/400k) for any
+                sector that produced an F outcome (genuine failure)
+                at default SPI. Tells us if speed margin matters.
+     Phase 3: Capture final CMD13 status for forensic context
+
+   OUTCOME CATEGORIES:
+
+     A = Driver agrees, data correct          (PASS - card works as expected)
+     B = Driver agrees write+read OK, data wrong  (genuine corruption)
+     C = Write OK, driver said read failed, data correct  (over-strict on read)
+     D = Driver said write failed, data correct (CRANKY HYPOTHESIS CONFIRMED)
+     E = Both flagged failed, data correct     (very cranky)
+     F = Both flagged failed, data wrong       (genuine card failure)
+
+   SECTOR PROVENANCE:
+
+     Sectors 32,000 / 200,000 / 500,000 / 1,000,000 / 1,500,000 / 1,900,000
+     are erase-block-aligned (multiples of 32) and well-distributed across
+     the card's 1,984,000-sector capacity. Sector 0 (MBR) is read-only.
+     Sector 100,032 is v3's old test sector - read-only here so we can
+     observe whether v3's writes left data on disk.
+
+================================================================================================= }}
+
+CON
+
+    _CLKFREQ        = 350_000_000
+
+    DEBUG_BAUD      = 2_000_000
+
+    ' P2 Edge module SD slot pins
+    SD_CS   = 60
+    SD_MOSI = 59
+    SD_MISO = 58
+    SD_SCK  = 61
+
+    SECTOR_SIZE     = 512
+
+    ' Test sectors
+    NUM_READ_SECTORS  = 8
+    NUM_WRITE_SECTORS = 6
+
+    ' Seeds
+    PRNG_SEED_V3      = $DEAD_BEEF                                              ' v3's seed (for checking sector 100,032 leftover)
+    PRNG_SEED_V4      = $5EED_DEAD                                              ' v4's seed (for new writes)
+
+    ' SPI speed values for Phase 2 default and Phase 2.5 retry sweep
+    PHASE2_SPI_HZ     = 25_000_000                                              ' Default SPI for primary write test
+    NUM_RETRY_SPEEDS  = 6
+    ' Retry speeds (descending): 20 MHz, 18.75 MHz, 15 MHz, 12.5 MHz, 8 MHz, 400 kHz
+    ' Granularity sized to find threshold within industry-standard derate range
+    ' (20% / 30% / 40% / 50% / 68%) plus 400 kHz for the slow-SPI WAITX hypothesis
+
+    POST_WRITE_WAIT_MS    = 100                                                 ' Let internal busy complete before reading
+    POST_RECOVERY_WAIT_MS = 200                                                 ' Let card settle after CMD0+reinit recovery
+    NUM_CMD13_POLLS       = 5                                                   ' How many CMD13 reads to check latching behavior
+
+    ' Sector for erase-then-write test (separate from write set so we don't
+    ' clobber Phase 2 results)
+    ERASE_TEST_SECTOR  = 100_064                                                ' Erase-block-aligned (32 * 3127), distinct from write set
+
+    ' Outcome codes (single byte)
+    OUT_A  = "A"                                                                ' Driver agrees, data correct
+    OUT_B  = "B"                                                                ' Driver agrees, data wrong (corruption)
+    OUT_C  = "C"                                                                ' Write OK, read err, data correct
+    OUT_D  = "D"                                                                ' Write err, read OK, data correct (CRANKY)
+    OUT_E  = "E"                                                                ' Both err, data correct
+    OUT_F  = "F"                                                                ' Both err, data wrong (genuine fail)
+    OUT_SK = "."                                                                ' skipped/unattempted
+
+' Enable raw access and debug API
+#ifdef __SPINTOOLS__
+#define SD_INCLUDE_ALL
+#elseifdef __FLEXSPIN__
+#define SD_INCLUDE_ALL
+#pragma exportdef SD_INCLUDE_ALL
+#else
+#pragma exportdef SD_INCLUDE_ALL
+#endif
+
+OBJ
+    sd : "micro_sd_fat32_fs"
+
+DAT { Read sanity targets - includes sector 100,032 to check v3 leftover }
+    readSectors     LONG    0, 32_000, 100_032, 200_000, 500_000, 1_000_000, 1_500_000, 1_900_000
+
+DAT { Write/verify targets - skip sector 0 (MBR) and 100,032 (v3 leftover) }
+    writeSectors    LONG    32_000, 200_000, 500_000, 1_000_000, 1_500_000, 1_900_000
+
+DAT { Phase 2.5 retry speeds in Hz - granular sweep across realistic derate range }
+    retrySpeeds     LONG    20_000_000, 18_750_000, 15_000_000, 12_500_000, 8_000_000, 400_000
+
+DAT { Phase 2.5 speed labels for matrix headers }
+    spdLbl0         BYTE    "20.0M ", 0
+    spdLbl1         BYTE    "18.75M", 0
+    spdLbl2         BYTE    "15.0M ", 0
+    spdLbl3         BYTE    "12.5M ", 0
+    spdLbl4         BYTE    " 8.0M ", 0
+    spdLbl5         BYTE    "400k  ", 0
+
+DAT { Per-write-sector outcome storage }
+    phase2Outcomes  BYTE    OUT_SK[NUM_WRITE_SECTORS]                           ' Phase 2 default-SPI outcomes
+    ' phase25Matrix[sector_idx * NUM_RETRY_SPEEDS + speed_idx] = outcome at that retry speed
+    phase25Matrix   BYTE    OUT_SK[NUM_WRITE_SECTORS * NUM_RETRY_SPEEDS]
+
+VAR
+    BYTE    writeBuf[SECTOR_SIZE]
+    BYTE    readBuf[SECTOR_SIZE]
+    BYTE    expectedBuf[SECTOR_SIZE]
+
+
+PUB go() | initStatus, idx, sector, spi_idx, target_speed, outcome, anyF
+'' Main entry point.
+
+    debug(" ")
+    debug("=== MACCA DIAGNOSTIC v4 (verify-regardless cranky-controller test) ===")
+    debug("  Driver: P2-uSD-FAT32-FS v1.5.2")
+    debug("  Purpose: determine whether writes actually persist on disk regardless of driver status.")
+    debug(" ")
+
+    ' --- PHASE 0: baseline init ---
+    debug("PHASE 0: BASELINE")
+    initStatus := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    if initStatus < 0
+        debug("  initCardOnly FAILED status=", sdec_(initStatus))
+        debug("  Cannot proceed without card init; ending.")
+        finalize()
+        return
+    debug("  initCardOnly OK")
+    debug("  card profile: cls=", udec_((sd.getOCR() >> 30) & 1), " (0=SDSC,1=SDHC) erase=", udec_(sd.eraseBlockSectors()), " cap=", udec_(sd.cardSizeSectors()), " maxSpi=", udec_(sd.getCardMaxSpeed() / 1_000_000), "MHz")
+    debug("  read timeout=", udec_(sd.getReadTimeout()), "ms  write timeout=", udec_(sd.getWriteTimeout()), "ms")
+    debug(" ")
+
+    ' --- PHASE 1: read-only sanity ---
+    debug("PHASE 1: READ SANITY (8 sectors via streamer AND slow-path; sector 100,032 checked for v3 leftover)")
+    repeat idx from 0 to NUM_READ_SECTORS - 1
+        sector := LONG[@readSectors][idx]
+        runReadSanity(sector)
+    debug(" ")
+
+    ' --- PHASE 2: write/verify at default SPI (25 MHz) ---
+    debug("PHASE 2: WRITE/VERIFY at SPI=25 MHz (default)")
+    debug("  Each cell: write known pattern -> wait -> read -> compare data on disk")
+    debug("  Driver status codes are recorded but NOT used to determine outcome.")
+    sd.setSPISpeed(PHASE2_SPI_HZ)
+    repeat idx from 0 to NUM_WRITE_SECTORS - 1
+        sector := LONG[@writeSectors][idx]
+        outcome := writeVerifyCell(sector, idx, PHASE2_SPI_HZ, @"phase2-25MHz")
+        BYTE[@phase2Outcomes][idx] := outcome
+    debug(" ")
+
+    ' --- PHASE 2.5: conditional retry on F-outcome sectors at slower SPI ---
+    anyF := false
+    repeat idx from 0 to NUM_WRITE_SECTORS - 1
+        if BYTE[@phase2Outcomes][idx] == OUT_F
+            anyF := true
+
+    if anyF
+        debug("PHASE 2.5: CONDITIONAL RETRY at slower SPI for F-outcome sectors")
+        debug("  Granular retry sweep: 20, 18.75, 15, 12.5, 8 MHz, then 400 kHz.")
+        debug("  Tests speed-margin hypothesis with industry-standard derate granularity.")
+        debug("  Only sectors that genuinely failed (F) at default SPI are retried.")
+        repeat spi_idx from 0 to NUM_RETRY_SPEEDS - 1
+            target_speed := LONG[@retrySpeeds][spi_idx]
+            debug(" ")
+            if target_speed >= 1_000_000
+                debug("  --- retry at SPI=", udec_(target_speed / 1_000_000), ".", udec_(((target_speed / 100_000) // 10)), " MHz ---")
+            else
+                debug("  --- retry at SPI=", udec_(target_speed / 1_000), " kHz ---")
+            sd.setSPISpeed(target_speed)
+            repeat idx from 0 to NUM_WRITE_SECTORS - 1
+                if BYTE[@phase2Outcomes][idx] == OUT_F
+                    sector := LONG[@writeSectors][idx]
+                    outcome := writeVerifyCell(sector, idx, target_speed, @"retry")
+                    BYTE[@phase25Matrix][idx * NUM_RETRY_SPEEDS + spi_idx] := outcome
+        debug(" ")
+    else
+        debug("PHASE 2.5: SKIPPED (no F outcomes at default SPI; speed-margin retry not needed)")
+        debug(" ")
+
+    ' --- PHASE 3: recovery test on remaining F outcomes ---
+    runRecoveryPhase()
+
+    ' --- PHASE 4: erase-then-write test ---
+    runEraseThenWritePhase()
+
+    ' --- PHASE 5: CMD13 latching test + final diagnostic state ---
+    runCMD13PollingPhase()
+
+    ' --- SUMMARY ---
+    printSummary()
+
+    finalize()
+
+
+PRI runRecoveryPhase() | idx, sector, hasUnrecovered, allRetriesFailed, spi_idx, retry_outcome, outcome, initStatus
+' For each sector that produced an F outcome at default SPI AND wasn't
+' rescued by the SPI retry phase, attempt a CMD0+reinit recovery sequence
+' and retry write/verify. Tells us whether v1.5.3 should automatically
+' retry-with-reinit on writeSector errors.
+
+    hasUnrecovered := false
+    repeat idx from 0 to NUM_WRITE_SECTORS - 1
+        if BYTE[@phase2Outcomes][idx] == OUT_F
+            allRetriesFailed := true
+            repeat spi_idx from 0 to NUM_RETRY_SPEEDS - 1
+                retry_outcome := BYTE[@phase25Matrix][idx * NUM_RETRY_SPEEDS + spi_idx]
+                if retry_outcome <> OUT_F and retry_outcome <> OUT_SK
+                    allRetriesFailed := false
+            if allRetriesFailed
+                hasUnrecovered := true
+
+    if not hasUnrecovered
+        debug("PHASE 3: SKIPPED (no unrecovered F outcomes; CMD0 + reinit recovery not needed)")
+        debug(" ")
+        return
+
+    debug("PHASE 3: RECOVERY TEST (CMD0 + initCardOnly + retry on unrecovered F sectors)")
+    debug("  For each F-outcome sector that no SPI speed rescued, attempts a fresh")
+    debug("  initCardOnly (which sends CMD0 + CMD8 + ACMD41) then retries write/verify.")
+    debug("  If recovery succeeds, v1.5.3 could auto-recover from writeSector E_IO_ERROR.")
+    debug(" ")
+
+    repeat idx from 0 to NUM_WRITE_SECTORS - 1
+        if BYTE[@phase2Outcomes][idx] <> OUT_F
+            next
+        ' Check whether ANY retry speed rescued this sector
+        allRetriesFailed := true
+        repeat spi_idx from 0 to NUM_RETRY_SPEEDS - 1
+            retry_outcome := BYTE[@phase25Matrix][idx * NUM_RETRY_SPEEDS + spi_idx]
+            if retry_outcome <> OUT_F and retry_outcome <> OUT_SK
+                allRetriesFailed := false
+        if not allRetriesFailed
+            next
+
+        sector := LONG[@writeSectors][idx]
+        debug("  recovery for sector ", udec_(sector), ":")
+
+        ' Attempt recovery: re-init the card from scratch
+        initStatus := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+        if initStatus < 0
+            debug("    re-init FAILED status=", sdec_(initStatus), " - card not recoverable in software")
+            next
+        debug("    re-init OK")
+
+        ' Settle, then re-set 25 MHz SPI
+        waitms(POST_RECOVERY_WAIT_MS)
+        sd.setSPISpeed(PHASE2_SPI_HZ)
+
+        ' Retry write/verify
+        outcome := writeVerifyCell(sector, idx, PHASE2_SPI_HZ, @"recovery-retry")
+        if outcome == OUT_A or outcome == OUT_D or outcome == OUT_E
+            debug("    -> RECOVERY WORKS for this sector. v1.5.3 candidate: auto-retry on E_IO_ERROR.")
+        else
+            debug("    -> recovery did not help.")
+
+    debug(" ")
+
+
+PRI runEraseThenWritePhase() | initStatus, eraseStatus, outcome
+' Use debugEraseBlock to explicitly erase a target erase-block, then attempt
+' write/verify. Tests a different code path - the card may handle freshly-
+' erased blocks differently than re-write of existing data.
+
+    debug("PHASE 4: ERASE-THEN-WRITE TEST")
+    debug("  Issues CMD32+CMD33+CMD38 to explicitly erase a block, then writes/verifies.")
+    debug("  If write succeeds where re-write of un-erased blocks failed, the card needs")
+    debug("  pre-erase for reliable writes (rare but documented for some old controllers).")
+    debug(" ")
+
+    ' Re-init at default SPI to ensure clean state
+    initStatus := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    if initStatus < 0
+        debug("  re-init FAILED status=", sdec_(initStatus), " - skipping erase test")
+        debug(" ")
+        return
+    sd.setSPISpeed(PHASE2_SPI_HZ)
+
+    debug("  target sector: ", udec_(ERASE_TEST_SECTOR), " (32-sector erase block: ", udec_(ERASE_TEST_SECTOR), "..", udec_(ERASE_TEST_SECTOR + sd.eraseBlockSectors() - 1), ")")
+
+    eraseStatus := sd.debugEraseBlock(ERASE_TEST_SECTOR)
+    debug("  debugEraseBlock status=", sdec_(eraseStatus))
+    if eraseStatus < 0
+        debug("    -> erase failed; skipping write attempt")
+        debug(" ")
+        return
+
+    waitms(POST_WRITE_WAIT_MS)
+
+    outcome := writeVerifyCell(ERASE_TEST_SECTOR, 0, PHASE2_SPI_HZ, @"post-erase")
+    if outcome == OUT_A or outcome == OUT_D or outcome == OUT_E
+        debug("  -> WRITE SUCCEEDED on freshly-erased block (data on disk).")
+        if outcome == OUT_A
+            debug("  -> v1.5.3 candidate: erase-before-write may rescue this card.")
+    else
+        debug("  -> write still fails on freshly-erased block; pre-erase doesn't rescue.")
+    debug(" ")
+
+
+PRI runCMD13PollingPhase() | poll_idx, r2_value
+' Read CMD13 multiple times in succession to test latching behavior.
+' If the latched bit clears across reads, v1.5.3 can poll until clean
+' before declaring an operation failed.
+
+    debug("PHASE 5: CMD13 POLLING TEST")
+    debug("  Issues ", udec_(NUM_CMD13_POLLS), " successive CMD13 reads to test latch behavior.")
+    debug("  If status changes across reads, v1.5.3 could poll-until-clean before flagging error.")
+    debug(" ")
+
+    repeat poll_idx from 1 to NUM_CMD13_POLLS
+        r2_value := sd.testCMD13()
+        debug("  poll ", udec_(poll_idx), ": testCMD13 = $", uhex_(r2_value))
+
+    debug(" ")
+    debug("  Final stored state:")
+    debug("    getLastCMD13      = $", uhex_byte_(sd.getLastCMD13()))
+    debug("    getLastCMD13Error = $", uhex_byte_(sd.getLastCMD13Error()))
+    debug(" ")
+
+
+PRI runReadSanity(sector) | streamerStatus, slowStatus, streamerHash, slowHash, idx, v3matches
+' Read a sector via both streamer and slow-path. Compare hashes.
+' For sector 100,032 (v3's test sector), additionally check whether the
+' data on disk matches v3's PRNG seed expansion - tells us if any v3
+' write actually persisted.
+
+    bytefill(@readBuf, $00, SECTOR_SIZE)
+    streamerStatus := sd.readSectorRaw(sector, @readBuf)
+    streamerHash := bufferHash(@readBuf, SECTOR_SIZE)
+
+    bytefill(@writeBuf, $00, SECTOR_SIZE)
+    slowStatus := sd.debugReadSectorSlow(sector, @writeBuf)
+    slowHash := bufferHash(@writeBuf, SECTOR_SIZE)
+
+    debug("  sector=", udec_(sector), ": streamer status=", sdec_(streamerStatus), " hash=$", uhex_long_(streamerHash), "  slowpath status=", sdec_(slowStatus), " hash=$", uhex_long_(slowHash))
+
+    if streamerStatus == 0 and slowStatus == 0
+        if streamerHash == slowHash
+            debug("    -> both paths agree")
+        else
+            debug("    -> MISMATCH between streamer and slow-path reads")
+
+    ' Special check: is sector 100,032 holding v3's leftover write?
+    if sector == 100_032 and slowStatus == 0
+        fillRandomSeeded(@expectedBuf, SECTOR_SIZE, PRNG_SEED_V3)
+        v3matches := countByteMismatches(@writeBuf, @expectedBuf, SECTOR_SIZE)
+        if v3matches == 0
+            debug("    -> sector 100,032 contains v3's expected pattern - SOME v3 WRITE PERSISTED despite reported failures")
+        else
+            debug("    -> sector 100,032 does NOT match v3 pattern (", udec_(v3matches), " bytes differ) - no v3 write persisted")
+
+
+PRI writeVerifyCell(sector, sector_idx, spi_speed, label) : outcome | writeStatus, readStatus, write_start, read_start, write_ms, read_ms, mismatches, dataOnDisk, pre_cmd13, post_cmd13, diag_result, diag_r1, diag_dresp, diag_sector
+' Write known pattern then verify-via-read regardless of driver status codes.
+' Captures full diagnostic context per cell:
+'   - pre-write CMD13 state (was card already in error state?)
+'   - writeStatus and elapsed time
+'   - getWriteDiag() result_code (which writeSector path produced the result)
+'   - diag_r1 (CMD24 R1 response) and diag_dresp (data response token)
+'   - readStatus and elapsed time
+'   - post-read CMD13 state
+'   - byte-exact verify against expected pattern
+
+    pre_cmd13 := sd.testCMD13() & $FF                                            ' Issue fresh CMD13 to see card state before write
+
+    fillRandomSeeded(@writeBuf, SECTOR_SIZE, PRNG_SEED_V4 ^ sector)
+    bytemove(@expectedBuf, @writeBuf, SECTOR_SIZE)
+
+    write_start := GETCT()
+    writeStatus := sd.writeSectorRaw(sector, @writeBuf)
+    write_ms := (GETCT() - write_start) / (clkfreq / 1000)
+
+    ' Capture writeSector diagnostic immediately before any other operations
+    diag_result, diag_r1, diag_dresp, diag_sector := sd.getWriteDiag()
+
+    waitms(POST_WRITE_WAIT_MS)
+
+    bytefill(@readBuf, $00, SECTOR_SIZE)
+    read_start := GETCT()
+    readStatus := sd.readSectorRaw(sector, @readBuf)
+    read_ms := (GETCT() - read_start) / (clkfreq / 1000)
+
+    post_cmd13 := sd.testCMD13() & $FF                                           ' Card state after the cycle
+
+    mismatches := countByteMismatches(@expectedBuf, @readBuf, SECTOR_SIZE)
+    dataOnDisk := (mismatches == 0)
+
+    ' Categorize outcome
+    if writeStatus == 0 and readStatus == 0
+        if dataOnDisk
+            outcome := OUT_A
+        else
+            outcome := OUT_B
+    elseif writeStatus == 0 and readStatus < 0
+        if dataOnDisk
+            outcome := OUT_C
+        else
+            outcome := OUT_F
+    elseif writeStatus < 0 and readStatus == 0
+        if dataOnDisk
+            outcome := OUT_D
+        else
+            outcome := OUT_F
+    else
+        if dataOnDisk
+            outcome := OUT_E
+        else
+            outcome := OUT_F
+
+    debug("  [", zstr_(label), "] sector=", udec_(sector), " wr=", sdec_(writeStatus), "/", udec_(write_ms), "ms rd=", sdec_(readStatus), "/", udec_(read_ms), "ms diff=", udec_(mismatches), "/", udec_(SECTOR_SIZE), " -> ", outcomeLabel(outcome))
+    debug("    diag: writeSector path=", udec_(diag_result), " (1=CMD24-fatal 2=resp-timeout 3=CRC-rej 4=write-rej 5=unknown-resp 6=busy-timeout 7=success-path)")
+    debug("    diag: CMD24-R1=$", uhex_byte_(diag_r1), "  data-response=$", uhex_byte_(diag_dresp), "  CMD13-pre=$", uhex_byte_(pre_cmd13), "  CMD13-post=$", uhex_byte_(post_cmd13))
+
+
+PRI outcomeLabel(outcome) : p_str
+' Return pointer to descriptive label for outcome code.
+
+    case outcome
+        OUT_A: p_str := @lbl_a
+        OUT_B: p_str := @lbl_b
+        OUT_C: p_str := @lbl_c
+        OUT_D: p_str := @lbl_d
+        OUT_E: p_str := @lbl_e
+        OUT_F: p_str := @lbl_f
+        other: p_str := @lbl_sk
+
+DAT { Outcome labels }
+    lbl_a   BYTE    "A (PASS)", 0
+    lbl_b   BYTE    "B (corruption)", 0
+    lbl_c   BYTE    "C (read over-strict, data OK)", 0
+    lbl_d   BYTE    "D (CRANKY: write over-strict, data OK)", 0
+    lbl_e   BYTE    "E (both over-strict, data OK)", 0
+    lbl_f   BYTE    "F (genuine failure)", 0
+    lbl_sk  BYTE    "(skipped)", 0
+
+
+VAR
+    BYTE summaryRow[40]                                                          ' Scratch for summary row formatting
+
+PRI printSummary() | idx, sector, spi_idx, col, anyD, anyE, anyF, anyA
+' Print compact summary table and high-level interpretation.
+
+    debug("=== SUMMARY ===")
+    debug(" ")
+    debug("  Sector       25M  20M  18.75M  15M  12.5M  8M  400k")
+    repeat idx from 0 to NUM_WRITE_SECTORS - 1
+        sector := LONG[@writeSectors][idx]
+        col := 0
+        ' Phase 2 default at 25 MHz
+        BYTE[@summaryRow][col++] := BYTE[@phase2Outcomes][idx]
+        BYTE[@summaryRow][col++] := " "
+        BYTE[@summaryRow][col++] := " "
+        BYTE[@summaryRow][col++] := " "
+        ' Phase 2.5 retries (6 speeds)
+        repeat spi_idx from 0 to NUM_RETRY_SPEEDS - 1
+            BYTE[@summaryRow][col++] := BYTE[@phase25Matrix][idx * NUM_RETRY_SPEEDS + spi_idx]
+            BYTE[@summaryRow][col++] := " "
+            BYTE[@summaryRow][col++] := " "
+            BYTE[@summaryRow][col++] := " "
+            BYTE[@summaryRow][col++] := " "
+            BYTE[@summaryRow][col++] := " "
+        BYTE[@summaryRow][col] := 0
+        debug("  ", udec_(sector), "    ", zstr_(@summaryRow))
+
+    debug(" ")
+    debug("Outcome codes:")
+    debug("  A = PASS (driver agrees, data correct)")
+    debug("  B = corruption (driver agrees, data wrong)")
+    debug("  C = read over-strict (write OK, read err, data correct)")
+    debug("  D = CRANKY HYPOTHESIS CONFIRMED (write err, read OK, data correct)")
+    debug("  E = very cranky (both err, data correct)")
+    debug("  F = genuine failure (both err, data wrong)")
+    debug("  . = skipped/not attempted")
+    debug(" ")
+
+    ' High-level interpretation
+    anyA := false
+    anyD := false
+    anyE := false
+    anyF := false
+    repeat idx from 0 to NUM_WRITE_SECTORS - 1
+        case BYTE[@phase2Outcomes][idx]
+            OUT_A:  anyA := true
+            OUT_D:  anyD := true
+            OUT_E:  anyE := true
+            OUT_F:  anyF := true
+
+    debug("Interpretation:")
+    if anyA
+        debug("  - At least one sector PASSES cleanly. Card is functional at 25 MHz default.")
+    if anyD or anyE
+        debug("  - CRANKY HYPOTHESIS CONFIRMED: at least one sector has D/E outcome.")
+        debug("    Driver is rejecting writes (CMD13 status) that the card actually completed.")
+        debug("    v1.5.3 candidate fix: soften CMD13 status interpretation for old controllers.")
+    if anyF and not anyA and not anyD and not anyE
+        debug("  - All write cells failed genuinely (data not on disk).")
+        debug("  - If retry columns also show F: card's write path is broken at all SPI speeds.")
+        debug("  - If retry columns show A/D/E at slower SPI: speed margin matters.")
+
+
+PRI fillRandomSeeded(p_buf, length, seed) | idx, state
+' Fill buffer with deterministic xorshift32 bytes using a caller-supplied seed.
+
+    state := seed
+    if state == 0
+        state := PRNG_SEED_V4
+    repeat idx from 0 to length - 1
+        state ^= state << 13
+        state ^= state >> 17
+        state ^= state << 5
+        BYTE[p_buf][idx] := state & $FF
+
+
+PRI countByteMismatches(p_a, p_b, length) : count | idx
+' Count number of bytes that differ between two buffers.
+
+    count := 0
+    repeat idx from 0 to length - 1
+        if BYTE[p_a][idx] <> BYTE[p_b][idx]
+            count++
+
+
+PRI bufferHash(p_buf, length) : hash | idx
+' Compute simple 32-bit additive checksum of a buffer.
+
+    hash := 0
+    repeat idx from 0 to length - 1
+        hash := hash + (BYTE[p_buf][idx] << (idx & 24))
+
+
+PRI finalize()
+' Emit end markers.
+
+    debug(" ")
+    debug("=== END ===")
+    debug("END_SESSION")
+
+
+con { license }
+
+{{
+  =================================================================================================
+
+  Terms of Use: MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this
+  software and associated documentation files (the "Software"), to deal in the Software
+  without restriction, including without limitation the rights to use, copy, modify,
+  merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies
+  or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+  INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+  HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+  CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+  OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+  =================================================================================================
+}}
