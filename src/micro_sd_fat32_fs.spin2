@@ -5903,7 +5903,9 @@ PRI initCard() : bSuccess | timeout, resp, card_version, acmd41_arg, got_respons
     ' Expected R1: 0x00 when ready, 0x01 while initializing
     ' ============================================
     DEBUG[CH_INIT]("    [initCard] Step 6: ACMD41 init loop (arg=$", uhex_long(acmd41_arg), ")...")
-    timeout := GETCT() + clkfreq * ACMD41_TIMEOUT_SECS                          '  2 second timeout
+    ' v1.5.3: GETMS-based deadline (was GETCT-based; safe at this duration but
+    ' converted for consistency with other timeout sites)
+    timeout := GETMS() + ACMD41_TIMEOUT_SECS * 1000                             '  2 second timeout
 
     repeat
       resp := cmd(CMD55, 0)                                                     '  APP_CMD prefix
@@ -5920,7 +5922,7 @@ PRI initCard() : bSuccess | timeout, resp, card_version, acmd41_arg, got_respons
         else
           DEBUG[CH_INIT]("    [initCard] ACMD41 unexpected response: $", uhex_(resp))
 
-      if GETCT() - timeout > 0
+      if GETMS() - timeout > 0
         DEBUG[CH_INIT]("    [initCard] FAIL: ACMD41 timeout after 2 seconds")
         DEBUG[CH_INIT]("    [initCard] Last response: $", uhex_(resp))
         bSuccess := false
@@ -6001,13 +6003,14 @@ PRI cmd(op,parm) : response | timeout, timed_out
     DEBUG[CH_INIT]("      [cmd] After CMD0 sent, MISO=", udec_(pinr(miso)))
   else
     sp_transfer(CRC_CMD8,8)                                                         '  send CRC for cmd(8,$1AA)
+  ' v1.5.3: GETMS-based deadline (was GETCT-based, overflowed at low sysclk)
   timed_out := false
-  timeout := GETCT() + clkfreq
+  timeout := GETMS() + 1000                                                       '  1s timeout
   repeat
     response := sp_transfer(-1,8)                                                   '  read 1st byte of reply
     if (response & $80) == 0                                                        '  valid R1 has bit 7 = 0 (SD spec 7.3.2.1)
       quit
-    if GETCT() - timeout > 0                                                        '  check timeout
+    if GETMS() - timeout > 0                                                        '  check timeout
       pinh(cs)                                                                      '  CS HIGH = deselected (standard active-LOW)
       response := false
       timed_out := true
@@ -6082,7 +6085,9 @@ PRI readSector(sector, buf_type) : status | _sck, _miso, data, loop_ctr, timeout
       cmd(CMD17, sector << hcs)
 
       ' Wait for start token ($FE) - use sp_transfer_8 for token polling
-      timeout := GETCT() + (clkfreq / 100) * card_read_timeout_ms               ' CSD-based timeout with 10x margin
+      ' v1.5.3: GETMS-based deadline (was GETCT-based, overflowed at low sysclk).
+      ' card_read_timeout_ms already includes 100x safety factor from parseTimeouts.
+      timeout := GETMS() + card_read_timeout_ms                                 ' CSD-based timeout (ms)
       loop_ctr := 0
       repeat
         data := sp_transfer_8($FF)
@@ -6095,7 +6100,7 @@ PRI readSector(sector, buf_type) : status | _sck, _miso, data, loop_ctr, timeout
           LONG[p_cache] := -1
           status := E_BAD_RESPONSE
           quit
-        if GETCT() - timeout > 0
+        if GETMS() - timeout > 0
           DEBUG[CH_SECTOR]("  [readSector] TIMEOUT waiting for start token")
           pinh(cs)
           LONG[p_cache] := -1
@@ -6625,10 +6630,12 @@ PRI waitDataToken() : status | timeout, resp
 ' @local timeout - Timeout deadline
 ' @local resp - Received byte
 
+  ' v1.5.3: GETMS-based deadline (was GETCT-based, overflowed at low sysclk).
+  ' card_read_timeout_ms already includes 100x safety factor from parseTimeouts.
   status := E_TIMEOUT                                                           '  default: timeout
   last_cmd18_token := $FF                                                       ' Default: no token received
   last_cmd18_result := 1                                                        ' Default: timeout
-  timeout := GETCT() + (clkfreq / 100) * card_read_timeout_ms                   ' CSD-based timeout with 10x margin
+  timeout := GETMS() + card_read_timeout_ms                                     ' CSD-based timeout (ms)
   repeat
     resp := sp_transfer_8($FF)
     if resp == TOKEN_START_BLOCK                                                ' $FE = data coming
@@ -6642,7 +6649,7 @@ PRI waitDataToken() : status | timeout, resp
       DEBUG[CH_RECOVER]("  [waitDataToken] ERROR token: $", uhex_byte_(resp))
       status := E_BAD_RESPONSE
       quit
-    if GETCT() - timeout > 0
+    if GETMS() - timeout > 0
       DEBUG[CH_RECOVER]("  [waitDataToken] TIMEOUT")
       quit
 
@@ -6655,8 +6662,9 @@ PRI waitDataResponse() : response | timeout, resp
 ' @local timeout - Timeout deadline
 ' @local resp - Received byte
 
+  ' v1.5.3: GETMS-based deadline (was GETCT-based, overflowed at low sysclk)
   response := E_TIMEOUT                                 '  default: timeout
-  timeout := GETCT() + clkfreq / 10                     ' 100ms timeout
+  timeout := GETMS() + 100                              ' 100ms timeout
   repeat
     resp := sp_transfer_8($FF)
     if resp <> $FF
@@ -6665,7 +6673,7 @@ PRI waitDataResponse() : response | timeout, resp
         response := resp & DATA_RESPONSE_MASK           ' Lower 5 bits
         quit
     ' Not a valid response format, keep polling (might be noise)
-    if GETCT() - timeout > 0
+    if GETMS() - timeout > 0
       DEBUG[CH_RECOVER]("  [waitDataResponse] TIMEOUT")
       quit
 
@@ -6678,14 +6686,16 @@ PRI waitBusyComplete() : status | timeout, resp
 ' @local timeout - Timeout deadline
 ' @local resp - Received byte
 
+  ' v1.5.3: GETMS-based deadline (was GETCT-based, overflowed at low sysclk
+  ' for SDSC's spec'd long write timeouts up to 30s)
   status := E_TIMEOUT                                                           '  default: timeout
-  timeout := GETCT() + (clkfreq / 1000) * card_write_timeout_ms                 ' CSD-based timeout
+  timeout := GETMS() + card_write_timeout_ms                                    ' CSD-based timeout (ms)
   repeat
     resp := sp_transfer_8($FF)
     if resp == $FF                                                              ' Card released MISO = done
       status := 0
       quit
-    if GETCT() - timeout > 0
+    if GETMS() - timeout > 0
       DEBUG[CH_RECOVER]("  [waitBusyComplete] TIMEOUT - card still busy")
       quit
 
@@ -6715,7 +6725,8 @@ PRI sendStopTransmission() : status | resp, idx, timeout
   last_cmd12_r1 := -1                                   ' Default: no response
   last_cmd12_busy := 1                                  ' Default: timeout
 
-  timeout := GETCT() + clkfreq / 10                     ' 100ms timeout
+  ' v1.5.3: GETMS-based deadline (was GETCT-based, overflowed at low sysclk)
+  timeout := GETMS() + 100                              ' 100ms timeout
   idx := 0
   repeat
     resp := sp_transfer_8($FF)
@@ -6726,7 +6737,7 @@ PRI sendStopTransmission() : status | resp, idx, timeout
       cmd12_capture_len := idx                          ' Record position of first non-$FF
       last_cmd12_r1 := resp
       quit
-    if GETCT() - timeout > 0
+    if GETMS() - timeout > 0
       cmd12_capture_len := idx
       DEBUG[CH_RECOVER]("  [sendStopTransmission] TIMEOUT waiting for R1")
       status := E_TIMEOUT
@@ -6807,7 +6818,8 @@ PRI sendCmd13Transaction() : r1, status | idx, resp, timeout
   cmd13_pre_capture[5] := sp_transfer_8($FF)            '  CRC (don't care after init)
 
   ' Capture raw byte stream and find R1 - skip bytes with bit 7 set (SD spec 7.3.2.1)
-  timeout := GETCT() + clkfreq / 10                     '  100ms timeout
+  ' v1.5.3: GETMS-based deadline (was GETCT-based, overflowed at low sysclk)
+  timeout := GETMS() + 100                              '  100ms timeout
   idx := 0
   r1 := -1
   repeat
@@ -6819,7 +6831,7 @@ PRI sendCmd13Transaction() : r1, status | idx, resp, timeout
       cmd13_capture_len := idx
       r1 := resp
       quit
-    if GETCT() - timeout > 0
+    if GETMS() - timeout > 0
       cmd13_capture_len := idx
       last_cmd13_r1 := $FF
       quit                                              '  r1 stays -1, status stays 0
@@ -7010,22 +7022,23 @@ PRI readDataRegister(cmd_num, arg, crc_byte, p_buf, byte_count) : bSuccess | tim
   sp_transfer_8(crc_byte)                               '  CRC-7
 
   ' Wait for R1 response - skip bytes with bit 7 set (SD spec 7.3.2.1)
-  timeout := GETCT() + clkfreq                          '  1s timeout
+  ' v1.5.3: GETMS-based deadlines (was GETCT-based, overflowed at low sysclk)
+  timeout := GETMS() + 1000                             '  1s timeout
   repeat
     resp := sp_transfer_8($FF)
     if (resp & $80) == 0                                '  valid R1 has bit 7 = 0
       quit
-    if GETCT() - timeout > 0
+    if GETMS() - timeout > 0
       quit
 
   if resp == $00
     ' Wait for data token ($FE)
-    timeout := GETCT() + clkfreq                        '  1s timeout
+    timeout := GETMS() + 1000                           '  1s timeout
     repeat
       resp := sp_transfer_8($FF)
       if resp == TOKEN_START_BLOCK                      '  $FE = data coming
         quit
-      if GETCT() - timeout > 0
+      if GETMS() - timeout > 0
         quit
 
     if resp == TOKEN_START_BLOCK
@@ -7180,10 +7193,14 @@ PRI parseTimeouts(p_csd) | csd_ver, taac, nsac, r2w_factor, read_timeout_ns, tim
     ' Read timeout = TAAC + NSAC * 100 (NSAC is in clock cycles / 100)
     ' For safety, multiply by 100 to get worst-case timeout
     read_timeout_ns := (time_val * time_unit) * 100                               ' Apply 100x safety factor
-    card_read_timeout_ms := (read_timeout_ns / 1_000_000) #> 100                  ' Minimum 100ms
+    card_read_timeout_ms := (read_timeout_ns / 1_000_000) #> 100 <# 5_000         ' Min 100ms, max 5s
 
-    ' Write timeout = read timeout * 2^R2W_FACTOR
-    card_write_timeout_ms := (card_read_timeout_ms << r2w_factor) #> 250 <# 1000  ' Min 250ms, max 1000ms
+    ' Write timeout = read timeout * 2^R2W_FACTOR (full SDSC spec range, capped at 30s)
+    ' v1.5.3: cap raised from 1000ms to 30000ms - covers the SDSC spec's full
+    ' worst-case write time (TAAC * 2^R2W can produce up to ~24s on slow cards).
+    ' v1.5.3 also fixes the GETCT overflow bug that was masking this; the previous
+    ' 1000ms cap was incidentally protecting against that overflow at low sysclks.
+    card_write_timeout_ms := (card_read_timeout_ms << r2w_factor) #> 250 <# 30_000  ' Min 250ms, max 30s
 
     DEBUG[CH_IDENT]("  [parseTimeouts] SDSC: TAAC=$", uhex_byte_(taac), " NSAC=", udec_(nsac), " R2W=", udec_(r2w_factor))
     DEBUG[CH_IDENT]("  [parseTimeouts] SDSC: read=", udec_(card_read_timeout_ms), "ms, write=", udec_(card_write_timeout_ms), "ms")
@@ -7351,8 +7368,10 @@ PRI readSectorSlow(sector, p_buffer) : status | data, idx, timeout
   cmd(CMD17, sector << hcs)
 
   ' Wait for start token ($FE)
+  ' v1.5.3: GETMS-based deadline (was GETCT-based, overflowed at low sysclk).
+  ' card_read_timeout_ms already includes 100x safety factor from parseTimeouts.
   status := E_TIMEOUT                                   '  assume failure
-  timeout := GETCT() + (clkfreq / 100) * card_read_timeout_ms
+  timeout := GETMS() + card_read_timeout_ms
   repeat
     data := sp_transfer_8($FF)
     if data == $FE
@@ -7361,7 +7380,7 @@ PRI readSectorSlow(sector, p_buffer) : status | data, idx, timeout
     if data <> $FF
       status := E_BAD_RESPONSE
       quit                                              '  error token
-    if GETCT() - timeout > 0
+    if GETMS() - timeout > 0
       quit                                              '  timeout
 
   if status == 0
@@ -7421,13 +7440,14 @@ PRI do_erase_block(start_sector) : status | resp, end_sector, timeout
         status := E_BAD_RESPONSE
       else
         ' Wait for busy completion (MISO returns to $FF)
+        ' v1.5.3: GETMS-based deadline (was GETCT-based, overflowed at low sysclk)
         status := E_TIMEOUT
-        timeout := GETCT() + (clkfreq / 1000) * card_write_timeout_ms
+        timeout := GETMS() + card_write_timeout_ms
         repeat
           if sp_transfer_8($FF) == $FF
             status := 0
             quit
-          if GETCT() - timeout > 0
+          if GETMS() - timeout > 0
             DEBUG[CH_SECTOR]("  [do_erase_block] busy timeout")
             quit
         pinh(cs)

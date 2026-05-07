@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.3] - 2026-05-07
+
+**Timeout calculation overflow fix; SDSC long-write support.**
+
+This release fixes a latent 32-bit arithmetic overflow in the driver's timeout calculations that caused immediate spurious "timeout" failures on SDSC cards at lower system clocks. The driver was computing deadline values as `GETCT() + (clkfreq / N) * timeout_ms`, which overflowed signed 32-bit arithmetic whenever the product exceeded 2^31 sysclks. SDSC cards with long CSD-spec'd timeouts (TAAC + R2W_FACTOR can produce up to 24,000 ms write timeouts per spec) hit this overflow at any system clock where the calculation crossed the boundary, causing every read/write attempt to be flagged as timed-out before the operation even started. The fix converts all timeout deadlines from sysclk-based to millisecond-based using `GETMS()`, which is documented in the P2 Knowledge Base as the canonical method for human-scale timing operations and wraps after ~50 days. As a separate but related improvement, the SDSC write-timeout clamp was raised from 1,000 ms to 30,000 ms so the driver can honor full SDSC spec-allowed worst-case timings on cards that legitimately need them.
+
+Validated by: SDHC regression suites continue to pass at all tested sysclks; @macca's 1GB SanDisk SU01G SDSC card now mounts and operates at sysclk=250 MHz where v1.5.2 silently failed.
+
+### Bug Fixes
+
+- **Timeout calculation overflow (12 sites).** Every `GETCT()`-based timeout deadline in the driver has been converted to a `GETMS()`-based deadline. Sites affected: ACMD41 init loop, `cmd()` R1 wait, `readSector` token poll, `waitDataToken`, `waitDataResponse`, `waitBusyComplete`, `sendStopTransmission`, `sendCmd13Transaction`, `readDataRegister` (R1 + token), `readSectorSlow`, and `do_erase_block`. Each conversion is mechanical: the deadline expression changes units from sysclks to milliseconds; the comparison stays a signed-difference check. SDHC behavior is unchanged because SDHC's smaller timeouts never overflowed.
+- **SDSC write-timeout clamp raised.** Previous clamp at 1,000 ms was incidentally protecting against the overflow bug at low sysclks; raising it without the math fix would have made the bug worse. With the math fix in place, the clamp is raised to 30,000 ms, which is at or above the worst-case write timeout the SDSC spec allows. SDSC read-timeout clamp also added (5,000 ms max) for safety against pathological CSD values.
+- **`debugEraseBlock` now uses GETMS-based deadline** following the same pattern as the other timeout sites.
+
+### Field Reports
+
+The bug was identified by @macca through careful debugging of a 1GB SanDisk SU01G SDSC card. He observed that mount succeeded at the driver's slow init speed (400 kHz) but failed after the driver's post-init speed bump to 25 MHz, traced the failure to the timeout calculation, and confirmed the fix by replacing the GETCT-based math with GETMS-based math. Many thanks for the detective work.
+
+### Documentation
+
+- `DOCs/User-Reports/2026-05-06-macca-v152-test-results.md`: full diagnostic chronology including the v1/v2/v3/v4 test sequence that ultimately led to the overflow discovery.
+
 ## [1.5.2] - 2026-05-05
 
 **SPI phase-margin improvements (write path); card-aware test infrastructure.**
