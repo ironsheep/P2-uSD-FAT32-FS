@@ -233,11 +233,11 @@ if [[ "$RUN_ONLY" == true ]]; then
 
     cd "$REGTEST_DIR"
 
-    # Cache toggle: set USE_CACHE=1 to enable. Default: disabled.
-    if [[ "$USE_CACHE" == "1" ]]; then
-        CACHE_FLAGS="--cache --cache-dir $CACHE_DIR"
-    else
+    # Cache toggle: set USE_CACHE=0 to disable. Default: enabled.
+    if [[ "$USE_CACHE" == "0" ]]; then
         CACHE_FLAGS=""
+    else
+        CACHE_FLAGS="--cache --cache-dir $CACHE_DIR"
     fi
 
     for i in "${!SUITES[@]}"; do
@@ -293,17 +293,17 @@ else
 
     cd "$REGTEST_DIR"
 
-    # Cache toggle: set USE_CACHE=1 to enable pnut-ts object cache. Default: disabled.
+    # Cache toggle: set USE_CACHE=0 to disable pnut-ts object cache. Default: enabled.
     # When enabled on a full run, clear cache once at start (skip on --from resume).
-    if [[ "$USE_CACHE" == "1" ]]; then
+    if [[ "$USE_CACHE" == "0" ]]; then
+        CACHE_FLAGS=""
+        echo "  Cache DISABLED (override: USE_CACHE=0)"
+    else
         CACHE_FLAGS="--cache --cache-dir $CACHE_DIR"
         if [[ -z "$FROM_SUITE" && -d "$CACHE_DIR" ]]; then
             rm -rf "$CACHE_DIR"
             echo "  Cache cleared (rm -rf $CACHE_DIR)"
         fi
-    else
-        CACHE_FLAGS=""
-        echo "  Cache DISABLED (set USE_CACHE=1 to enable)"
     fi
 
     for i in "${!SUITES[@]}"; do
