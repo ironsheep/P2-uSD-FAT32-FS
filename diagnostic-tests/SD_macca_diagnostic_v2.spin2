@@ -8,7 +8,9 @@
                -- see below for terms of use
    E-mail..... stephen@ironsheep.biz
    Started.... MAY 2026
-   Updated.... 06 MAY 2026
+   Updated.... 18 MAY 2026 - Phase 0 no longer gates the sweep. A card that
+               fails initCardOnly at boot settings now still gets the full
+               sysclk x SPI matrix, so any working combination can be found.
 
    Designed in response to v1 diagnostic feedback from @macca: the v1 diagnostic
    gated on sd.mount() as a precondition, which prevented testing on cards whose
@@ -18,8 +20,10 @@
 
    THE TEST:
 
-     PHASE 0: baseline at boot settings — confirms the card responds at all
-              and captures the expected-data hash for cross-cell comparison.
+     PHASE 0: baseline at boot settings — INFORMATIONAL ONLY. Reports whether
+              the card responds at boot config, but never gates the sweep.
+              A card that fails initCardOnly at boot still gets the full
+              matrix below, so any working sysclk/SPI combination is found.
 
      PHASE 1: sysclk x SPI matrix — for each (sysclk, SPI) cell:
               changeFrequency() -> initCardOnly() -> setSPISpeed() ->
@@ -111,15 +115,18 @@ OBJ
     sd : "micro_sd_fat32_fs"
 
 DAT { sysclk values in Hz }
-    sysclks         LONG    200_000_000, 250_000_000, 270_000_000, 300_000_000, 320_000_000, 350_000_000
+    ' Ordered gentlest-first. A marginal card that latches after a failed write
+    ' gives only one clean write per power cycle; testing the speed most likely
+    ' to init (270 MHz -> 22.5 MHz SPI) first spends that budget wisely.
+    sysclks         LONG    270_000_000, 320_000_000, 200_000_000, 250_000_000, 300_000_000, 350_000_000
 
 DAT { SPI speed values in Hz }
-    ' 400 kHz is included specifically to test v1.5.2's write-path streamer at
-    ' very large hp values (hp~438 at sysclk=350/SPI=400k). v1.5.2 removed the
-    ' WAITX align_delay between XINIT and WYPIN; the removal was validated only
+    ' Ordered slowest-first (gentlest write first). 400 kHz also tests v1.5.2's
+    ' write-path streamer at very large hp values (hp~438 at sysclk=350/SPI=400k):
+    ' v1.5.2 removed the WAITX align_delay between XINIT and WYPIN, validated only
     ' at hp=4-7 (25 MHz SPI on SDHC cards). The 400 kHz column certifies whether
     ' the WAITX removal is safe at the slow SPI speeds used during card init.
-    spiSpeeds       LONG    25_000_000, 18_750_000, 15_000_000, 12_500_000, 8_000_000, 400_000
+    spiSpeeds       LONG    400_000, 8_000_000, 12_500_000, 15_000_000, 18_750_000, 25_000_000
 
 DAT { Result matrix - one byte per (sysclk, SPI) cell }
     resultMatrix    BYTE    OUT_SKIPPED[NUM_SYSCLKS * NUM_SPI_SPEEDS]
@@ -142,18 +149,15 @@ PUB go() | sysclk_idx, spi_idx, target_sysclk, target_spi, baseline_status
     baseline_status := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
     if baseline_status < 0
         debug("  initCardOnly FAILED at boot settings (status=", sdec_(baseline_status), ")")
-        debug("  -> SPI/card link is broken at boot; sweep results would be meaningless")
-        debug("=== END ===")
-        debug("END_SESSION")
-        return
-
-    debug("  initCardOnly OK")
-    debug("  card profile: cls=", udec_((sd.getOCR() >> 30) & 1), " (0=SDSC,1=SDHC) erase=", udec_(sd.eraseBlockSectors()), " maxSpi=", udec_(sd.getCardMaxSpeed() / 1_000_000), "MHz")
-
-    if runRoundTripCell(clkfreq, sd.getCardMaxSpeed())
-        debug("  -> baseline write/read PASSES at default")
+        debug("  -> boot config is not a working cell; running the full matrix")
+        debug("     anyway to find ANY working sysclk/SPI combination for this card")
     else
-        debug("  -> baseline write/read FAILS at default; sweep will show ranges")
+        debug("  initCardOnly OK")
+        debug("  card profile: cls=", udec_((sd.getOCR() >> 30) & 1), " (0=SDSC,1=SDHC) erase=", udec_(sd.eraseBlockSectors()), " maxSpi=", udec_(sd.getCardMaxSpeed() / 1_000_000), "MHz")
+        if runRoundTripCell(clkfreq, sd.getCardMaxSpeed())
+            debug("  -> baseline write/read PASSES at default")
+        else
+            debug("  -> baseline write/read FAILS at default; sweep will show ranges")
     debug(" ")
 
     ' --- PHASE 1: sysclk x SPI matrix ---
@@ -307,7 +311,7 @@ PRI printSummaryMatrix() | sysclk_idx, spi_idx, target_sysclk
 ' Each cell shows P/I/W/R/V/. (5 chars per row, separated by spaces).
 
     debug(" ")
-    debug("              SPI=25M  18.75M  15M    12.5M  8M     400k")
+    debug("              SPI=400k 8M     12.5M  15M    18.75M 25M")
     repeat sysclk_idx from 0 to NUM_SYSCLKS - 1
         target_sysclk := LONG[@sysclks][sysclk_idx]
         ' Build "C   C   C   C   C\0" (each cell + 3 spaces, then last cell + null)

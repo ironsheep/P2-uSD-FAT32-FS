@@ -25,6 +25,8 @@
 CON
   _CLKFREQ = 270_000_000
 
+  DEBUG_BAUD = 2_000_000
+
   ' SD card pins - P2 EC32MB Edge Module
   CS_PIN   = 60
   MOSI_PIN = 59

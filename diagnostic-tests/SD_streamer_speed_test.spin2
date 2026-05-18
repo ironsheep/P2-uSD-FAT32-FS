@@ -1,0 +1,172 @@
+{{ =================================================================================================
+
+   File....... SD_streamer_speed_test.spin2
+   Purpose.... Determine whether the streamer-DMA sector READ works at lower
+               SPI clock rates on a marginal card. The phase sweep
+               (SD_phase_sweep_test) ruled out align_delay sample-phase as the
+               cause of the all-zeros streamer read on the Cloudisk 2GB SDSC
+               card. The remaining structural difference between the working
+               slow path and the failing streamer path is the clocking style:
+               the slow path clocks SCK in 8-bit bursts with idle gaps between
+               bytes; the streamer clocks 4096 bits back-to-back with no gaps.
+   Author..... Stephen M Moraco
+               -- see below for terms of use
+   E-mail..... stephen@ironsheep.biz
+   Started.... 18 MAY 2026
+
+   THE HYPOTHESIS THIS TESTS:
+
+     A slow / weak controller may not sustain gapless continuous clocking;
+     it keeps up only when the inter-byte gaps give it breathing room. If so,
+     the streamer read should start working as the SPI clock is lowered.
+
+   THE TEST METHOD (read-only, mount-free):
+
+     initCardOnly(), then for each SPI speed 25 MHz down to 400 kHz:
+       - read PHASE_TEST_SECTOR via the streamer path  (sd.readSectorRaw)
+       - read the same sector via the slow path        (sd.debugReadSectorSlow)
+       - report both status codes, the byte-mismatch count, and the first
+         bytes of each buffer.
+     The slow path is the known-good reference (smart-pin sampling is
+     hardware-synchronized to SCK and is unaffected by clock rate margin).
+
+     PASS for a cell = streamer read succeeded AND matches the slow read
+     byte-for-byte. If the streamer read starts passing at some low SPI
+     speed, continuous-clock RATE is the cause and a driver-side SPI clamp
+     fixes the card. If it fails at every speed including 400 kHz, the
+     failure is structural and a logic-analyzer capture is the next step.
+
+================================================================================================= }}
+
+CON
+
+    _CLKFREQ        = 350_000_000
+
+    DEBUG_BAUD      = 2_000_000
+
+    ' P2 Edge module SD slot pins
+    SD_CS   = 60
+    SD_MOSI = 59
+    SD_MISO = 58
+    SD_SCK  = 61
+
+    SECTOR_SIZE       = 512
+    PHASE_TEST_SECTOR = 0                       ' Any readable sector; 0 is always present
+
+    NUM_SPEEDS        = 7
+
+#ifdef __SPINTOOLS__
+#define SD_INCLUDE_ALL
+#elseifdef __FLEXSPIN__
+#define SD_INCLUDE_ALL
+#pragma exportdef SD_INCLUDE_ALL
+#else
+#pragma exportdef SD_INCLUDE_ALL
+#endif
+
+OBJ
+    sd : "micro_sd_fat32_fs"
+
+DAT { SPI speeds in Hz, fastest first }
+    spiSpeeds   LONG    25_000_000, 20_000_000, 15_000_000, 12_500_000, 8_000_000, 1_000_000, 400_000
+
+VAR
+    BYTE    streamerBuf[SECTOR_SIZE]
+    BYTE    slowBuf[SECTOR_SIZE]
+
+PUB go() | idx, target_spi, streamerStatus, slowStatus, mismatches, anyPass
+
+    debug(" ")
+    debug("=== SD STREAMER-READ SPI-SPEED SWEEP ===")
+    debug("  Tests whether the streamer-DMA read works at lower SPI clocks.")
+    debug("  Read-only. Compares streamer read vs slow-path read of sector ", udec_(PHASE_TEST_SECTOR), ".")
+    debug(" ")
+
+    if sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK) < 0
+        debug("FATAL: initCardOnly failed - power-cycle the card and retry.")
+        debug("END_SESSION")
+        return
+    debug("  initCardOnly OK  (cls=", udec_((sd.getOCR() >> 30) & 1), " 0=SDSC,1=SDHC)")
+    debug(" ")
+
+    anyPass := false
+    repeat idx from 0 to NUM_SPEEDS - 1
+        target_spi := spiSpeeds[idx]
+        sd.setSPISpeed(target_spi)
+
+        bytefill(@streamerBuf, $EE, SECTOR_SIZE)                                ' streamer-path sentinel
+        bytefill(@slowBuf, $CC, SECTOR_SIZE)                                    ' slow-path sentinel (distinct)
+
+        streamerStatus := sd.readSectorRaw(PHASE_TEST_SECTOR, @streamerBuf)
+        slowStatus     := sd.debugReadSectorSlow(PHASE_TEST_SECTOR, @slowBuf)
+
+        mismatches := countMismatches(@streamerBuf, @slowBuf)
+
+        debug(" ")
+        if target_spi >= 1_000_000
+            debug("  --- SPI = ", udec_(target_spi / 1_000_000), " MHz ---")
+        else
+            debug("  --- SPI = ", udec_(target_spi / 1_000), " kHz ---")
+        debug("    streamer: status=", sdec_(streamerStatus), "  bytes[0..3]=$", uhex_byte_(streamerBuf[0]), " $", uhex_byte_(streamerBuf[1]), " $", uhex_byte_(streamerBuf[2]), " $", uhex_byte_(streamerBuf[3]))
+        debug("    slowpath: status=", sdec_(slowStatus), "  bytes[0..3]=$", uhex_byte_(slowBuf[0]), " $", uhex_byte_(slowBuf[1]), " $", uhex_byte_(slowBuf[2]), " $", uhex_byte_(slowBuf[3]))
+        debug("    streamer-vs-slow mismatches: ", udec_(mismatches), " / ", udec_(SECTOR_SIZE))
+
+        if slowStatus < 0
+            debug("    -> NO REFERENCE: slow-path read failed; cannot judge this cell")
+        elseif streamerStatus < 0
+            debug("    -> FAIL: streamer read returned an error")
+        elseif mismatches == 0
+            debug("    -> PASS: streamer read matches slow-path reference")
+            anyPass := true
+        else
+            debug("    -> FAIL: streamer read succeeded but data differs from reference")
+
+    debug(" ")
+    debug("=== VERDICT ===")
+    if anyPass
+        debug("  Streamer read PASSES at one or more SPI speeds (see above).")
+        debug("  -> Continuous-clock RATE is the cause; an SPI clamp makes this card usable.")
+    else
+        debug("  Streamer read FAILS at every SPI speed down to 400 kHz.")
+        debug("  -> Not a clock-rate issue; failure is structural - logic analyzer next.")
+    debug(" ")
+    debug("END_SESSION")
+
+
+PRI countMismatches(p_a, p_b) : count | idx
+' Count bytes that differ between two SECTOR_SIZE buffers.
+
+    count := 0
+    repeat idx from 0 to SECTOR_SIZE - 1
+        if BYTE[p_a][idx] <> BYTE[p_b][idx]
+            count++
+
+
+con { license }
+
+{{
+  =================================================================================================
+
+  Terms of Use: MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this
+  software and associated documentation files (the "Software"), to deal in the Software
+  without restriction, including without limitation the rights to use, copy, modify,
+  merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies
+  or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+  INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+  HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+  CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+  OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+  =================================================================================================
+}}

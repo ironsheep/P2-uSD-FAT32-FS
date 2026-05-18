@@ -4,7 +4,10 @@
 ''   Walks the diagnostic tuning knobs added by Phase 2 (debugSetSampleMode)
 ''   and Phase 3 (debugSetAlignDelayOffset) over a fixed grid at one compile-time
 ''   sysclk, exercising both Path A (smart-pin direct via CSD read) and
-''   Path B (streamer DMA via sector 0 read with $55 $AA signature check).
+''   Path B (streamer DMA, validated against a slow-path read of the same
+''   sector). Path B PASS = streamer read matches the known-good slow read
+''   byte-for-byte. This is card-agnostic: no filesystem or boot signature
+''   is required, so unformattable / marginal cards can be swept.
 ''
 ''   Sweep grid: 2 sample modes x 12 align_delay offsets = 24 cells.
 ''   Sample modes: 0 = pre-edge, 1 = on-edge.
@@ -39,6 +42,8 @@ CON
     OFFSET_COUNT    = 12                        ' OFFSET_MAX - OFFSET_MIN + 1
     MODE_COUNT      = 2                         ' pre-edge + on-edge
 
+    PHASE_TEST_SECTOR = 0                       ' Sector swept on Path B (any readable sector)
+
     PATH_A_PASS     = 1
     PATH_A_FAIL     = 0
     PATH_B_PASS     = 1
@@ -60,8 +65,11 @@ DAT
     result_b        BYTE    0[MODE_COUNT * OFFSET_COUNT]
     result_a        BYTE    0[MODE_COUNT]       ' Indexed by sample mode
 
-    ' Sector-0 readback buffer
+    ' Streamer-path readback buffer
     sec_buf         BYTE    0[512]
+
+    ' Slow-path (known-good reference) readback buffer
+    slow_buf        BYTE    0[512]
 
     ' CSD readback buffer (16 bytes)
     csd_buf         BYTE    0[16]
@@ -83,13 +91,13 @@ PUB go() | mode, offset, status
     debug("  READ-ONLY: no writes to the card.")
     debug(" ")
 
-    status := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    status := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
     if status < 0
-        debug("FATAL: mount failed (", sdec_(status), ")")
+        debug("FATAL: initCardOnly failed (", sdec_(status), ")")
         debug("END_SESSION")
         return
 
-    debug("  Mount OK. hp = ", udec_(sd.debugGetCurrentHp()))
+    debug("  initCardOnly OK. hp = ", udec_(sd.debugGetCurrentHp()))
     debug(" ")
     debug("============================================================")
     debug("  Per-cell sweep")
@@ -108,7 +116,6 @@ PUB go() | mode, offset, status
             debug("    sysclk=", udec_(clkfreq / 1_000_000), " hp=", udec_(sd.debugGetCurrentHp()), " mode=", udec_(mode), " offset=", sdec_(offset), " path_b=",  zstr_((status == PATH_B_PASS) ? @str_pass : @str_fail))
 
     debug(" ")
-    sd.unmount()
 
     ' §4.5 margin-summary post-processing
     print_margin_summary()
@@ -138,19 +145,29 @@ PRI test_path_a() : status | read_status, csd_struct
     return PATH_A_PASS
 
 
-PRI test_path_b() : status | read_status, sig
-' Path B test: read sector 0 via sd.readSectorRaw and verify the boot signature
-' $55 $AA at offsets 510-511. Returns PATH_B_PASS or PATH_B_FAIL.
-' This exercises the streamer-DMA bulk path for the entire 512-byte transfer.
+PRI test_path_b() : status | streamer_status, slow_status, idx, mismatches
+' Path B test: read PHASE_TEST_SECTOR via the streamer-DMA path AND via the
+' slow byte-by-byte path, then compare. The slow path is the known-good
+' reference - its smart-pin sampling is hardware-synchronized to SCK and is
+' not affected by the align_delay knob. PASS = streamer read succeeded and
+' matches the slow-path read byte-for-byte. Card-agnostic: needs no
+' filesystem and no boot signature, so unformattable cards can be swept.
 
-    bytefill(@sec_buf, $EE, 512)                                                '  sentinel
-    read_status := sd.readSectorRaw(0, @sec_buf)
-    if read_status < 0
-        return PATH_B_FAIL
-    sig := (sec_buf[511] << 8) | sec_buf[510]
-    if sig <> sd.BOOT_SIGNATURE
-        return PATH_B_FAIL
-    return PATH_B_PASS
+    bytefill(@sec_buf, $EE, 512)                                                '  streamer sentinel
+    bytefill(@slow_buf, $CC, 512)                                               '  slow-path sentinel (distinct)
+    streamer_status := sd.readSectorRaw(PHASE_TEST_SECTOR, @sec_buf)
+    slow_status := sd.debugReadSectorSlow(PHASE_TEST_SECTOR, @slow_buf)
+    if slow_status < 0
+        return PATH_B_FAIL                                                      '  no reference -> cannot judge this cell
+    if streamer_status < 0
+        return PATH_B_FAIL                                                      '  streamer read errored outright
+    mismatches := 0
+    repeat idx from 0 to 511
+        if sec_buf[idx] <> slow_buf[idx]
+            mismatches++
+    if mismatches == 0
+        return PATH_B_PASS
+    return PATH_B_FAIL
 
 
 PRI print_margin_summary() | mode, offset, run_start, run_end, run_width, best_start, best_end, best_width, in_run, idx, plateau_count, plateau_starts[OFFSET_COUNT]
