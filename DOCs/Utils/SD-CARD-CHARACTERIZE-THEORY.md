@@ -28,7 +28,7 @@ The CID uniquely identifies each physical card.
 
 **Parsing**: Bytes are in big-endian order as received from the card. Multi-byte fields are reconstructed with shifts: `cid_psn := (buf[9] << 24) | (buf[10] << 16) | (buf[11] << 8) | buf[12]`.
 
-**Driver usage**: The MID field determines SPI speed limits. PNY cards (MID=$FE) are limited to 20 MHz; other cards use 25 MHz.
+**Driver usage**: The MID field is recorded for card identification only. It does **not** affect SPI speed — every card runs at `min(TRAN_SPEED, 25 MHz)`. (A per-manufacturer SPI cap, e.g. derating PNY/Phison cards to 20 MHz, was considered in early-2026 PNY research but evaluated and **never adopted**; see `DOCs/Research/PNY-MICROSD-SPI-ISSUES.md`.)
 
 ### CSD Register (Card Specific Data) - 16 bytes
 

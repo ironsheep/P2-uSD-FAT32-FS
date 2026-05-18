@@ -1,8 +1,27 @@
 # PNY microSD Cards - SPI Mode Compatibility Research
 
 **Date**: 2026-01-18
-**Status**: Research for future driver hardening
+**Status**: Research for future driver hardening — partially adopted (see Decision below)
 **Related**: Driver initialization sequence, response parsing
+
+---
+
+## Decision (audited 2026-05-18)
+
+This document proposed, among other hardening measures, a **per-manufacturer SPI
+speed cap** — detecting PNY/Phison cards via the CID MID byte and derating them
+to ~20 MHz (see "Brand-specific workaround", the priority-1 fix, and the
+"brand detection via CID" checklist item below).
+
+That brand-based speed cap was **evaluated and deliberately NOT adopted.** Card
+characterization showed every Phison/`$27` card in the catalog runs reliably at
+the full 25 MHz SPI clock; no card needs derating. The shipping driver branches
+on **no** manufacturer ID — SPI speed is `min(TRAN_SPEED, 25 MHz)` for every
+card. `card_mfr_id` is recorded for identification only.
+
+The **CS-handling and dummy-byte** hardening from this document *was* adopted.
+Only the manufacturer-conditional speed cap was rejected. This note is kept so
+the reasoning isn't re-litigated: the idea was considered, and the answer was no.
 
 ---
 
@@ -142,7 +161,7 @@ When hardening the driver for PNY compatibility:
 - [ ] Review CMD0/CMD8/ACMD41 sequence
 - [ ] Review R1/data token parsing (bit alignment tolerance)
 - [ ] Increase ACMD41 timeout to 1 second
-- [ ] Consider brand detection via CID for speed limiting
+- [✗] Consider brand detection via CID for speed limiting — *evaluated 2026-05-18, NOT adopted; all Phison/$27 cards run fine at 25 MHz (see Decision at top)*
 
 **Write Operations (new - 2026-01-20):**
 - [ ] Review writeSector() busy-wait implementation

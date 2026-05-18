@@ -1846,7 +1846,7 @@ PUB getCardMaxSpeed() : hz
 
 PUB getManufacturerID() : mid
 '' Get card manufacturer ID (MID) from CID register.
-'' Common IDs: $03=SanDisk, $1D=PNY/AData, $27=Samsung.
+'' Common IDs: $03=SanDisk, $1B=Samsung, $1D=ADATA, $27=Phison, $28=Lexar.
 ''
 '' @returns mid - Manufacturer ID byte
 
@@ -7115,7 +7115,7 @@ PRI parseTransSpeed(p_csd) : speed_hz | tran_speed, time_val, mult_val
 
 PRI parseMfrId(p_cid) : mfr_id
 ' Extract manufacturer ID from CID register byte 0.
-' Common IDs: $03=SanDisk, $1D=PNY/AData, $27=Samsung, $28=Lexar, $74=Transcend.
+' Common IDs: $03=SanDisk, $1B=Samsung, $1D=ADATA, $27=Phison, $28=Lexar, $74=Gigastone/Transcend.
 '
 ' @param p_cid - Pointer to CID register data
 ' @returns mfr_id - Manufacturer ID byte
@@ -7208,7 +7208,8 @@ PRI parseTimeouts(p_csd) | csd_ver, taac, nsac, r2w_factor, read_timeout_ns, tim
 PRI identifyCard() | cid[4], csd[4]
 ' Read card identity and configure adaptive timing.
 ' Reads CID/CSD, identifies brand, sets optimal SPI speed.
-' PNY cards get conservative 20 MHz, others use 25 MHz.
+' SPI speed is min(TRAN_SPEED, 25 MHz) for every card regardless of
+' manufacturer; card_mfr_id is recorded for identification only.
 '
 ' @local cid - CID register data (4 longs = 16 bytes)
 ' @local csd - CSD register data (4 longs = 16 bytes)

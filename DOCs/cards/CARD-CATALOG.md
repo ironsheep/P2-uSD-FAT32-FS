@@ -15,7 +15,7 @@ This section documents ALL fields available from SD card registers and indicates
 
 | Field | Bits | Size | Usage | Description |
 |-------|------|------|-------|-------------|
-| MID | [127:120] | 8 bits | **[USED]** | Manufacturer ID - determines PNY cards ($27) for 20MHz limit |
+| MID | [127:120] | 8 bits | [INFO] | Manufacturer ID - recorded for card identification; does not affect driver operation |
 | OID | [119:104] | 16 bits | [INFO] | OEM/Application ID (2 ASCII chars) |
 | PNM | [103:64] | 40 bits | [INFO] | Product Name (5 ASCII chars) |
 | PRV | [63:56] | 8 bits | [INFO] | Product Revision (BCD: major.minor) |
@@ -23,7 +23,9 @@ This section documents ALL fields available from SD card registers and indicates
 | MDT | [19:8] | 12 bits | [INFO] | Manufacturing Date (year + month) |
 | CRC7 | [7:1] | 7 bits | [INFO] | CRC checksum |
 
-**Driver Usage:** MID is checked to identify PNY/Phison cards ($27) which require reduced SPI clock (20MHz vs 25MHz).
+**Driver Usage:** MID is read and exposed via `getManufacturerID()` for card identification only. The driver applies **no manufacturer-specific behavior** — SPI speed is `min(TRAN_SPEED, 25 MHz)` for every card regardless of brand.
+
+> **Note (audited 2026-05-18):** Earlier revisions of this catalog and the driver comments claimed MID `$27` (Phison/PNY) triggered a 20 MHz SPI cap. This was never implemented — it originated as a *proposal* in `DOCs/Research/PNY-MICROSD-SPI-ISSUES.md` (Jan 2026). Characterization showed every Phison/`$27` card runs reliably at 25 MHz, so the per-brand speed cap was evaluated and **deliberately not adopted**. The stale claims were removed.
 
 ### CSD Register (Card Specific Data) - 16 bytes
 
@@ -104,7 +106,6 @@ This section documents ALL fields available from SD card registers and indicates
 
 | Register | Field | Purpose |
 |----------|-------|---------|
-| CID | MID | PNY card detection (20MHz limit) |
 | CSD | CSD_STRUCTURE | SDSC vs SDHC/SDXC formulas |
 | CSD | TRAN_SPEED | SPI clock frequency |
 | CSD | TAAC | Read timeout (SDSC) |
@@ -123,8 +124,10 @@ This section documents ALL fields available from SD card registers and indicates
 - **A** = Video-optimized (CCC=$DB7 with Classes 1+11 for sustained writes)
 - **B** = Fast (Premium brand, SD 4.xx spec, 25 MHz)
 - **C** = Standard (SD 3.0x spec, 25 MHz)
-- **D** = Limited (MID $27 triggers 20 MHz SPI limit)
+- **D** = Limited (markedly low *measured* internal throughput, e.g. < 100 KB/s; runs at 25 MHz like every card — the card's own controller, not the SPI bus, is the bottleneck)
 - **E** = SDSC class (CSD v1.0, pre-2010 architecture, recommend ≤ 12.5 MHz)
+
+> **Note (audited 2026-05-18):** Rating **D** previously read "MID $27 triggers 20 MHz SPI limit." That MID-based SPI derate was never implemented in the driver and has been removed (see Driver Usage note above). **D** is now defined by measured throughput.
 
 | Card ID | Manufacturer | Product | Capacity | Speed | Test Status |
 |---------|-------------|---------|----------|:-----:|-------------|
