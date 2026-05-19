@@ -14,13 +14,14 @@
    Reusable library that runs FSCK or Audit in a temporary cog.
    Output is sent via isp_string_fifo for the caller to display.
 
-   Two modes:
-     MODE_AUDIT - Read-only filesystem integrity check
-     MODE_FSCK  - Full check and repair (4-pass)
+   Three modes:
+     MODE_AUDIT - Read-only filesystem integrity check (single-pass)
+     MODE_FSCK  - Full 4-pass check and repair (writes to card)
+     MODE_CHECK - Full 4-pass check, no writes (reports "WOULD REPAIR" lines)
 
    Usage:
      caller: sd.stop()
-     caller: fsck.startFsck(cs, mosi, miso, sck)   ' or startAudit()
+     caller: fsck.startFsck(cs, mosi, miso, sck)   ' or startAudit() / startCheck()
      caller: repeat
                if fsck.hasOutput()
                  display(fsck.getOutput())
@@ -38,6 +39,7 @@ CON { operation modes }
 
   MODE_AUDIT = 0
   MODE_FSCK  = 1
+  MODE_CHECK = 2                    ' Full fsck passes with all writes suppressed (dry-run)
 
 CON { FAT32 structure constants }
 
@@ -142,6 +144,7 @@ VAR
   LONG    dataStart
   LONG    rootCluster
   LONG    mediaType             ' BPB media descriptor byte ($F0 removable / $F8 fixed)
+  LONG    dryRun                ' TRUE in MODE_CHECK -- all repair writes suppressed
 
   ' Statistics / results
   LONG    v_passCount
@@ -213,6 +216,20 @@ PUB startAudit(cs, mosi, miso, sck) : ok
     ok := doStart(cs, mosi, miso, sck, MODE_AUDIT)
 
 
+PUB startCheck(cs, mosi, miso, sck) : ok
+'' Launch a check-only run (full 4-pass fsck logic, no writes) in a new cog.
+'' Reports every repair that fsck WOULD perform without modifying the card --
+'' the safe way to verify the fsck path on any filesystem before running it.
+''
+'' @param cs - SD card CS pin
+'' @param mosi - SD card MOSI pin
+'' @param miso - SD card MISO pin
+'' @param sck - SD card SCK pin
+'' @returns ok - TRUE if cog launched successfully
+
+    ok := doStart(cs, mosi, miso, sck, MODE_CHECK)
+
+
 PUB hasOutput() : yes
 '' Check if the utility has produced output strings
 ''
@@ -276,7 +293,7 @@ PRI doStart(cs, mosi, miso, sck, mode) : ok
 ' Store pin configuration, init FIFO, launch cog
 '
 ' @param cs, mosi, miso, sck - SD pin configuration
-' @param mode - MODE_AUDIT or MODE_FSCK
+' @param mode - MODE_AUDIT, MODE_FSCK, or MODE_CHECK
 ' @returns ok - TRUE if cog launched
 
     ' Store pins for the new cog to read
@@ -285,6 +302,7 @@ PRI doStart(cs, mosi, miso, sck, mode) : ok
     pin_miso := miso
     pin_sck := sck
     op_mode := mode
+    dryRun := (mode == MODE_CHECK)                              '  check mode = full fsck logic with all writes suppressed
     op_done := false
 
     ' Initialize FIFO
@@ -398,7 +416,11 @@ PRI runFsck(cardSectors)
     fatBufSector := -1
     fatBufDirty := false
 
-    fifo.put(@"=== FAT32 Filesystem Check & Repair ===")
+    if dryRun
+        fifo.put(@"=== FAT32 Filesystem Check (DRY-RUN -- no writes) ===")
+        fifo.put(@"*** CHECK MODE: every REPAIR line below is hypothetical ***")
+    else
+        fifo.put(@"=== FAT32 Filesystem Check & Repair ===")
     fifo.putFmt2(@"Card: %d sectors (%d MB)", cardSectors, cardSectors / 2048)
     fifo.put(@" ")
 
@@ -762,6 +784,19 @@ PRI auditMountTest() | result
     fifo.put(@" ")
 
 
+PRI doRepairWrite(sector, pBuf)
+' Perform a repair sector write, or skip the write in MODE_CHECK (dry-run).
+' Every fsck repair site routes its write through here so MODE_CHECK can
+' exercise the same detection logic with zero risk to the card.
+'
+' @param sector - Sector number to write
+' @param pBuf - Pointer to 512-byte buffer to write
+
+    if dryRun
+        return                                                                  '  MODE_CHECK -- detection only, no writes
+    sd.writeSectorRaw(sector, pBuf)
+
+
 ' =========================================================================
 ' FSCK Pass 1: Structural integrity
 ' =========================================================================
@@ -785,7 +820,7 @@ PRI fsckPass1() | idx, mismatch, fsinfoDirty, startRepairs
 
     if mismatch
         fifo.put(@"  REPAIR: Backup VBR mismatch - copying")
-        sd.writeSectorRaw(partitionStart + 6, @buf)
+        doRepairWrite(partitionStart + 6, @buf)
         v_repairCount++
     else
         fifo.put(@"  [OK] Backup VBR matches")
@@ -813,7 +848,7 @@ PRI fsckPass1() | idx, mismatch, fsinfoDirty, startRepairs
         v_repairCount++
 
     if fsinfoDirty
-        sd.writeSectorRaw(partitionStart + 1, @buf)
+        doRepairWrite(partitionStart + 1, @buf)
     else
         fifo.put(@"  [OK] FSInfo signatures")
 
@@ -829,7 +864,7 @@ PRI fsckPass1() | idx, mismatch, fsinfoDirty, startRepairs
 
     if mismatch
         fifo.put(@"  REPAIR: Backup FSInfo mismatch - copying")
-        sd.writeSectorRaw(partitionStart + 7, @buf)
+        doRepairWrite(partitionStart + 7, @buf)
         v_repairCount++
     else
         fifo.put(@"  [OK] Backup FSInfo matches")
@@ -843,7 +878,7 @@ PRI fsckPass1() | idx, mismatch, fsinfoDirty, startRepairs
     if (LONG[@buf] & sd.FAT32_ENTRY_MASK) <> (($0FFFFF00 | mediaType) & sd.FAT32_ENTRY_MASK)
         fifo.put(@"  REPAIR: FAT[0] media type")
         LONG[@buf] := ($0FFFFF00 | mediaType) | (LONG[@buf] & $F0000000)
-        sd.writeSectorRaw(fat1Start, @buf)
+        doRepairWrite(fat1Start, @buf)
         v_repairCount++
     else
         fifo.put(@"  [OK] FAT[0] media type")
@@ -852,7 +887,7 @@ PRI fsckPass1() | idx, mismatch, fsinfoDirty, startRepairs
     if (LONG[@buf + 4] & sd.FAT32_ENTRY_MASK) <> sd.FAT32_EOC_MARK
         fifo.put(@"  REPAIR: FAT[1] EOC marker")
         LONG[@buf + 4] := sd.FAT32_EOC_MARK | (LONG[@buf + 4] & $F0000000)
-        sd.writeSectorRaw(fat1Start, @buf)
+        doRepairWrite(fat1Start, @buf)
         v_repairCount++
     else
         fifo.put(@"  [OK] FAT[1] EOC marker")
@@ -861,7 +896,7 @@ PRI fsckPass1() | idx, mismatch, fsinfoDirty, startRepairs
     if (LONG[@buf + 8] & sd.FAT32_ENTRY_MASK) == FAT_FREE
         fifo.put(@"  REPAIR: FAT[2] root cluster was free")
         LONG[@buf + 8] := sd.FAT32_EOC_MARK | (LONG[@buf + 8] & $F0000000)
-        sd.writeSectorRaw(fat1Start, @buf)
+        doRepairWrite(fat1Start, @buf)
         v_repairCount++
     else
         fifo.put(@"  [OK] FAT[2] root cluster")
@@ -1196,7 +1231,7 @@ PRI fsckPass4() | fatSector, entIdx, clus, fatVal, freeCount, syncCount, mismatc
 
         if mismatch
             ' Copy FAT1 to FAT2
-            sd.writeSectorRaw(fat2Start + fatSector, @buf)
+            doRepairWrite(fat2Start + fatSector, @buf)
             syncCount++
 
     if syncCount > 0
@@ -1213,9 +1248,9 @@ PRI fsckPass4() | fatSector, entIdx, clus, fatVal, freeCount, syncCount, mismatc
     if LONG[@buf + FSINFO_FREE_COUNT_OFFSET] <> freeCount
         fifo.putFmt2(@"  REPAIR: FSInfo free count %d -> %d", LONG[@buf + FSINFO_FREE_COUNT_OFFSET], freeCount)
         LONG[@buf + FSINFO_FREE_COUNT_OFFSET] := freeCount
-        sd.writeSectorRaw(partitionStart + 1, @buf)
+        doRepairWrite(partitionStart + 1, @buf)
         ' Update backup FSInfo too
-        sd.writeSectorRaw(partitionStart + 7, @buf)
+        doRepairWrite(partitionStart + 7, @buf)
         v_repairCount++
     else
         fifo.put(@"  [OK] FSInfo free count correct")
@@ -1269,8 +1304,8 @@ PRI flushFAT()
 
     if fatBufDirty
         if fatBufSector >= 0
-            sd.writeSectorRaw(fatBufSector, @fatBuf)
-            sd.writeSectorRaw(fatBufSector - fat1Start + fat2Start, @fatBuf)
+            doRepairWrite(fatBufSector, @fatBuf)
+            doRepairWrite(fatBufSector - fat1Start + fat2Start, @fatBuf)
             fatBufDirty := false
 
 
