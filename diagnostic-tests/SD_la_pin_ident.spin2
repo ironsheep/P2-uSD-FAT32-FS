@@ -1,0 +1,105 @@
+{{ =================================================================================================
+
+   File....... SD_la_pin_ident.spin2
+   Purpose.... Logic-analyzer PROBE IDENTIFICATION aid. Drives the four SD bus
+               pins as a 4-bit binary counter so each line shows a unique,
+               power-of-2 toggle rate -- letting you confirm which LA probe is
+               clipped to which signal before a real capture.
+   Author..... Stephen M Moraco
+               -- see below for terms of use
+   E-mail..... stephen@ironsheep.biz
+   Started.... 18 MAY 2026
+
+   =================================================================================================
+   THEORY OF OPERATION
+
+     No SD driver, no card traffic. The four eval-board SD pins are driven
+     directly as the four bits of a free-running 4-bit counter (0..15, 1 ms per
+     step). Each line is therefore a clean square wave whose period is a
+     distinct power of 2 -- adjacent lines differ by exactly 2x:
+
+       BIT  PIN   SD SIGNAL   TOGGLE PERIOD   FREQUENCY
+       ---  ----  ---------   -------------   ---------
+        0   P18   MISO          2 ms            500 Hz   <- fastest
+        1   P19   MOSI          4 ms            250 Hz
+        2   P20   CS            8 ms            125 Hz
+        3   P21   SCK          16 ms           62.5 Hz   <- slowest
+
+     Read the LA: the channel toggling fastest is your P18/MISO probe; the one
+     toggling slowest is P21/SCK. The 2x ratio between neighbors makes any
+     swapped or mis-clipped probe obvious. The counter also counts visibly
+     (0000 -> 1111) so P21..P18 read as a rising binary value.
+
+================================================================================================= }}
+
+CON
+
+    _CLKFREQ        = 350_000_000
+
+    DEBUG_BAUD      = 2_000_000
+
+    ' External uSD eval add-on board pins -- each becomes one counter bit
+    SD_MISO = 18                                                                ' counter bit 0 (LSB, fastest)
+    SD_MOSI = 19                                                                ' counter bit 1
+    SD_CS   = 20                                                                ' counter bit 2
+    SD_SCK  = 21                                                                ' counter bit 3 (MSB, slowest)
+
+    STEP_MS         = 1                                                         ' counter increment interval
+    NUM_STEPS       = 40_000                                                    ' total steps -> ~40 s of counting
+
+PUB go() | idx, count
+
+    debug(" ")
+    debug("=== SD LA PIN IDENTIFICATION - 4-bit counter on the SD bus pins ===")
+    debug("  BIT 0  P18  MISO   2 ms period  (500 Hz)  - fastest")
+    debug("  BIT 1  P19  MOSI   4 ms period  (250 Hz)")
+    debug("  BIT 2  P20  CS     8 ms period  (125 Hz)")
+    debug("  BIT 3  P21  SCK   16 ms period (62.5 Hz)  - slowest")
+    debug("  counting now for ~", udec_(NUM_STEPS / 1000), " s ...")
+
+    repeat idx from 0 to NUM_STEPS - 1
+        count := idx & $F
+        pinw(SD_MISO, (count >> 0) & 1)                                         ' bit 0
+        pinw(SD_MOSI, (count >> 1) & 1)                                         ' bit 1
+        pinw(SD_CS,   (count >> 2) & 1)                                         ' bit 2
+        pinw(SD_SCK,  (count >> 3) & 1)                                         ' bit 3
+        waitms(STEP_MS)
+
+    pinl(SD_MISO)                                                               ' park all lines low
+    pinl(SD_MOSI)
+    pinl(SD_CS)
+    pinl(SD_SCK)
+
+    debug(" ")
+    debug("  done - ", udec_(NUM_STEPS), " counter steps issued")
+    debug("END_SESSION")
+
+
+con { license }
+
+{{
+  =================================================================================================
+
+  Terms of Use: MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this
+  software and associated documentation files (the "Software"), to deal in the Software
+  without restriction, including without limitation the rights to use, copy, modify,
+  merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies
+  or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+  INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+  HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+  CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+  OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+  =================================================================================================
+}}

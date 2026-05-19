@@ -1,0 +1,166 @@
+{{ =================================================================================================
+
+   File....... SD_la_streamer_diag.spin2
+   Purpose.... Instrumented streamer-read diagnostic. Reads sector 0 two ways --
+               byte-by-byte (slow, no streamer; the known-good reference) and
+               via the streamer-DMA path (the failing path) -- and dumps the
+               driver's internal CRC/capture diagnostics so the streamer-RX
+               corruption can be pinned down. Pairs with a hardware LA capture.
+   Author..... Stephen M Moraco
+               -- see below for terms of use
+   E-mail..... stephen@ironsheep.biz
+   Started.... 18 MAY 2026
+
+   =================================================================================================
+   THEORY OF OPERATION
+
+     The LA proved the card delivers a valid sector on MISO, yet readSectorRaw
+     returns -7 with the caller buffer untouched. In the driver, readSector()
+     streams 512 bytes into an internal buffer, validates CRC, and on mismatch
+     returns an error; the dispatch handler then skips the bytemove to the
+     caller. So -7 + untouched buffer == streamer capture failed CRC.
+
+     This test exposes the driver's built-in diagnostics:
+       - debugReadSectorSlow()  - byte-by-byte read, NO streamer (reference)
+       - getLastReceivedCRC()   - the CRC the card sent (truth)
+       - getLastCalculatedCRC() - CRC of what the streamer captured
+       - debugGetReadSectorDiag() - start token + captured buf[0..3]
+       - getCRCMismatchCount() / getCRCRetryCount()
+
+     Compare the slow (reference) bytes/CRC against the streamer capture:
+       recv_crc != calc_crc            -> streamer corrupts the capture
+       captured buf[0..3] != slow      -> shows where/how the capture diverges
+
+   RUN TIMELINE (for the hardware LA)
+       ~0-2 s   card init                  (ignore)
+       ~2-3 s   slow reference read         (ignore)
+       ~3-18 s  15 s quiet window           <-- ARM THE LA HERE
+       ~18-20 s 8 streamer reads, 250 ms apart  <-- captured (trigger: CS P20 falling)
+
+================================================================================================= }}
+
+CON
+
+    _CLKFREQ        = 350_000_000
+
+    DEBUG_BAUD      = 2_000_000
+
+    ' P2 Edge module SD slot pins
+    'SD_CS   = 60
+    'SD_MOSI = 59
+    'SD_MISO = 58
+    'SD_SCK  = 61
+
+    ' External uSD eval add-on board pins (ACTIVE)
+    SD_CS   = 20
+    SD_MOSI = 19
+    SD_MISO = 18
+    SD_SCK  = 21
+
+    ARM_SECONDS     = 15                                                        ' quiet window for the user to arm the LA
+    NUM_FAST        = 8                                                         ' streamer reads issued for the LA to trigger on
+
+#pragma exportdef SD_INCLUDE_ALL
+
+OBJ
+    sd : "micro_sd_fat32_fs"
+
+DAT
+    slowBuf     BYTE    0[512]                                                  ' byte-by-byte reference read destination
+    fastBuf     BYTE    0[512]                                                  ' streamer read destination
+
+PUB go() | status, idx, tok, b0, b1, b2, b3, pbuf, dsec, dbt, recvC, calcC
+
+    debug(" ")
+    debug("=== SD STREAMER-READ DIAGNOSTIC (eval board, CS=P20 SCK=P21 MOSI=P19 MISO=P18) ===")
+    debug(" ")
+
+    status := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    if status < 0
+        debug("FATAL: initCardOnly failed (", sdec_(status), ") - check wiring/power.")
+        debug("END_SESSION")
+        return
+    debug("  initCardOnly OK (cls=", udec_((sd.getOCR() >> 30) & 1), " 0=SDSC,1=SDHC)")
+    debug(" ")
+
+    ' ---- Reference: byte-by-byte slow read, NO streamer ----
+    bytefill(@slowBuf, $EE, 512)
+    status := sd.debugReadSectorSlow(0, @slowBuf)
+    recvC := sd.getLastReceivedCRC()
+    calcC := sd.getLastCalculatedCRC()
+    debug("--- SLOW READ of sector 0 (reference, NO streamer) ---")
+    debug("  status            = ", sdec_(status))
+    debug("  buf[0..3]         = $", uhex_byte_(slowBuf[0]), " $", uhex_byte_(slowBuf[1]), " $", uhex_byte_(slowBuf[2]), " $", uhex_byte_(slowBuf[3]))
+    debug("  buf[508..511]     = $", uhex_byte_(slowBuf[508]), " $", uhex_byte_(slowBuf[509]), " $", uhex_byte_(slowBuf[510]), " $", uhex_byte_(slowBuf[511]), "  (510..511 = MBR sig, expect $55 $AA)")
+    if recvC == calcC
+        debug("  recv_crc=$", uhex_word_(recvC), "  calc_crc=$", uhex_word_(calcC), "  MATCH")
+    else
+        debug("  recv_crc=$", uhex_word_(recvC), "  calc_crc=$", uhex_word_(calcC), "  *** MISMATCH ***")
+    debug(" ")
+
+    ' ---- Arm window ----
+    debug("  >>> ARM LOGIC ANALYZER NOW - trigger: CS (P20) FALLING edge <<<")
+    debug("  >>> ", udec_(ARM_SECONDS), "-second window, then ", udec_(NUM_FAST), " streamer reads 250 ms apart <<<")
+    repeat idx from 1 to ARM_SECONDS
+        waitms(1000)
+    debug("  >>> STREAMER READS STARTING NOW <<<")
+    debug(" ")
+
+    ' ---- Streamer reads (the failing path) ----
+    repeat idx from 1 to NUM_FAST
+        bytefill(@fastBuf, $EE, 512)
+        status := sd.readSectorRaw(0, @fastBuf)
+        sd.debugGetReadSectorDiag(@dsec, @dbt, @tok, @b0, @b1, @b2, @b3, @pbuf)
+        recvC := sd.getLastReceivedCRC()
+        calcC := sd.getLastCalculatedCRC()
+        debug("--- STREAMER READ ", udec_(idx), "/", udec_(NUM_FAST), " ---")
+        debug("  readSectorRaw status        = ", sdec_(status))
+        debug("  start token                 = $", uhex_byte_(tok), "  (expect $FE)")
+        debug("  streamer-captured buf[0..3] = $", uhex_byte_(b0), " $", uhex_byte_(b1), " $", uhex_byte_(b2), " $", uhex_byte_(b3))
+        debug("  caller buf[0..3]            = $", uhex_byte_(fastBuf[0]), " $", uhex_byte_(fastBuf[1]), " $", uhex_byte_(fastBuf[2]), " $", uhex_byte_(fastBuf[3]), "  ($EE = untouched)")
+        if recvC == calcC
+            debug("  recv_crc=$", uhex_word_(recvC), " (card)  calc_crc=$", uhex_word_(calcC), " (streamer)  MATCH")
+        else
+            debug("  recv_crc=$", uhex_word_(recvC), " (card)  calc_crc=$", uhex_word_(calcC), " (streamer)  *** MISMATCH ***")
+        waitms(250)
+
+    ' ---- Summary ----
+    debug(" ")
+    debug("--- SUMMARY ---")
+    debug("  CRC mismatch count = ", udec_(sd.getCRCMismatchCount()))
+    debug("  CRC retry   count  = ", udec_(sd.getCRCRetryCount()))
+    debug("  reference (slow)  buf[0..3] = $", uhex_byte_(slowBuf[0]), " $", uhex_byte_(slowBuf[1]), " $", uhex_byte_(slowBuf[2]), " $", uhex_byte_(slowBuf[3]))
+    debug("  streamer-captured buf[0..3] = $", uhex_byte_(b0), " $", uhex_byte_(b1), " $", uhex_byte_(b2), " $", uhex_byte_(b3))
+    debug("  -> differ: streamer corrupts capture | same: corruption is later in the 512 bytes")
+    debug(" ")
+    debug("END_SESSION")
+
+
+con { license }
+
+{{
+  =================================================================================================
+
+  Terms of Use: MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this
+  software and associated documentation files (the "Software"), to deal in the Software
+  without restriction, including without limitation the rights to use, copy, modify,
+  merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies
+  or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+  INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+  HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+  CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+  OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+  =================================================================================================
+}}

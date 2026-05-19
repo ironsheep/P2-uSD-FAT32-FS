@@ -1,0 +1,132 @@
+{{ =================================================================================================
+
+   File....... SD_la_streamer_read.spin2
+   Purpose.... Bus stimulus for an EXTERNAL (hardware) logic analyzer. Performs
+               repeated streamer-DMA sector reads, well separated in time, so the
+               LA can capture the streamer-read transaction on the wire.
+   Author..... Stephen M Moraco
+               -- see below for terms of use
+   E-mail..... stephen@ironsheep.biz
+   Started.... 18 MAY 2026
+
+   =================================================================================================
+   THEORY OF OPERATION
+
+     This is not a self-contained software analyzer -- it is pure STIMULUS for a
+     hardware logic analyzer hooked to the SD bus. It:
+
+       1. Initializes the card (initCardOnly -> raw mode).
+       2. Settles a few seconds, separating bursty card-init traffic from the
+          reads.
+       3. Issues 200 streamer-DMA reads of sector 0, 250 ms apart -- ~50 s of
+          steady, identical transactions, so the LA can be armed any time
+          during the burst and every trigger lands on a streamer read.
+
+   LOGIC ANALYZER SETUP
+
+     Probe the EXTERNAL uSD eval add-on board pins:
+       CS = P20   SCK = P21   MOSI = P19   MISO = P18
+     Trigger.... CS (P20) FALLING edge -- the unambiguous start of a transaction.
+                 Do NOT trigger on SCK: if the streamer clock is the fault, SCK
+                 may not toggle and an SCK trigger would never fire.
+     Rate....... >= 100 MS/s (250+ preferred) to resolve the 25 MHz SCK.
+     Note....... a streamer sector read holds CS low ~170 us (healthy) to ~700 us
+                 (failing) -- far longer than init's short commands. If your LA
+                 supports a "CS-low duration >" qualifier, set ~100 us to land
+                 directly on a streamer read.
+
+================================================================================================= }}
+
+CON
+
+    _CLKFREQ        = 350_000_000
+
+    DEBUG_BAUD      = 2_000_000
+
+    ' P2 Edge module SD slot pins
+    'SD_CS   = 60
+    'SD_MOSI = 59
+    'SD_MISO = 58
+    'SD_SCK  = 61
+
+    ' External uSD eval add-on board pins (ACTIVE)
+    SD_CS   = 20
+    SD_MOSI = 19
+    SD_MISO = 18
+    SD_SCK  = 21
+
+    SETTLE_S        = 3                                                         ' post-init settle, separates init from reads
+    NUM_READS       = 200                                                       ' streamer reads issued back-to-back (~50 s)
+    READ_GAP_MS     = 250                                                       ' spacing between reads (visible on the LA)
+    ' NOTE: waitms() with a large constant overflows 32-bit at 350 MHz
+    ' (ms * clkfreq/1000). Keep every waitms() argument small; loop for longer
+    ' waits. waitms(1000) = 350_000_000 ticks, safe; waitms(15000) is not.
+
+#pragma exportdef SD_INCLUDE_ALL
+
+OBJ
+    sd : "micro_sd_fat32_fs"
+
+DAT
+    secBuf      BYTE    0[512]                                                  ' streamer-read destination
+
+PUB go() | status, idx
+
+    debug(" ")
+    debug("=== SD STREAMER-READ LA STIMULUS (external eval board, CS=P20 SCK=P21 MOSI=P19 MISO=P18) ===")
+    debug(" ")
+
+    status := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    if status < 0
+        debug("FATAL: initCardOnly failed (", sdec_(status), ") - check wiring/power, retry.")
+        debug("END_SESSION")
+        return
+    debug("  initCardOnly OK (cls=", udec_((sd.getOCR() >> 30) & 1), " 0=SDSC,1=SDHC)")
+    debug(" ")
+
+    debug("  >>> INIT COMPLETE - ", udec_(SETTLE_S), " s settle, then a ~50 s burst of streamer reads <<<")
+    debug("  >>> ARM LOGIC ANALYZER any time during the burst: CS (P20) FALLING edge <<<")
+    repeat SETTLE_S                                                             ' loop of waitms(1000) -- avoids overflow
+        waitms(1000)
+
+    debug(" ")
+    debug("  >>> READS STARTING NOW (", udec_(NUM_READS), " reads of sector 0, ", udec_(READ_GAP_MS), " ms apart) <<<")
+    repeat idx from 1 to NUM_READS
+        bytefill(@secBuf, $EE, 512)                                             ' poison the buffer so a no-op read is visible
+        status := sd.readSectorRaw(0, @secBuf)
+        debug("  read ", udec_(idx), "/", udec_(NUM_READS), "  status=", sdec_(status), "  buf[0..3]=", uhex_byte_(secBuf[0]), " ", uhex_byte_(secBuf[1]), " ", uhex_byte_(secBuf[2]), " ", uhex_byte_(secBuf[3]))
+        waitms(READ_GAP_MS)
+
+    debug(" ")
+    debug("  done - ", udec_(NUM_READS), " streamer reads issued")
+    debug("END_SESSION")
+
+
+con { license }
+
+{{
+  =================================================================================================
+
+  Terms of Use: MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this
+  software and associated documentation files (the "Software"), to deal in the Software
+  without restriction, including without limitation the rights to use, copy, modify,
+  merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies
+  or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+  INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+  HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+  CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+  OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+  =================================================================================================
+}}

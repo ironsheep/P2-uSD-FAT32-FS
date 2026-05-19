@@ -116,10 +116,16 @@ CON
     DEBUG_BAUD      = 2_000_000
 
     ' P2 Edge module SD slot pins
-    SD_CS   = 60
-    SD_MOSI = 59
-    SD_MISO = 58
-    SD_SCK  = 61
+    'SD_CS   = 60
+    'SD_MOSI = 59
+    'SD_MISO = 58
+    'SD_SCK  = 61
+
+    ' External uSD eval add-on board pins (ACTIVE)
+    SD_CS   = 20
+    SD_MOSI = 19
+    SD_MISO = 18
+    SD_SCK  = 21
 
     ' Streamer 1-pin capture: X_1P_1DAC1_WFBYTE (mode %1100) + write-enable
     ' (D[23]). The captured pin number is OR'd in as (pin << 17); the low
@@ -184,14 +190,14 @@ PUB go() | status
 
     ' --- Capture 1: SCK during a streamer read ---
     debug("------------------------------------------------------------")
-    debug("CAPTURE 1: SCK (P61) during a streamer-DMA read of sector 0")
+    debug("CAPTURE 1: SCK (P21) during a streamer-DMA read of sector 0")
     debug("------------------------------------------------------------")
     capture1pin(@"SCK", SD_SCK, true)
 
     ' --- Capture 2: MISO during a streamer read ---
     debug(" ")
     debug("------------------------------------------------------------")
-    debug("CAPTURE 2: MISO (P58) during a streamer-DMA read of sector 0")
+    debug("CAPTURE 2: MISO (P18) during a streamer-DMA read of sector 0")
     debug("------------------------------------------------------------")
     capture1pin(@"MISO", SD_MISO, false)
 

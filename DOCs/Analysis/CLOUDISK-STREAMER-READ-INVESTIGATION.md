@@ -2,9 +2,31 @@
 
 **Opened:** 2026-05-18
 **Card under test:** Cloudisk 2GB microSD (counterfeit — CID product name `asdfg`, MID `$05`, CRC7 `$00`); register-confirmed 2 GB **SDSC** (CSD v1.0).
-**Status:** Cause narrowed to the driver's streamer-DMA *read* path; soft logic analyzer built to capture the bus and resolve the final fork.
+**Status:** ✅ **RESOLVED 2026-05-18.** The premise of this investigation was wrong.
 
 This card was bought new specifically to certify the driver against budget/marginal SDSC media. It is a legitimate certification target, not a card to discard.
+
+---
+
+> ## ⚠️ RESOLUTION — read this first
+>
+> **The streamer was never at fault.** A hardware logic analyzer plus an
+> instrumented diagnostic (`SD_la_streamer_diag.spin2`) proved the streamer
+> captures all 512 data bytes **perfectly** (`calc_crc` bit-identical to the
+> no-streamer slow read).
+>
+> **Real root cause:** this card transmits a **dummy `$0000` data-block CRC**
+> instead of a real one. `readSector` treated the CRC mismatch as fatal →
+> `E_CRC_ERROR` → the dispatch flattened it to `-7` and skipped the copy-out →
+> caller buffer untouched. "Buffer untouched" was an error-handling artifact,
+> not evidence of a failed DMA.
+>
+> Full analysis, the recognition procedure, and the driver fix design:
+> **[`DUMMY-DATA-CRC-ANALYSIS.md`](DUMMY-DATA-CRC-ANALYSIS.md)**.
+>
+> Sections 3–7 below are preserved as a record of the (mis-aimed) investigation.
+> Their conclusions about "streamer-RX capture path" and "card limitation under
+> gapless clocking" are **superseded** — disregard them.
 
 ---
 

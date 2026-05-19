@@ -158,6 +158,29 @@ This section documents ALL fields available from SD card registers and indicates
 
 ---
 
+## Card Quirks — Non-Standard Behaviors
+
+Some cards deviate from spec-typical behavior in ways the driver must recognize and accommodate. Documented here so a card showing the same pattern is matched against a *known, handled* quirk instead of triggering a fresh investigation.
+
+### Dummy data-block CRC (SPI read CRC not provided)
+
+Some cards — observed so far on older **SDSC** (CSD v1.0) media — do **not** compute a real CRC-16 for the data blocks they return on a read. They transmit a fixed placeholder (`$0000` or `$FFFF`) in the CRC field. **The card's 512 data bytes are correct** — only the trailing CRC is a dummy.
+
+**Recognition signature:** a slow/tolerant read returns valid, structured data (e.g. sector 0 ends in the `55 AA` MBR signature), but the CRC read back from the card is a constant placeholder that does not match the CRC computed over that data — and is identical across different sectors.
+
+A driver that hard-fails on a data-CRC mismatch rejects every card in this class. The driver detects such a card with an init-time CRC probe and disables read-CRC *validation* for the session (write-CRC generation and the post-read CMD13 check are unaffected).
+
+| Card | MID | Capacity | Behavior | Notes |
+|------|-----|----------|----------|-------|
+| Cloudisk `asdfg` (counterfeit) | `$05` | 2 GB SDSC | Sends `$0000` data-block CRC | Wire-confirmed by hardware LA, 2026-05-18 |
+| SanDisk SU01G 1 GB SDSC | `$03` | 1 GB SDSC | **Suspected** — same streamer-read symptom | Re-test with `SD_la_streamer_diag.spin2` to confirm |
+
+> CRC-validation / CRC error-injection regression suites implicitly assume a *real-CRC* card. On a dummy-CRC card those specific tests are **inapplicable** and must not be read as failures.
+
+Full analysis, recognition procedure, and driver fix design: [`DOCs/Analysis/DUMMY-DATA-CRC-ANALYSIS.md`](../Analysis/DUMMY-DATA-CRC-ANALYSIS.md).
+
+---
+
 ## Internal Throughput Summary
 
 Cards tested with `diagnostic-tests/SD_speed_characterize.spin2` have measured internal throughput data. This reflects the card's internal flash/controller performance, NOT the SPI bus speed.
