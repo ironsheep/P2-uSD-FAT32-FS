@@ -1,0 +1,365 @@
+{{ =================================================================================================
+
+   File....... SD_soft_la_test.spin2
+   Purpose.... P2-internal "software logic analyzer" for the SD bus. A spare
+               cog's streamer captures one SD signal at a time while the
+               driver performs a sector read, so we can see -- in software,
+               no external instrument -- what is actually on the wire during
+               the failing streamer-DMA read.
+   Author..... Stephen M Moraco
+               -- see below for terms of use
+   E-mail..... stephen@ironsheep.biz
+   Started.... 18 MAY 2026
+
+   =================================================================================================
+   THEORY OF OPERATION
+   =================================================================================================
+
+   WHY THIS EXISTS
+
+     The Cloudisk 2GB SDSC card reads correctly via the driver's slow,
+     byte-by-byte path but returns NOTHING via the streamer-DMA path
+     (the streamer leaves the destination buffer untouched). Phase and SPI
+     clock rate were ruled out by earlier diagnostics. The one remaining
+     question can only be answered by observing the bus during a streamer
+     read:
+       1. Does SCK actually toggle during the streamer burst?
+       2. Does the card drive MISO with the sector data in response?
+
+   WHY ONE SIGNAL AT A TIME (SEQUENTIAL, NOT SIMULTANEOUS)
+
+     A simultaneous four-signal capture would need the streamer's 16-pin
+     capture mode, whose only block-aligned window containing both MISO
+     (P58) and SCK (P61) is P48..P63 -- which also contains P62/P63, the
+     P2's debug-serial pins. A capture spanning those pins corrupts the
+     very channel this tool reports through.
+
+     The fix is to NOT capture them together. Each question above is a
+     self-contained yes/no:
+       - "Does SCK toggle?" -> capture SCK alone, count transitions.
+       - "Does the card drive MISO?" -> capture MISO alone; a real 512-byte
+         read shows ~164 us of dense toggling, unmistakable on its own with
+         no clock correlation required.
+     So this tool captures ONE pin per SD read, sequentially. Each capture
+     uses the streamer's 1-pin mode (X_1P_1DAC1_WFBYTE) -- the exact mode
+     the driver itself uses for sector reads, proven not to disturb other
+     pins. P58 and P61 are nowhere near the P62/P63 debug pins.
+
+   NO DEBUG DURING A CAPTURE
+
+     `debug()` transmits on P62. To guarantee the debug channel and a
+     running capture never interact, this tool emits NO debug output
+     between launching a capture cog and that capture completing. All
+     results for a capture are printed only after the capture cog has
+     finished and stopped.
+
+   MECHANISM
+
+     A spare cog (cogspin of a Spin2 method, so DAT vars resolve; the
+     streamer work is inline PASM) captures the selected pin with two
+     back-to-back XINITs against one continuous WRFAST. 1-pin capture packs
+     8 samples per byte, so the hub write rate is ~22 MB/s.
+
+   HARDWARE-EDGE TRIGGER (CS)
+
+     A software-timed capture window can miss the read: readSectorRaw goes
+     through the worker-cog mailbox, so the bus activity starts an
+     indeterminate handoff later. Instead, the capture cog sets the
+     streamer up, then spins on CS (P60) and issues XINIT only when CS
+     FALLS -- the real start of the SD transaction. The capture is thus
+     synced to the bus event itself, not to the software call. (An earlier
+     waitus()-windowed version missed the read; the symptom was a capture
+     showing ~50 SCK transitions, far too few for any real transaction.)
+
+   SAMPLE RATE AND NYQUIST
+
+     Sample clock = sysclk/2 (streamer NCO xfrq = $8000_0000). At
+     _CLKFREQ = 350 MHz that is 175 MS/s -- 7 samples per 25 MHz SCK
+     period, 3.5x the Nyquist rate. Window = 128000 samples = ~731 us,
+     which contains a full 25 MHz single-sector read.
+
+   READING THE RESULT
+
+     - SCK shows thousands of transitions  -> SCK is clocking.
+       SCK essentially static               -> driver clock-gen (WYPIN) dead.
+     - MISO shows a long dense burst of transitions -> the card IS driving
+       the sector data; with the driver's streamer buffer coming back
+       empty, the bug is in the driver's streamer-RX capture path.
+       MISO flat -> the card does not drive MISO under streamer clocking
+       (a card limitation).
+
+   LIMITATION
+
+     This records the digital logic level the P2 input registers latch.
+     It does not reveal analog signal quality (slow slew, marginal levels).
+     If the streamer fails because MISO slews too slowly to latch cleanly,
+     a scope is still required for that residual question.
+
+================================================================================================= }}
+
+CON
+
+    _CLKFREQ        = 350_000_000
+
+    DEBUG_BAUD      = 2_000_000
+
+    ' P2 Edge module SD slot pins
+    SD_CS   = 60
+    SD_MOSI = 59
+    SD_MISO = 58
+    SD_SCK  = 61
+
+    ' Streamer 1-pin capture: X_1P_1DAC1_WFBYTE (mode %1100) + write-enable
+    ' (D[23]). The captured pin number is OR'd in as (pin << 17); the low
+    ' 16 bits carry the sample count. 8 samples pack into each hub byte.
+    CAP_1P_BASE       = $C000_0000 | $0080_0000                                 ' = $C080_0000
+    ' Streamer NCO (P2KB p2kbPasm2Setxfrq): D = target_freq * 2^32 / clkfreq.
+    ' sysclk/2 sample rate -> D = 2^32 / 2 = $8000_0000.
+    CAP_XFRQ          = $8000_0000                                              ' sysclk/2 = 175 MS/s at 350 MHz
+
+    SAMPLES_PER_XINIT = 64000                                                   ' multiple of 8; < 16-bit count max
+    NUM_XINIT         = 2
+    TOTAL_SAMPLES     = SAMPLES_PER_XINIT * NUM_XINIT                           ' 128000
+    CAP_BUF_BYTES     = TOTAL_SAMPLES / 8                                       ' 16000
+
+    WAVE_SNIPPET      = 96                                                      ' samples shown in ASCII waveform
+
+#ifdef __SPINTOOLS__
+#define SD_INCLUDE_ALL
+#elseifdef __FLEXSPIN__
+#define SD_INCLUDE_ALL
+#pragma exportdef SD_INCLUDE_ALL
+#else
+#pragma exportdef SD_INCLUDE_ALL
+#endif
+
+OBJ
+    sd : "micro_sd_fat32_fs"
+
+DAT
+    capBuf      BYTE    0[CAP_BUF_BYTES]                                        ' bit-packed capture buffer
+    scratchBuf  BYTE    0[512]                                                  ' SD read destination
+    rowBuf      BYTE    0[WAVE_SNIPPET + 1]                                     ' one waveform row, assembled then printed
+    capStack    LONG    0[64]                                                   ' capture cog stack
+    capModeWord LONG    0                                                       ' main -> capture cog: streamer mode | pin | count
+    capStarted  LONG    0                                                       ' capture cog -> main: streamer running
+    capDone     LONG    0                                                       ' capture cog -> main: capture complete
+
+    sckTrans    LONG    0                                                       ' kept for the cross-capture verdict
+    misoTrans   LONG    0
+
+PUB go() | status
+
+    debug(" ")
+    debug("=== SD SOFT LOGIC ANALYZER (sequential 1-pin captures) ===")
+    debug("  Sample rate sysclk/2 = ", udec_(clkfreq / 2_000_000), " MS/s   window ", udec_((TOTAL_SAMPLES * 2) / (clkfreq / 1_000_000)), " us")
+    debug("  No debug is emitted while a capture is running.")
+    debug(" ")
+
+    status := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    if status < 0
+        debug("FATAL: initCardOnly failed (", sdec_(status), ") - power-cycle the card and retry.")
+        debug("END_SESSION")
+        return
+    debug("  initCardOnly OK (cls=", udec_((sd.getOCR() >> 30) & 1), " 0=SDSC,1=SDHC)")
+    debug(" ")
+
+    ' --- Capture 1: SCK during a streamer read ---
+    debug("------------------------------------------------------------")
+    debug("CAPTURE 1: SCK (P61) during a streamer-DMA read of sector 0")
+    debug("------------------------------------------------------------")
+    capture1pin(@"SCK", SD_SCK, true)
+
+    ' --- Capture 2: MISO during a streamer read ---
+    debug(" ")
+    debug("------------------------------------------------------------")
+    debug("CAPTURE 2: MISO (P58) during a streamer-DMA read of sector 0")
+    debug("------------------------------------------------------------")
+    capture1pin(@"MISO", SD_MISO, false)
+
+    ' --- Cross-capture verdict ---
+    debug(" ")
+    debug("============================================================")
+    debug("  VERDICT")
+    debug("============================================================")
+    if sckTrans < 1000
+        debug("  SCK did NOT clock during the read (", udec_(sckTrans), " transitions).")
+        debug("  -> The driver's streamer clock generation (WYPIN) is not running.")
+    elseif misoTrans < 50
+        debug("  SCK clocked (", udec_(sckTrans), " transitions) but MISO stayed flat")
+        debug("  (", udec_(misoTrans), " transitions).")
+        debug("  -> The card does not drive MISO under continuous streamer")
+        debug("     clocking. This is a card limitation, not a driver bug.")
+    else
+        debug("  SCK clocked (", udec_(sckTrans), " transitions) AND MISO carried")
+        debug("  data (", udec_(misoTrans), " transitions) during the read, yet the")
+        debug("  driver's streamer buffer came back empty.")
+        debug("  -> The card and the wire are fine. The bug is in the driver's")
+        debug("     streamer-RX capture path itself.")
+    debug(" ")
+    debug("END_SESSION")
+
+
+PRI capture1pin(p_label, pin, isSck) | status, cogN, t0
+' Capture one pin for the duration of one streamer-DMA sector read.
+' CRITICAL: between launching the capture cog and the capture completing,
+' this routine emits NO debug() output (debug transmits on P62).
+
+    capStarted := 0
+    capDone := 0
+    bytefill(@capBuf, 0, CAP_BUF_BYTES)
+    bytefill(@scratchBuf, $EE, 512)
+    capModeWord := CAP_1P_BASE | (pin << 17) | SAMPLES_PER_XINIT
+
+    cogN := cogspin(NEWCOG, captureCog(), @capStack)
+    if cogN < 0 or cogN > 7
+        debug("  ERROR: could not launch capture cog (", sdec_(cogN), ")")
+        return
+
+    ' ---- quiet zone: no debug() from here until the capture has finished ----
+    t0 := getms()
+    repeat until capStarted
+        if getms() - t0 > 200
+            debug("  ERROR: capture cog never signaled start")
+            return
+
+    waitus(5)                                                                   ' ensure the capture cog reached its CS-poll loop
+
+    status := sd.readSectorRaw(0, @scratchBuf)                                  ' the SD read; its CS edge triggers the capture
+
+    t0 := getms()
+    repeat until capDone
+        if getms() - t0 > 500
+            debug("  ERROR: capture did not complete within 500ms")
+            return
+    ' ---- end quiet zone: capture cog has finished and stopped ----
+
+    debug("  capture cog ran on cog ", udec_(cogN))
+    debug("  driver streamer read status=", sdec_(status), "  buf[0..3]=$", uhex_byte_(scratchBuf[0]), " $", uhex_byte_(scratchBuf[1]), " $", uhex_byte_(scratchBuf[2]), " $", uhex_byte_(scratchBuf[3]))
+    analyze1pin(p_label, isSck)
+
+
+PRI analyze1pin(p_label, isSck) | idx, level, prev, trans, firstTrans, lastTrans, highs
+
+' Unpack the bit-packed capture, count transitions and high/low balance,
+' locate the active region, print a summary and an ASCII waveform snippet.
+
+    trans      := 0
+    firstTrans := -1
+    lastTrans  := -1
+    highs      := 0
+    prev       := (capBuf[0] >> 0) & 1
+
+    repeat idx from 1 to TOTAL_SAMPLES - 1
+        level := (capBuf[idx >> 3] >> (idx & 7)) & 1
+        if level
+            highs++
+        if level <> prev
+            trans++
+            if firstTrans < 0
+                firstTrans := idx
+            lastTrans := idx
+        prev := level
+
+    debug(" ")
+    debug("  ANALYSIS: ", zstr_(p_label))
+    debug("    samples: ", udec_(TOTAL_SAMPLES), "   transitions: ", udec_(trans))
+    debug("    high samples: ", udec_(highs), " / ", udec_(TOTAL_SAMPLES))
+    if firstTrans < 0
+        debug("    signal is STATIC for the entire capture (no transitions).")
+    else
+        debug("    active region: sample ", udec_(firstTrans), "..", udec_(lastTrans), "  (", udec_(((lastTrans - firstTrans) * 2) / (clkfreq / 1_000_000)), " us span)")
+
+    if isSck
+        sckTrans := trans
+        if trans < 1000
+            debug("    -> SCK is STATIC / barely clocking.")
+        else
+            debug("    -> SCK is CLOCKING.")
+    else
+        misoTrans := trans
+        if trans < 50
+            debug("    -> MISO is essentially flat - the card is not driving data.")
+        else
+            debug("    -> MISO is CARRYING DATA (sustained transitions).")
+
+    if firstTrans >= 0
+        printWaveform(firstTrans)
+
+
+PRI printWaveform(startIdx) | lineEnd
+' Print a WAVE_SNIPPET-sample ASCII view of the captured signal.
+
+    lineEnd := startIdx + WAVE_SNIPPET - 1
+    if lineEnd > TOTAL_SAMPLES - 1
+        lineEnd := TOTAL_SAMPLES - 1
+    debug("    waveform from sample ", udec_(startIdx), " (1 char = 1 sample = ", udec_((2 * 1_000) / (clkfreq / 1_000_000)), " ns):")
+    debug_char_row(@"    sig : ", startIdx, lineEnd)
+
+
+PRI debug_char_row(p_prefix, startIdx, lineEnd) | idx, p_dst
+' Assemble the captured signal as a row of 0/1 characters, print on one line.
+
+    p_dst := @rowBuf
+    repeat idx from startIdx to lineEnd
+        BYTE[p_dst++] := ((capBuf[idx >> 3] >> (idx & 7)) & 1) ? "1" : "0"
+    BYTE[p_dst] := 0
+    debug(zstr_(p_prefix), zstr_(@rowBuf))
+
+
+PRI captureCog() | mode1, bufAddr, xf
+' Runs on its own cog (a Spin2 method, so DAT vars resolve correctly; the
+' streamer work is inline PASM, the same pattern the driver uses). Reads
+' capModeWord, captures the selected pin with two back-to-back XINITs
+' against one continuous WRFAST, then signals completion.
+
+    mode1   := capModeWord
+    bufAddr := @capBuf
+    xf      := CAP_XFRQ
+    capStarted := 1                                                             ' signal main cog: armed, watching CS
+
+    ' Hardware-edge trigger: set the streamer up, then wait for CS (P60) to
+    ' fall -- the real start of the SD transaction -- before XINIT. This
+    ' syncs the capture to the bus event itself, not to the software call.
+    org
+                setxfrq xf                                                      ' sample clock = sysclk/2
+                wrfast  #0, bufAddr                                             ' FIFO -> capBuf, continuous
+waitCsLow       testp   #SD_CS  wc                                              ' C = CS pin level (1=idle high)
+        if_c    jmp     #waitCsLow                                              ' spin while CS is high
+                xinit   mode1, #0                                               ' CS just fell -> capture first batch
+                waitxfi
+                xinit   mode1, #0                                               ' capture next batch (FIFO continues)
+                waitxfi
+    end
+
+    capDone := 1                                                                ' signal main cog: capture complete
+
+
+con { license }
+
+{{
+  =================================================================================================
+
+  Terms of Use: MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this
+  software and associated documentation files (the "Software"), to deal in the Software
+  without restriction, including without limitation the rights to use, copy, modify,
+  merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies
+  or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+  INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+  HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+  CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+  OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+  =================================================================================================
+}}
