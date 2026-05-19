@@ -341,6 +341,7 @@ CON ' SD SPI command numbers (SD Physical Layer Spec)
   CMD10   = 10                                                                ' SEND_CID
   CMD12   = 12                                                                ' STOP_TRANSMISSION - terminates multi-block read/write
   CMD13   = 13                                                                ' SEND_STATUS - get card status register (R2 response)
+  CMD16   = 16                                                                ' SET_BLOCKLEN - set data block length (mandatory for SDSC)
   CMD17   = 17                                                                ' READ_SINGLE_BLOCK
   CMD18   = 18                                                                ' READ_MULTIPLE_BLOCK - read consecutive sectors
   CMD23   = 23                                                                ' SET_BLOCK_COUNT - pre-define sector count for CMD18/CMD25
@@ -2690,11 +2691,9 @@ PRI fs_worker() | cur_cmd
 
       CMD_READ_SECTOR_RAW:
         sec_in_buf := -1                                                        ' Force re-read
-        if readSector(pb_param0, BUF_DATA) == 0                                 ' readSector returns 0 on success, -1 on error
+        pb_status := readSector(pb_param0, BUF_DATA)                            ' pass through the actual error code (E_TIMEOUT/E_BAD_RESPONSE/E_CRC_ERROR/E_IO_ERROR)
+        if pb_status == SUCCESS
           bytemove(pb_param1, @buf, SECTOR_SIZE)
-          pb_status := SUCCESS
-        else
-          pb_status := E_IO_ERROR
 
 #ifdef SD_INCLUDE_RAW
       CMD_READ_SECTORS:
@@ -5953,6 +5952,21 @@ PRI initCard() : bSuccess | timeout, resp, card_version, acmd41_arg, got_respons
       DEBUG[CH_INIT]("    [initCard] Card type: SDSC (byte addressing)")
 
     ' ============================================
+    ' STEP 7.5: CMD16 - SET_BLOCKLEN (SDSC only)
+    ' SDHC/SDXC hardwire the data block length to 512 and ignore CMD16.
+    ' SDSC cards take their read/write data-token size from CMD16; the
+    ' power-up default is the CSD READ_BL_LEN, which on 2 GB cards is
+    ' commonly 1024. Without CMD16 the card may stream more bytes per block
+    ' than the streamer reads, leaving the card mid-block and desynced.
+    ' SD Physical Layer Spec section 7.2.3.
+    ' ============================================
+    if hcs <> 0                                                                 '  SDSC: byte-addressed -> block length must be pinned explicitly
+      DEBUG[CH_INIT]("    [initCard] Step 7.5: CMD16 (SET_BLOCKLEN=512) for SDSC...")
+      resp := cmd(CMD16, SECTOR_SIZE)
+      if resp <> 0                                                              '  R1=$00 expected (card out of idle by now); non-zero = error bits set
+        DEBUG[CH_INIT]("    [initCard] WARNING: CMD16 R1=$", uhex_byte_(resp), " - block length may not be set")
+
+    ' ============================================
     ' STEP 8: Identify card and set optimal SPI speed
     ' Reads CID for manufacturer ID, CSD for TRAN_SPEED
     ' ============================================
@@ -6102,12 +6116,19 @@ PRI readSector(sector, buf_type) : status | _sck, _miso, data, loop_ctr, timeout
         if data == $FE
           quit                                                                  ' Got start token
         if data <> $FF
-          DEBUG[CH_SECTOR]("  [readSector] ERROR: got $", uhex_byte_(data), " instead of $FF or $FE")
+          diag_last_token := data                                               '  capture the actual byte the card sent (failure path - was left stale)
+          if data & $F0                                                         '  high nibble set -> not a data error token
+            DEBUG[CH_SECTOR]("  [readSector] ERROR: got $", uhex_byte_(data), " (not $FF/$FE, not a data error token)")
+          else
+            ' Data error token (SD spec 7.3.3.3): low 4 bits = R2 error bits.
+            ' The card is telling us exactly why it could not deliver data.
+            DEBUG[CH_SECTOR]("  [readSector] DATA ERROR TOKEN $", uhex_byte_(data), " - error=", udec_(data & 1), " ccErr=", udec_((data >> 1) & 1), " eccFail=", udec_((data >> 2) & 1), " outOfRange=", udec_((data >> 3) & 1))
           pinh(cs)
           LONG[p_cache] := -1
           status := E_BAD_RESPONSE
           quit
         if GETMS() - timeout > 0
+          diag_last_token := data                                               '  card stayed silent ($FF); record it rather than leaving it stale
           DEBUG[CH_SECTOR]("  [readSector] TIMEOUT waiting for start token")
           pinh(cs)
           LONG[p_cache] := -1

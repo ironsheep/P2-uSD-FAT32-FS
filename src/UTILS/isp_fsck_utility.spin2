@@ -141,6 +141,7 @@ VAR
   LONG    fat2Start
   LONG    dataStart
   LONG    rootCluster
+  LONG    mediaType             ' BPB media descriptor byte ($F0 removable / $F8 fixed)
 
   ' Statistics / results
   LONG    v_passCount
@@ -437,7 +438,7 @@ PRI runFsck(cardSectors)
 ' Shared geometry reader
 ' =========================================================================
 
-PRI readGeometry() : ok | numFats
+PRI readGeometry() : ok | numFats, rdStatus
 ' Read MBR and VBR to extract filesystem geometry.
 ' Populates all geometry variables needed by subsequent passes.
 '
@@ -445,18 +446,22 @@ PRI readGeometry() : ok | numFats
 
     ' Read MBR to get partition start
     ok := false
-    sd.readSectorRaw(0, @buf)
-    if WORD[@buf + sd.BOOT_SIG_OFFSET] <> sd.BOOT_SIGNATURE
-        fifo.put(@"  ERROR: Invalid MBR signature")
+    rdStatus := sd.readSectorRaw(0, @buf)
+    if rdStatus < 0
+        fifo.putFmt1(@"  ERROR: MBR (sector 0) read failed, status %d", rdStatus)
+    elseif WORD[@buf + sd.BOOT_SIG_OFFSET] <> sd.BOOT_SIGNATURE
+        fifo.putFmt1(@"  ERROR: Invalid MBR signature (got $%x, expected $AA55)", WORD[@buf + sd.BOOT_SIG_OFFSET])
     elseif LONG[@buf + MBR_PART_LBA_START] == 0
         fifo.put(@"  ERROR: Partition start is 0")
     else
         partitionStart := LONG[@buf + MBR_PART_LBA_START]
 
         ' Read VBR (Volume Boot Record)
-        sd.readSectorRaw(partitionStart, @buf)
-        if WORD[@buf + sd.BOOT_SIG_OFFSET] <> sd.BOOT_SIGNATURE
-            fifo.put(@"  ERROR: Invalid VBR signature")
+        rdStatus := sd.readSectorRaw(partitionStart, @buf)
+        if rdStatus < 0
+            fifo.putFmt1(@"  ERROR: VBR read failed, status %d", rdStatus)
+        elseif WORD[@buf + sd.BOOT_SIG_OFFSET] <> sd.BOOT_SIGNATURE
+            fifo.putFmt1(@"  ERROR: Invalid VBR signature (got $%x)", WORD[@buf + sd.BOOT_SIG_OFFSET])
         else
             ' Extract geometry fields
             sectorsPerCluster := buf[BPB_SEC_PER_CLUS]
@@ -465,6 +470,7 @@ PRI readGeometry() : ok | numFats
             sectorsPerFat := LONG[@buf + BPB_FAT_SIZE_32]
             totalSectors := LONG[@buf + BPB_TOTAL_SEC_32]
             rootCluster := LONG[@buf + BPB_ROOT_CLUSTER]
+            mediaType := buf[BPB_MEDIA_TYPE]
 
             ' Validate critical fields
             if sectorsPerCluster == 0 or sectorsPerFat == 0 or totalSectors == 0
@@ -568,13 +574,17 @@ PRI auditVBR() | result
     auditRunTest(@"Total sectors 16-bit = 0", result == 0)
 
     result := buf[BPB_MEDIA_TYPE]
-    auditRunTest(@"Media type = $F8", result == $F8)
+    ' $F0 (removable) and $F8 (fixed) are both spec-legal -- macOS writes $F0 for SD
+    auditRunTest(@"Media type valid ($F0/$F8)", result == $F0 OR result == $F8)
+    fifo.putFmt1(@"    Media type: $%x", result)
 
     result := WORD[@buf + BPB_FAT_SIZE_16]
     auditRunTest(@"FAT size 16-bit = 0", result == 0)
 
     result := LONG[@buf + BPB_HIDDEN_SECS]
-    auditRunTest(@"Hidden sectors = partition start", result == partitionStart)
+    ' Informational BPB field -- macOS writes 0, others write the partition LBA; both OK
+    auditRunTest(@"Hidden sectors valid (0 or partition start)", result == partitionStart OR result == 0)
+    fifo.putFmt1(@"    Hidden sectors: %d", result)
 
     auditRunTest(@"Total sectors 32-bit > 0", totalSectors > 0)
     fifo.putFmt1(@"    Total sectors: %d", totalSectors)
@@ -676,7 +686,9 @@ PRI auditFAT() | result, idx, mismatch
     sd.readSectorRaw(fat1Start, @buf)
 
     result := LONG[@buf]
-    auditRunTest(@"FAT[0] = $0FFFFFF8 (media)", result == $0FFFFFF8)
+    ' FAT[0]'s low byte mirrors the BPB media byte -- validate against the card's own,
+    ' do not assume $F8 (a $F0-media card has a valid FAT[0] of $0FFFFFF0)
+    auditRunTest(@"FAT[0] media byte matches BPB", (result & sd.FAT32_ENTRY_MASK) == (($0FFFFF00 | mediaType) & sd.FAT32_ENTRY_MASK))
 
     result := LONG[@buf + 4]
     auditRunTest(@"FAT[1] = $0FFFFFFF (EOC)", result == $0FFFFFFF)
@@ -697,7 +709,7 @@ PRI auditFAT() | result, idx, mismatch
     fifo.put(@" ")
 
 
-PRI auditRootDir() | result, idx, p_entry, found_label
+PRI auditRootDir() | result, idx, p_entry, found_label, attr
 ' Verify root directory structure
 ' FAT32 spec: volume label entry can be anywhere in root directory, not necessarily first.
 ' Some formatters only write the label in the VBR, not the root directory.
@@ -712,11 +724,15 @@ PRI auditRootDir() | result, idx, p_entry, found_label
       p_entry := @buf + (idx * sd.DIR_ENTRY_SIZE)
       if byte[p_entry] == DIR_END_MARKER
         quit
-      if byte[p_entry] <> sd.DIR_ENTRY_DELETED and byte[p_entry + sd.DE_ATTR_OFFSET] == sd.ATTR_VOLUME_ID
+      attr := byte[p_entry + sd.DE_ATTR_OFFSET]
+      ' Volume label = VOLUME_ID bit set, not a directory, and not an LFN entry ($0F).
+      ' Real label entries also carry the archive bit (macOS writes $28), so mask the
+      ' VOLUME_ID bit -- never test for an exact $08.
+      if byte[p_entry] <> sd.DIR_ENTRY_DELETED and attr <> $0F and (attr & sd.ATTR_VOLUME_ID) <> 0 and (attr & sd.ATTR_DIRECTORY) == 0
         found_label := true
         result := byte[p_entry]
         quit
-    auditRunTest(@"Volume label entry (attr=$08)", found_label)
+    auditRunTest(@"Volume label entry present", found_label)
 
     if found_label
       auditRunTest(@"Valid volume label chars", result >= $20 AND result <= $7E)
@@ -819,11 +835,14 @@ PRI fsckPass1() | idx, mismatch, fsinfoDirty, startRepairs
         fifo.put(@"  [OK] Backup FSInfo matches")
 
     ' === FAT[0] media type ===
+    ' FAT[0]'s low byte mirrors the BPB media byte ($F0 removable / $F8 fixed).
+    ' Validate and repair against the card's ACTUAL media byte -- assuming $F8 here
+    ' would rewrite a perfectly valid $F0-media filesystem ($0FFFFFF0) and corrupt it.
     sd.readSectorRaw(fat1Start, @buf)
 
-    if (LONG[@buf] & sd.FAT32_ENTRY_MASK) <> ($0FFFFFF8 & sd.FAT32_ENTRY_MASK)
+    if (LONG[@buf] & sd.FAT32_ENTRY_MASK) <> (($0FFFFF00 | mediaType) & sd.FAT32_ENTRY_MASK)
         fifo.put(@"  REPAIR: FAT[0] media type")
-        LONG[@buf] := $0FFFFFF8 | (LONG[@buf] & $F0000000)
+        LONG[@buf] := ($0FFFFF00 | mediaType) | (LONG[@buf] & $F0000000)
         sd.writeSectorRaw(fat1Start, @buf)
         v_repairCount++
     else
