@@ -215,6 +215,7 @@ CON ' card warning/capability flags
   CW_NONE              = $00                                                  ' No warnings or capabilities
   CW_CMD13_UNRELIABLE  = $01                                                  ' CMD13 probe failed at init; status checks disabled for this card
   CW_CMD23_SUPPORTED   = $02                                                  ' CMD23 (SET_BLOCK_COUNT) confirmed working in SPI mode
+  CW_NO_DATA_CRC       = $04                                                  ' Card returns a dummy data-block CRC; read-CRC validation disabled for this card
 
 CON ' Multi-file handle configuration
   {Spin2_Doc_CON}
@@ -5977,6 +5978,12 @@ PRI initCard() : bSuccess | timeout, resp, card_version, acmd41_arg, got_respons
     ' STEP 10: Check CMD23 support from SCR CMD_SUPPORT field
     probeCmd23()
 
+    ' STEP 11: Probe data-block CRC behavior. Some cards (older SDSC and
+    ' counterfeit media) return a dummy $0000/$FFFF data CRC instead of a real
+    ' one; detect this now so readSector does not treat the mismatch as fatal.
+    ' See DOCs/Analysis/DUMMY-DATA-CRC-ANALYSIS.md
+    probeDataCrc()
+
     DEBUG[CH_INIT]("    [initCard] === INIT SUCCESS ===")
 
 PRI cmd(op,parm) : response | timeout, timed_out
@@ -6166,8 +6173,9 @@ PRI readSector(sector, buf_type) : status | _sck, _miso, data, loop_ctr, timeout
       diag_recv_crc := sp_transfer_8($FF) << 8
       diag_recv_crc |= sp_transfer_8($FF)
 
-      ' CRC-16 validation: validate received data against card's CRC (when enabled)
-      if NOT diag_crc_enabled
+      ' CRC-16 validation: skipped when globally disabled, or when this card
+      ' returns a dummy data CRC (CW_NO_DATA_CRC, set by probeDataCrc at init).
+      if (NOT diag_crc_enabled) OR (card_warning_flags & CW_NO_DATA_CRC)
         pinh(cs)                                                                ' Deselect card - skip CRC check
         quit                                                                    ' Exit retry loop (assume success)
       diag_calc_crc := calcDataCRC(p_buf, SECTOR_SIZE)
@@ -6291,7 +6299,7 @@ PRI readSectors(start_sector, count, p_buffer) : sectors_read | _sck, _miso, p_b
         diag_recv_crc := sp_transfer_8($FF) << 8
         diag_recv_crc |= sp_transfer_8($FF)
 
-        if diag_crc_enabled
+        if diag_crc_enabled AND NOT (card_warning_flags & CW_NO_DATA_CRC)
           diag_calc_crc := calcDataCRC(p_buf, SECTOR_SIZE)
           if diag_calc_crc == diag_recv_crc
             diag_crc_matches++
@@ -6920,6 +6928,66 @@ PRI probeCmd23() | scr[2], cmd_support, resp
       DEBUG[CH_STATUS]("    [probeCmd23] CMD23 not advertised (CMD_SUPPORT=$", uhex_byte_(cmd_support), ")")
   else
     DEBUG[CH_STATUS]("    [probeCmd23] SCR read failed - assuming CMD23 not supported")
+
+PRI probeDataCrc() | data, idx, timeout, recv_crc, calc_crc, got_token
+' Probe the card's data-block CRC behavior at init time.
+' Some cards -- older SDSC and counterfeit media especially -- do not compute
+' a real CRC-16 for the data blocks they return on a read; they transmit a
+' fixed placeholder ($0000 or $FFFF) in the CRC field. The card's 512 data
+' bytes are still valid -- only the trailing CRC is a dummy. readSector would
+' treat the resulting mismatch as a fatal error and reject the card.
+'
+' This probe does one byte-by-byte read of sector 0 (no streamer, tolerant of
+' a CRC mismatch) and compares the card's CRC against the computed CRC. If the
+' card's CRC is a placeholder that disagrees with the computed value, it sets
+' CW_NO_DATA_CRC so readSector skips read-CRC validation for this card. Cards
+' that return a real, matching CRC are unaffected -- they keep strict
+' validation. See DOCs/Analysis/DUMMY-DATA-CRC-ANALYSIS.md
+'
+' @local data - Received byte / start token
+' @local idx - Data byte loop counter
+' @local timeout - Token-wait deadline (ms)
+' @local recv_crc - 16-bit CRC read from the card
+' @local calc_crc - 16-bit CRC computed over the received data
+' @local got_token - TRUE once the $FE start token is seen
+
+  cmd(CMD17, 0)                                                                 ' READ_SINGLE_BLOCK, sector 0 (return ignored, mirrors readSector)
+
+  ' Wait for the $FE start token
+  got_token := FALSE
+  timeout := GETMS() + card_read_timeout_ms
+  repeat
+    data := sp_transfer_8($FF)
+    if data == $FE
+      got_token := TRUE
+      quit
+    if data <> $FF OR GETMS() - timeout > 0
+      quit                                                                      ' error token or timeout
+
+  if NOT got_token
+    DEBUG[CH_INIT]("    [probeDataCrc] no start token (got $", uhex_byte_(data), ") - probe skipped")
+    pinh(cs)
+  else
+    ' Read 512 data bytes + 2 CRC bytes byte-by-byte (no streamer)
+    repeat idx from 0 TO SECTOR_SIZE - 1
+      BYTE[@buf + idx] := sp_transfer_8($FF)
+    recv_crc := sp_transfer_8($FF) << 8
+    recv_crc |= sp_transfer_8($FF)
+    pinh(cs)                                                                    ' Deselect card
+    sp_transfer_8($FF)                                                          ' 8 NCS recovery clocks (CS HIGH, SD spec)
+
+    calc_crc := calcDataCRC(@buf, SECTOR_SIZE)
+    diag_recv_crc := recv_crc                                                   ' publish for diagnostic getters
+    diag_calc_crc := calc_crc
+    sec_in_buf := -1                                                            ' probe used buf as scratch; invalidate cache
+
+    if recv_crc == calc_crc
+      DEBUG[CH_INIT]("    [probeDataCrc] data CRC OK ($", uhex_word_(recv_crc), ") - validation stays ON")
+    elseif recv_crc == $0000 OR recv_crc == $FFFF
+      card_warning_flags |= CW_NO_DATA_CRC
+      DEBUG[CH_INIT]("    [probeDataCrc] card returns dummy data CRC ($", uhex_word_(recv_crc), ", computed $", uhex_word_(calc_crc), ") - read-CRC validation DISABLED for this card")
+    else
+      DEBUG[CH_INIT]("    [probeDataCrc] data CRC MISMATCH recv=$", uhex_word_(recv_crc), " calc=$", uhex_word_(calc_crc), " (not a dummy value) - validation stays ON")
 
 PRI checkCardStatus(caller) : status | r1, cmd_status
 ' Send CMD13 to verify card status after operation - checks R2 response for errors.

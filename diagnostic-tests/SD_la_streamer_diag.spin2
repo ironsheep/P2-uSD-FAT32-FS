@@ -90,12 +90,12 @@ PUB go() | status, idx, tok, b0, b1, b2, b3, pbuf, dsec, dbt, recvC, calcC
     calcC := sd.getLastCalculatedCRC()
     debug("--- SLOW READ of sector 0 (reference, NO streamer) ---")
     debug("  status            = ", sdec_(status))
-    debug("  buf[0..3]         = $", uhex_byte_(slowBuf[0]), " $", uhex_byte_(slowBuf[1]), " $", uhex_byte_(slowBuf[2]), " $", uhex_byte_(slowBuf[3]))
-    debug("  buf[508..511]     = $", uhex_byte_(slowBuf[508]), " $", uhex_byte_(slowBuf[509]), " $", uhex_byte_(slowBuf[510]), " $", uhex_byte_(slowBuf[511]), "  (510..511 = MBR sig, expect $55 $AA)")
+    debug("  buf[0..3]         = ", uhex_byte_(slowBuf[0]), " ", uhex_byte_(slowBuf[1]), " ", uhex_byte_(slowBuf[2]), " ", uhex_byte_(slowBuf[3]))
+    debug("  buf[508..511]     = ", uhex_byte_(slowBuf[508]), " ", uhex_byte_(slowBuf[509]), " ", uhex_byte_(slowBuf[510]), " ", uhex_byte_(slowBuf[511]), "  (510..511 = MBR sig, expect $55 $AA)")
     if recvC == calcC
-        debug("  recv_crc=$", uhex_word_(recvC), "  calc_crc=$", uhex_word_(calcC), "  MATCH")
+        debug("  recv_crc=", uhex_word_(recvC), "  calc_crc=", uhex_word_(calcC), "  MATCH")
     else
-        debug("  recv_crc=$", uhex_word_(recvC), "  calc_crc=$", uhex_word_(calcC), "  *** MISMATCH ***")
+        debug("  recv_crc=", uhex_word_(recvC), "  calc_crc=", uhex_word_(calcC), "  *** MISMATCH ***")
     debug(" ")
 
     ' ---- Arm window ----
@@ -115,13 +115,13 @@ PUB go() | status, idx, tok, b0, b1, b2, b3, pbuf, dsec, dbt, recvC, calcC
         calcC := sd.getLastCalculatedCRC()
         debug("--- STREAMER READ ", udec_(idx), "/", udec_(NUM_FAST), " ---")
         debug("  readSectorRaw status        = ", sdec_(status))
-        debug("  start token                 = $", uhex_byte_(tok), "  (expect $FE)")
-        debug("  streamer-captured buf[0..3] = $", uhex_byte_(b0), " $", uhex_byte_(b1), " $", uhex_byte_(b2), " $", uhex_byte_(b3))
-        debug("  caller buf[0..3]            = $", uhex_byte_(fastBuf[0]), " $", uhex_byte_(fastBuf[1]), " $", uhex_byte_(fastBuf[2]), " $", uhex_byte_(fastBuf[3]), "  ($EE = untouched)")
+        debug("  start token                 = ", uhex_byte_(tok), "  (expect $FE)")
+        debug("  streamer-captured buf[0..3] = ", uhex_byte_(b0), " ", uhex_byte_(b1), " ", uhex_byte_(b2), " ", uhex_byte_(b3))
+        debug("  caller buf[0..3]            = ", uhex_byte_(fastBuf[0]), " ", uhex_byte_(fastBuf[1]), " ", uhex_byte_(fastBuf[2]), " ", uhex_byte_(fastBuf[3]), "  ($EE = untouched)")
         if recvC == calcC
-            debug("  recv_crc=$", uhex_word_(recvC), " (card)  calc_crc=$", uhex_word_(calcC), " (streamer)  MATCH")
+            debug("  recv_crc=", uhex_word_(recvC), " (card)  calc_crc=", uhex_word_(calcC), " (streamer)  MATCH")
         else
-            debug("  recv_crc=$", uhex_word_(recvC), " (card)  calc_crc=$", uhex_word_(calcC), " (streamer)  *** MISMATCH ***")
+            debug("  recv_crc=", uhex_word_(recvC), " (card)  calc_crc=", uhex_word_(calcC), " (streamer)  *** MISMATCH ***")
         waitms(250)
 
     ' ---- Summary ----
@@ -129,8 +129,8 @@ PUB go() | status, idx, tok, b0, b1, b2, b3, pbuf, dsec, dbt, recvC, calcC
     debug("--- SUMMARY ---")
     debug("  CRC mismatch count = ", udec_(sd.getCRCMismatchCount()))
     debug("  CRC retry   count  = ", udec_(sd.getCRCRetryCount()))
-    debug("  reference (slow)  buf[0..3] = $", uhex_byte_(slowBuf[0]), " $", uhex_byte_(slowBuf[1]), " $", uhex_byte_(slowBuf[2]), " $", uhex_byte_(slowBuf[3]))
-    debug("  streamer-captured buf[0..3] = $", uhex_byte_(b0), " $", uhex_byte_(b1), " $", uhex_byte_(b2), " $", uhex_byte_(b3))
+    debug("  reference (slow)  buf[0..3] = ", uhex_byte_(slowBuf[0]), " ", uhex_byte_(slowBuf[1]), " ", uhex_byte_(slowBuf[2]), " ", uhex_byte_(slowBuf[3]))
+    debug("  streamer-captured buf[0..3] = ", uhex_byte_(b0), " ", uhex_byte_(b1), " ", uhex_byte_(b2), " ", uhex_byte_(b3))
     debug("  -> differ: streamer corrupts capture | same: corruption is later in the 512 bytes")
     debug(" ")
     debug("END_SESSION")
