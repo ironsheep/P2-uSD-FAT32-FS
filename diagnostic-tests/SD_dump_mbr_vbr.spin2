@@ -1,0 +1,74 @@
+{{ =================================================================================================
+   File....... SD_dump_mbr_vbr.spin2
+   Purpose.... Forensic capture: full 512-byte hex dump of the MBR (sector 0) and the
+               FAT32-partition VBR (sector 8192) of the as-received counterfeit Cloudisk
+               2GB card, before it is reformatted. Preserves the original factory state.
+   Author..... Stephen M Moraco
+   Started.... 18 MAY 2026
+================================================================================================= }}
+
+CON
+    _CLKFREQ        = 350_000_000
+    DEBUG_BAUD      = 2_000_000
+
+    ' P2 Edge module SD slot pins
+    SD_CS   = 60
+    SD_MOSI = 59
+    SD_MISO = 58
+    SD_SCK  = 61
+
+    VBR_SECTOR      = 8192                                                      ' partition 1 LBA start (from the MBR)
+
+#pragma exportdef SD_INCLUDE_ALL
+
+OBJ
+    sd : "micro_sd_fat32_fs"
+
+DAT
+    buf     BYTE    0[512]
+
+PUB go() | status
+
+    debug(" ")
+    debug("=== SD MBR/VBR FORENSIC DUMP (as-received, pre-format) ===")
+    debug(" ")
+
+    status := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    if status < 0
+        debug("FATAL: initCardOnly failed (", sdec_(status), ")")
+        debug("END_SESSION")
+        return
+    debug("  initCardOnly OK")
+
+    debug(" ")
+    debug("================ MBR  (sector 0) ================")
+    if sd.readSectorRaw(0, @buf) < 0
+        debug("  ERROR reading sector 0")
+    else
+        dumpSector()
+        debug("  signature[510..511] = ", uhex_byte_(buf[510]), " ", uhex_byte_(buf[511]))
+
+    debug(" ")
+    debug("================ VBR  (sector ", udec_(VBR_SECTOR), ") ================")
+    if sd.readSectorRaw(VBR_SECTOR, @buf) < 0
+        debug("  ERROR reading sector ", udec_(VBR_SECTOR))
+    else
+        dumpSector()
+        debug(" ")
+        debug("  -- BPB decode --")
+        debug("    BytsPerSec  (off 11) = ", udec_(buf[11] | (buf[12] << 8)), "   (expect 512)")
+        debug("    SecPerClus  (off 13) = ", udec_(buf[13]))
+        debug("    RsvdSecCnt  (off 14) = ", udec_(buf[14] | (buf[15] << 8)))
+        debug("    NumFATs     (off 16) = ", udec_(buf[16]))
+        debug("    fstype @82           = '", lstr_(@buf + 82, 8), "'")
+        debug("    signature[510..511]  = ", uhex_byte_(buf[510]), " ", uhex_byte_(buf[511]))
+
+    debug(" ")
+    debug("END_SESSION")
+
+
+PRI dumpSector() | off
+' Hex-dump the 512-byte buffer, 16 bytes per line, with the offset prefix.
+
+    repeat off from 0 to 511 step 16
+        debug("  ", uhex_word_(off), ": ", uhex_byte_array_(@buf + off, 16))

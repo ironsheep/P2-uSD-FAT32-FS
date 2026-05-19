@@ -1,0 +1,81 @@
+{{ =================================================================================================
+   File....... SD_mount_diag.spin2
+   Purpose.... Diagnose a mount() failure: dump sector 0's structure (MBR partition
+               table or VBR/BPB) and report the exact mount status code, to tell
+               whether the card is FAT16/FAT12 (unsupported), unformatted, or FAT32.
+   Author..... Stephen M Moraco
+   Started.... 18 MAY 2026
+================================================================================================= }}
+
+CON
+    _CLKFREQ        = 350_000_000
+    DEBUG_BAUD      = 2_000_000
+
+    ' P2 Edge module SD slot pins
+    SD_CS   = 60
+    SD_MOSI = 59
+    SD_MISO = 58
+    SD_SCK  = 61
+
+#pragma exportdef SD_INCLUDE_ALL
+
+OBJ
+    sd : "micro_sd_fat32_fs"
+
+DAT
+    sec0    BYTE    0[512]
+
+PUB go() | status, ptype, idx
+
+    debug(" ")
+    debug("=== SD MOUNT DIAGNOSTIC (Edge socket) ===")
+    debug(" ")
+
+    status := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    if status < 0
+        debug("FATAL: initCardOnly failed (", sdec_(status), ")")
+        debug("END_SESSION")
+        return
+    debug("  initCardOnly OK")
+
+    status := sd.readSectorRaw(0, @sec0)
+    debug("  readSectorRaw(0) status = ", sdec_(status))
+    if status < 0
+        debug("FATAL: cannot read sector 0")
+        debug("END_SESSION")
+        return
+
+    debug(" ")
+    debug("--- sector 0 structure ---")
+    debug("  bytes[0..15]   : ", uhex_byte_array_(@sec0, 16))
+    debug("  signature[510] : ", uhex_byte_(sec0[510]), " ", uhex_byte_(sec0[511]), "  (expect 55 AA)")
+    debug(" ")
+    debug("  -- if MBR: partition entry 1 (offset 446) --")
+    debug("  entry[446..461]: ", uhex_byte_array_(@sec0 + 446, 16))
+    ptype := sec0[450]
+    debug("  partition type byte (off 450) = $", uhex_byte_(ptype))
+    case ptype
+        $00:        debug("    -> empty / no partition table here")
+        $01:        debug("    -> FAT12  (driver is FAT32-only)")
+        $04, $06:   debug("    -> FAT16  (driver is FAT32-only)")
+        $0E:        debug("    -> FAT16 LBA  (driver is FAT32-only)")
+        $0B, $0C:   debug("    -> FAT32  (supported)")
+        other:      debug("    -> other/unknown partition type")
+    debug(" ")
+    debug("  -- if VBR/superfloppy: BPB fs-type strings --")
+    debug("  bytes-per-sector (off 11) : ", udec_(sec0[11] | (sec0[12] << 8)))
+    debug("  fstype @54 (FAT12/16)     : '", lstr_(@sec0 + 54, 8), "'")
+    debug("  fstype @82 (FAT32)        : '", lstr_(@sec0 + 82, 8), "'")
+
+    debug(" ")
+    debug("--- attempting mount() ---")
+    status := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    debug("  mount() status = ", sdec_(status), "   sd.error() = ", sdec_(sd.error()))
+    if status == 0
+        debug("  MOUNT OK")
+        sd.unmount()
+    else
+        debug("  MOUNT FAILED")
+
+    debug(" ")
+    debug("END_SESSION")

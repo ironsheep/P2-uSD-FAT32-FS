@@ -6979,7 +6979,7 @@ PRI probeDataCrc() | data, idx, timeout, recv_crc, calc_crc, got_token
     calc_crc := calcDataCRC(@buf, SECTOR_SIZE)
     diag_recv_crc := recv_crc                                                   ' publish for diagnostic getters
     diag_calc_crc := calc_crc
-    sec_in_buf := -1                                                            ' probe used buf as scratch; invalidate cache
+    sec_in_buf := 0                                                             ' buf holds valid sector 0 - leave cached so mount's MBR read is a cache hit
 
     if recv_crc == calc_crc
       DEBUG[CH_INIT]("    [probeDataCrc] data CRC OK ($", uhex_word_(recv_crc), ") - validation stays ON")
