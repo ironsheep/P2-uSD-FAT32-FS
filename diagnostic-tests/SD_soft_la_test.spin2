@@ -60,15 +60,27 @@
      back-to-back XINITs against one continuous WRFAST. 1-pin capture packs
      8 samples per byte, so the hub write rate is ~22 MB/s.
 
-   HARDWARE-EDGE TRIGGER (CS)
+   HARDWARE-EDGE TRIGGER (CS falling edge via selectable event SE1)
 
      A software-timed capture window can miss the read: readSectorRaw goes
      through the worker-cog mailbox, so the bus activity starts an
-     indeterminate handoff later. Instead, the capture cog sets the
-     streamer up, then spins on CS (P60) and issues XINIT only when CS
-     FALLS -- the real start of the SD transaction. The capture is thus
-     synced to the bus event itself, not to the software call. (An earlier
-     waitus()-windowed version missed the read; the symptom was a capture
+     indeterminate handoff later. The capture must sync to the bus event
+     itself, not to the software call.
+
+     This tool uses the P2 selectable-event hardware. SETSE1 arms a
+     CS (P60) FALLING-EDGE event; WAITSE1 then halts the capture cog until
+     that edge occurs, and XINIT fires immediately on the wake. Advantages
+     over the earlier TESTP/JMP poll loop:
+       - Fixed 2-clock wake latency -- no poll-loop granularity jitter.
+       - The SE1 flag LATCHES the edge in hardware the instant CS falls,
+         even while this cog is still mid-setup, so the trigger cannot be
+         missed.
+     Because SE1 is armed for a true EDGE (not a level), the capture
+     completing at all is proof the edge fired: were CS already low at arm
+     time, WAITSE1 would block forever and the run would time out. As a
+     further check the cog samples CS with TESTP immediately after WAITSE1
+     wakes and reports the level (must be LOW). (An earlier waitus()-
+     windowed version missed the read entirely; the symptom was a capture
      showing ~50 SCK transitions, far too few for any real transaction.)
 
    SAMPLE RATE AND NYQUIST
@@ -117,6 +129,11 @@ CON
     ' sysclk/2 sample rate -> D = 2^32 / 2 = $8000_0000.
     CAP_XFRQ          = $8000_0000                                              ' sysclk/2 = 175 MS/s at 350 MHz
 
+    ' Selectable-event SE1 config word for SETSE1 (P2KB p2kbPasm2Setse1):
+    ' %010_PPPPPP selects a pin falling edge. CS (P60) falling marks the
+    ' start of the SD transaction -- the capture's hardware trigger.
+    SE1_CS_FALL       = %010_000000 | SD_CS
+
     SAMPLES_PER_XINIT = 64000                                                   ' multiple of 8; < 16-bit count max
     NUM_XINIT         = 2
     TOTAL_SAMPLES     = SAMPLES_PER_XINIT * NUM_XINIT                           ' 128000
@@ -144,6 +161,7 @@ DAT
     capModeWord LONG    0                                                       ' main -> capture cog: streamer mode | pin | count
     capStarted  LONG    0                                                       ' capture cog -> main: streamer running
     capDone     LONG    0                                                       ' capture cog -> main: capture complete
+    capCsAtWake LONG    9                                                       ' capture cog -> main: CS level sampled at WAITSE1 wake (0=low=good)
 
     sckTrans    LONG    0                                                       ' kept for the cross-capture verdict
     misoTrans   LONG    0
@@ -207,6 +225,7 @@ PRI capture1pin(p_label, pin, isSck) | status, cogN, t0
 
     capStarted := 0
     capDone := 0
+    capCsAtWake := 9
     bytefill(@capBuf, 0, CAP_BUF_BYTES)
     bytefill(@scratchBuf, $EE, 512)
     capModeWord := CAP_1P_BASE | (pin << 17) | SAMPLES_PER_XINIT
@@ -223,7 +242,7 @@ PRI capture1pin(p_label, pin, isSck) | status, cogN, t0
             debug("  ERROR: capture cog never signaled start")
             return
 
-    waitus(5)                                                                   ' ensure the capture cog reached its CS-poll loop
+    waitus(5)                                                                   ' ensure the capture cog reached WAITSE1 (armed)
 
     status := sd.readSectorRaw(0, @scratchBuf)                                  ' the SD read; its CS edge triggers the capture
 
@@ -235,7 +254,11 @@ PRI capture1pin(p_label, pin, isSck) | status, cogN, t0
     ' ---- end quiet zone: capture cog has finished and stopped ----
 
     debug("  capture cog ran on cog ", udec_(cogN))
-    debug("  driver streamer read status=", sdec_(status), "  buf[0..3]=$", uhex_byte_(scratchBuf[0]), " $", uhex_byte_(scratchBuf[1]), " $", uhex_byte_(scratchBuf[2]), " $", uhex_byte_(scratchBuf[3]))
+    if capCsAtWake == 0
+        debug("  TRIGGER PROOF: SE1 CS-falling-edge event fired - CS was LOW at WAITSE1 wake (capture synced to the edge)")
+    else
+        debug("  TRIGGER PROOF: WARNING - CS level at WAITSE1 wake = ", udec_(capCsAtWake), " (expected 0=low)")
+    debug("  driver streamer read status=", sdec_(status), "  buf[0..3]=", uhex_byte_(scratchBuf[0]), " ", uhex_byte_(scratchBuf[1]), " ", uhex_byte_(scratchBuf[2]), " ", uhex_byte_(scratchBuf[3]))
     analyze1pin(p_label, isSck)
 
 
@@ -307,31 +330,40 @@ PRI debug_char_row(p_prefix, startIdx, lineEnd) | idx, p_dst
     debug(zstr_(p_prefix), zstr_(@rowBuf))
 
 
-PRI captureCog() | mode1, bufAddr, xf
+PRI captureCog() | mode1, bufAddr, xf, csWake
 ' Runs on its own cog (a Spin2 method, so DAT vars resolve correctly; the
 ' streamer work is inline PASM, the same pattern the driver uses). Reads
-' capModeWord, captures the selected pin with two back-to-back XINITs
-' against one continuous WRFAST, then signals completion.
+' capModeWord, arms a CS falling-edge selectable event, captures the
+' selected pin with two back-to-back XINITs against one continuous
+' WRFAST, then signals completion.
 
     mode1   := capModeWord
     bufAddr := @capBuf
     xf      := CAP_XFRQ
+    csWake  := 0
     capStarted := 1                                                             ' signal main cog: armed, watching CS
 
-    ' Hardware-edge trigger: set the streamer up, then wait for CS (P60) to
-    ' fall -- the real start of the SD transaction -- before XINIT. This
-    ' syncs the capture to the bus event itself, not to the software call.
+    ' Hardware-edge trigger via selectable event SE1. SETSE1 arms a CS
+    ' (P60) falling-edge event and clears the SE1 flag; the flag then
+    ' latches the instant CS falls -- even during the streamer setup
+    ' below -- so the edge cannot be missed. WAITSE1 halts the cog with a
+    ' fixed 2-clock wake latency (no poll-loop jitter). TESTP right after
+    ' the wake records the CS level, which must be LOW: direct proof the
+    ' event fired on the edge.
     org
+                setse1  #SE1_CS_FALL                                            ' arm SE1 = CS falling edge, clear flag
                 setxfrq xf                                                      ' sample clock = sysclk/2
                 wrfast  #0, bufAddr                                             ' FIFO -> capBuf, continuous
-waitCsLow       testp   #SD_CS  wc                                              ' C = CS pin level (1=idle high)
-        if_c    jmp     #waitCsLow                                              ' spin while CS is high
+                waitse1                                                         ' halt until CS falls (latched, cannot be missed)
+                testp   #SD_CS  wc                                              ' C = CS pin level at wake
+                bitc    csWake, #0                                              ' record CS level (expect 0 = low)
                 xinit   mode1, #0                                               ' CS just fell -> capture first batch
                 waitxfi
                 xinit   mode1, #0                                               ' capture next batch (FIFO continues)
                 waitxfi
     end
 
+    capCsAtWake := csWake                                                       ' publish trigger-proof result
     capDone := 1                                                                ' signal main cog: capture complete
 
 
