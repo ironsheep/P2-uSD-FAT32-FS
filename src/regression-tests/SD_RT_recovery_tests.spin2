@@ -27,18 +27,20 @@ CON
 
      _CLKFREQ        = 350_000_000
 
-     ' P2 Edge module SD slot pins
+     ' SD card pin assignments
+     ' Default: P2 Edge module SD slot. Build with -D SD_PINS_EXTERNAL
+     ' to use the external SD header (base pin 16).
+#ifdef SD_PINS_EXTERNAL
+     SD_CS   = 20
+     SD_MOSI = 19
+     SD_MISO = 18
+     SD_SCK  = 21
+#else
      SD_CS   = 60
      SD_MOSI = 59
      SD_MISO = 58
      SD_SCK  = 61
-
-     ' External SD header (base pin 16)
-     'SD_CS   = 20
-     'SD_MOSI = 19
-     'SD_MISO = 18
-     'SD_SCK  = 21
-
+#endif
      BUFFER_SIZE = 512
 
      MAX_READ_CRC_RETRIES = 3  ' Must match driver constant
@@ -76,7 +78,7 @@ readBuffer2_guard BYTE  0[16]
 beforeContent   BYTE    "BEFORE", 0
 afterContent    BYTE    "AFTER", 0
 
-PUB go() | result, handle, handle0, handle1, handle2, bytesRead, bytesRead2, crcBaseline
+PUB go() | result, handle, handle0, handle1, handle2, bytesRead, bytesRead2, crcBaseline, dummyCRC
 '' Main entry point for recovery scenario regression tests
 
     debug(" ")
@@ -90,6 +92,12 @@ PUB go() | result, handle, handle0, handle1, handle2, bytesRead, bytesRead2, crc
         debug("ERROR: Could not mount SD card!")
         debug("END_SESSION")
         return
+
+    ' Detect dummy-CRC cards. On these cards (CW_NO_DATA_CRC), the driver
+    ' permanently skips read-side CRC validation, so read-side error injection
+    ' is a no-op — exhaustive injection cannot force a read failure.
+    dummyCRC := (sd.cardWarnings() & sd.CW_NO_DATA_CRC) <> 0
+    debug("   Dummy-CRC card: ", udec(dummyCRC))
 
     ' Show card info
     debug(" ")
@@ -165,8 +173,15 @@ PUB go() | result, handle, handle0, handle1, handle2, bytesRead, bytesRead2, crc
         sd.setTestForceReadError(MAX_READ_CRC_RETRIES)
         bytefill(@readBuffer, 0, BUFFER_SIZE)
         bytesRead := sd.readHandle(handle, @readBuffer, BUFFER_SIZE)
-        utils.evaluateSubValue(bytesRead, @"read fails with 0", 0)
-        utils.evaluateSubBool(sd.getCRCMismatchCount() > crcBaseline, @"CRC mismatches counted", true)
+        if dummyCRC
+            ' Read-side validation is permanently skipped on this card class, so
+            ' exhaustive injection cannot force failure. Read returns 512 bytes
+            ' and mismatch counter stays unchanged.
+            utils.evaluateSubValue(bytesRead, @"read returns 512 (validation skipped)", BUFFER_SIZE)
+            utils.evaluateSubValue(sd.getCRCMismatchCount(), @"mismatch count unchanged (validation skipped)", crcBaseline)
+        else
+            utils.evaluateSubValue(bytesRead, @"read fails with 0", 0)
+            utils.evaluateSubBool(sd.getCRCMismatchCount() > crcBaseline, @"CRC mismatches counted", true)
 
         ' Clear errors and seek back to start
         sd.clearTestErrors()

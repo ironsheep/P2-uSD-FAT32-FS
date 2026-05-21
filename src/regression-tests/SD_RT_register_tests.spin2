@@ -22,18 +22,20 @@ CON
 
      _CLKFREQ        = 350_000_000
 
-     ' P2 Edge module SD slot pins
+     ' SD card pin assignments
+     ' Default: P2 Edge module SD slot. Build with -D SD_PINS_EXTERNAL
+     ' to use the external SD header (base pin 16).
+#ifdef SD_PINS_EXTERNAL
+     SD_CS   = 20
+     SD_MOSI = 19
+     SD_MISO = 18
+     SD_SCK  = 21
+#else
      SD_CS   = 60
      SD_MOSI = 59
      SD_MISO = 58
      SD_SCK  = 61
-
-     ' External SD header (base pin 16)
-     'SD_CS   = 20
-     'SD_MOSI = 19
-     'SD_MISO = 18
-     'SD_SCK  = 21
-
+#endif
 ' Enable register and raw access
 #ifdef __SPINTOOLS__
 #define SD_INCLUDE_REGISTERS
@@ -157,17 +159,19 @@ PUB go() | result, csdVer, tranSpeed, capacity, cardSectors, readTimeout, writeT
     ' ======================================================================
     utils.startTestGroup(@"Timeout Values")
 
-    ' Test: getReadTimeout() is reasonable (50-500ms)
+    ' Test: getReadTimeout() within driver's clamp (1..30000ms)
+    ' SDHC fixed ~100ms; SDSC calculated from CSD TAAC/NSAC, can be much larger.
     utils.startTest(@"getReadTimeout() in reasonable range")
     readTimeout := sd.getReadTimeout()
     debug("   Read timeout: ", udec(readTimeout), " ms")
-    utils.evaluateRange(readTimeout, @"read timeout ms", 50, 500)
+    utils.evaluateRange(readTimeout, @"read timeout ms", 1, 30000)
 
-    ' Test: getWriteTimeout() is reasonable (100-1000ms)
+    ' Test: getWriteTimeout() within driver's clamp (1..30000ms)
+    ' SDHC fixed ~250ms; SDSC = read * R2W_FACTOR, clamped to 30000ms (v1.5.3).
     utils.startTest(@"getWriteTimeout() in reasonable range")
     writeTimeout := sd.getWriteTimeout()
     debug("   Write timeout: ", udec(writeTimeout), " ms")
-    utils.evaluateRange(writeTimeout, @"write timeout ms", 100, 1000)
+    utils.evaluateRange(writeTimeout, @"write timeout ms", 1, 30000)
 
     ' Test: Write timeout >= read timeout
     utils.startTest(@"Write timeout >= read timeout")

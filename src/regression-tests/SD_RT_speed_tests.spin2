@@ -29,18 +29,20 @@ CON
 
      _CLKFREQ        = 350_000_000
 
-     ' P2 Edge module SD slot pins
+     ' SD card pin assignments
+     ' Default: P2 Edge module SD slot. Build with -D SD_PINS_EXTERNAL
+     ' to use the external SD header (base pin 16).
+#ifdef SD_PINS_EXTERNAL
+     SD_CS   = 20
+     SD_MOSI = 19
+     SD_MISO = 18
+     SD_SCK  = 21
+#else
      SD_CS   = 60
      SD_MOSI = 59
      SD_MISO = 58
      SD_SCK  = 61
-
-     ' External SD header (base pin 16)
-     'SD_CS   = 20
-     'SD_MOSI = 19
-     'SD_MISO = 18
-     'SD_SCK  = 21
-
+#endif
      BUFFER_SIZE = 512
 
 ' Enable speed and register features
@@ -72,7 +74,7 @@ writeBuffer     BYTE    0[BUFFER_SIZE]
 readBuffer      BYTE    0[BUFFER_SIZE]
 readBuffer_guard BYTE   0[16]
 
-PUB go() | result, handle, spiFreq, maxSpeed, hsActive, cmd6Sup, hsCap, hsResult, bytesRead, bytesWritten, readTimeout, writeTimeout
+PUB go() | result, handle, spiFreq, maxSpeed, hsActive, cmd6Sup, hsCap, hsResult, bytesRead, bytesWritten, readTimeout, writeTimeout, computedSpeed
 '' Main entry point for speed API regression tests
 
     debug(" ")
@@ -86,6 +88,14 @@ PUB go() | result, handle, spiFreq, maxSpeed, hsActive, cmd6Sup, hsCap, hsResult
         debug("ERROR: Could not mount SD card!")
         debug("END_SESSION")
         return
+
+    ' Capture the driver's computed safe operating speed. On most cards this is
+    ' 25 MHz; on cards where probeSpiCeiling backed off (dummy-CRC counterfeits
+    ' with SCK ceiling < 25 MHz), it is the probe-found safe rate. Used below
+    ' wherever the test needs to restore a known-good speed without forcing
+    ' the card above its empirical ceiling.
+    computedSpeed := sd.getSPIFrequency()
+    debug("   Driver-computed safe speed: ", udec(computedSpeed), " Hz")
 
     ' Show card info
     debug(" ")
@@ -128,8 +138,8 @@ PUB go() | result, handle, spiFreq, maxSpeed, hsActive, cmd6Sup, hsCap, hsResult
     debug("   After setSPISpeed(20M): ", udec(spiFreq), " Hz")
     ' Should be approximately 20 MHz (allow 15-25 MHz range for divider rounding)
     utils.evaluateRange(spiFreq, @"freq after setSPISpeed(20M)", 15_000_000, 25_000_000)
-    ' Restore to 25 MHz
-    sd.setSPISpeed(25_000_000)
+    ' Restore to driver-chosen standard speed (honors per-card SCK ceiling)
+    sd.setSPISpeed(computedSpeed)
 
     ' Test: Data integrity at 20 MHz
     utils.startTest(@"Read/write integrity at 20 MHz")
@@ -148,7 +158,7 @@ PUB go() | result, handle, spiFreq, maxSpeed, hsActive, cmd6Sup, hsCap, hsResult
         sd.closeFileHandle(handle)
     result := utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $50)
     utils.evaluateBool(result, @"data integrity at 20 MHz", true)
-    sd.setSPISpeed(25_000_000)
+    sd.setSPISpeed(computedSpeed)
 
     ' ======================================================================
     ' TEST GROUP: CMD6/High-Speed
@@ -185,8 +195,8 @@ PUB go() | result, handle, spiFreq, maxSpeed, hsActive, cmd6Sup, hsCap, hsResult
 
     ' Test: Read/write integrity after high-speed attempt
     utils.startTest(@"Data integrity after HS attempt")
-    ' Restore known SPI speed after HS attempt (card may be in uncertain state)
-    sd.setSPISpeed(25_000_000)
+    ' Restore driver-chosen standard speed after HS attempt (card may be in uncertain state)
+    sd.setSPISpeed(computedSpeed)
     bytefill(@readBuffer, 0, BUFFER_SIZE)  ' Clear stale data
     utils.fillBufferWithPattern(@writeBuffer, BUFFER_SIZE, $70)
     sd.deleteFile(@spTestFile2)
@@ -223,8 +233,8 @@ PUB go() | result, handle, spiFreq, maxSpeed, hsActive, cmd6Sup, hsCap, hsResult
     ' ======================================================================
     utils.startTestGroup(@"Speed Boundaries")
 
-    ' Restore standard speed first
-    sd.setSPISpeed(25_000_000)
+    ' Restore driver-chosen standard speed first
+    sd.setSPISpeed(computedSpeed)
 
     ' Test: setSPISpeed(400_000) init speed
     ' Note: 400 kHz is the card initialization speed; filesystem operations are
@@ -235,7 +245,7 @@ PUB go() | result, handle, spiFreq, maxSpeed, hsActive, cmd6Sup, hsCap, hsResult
     spiFreq := sd.getSPIFrequency()
     debug("   Init speed: ", udec(spiFreq), " Hz")
     utils.evaluateRange(spiFreq, @"init speed Hz", 300_000, 500_000)
-    sd.setSPISpeed(25_000_000)                                                  ' Restore before filesystem ops
+    sd.setSPISpeed(computedSpeed)                                               ' Restore driver-chosen safe speed before filesystem ops
 
     ' Verify data works after speed restore (read existing file)
     utils.startTest(@"Data integrity after speed restore")
@@ -257,23 +267,25 @@ PUB go() | result, handle, spiFreq, maxSpeed, hsActive, cmd6Sup, hsCap, hsResult
     debug("   Standard speed: ", udec(spiFreq), " Hz")
     utils.evaluateRange(spiFreq, @"standard speed Hz", 20_000_000, 30_000_000)
 
-    ' Test: getReadTimeout() is reasonable
+    ' Test: getReadTimeout() within driver's clamp (1..30000ms)
+    ' SDHC fixed ~100ms; SDSC calculated from CSD TAAC/NSAC, can be much larger.
     utils.startTest(@"getReadTimeout() reasonable value")
     readTimeout := sd.getReadTimeout()
     debug("   Read timeout: ", udec(readTimeout), " ms")
-    utils.evaluateRange(readTimeout, @"read timeout", 50, 500)
+    utils.evaluateRange(readTimeout, @"read timeout", 1, 30000)
 
-    ' Test: getWriteTimeout() is reasonable
+    ' Test: getWriteTimeout() within driver's clamp (1..30000ms)
+    ' SDHC fixed ~250ms; SDSC = read * R2W_FACTOR, clamped to 30000ms (v1.5.3).
     utils.startTest(@"getWriteTimeout() reasonable value")
     writeTimeout := sd.getWriteTimeout()
     debug("   Write timeout: ", udec(writeTimeout), " ms")
-    utils.evaluateRange(writeTimeout, @"write timeout", 100, 1000)
+    utils.evaluateRange(writeTimeout, @"write timeout", 1, 30000)
 
     ' ======================================================================
     ' Cleanup and Summary
     ' ======================================================================
-    ' Restore to 25 MHz before cleanup
-    sd.setSPISpeed(25_000_000)
+    ' Restore driver-chosen standard speed before cleanup
+    sd.setSPISpeed(computedSpeed)
 
     sd.deleteFile(@spTestFile)
     sd.deleteFile(@spTestFile2)

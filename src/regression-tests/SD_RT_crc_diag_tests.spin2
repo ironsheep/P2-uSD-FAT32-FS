@@ -27,18 +27,20 @@ CON
 
      _CLKFREQ        = 350_000_000
 
-     ' P2 Edge module SD slot pins
+     ' SD card pin assignments
+     ' Default: P2 Edge module SD slot. Build with -D SD_PINS_EXTERNAL
+     ' to use the external SD header (base pin 16).
+#ifdef SD_PINS_EXTERNAL
+     SD_CS   = 20
+     SD_MOSI = 19
+     SD_MISO = 18
+     SD_SCK  = 21
+#else
      SD_CS   = 60
      SD_MOSI = 59
      SD_MISO = 58
      SD_SCK  = 61
-
-     ' External SD header (base pin 16)
-     'SD_CS   = 20
-     'SD_MOSI = 19
-     'SD_MISO = 18
-     'SD_SCK  = 21
-
+#endif
      BUFFER_SIZE = 512
 
 ' Enable debug/diagnostic features
@@ -66,7 +68,7 @@ writeBuffer     BYTE    0[BUFFER_SIZE]
 readBuffer      BYTE    0[BUFFER_SIZE]
 readBuffer_guard BYTE   0[16]
 
-PUB go() | result, handle, bytesRead, matchCount, mismatchCount, retryCount, lastRecvCRC, lastCalcCRC, lastSentCRC, matchBefore, matchAfter, cmd13val, cmd13err
+PUB go() | result, handle, bytesRead, matchCount, mismatchCount, retryCount, lastRecvCRC, lastCalcCRC, lastSentCRC, matchBefore, matchAfter, cmd13val, cmd13err, dummyCRC
 '' Main entry point for CRC diagnostic regression tests
 
     debug(" ")
@@ -80,6 +82,15 @@ PUB go() | result, handle, bytesRead, matchCount, mismatchCount, retryCount, las
         debug("ERROR: Could not mount SD card!")
         debug("END_SESSION")
         return
+
+    ' Detect dummy-CRC cards. Some cards (older SDSC, counterfeit media) return a
+    ' placeholder $0000 data-block CRC instead of a real one; the driver's
+    ' probeDataCrc() flags these via CW_NO_DATA_CRC and readSector skips CRC
+    ' validation. On these cards, the CRC match/mismatch/retry counters never
+    ' increment and getLastReceivedCRC() reports the dummy value, not the real
+    ' CRC the data would have produced. Several tests below branch on this.
+    dummyCRC := (sd.cardWarnings() & sd.CW_NO_DATA_CRC) <> 0
+    debug("   Dummy-CRC card: ", udec(dummyCRC))
 
     ' Show card info
     debug(" ")
@@ -96,11 +107,16 @@ PUB go() | result, handle, bytesRead, matchCount, mismatchCount, retryCount, las
     ' ======================================================================
     utils.startTestGroup(@"CRC Counter Initial State")
 
-    ' Test: Match count > 0 after mount (mount reads sectors)
-    utils.startTest(@"CRC match count > 0 after mount")
+    ' Test: Match count behaves correctly after mount (mount reads sectors).
+    ' Real-CRC card: count > 0 (each read validates and increments). Dummy-CRC
+    ' card: count == 0 (validation skipped by design).
+    utils.startTest(@"CRC match count correct after mount")
     matchCount := sd.getCRCMatchCount()
     debug("   CRC match count: ", udec(matchCount))
-    utils.evaluateSubBool(matchCount > 0, @"match count > 0", true)
+    if dummyCRC
+        utils.evaluateSubBool(matchCount == 0, @"match count == 0 (dummy-CRC, validation skipped)", true)
+    else
+        utils.evaluateSubBool(matchCount > 0, @"match count > 0", true)
 
     ' Test: Mismatch count == 0 on healthy card
     utils.startTest(@"CRC mismatch count == 0 on healthy card")
@@ -114,13 +130,18 @@ PUB go() | result, handle, bytesRead, matchCount, mismatchCount, retryCount, las
     debug("   CRC retry count: ", udec(retryCount))
     utils.evaluateSingleValue(retryCount, @"retry count", 0)
 
-    ' Test: lastReceivedCRC == lastCalculatedCRC (CRC pair consistent after mount)
-    ' Note: CRC may be $0000 if last sector read was all zeros (e.g., empty FAT sector)
-    utils.startTest(@"lastReceivedCRC == lastCalculatedCRC after mount")
+    ' Test: lastReceivedCRC pairs correctly with lastCalculatedCRC after mount.
+    ' Real-CRC card: recv == calc (validates). Note: may both be $0000 if last
+    ' sector read was all zeros (e.g., empty FAT sector). Dummy-CRC card: recv
+    ' is the card's dummy placeholder (typically $0000), independent of calc.
+    utils.startTest(@"lastReceivedCRC consistent after mount")
     lastRecvCRC := sd.getLastReceivedCRC()
     lastCalcCRC := sd.getLastCalculatedCRC()
     debug("   Last received CRC: $", uhex_(lastRecvCRC), " calculated: $", uhex_(lastCalcCRC))
-    utils.evaluateSingleValue(lastRecvCRC, @"recv == calc CRC", lastCalcCRC)
+    if dummyCRC
+        utils.evaluateSingleValue(lastRecvCRC, @"recv == dummy ($0000)", $0000)
+    else
+        utils.evaluateSingleValue(lastRecvCRC, @"recv == calc CRC", lastCalcCRC)
 
     ' ======================================================================
     ' TEST GROUP: CRC Values After Operations
@@ -146,7 +167,10 @@ PUB go() | result, handle, bytesRead, matchCount, mismatchCount, retryCount, las
 
     matchAfter := sd.getCRCMatchCount()
     debug("   Match before: ", udec(matchBefore), " after: ", udec(matchAfter))
-    utils.evaluateSubBool(matchAfter > matchBefore, @"match count increased", true)
+    if dummyCRC
+        utils.evaluateSubBool(matchAfter == matchBefore, @"match count unchanged (dummy-CRC, validation skipped)", true)
+    else
+        utils.evaluateSubBool(matchAfter > matchBefore, @"match count increased", true)
 
     ' Test: lastCalculatedCRC != 0 after reads
     utils.startTest(@"lastCalculatedCRC != 0 after reads")
@@ -168,8 +192,12 @@ PUB go() | result, handle, bytesRead, matchCount, mismatchCount, retryCount, las
     utils.evaluateSubValue(result, @"remount succeeds", sd.SUCCESS)
     matchCount := sd.getCRCMatchCount()
     debug("   Match count after remount: ", udec(matchCount))
-    ' After remount, count should be > 0 (mount reads sectors) but less than before
-    utils.evaluateSubBool(matchCount > 0, @"match count > 0 after remount", true)
+    ' Real-CRC card: mount reads sectors, count > 0. Dummy-CRC card: validation
+    ' skipped by design, count stays 0 across remount.
+    if dummyCRC
+        utils.evaluateSubBool(matchCount == 0, @"match count == 0 after remount (dummy-CRC)", true)
+    else
+        utils.evaluateSubBool(matchCount > 0, @"match count > 0 after remount", true)
 
     ' ======================================================================
     ' TEST GROUP: setCRCValidation Toggle
@@ -188,7 +216,10 @@ PUB go() | result, handle, bytesRead, matchCount, mismatchCount, retryCount, las
         sd.closeFileHandle(handle)
     matchAfter := sd.getCRCMatchCount()
     debug("   CRC enabled - before: ", udec(matchBefore), " after: ", udec(matchAfter))
-    utils.evaluateSubBool(matchAfter > matchBefore, @"enabled: count increased", true)
+    if dummyCRC
+        utils.evaluateSubBool(matchAfter == matchBefore, @"enabled: count unchanged (dummy-CRC, validation still skipped)", true)
+    else
+        utils.evaluateSubBool(matchAfter > matchBefore, @"enabled: count increased", true)
 
     ' Test: Disable CRC validation, count unchanged on read
     utils.startTest(@"CRC disabled: count unchanged on read")

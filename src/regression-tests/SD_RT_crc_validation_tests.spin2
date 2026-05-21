@@ -27,18 +27,20 @@ CON
 
      _CLKFREQ        = 350_000_000
 
-     ' P2 Edge module SD slot pins
+     ' SD card pin assignments
+     ' Default: P2 Edge module SD slot. Build with -D SD_PINS_EXTERNAL
+     ' to use the external SD header (base pin 16).
+#ifdef SD_PINS_EXTERNAL
+     SD_CS   = 20
+     SD_MOSI = 19
+     SD_MISO = 18
+     SD_SCK  = 21
+#else
      SD_CS   = 60
      SD_MOSI = 59
      SD_MISO = 58
      SD_SCK  = 61
-
-     ' External SD header (base pin 16)
-     'SD_CS   = 20
-     'SD_MOSI = 19
-     'SD_MISO = 18
-     'SD_SCK  = 21
-
+#endif
      BUFFER_SIZE = 512
 
      MAX_READ_CRC_RETRIES = 3  ' Must match driver constant
@@ -68,7 +70,7 @@ writeBuffer     BYTE    0[BUFFER_SIZE]
 readBuffer      BYTE    0[BUFFER_SIZE]
 readBuffer_guard BYTE   0[16]
 
-PUB go() | result, handle, bytesRead, bytesWritten, retryBefore, retryAfter, mismatchBefore, mismatchAfter, errCount
+PUB go() | result, handle, bytesRead, bytesWritten, retryBefore, retryAfter, mismatchBefore, mismatchAfter, errCount, dummyCRC
 '' Main entry point for CRC validation regression tests
 
     debug(" ")
@@ -82,6 +84,13 @@ PUB go() | result, handle, bytesRead, bytesWritten, retryBefore, retryAfter, mis
         debug("ERROR: Could not mount SD card!")
         debug("END_SESSION")
         return
+
+    ' Detect dummy-CRC cards. On these cards (CW_NO_DATA_CRC), the driver
+    ' permanently skips read-side CRC validation (the card's CRC is meaningless),
+    ' so read-side error injection has no effect. Write-side injection still
+    ' fires because the driver always sends a real computed CRC.
+    dummyCRC := (sd.cardWarnings() & sd.CW_NO_DATA_CRC) <> 0
+    debug("   Dummy-CRC card: ", udec(dummyCRC))
 
     ' Show card info
     debug(" ")
@@ -123,8 +132,15 @@ PUB go() | result, handle, bytesRead, bytesWritten, retryBefore, retryAfter, mis
     errCount := sd.getTestErrorCount()
     debug("  bytesRead=", sdec_(bytesRead), " retries before=", udec_(retryBefore), " after=", udec_(retryAfter), " errCount=", udec_(errCount))
     utils.evaluateSubValue(bytesRead, @"read returns 512 bytes", BUFFER_SIZE)
-    utils.evaluateSubBool(retryAfter > retryBefore, @"retry count increased", true)
-    utils.evaluateSubValue(errCount, @"error count == 1", 1)
+    if dummyCRC
+        ' Dummy-CRC card: read-side validation is permanently skipped, so the
+        ' injection hook never fires and no retry is triggered. Read returns
+        ' 512 bytes normally — no error path exercised.
+        utils.evaluateSubValue(retryAfter, @"retry count unchanged (validation skipped)", retryBefore)
+        utils.evaluateSubValue(errCount, @"error count == 0 (hook bypassed)", 0)
+    else
+        utils.evaluateSubBool(retryAfter > retryBefore, @"retry count increased", true)
+        utils.evaluateSubValue(errCount, @"error count == 1", 1)
     utils.showSubTestResults()
 
     ' Test 2: Exhaustive forced CRC error (count=3) causes read failure
@@ -142,8 +158,15 @@ PUB go() | result, handle, bytesRead, bytesWritten, retryBefore, retryAfter, mis
         sd.closeFileHandle(handle)
     mismatchAfter := sd.getCRCMismatchCount()
     debug("  bytesRead=", sdec_(bytesRead), " mismatches before=", udec_(mismatchBefore), " after=", udec_(mismatchAfter))
-    utils.evaluateSubValue(bytesRead, @"read returns 0 (failure)", 0)
-    utils.evaluateSubBool(mismatchAfter > mismatchBefore, @"mismatch count increased", true)
+    if dummyCRC
+        ' Dummy-CRC card: read-side validation is permanently skipped, so even
+        ' exhaustive injection cannot cause failure. Read returns 512 bytes and
+        ' mismatch count stays unchanged.
+        utils.evaluateSubValue(bytesRead, @"read returns 512 (validation skipped)", BUFFER_SIZE)
+        utils.evaluateSubValue(mismatchAfter, @"mismatch count unchanged (validation skipped)", mismatchBefore)
+    else
+        utils.evaluateSubValue(bytesRead, @"read returns 0 (failure)", 0)
+        utils.evaluateSubBool(mismatchAfter > mismatchBefore, @"mismatch count increased", true)
     utils.showSubTestResults()
 
     ' Test 3: Normal read after forced error succeeds
