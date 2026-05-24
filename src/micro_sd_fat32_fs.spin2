@@ -3367,20 +3367,37 @@ PRI do_mount() : status | reserved, pPart, pVBR, pFSI, idx, p_entry, cluster, se
           if card_warning_flags & CW_CMD13_UNRELIABLE
             DEBUG[CH_MOUNT]("  [do_mount] WARNING: CMD13 unreliable on this card - status checks disabled")
 
-PRI do_unmount() : status
+PRI do_unmount() : status | sync_status, close_status
 ' Internal unmount operation - syncs all handles and updates FSInfo.
 '
-' @returns status - SUCCESS on success
+' Continues through the full unmount sequence even when an earlier step fails,
+' so as much state as possible reaches disk; the first error encountered is
+' the value returned.
+'
+' @returns status - SUCCESS on clean unmount; first non-SUCCESS encountered
+'                   among (do_sync_all, do_close, updateFSInfo) otherwise.
 
 ' Sync all open handles before unmount
 
-  do_sync_all()
-  do_close()
-  status := updateFSInfo()
+  status := SUCCESS
+
+  sync_status := do_sync_all()
+  if sync_status < 0
+    status := sync_status
+
+  close_status := do_close()
+  if close_status < 0 AND status == SUCCESS
+    status := close_status
+
+  ' updateFSInfo returns FALSE for both "nothing to update" (no FSInfo sector
+  ' / no cached free count) and "write failed" -- gate on those preconditions
+  ' so a card without FSInfo does not get a spurious E_IO_ERROR on unmount.
+  if fsinfo_sec <> 0 AND fsi_free_count <> $FFFF_FFFF AND NOT updateFSInfo() AND status == SUCCESS
+    status := E_IO_ERROR
+
   flags := flags & !F_MOUNTED
   driver_mode := MODE_NONE
-  DEBUG[CH_MOUNT]("  [do_unmount] Card unmounted cleanly, mode=NONE")
-  status := SUCCESS
+  DEBUG[CH_MOUNT]("  [do_unmount] Card unmounted, mode=NONE, status=", sdec_(status))
 
 PRI do_open(name_ptr) : status | search_result
 ' Internal open file operation - finds existing file in directory.
@@ -3788,7 +3805,10 @@ PRI do_write_h(handle, p_buffer, count) : bytes_written | p_hbuf, offset, to_wri
       if h_flags[handle] & HF_DIRTY
         DEBUG[CH_FILE]("  [do_write_h] Flushing stale sector ", udec_(h_buf_sector[handle]))
         bytemove(@buf, p_hbuf, SECTOR_SIZE)
-        writeSector(h_buf_sector[handle], BUF_DATA)
+        if writeSector(h_buf_sector[handle], BUF_DATA) < 0
+          DEBUG[CH_FILE]("  [do_write_h] Stale sector flush FAILED for sector ", udec_(h_buf_sector[handle]))
+          bytes_written := E_IO_ERROR                  ' Surface I/O failure (sector still dirty -- next sync retries)
+          return
         h_flags[handle] &= !HF_DIRTY
       h_buf_sector[handle] := -1
       h_sector[handle]++
@@ -3820,7 +3840,11 @@ PRI do_write_h(handle, p_buffer, count) : bytes_written | p_hbuf, offset, to_wri
         if h_flags[handle] & HF_DIRTY
           DEBUG[CH_FILE]("  [do_write_h] Flushing dirty sector ", udec_(h_buf_sector[handle]))
           bytemove(@buf, p_hbuf, SECTOR_SIZE)
-          writeSector(h_buf_sector[handle], BUF_DATA)
+          if writeSector(h_buf_sector[handle], BUF_DATA) < 0
+            DEBUG[CH_FILE]("  [do_write_h] Dirty sector flush FAILED for sector ", udec_(h_buf_sector[handle]))
+            if bytes_written == 0
+              bytes_written := E_IO_ERROR              ' No data accepted yet -- surface failure
+            quit                                       ' Otherwise return partial write count to caller
           h_flags[handle] &= !HF_DIRTY
 
         ' Load sector (or zero-fill if writing past end)
@@ -3858,7 +3882,9 @@ PRI do_write_h(handle, p_buffer, count) : bytes_written | p_hbuf, offset, to_wri
         ' Flush current sector
         DEBUG[CH_FILE]("  [do_write_h] Sector full, flushing sector ", udec_(h_sector[handle]))
         bytemove(@buf, p_hbuf, SECTOR_SIZE)
-        writeSector(h_sector[handle], BUF_DATA)
+        if writeSector(h_sector[handle], BUF_DATA) < 0
+          DEBUG[CH_FILE]("  [do_write_h] Full-sector flush FAILED for sector ", udec_(h_sector[handle]))
+          quit                                         ' Return partial write count -- this sector's bytes were already counted but did not reach disk
         h_flags[handle] &= !HF_DIRTY
         h_buf_sector[handle] := -1
 
@@ -3972,18 +3998,25 @@ PRI do_sync_h(handle) : status | p_buf
     status := E_NOT_A_DIR_HANDLE
   else
     DEBUG[CH_FILE]("  [do_sync_h] Syncing handle=", udec_(handle), " flags=$", uhex_byte_(h_flags[handle]))
+    status := SUCCESS
 
-    ' If buffer is dirty, flush it to disk
+    ' If buffer is dirty, flush it to disk. Only clear HF_DIRTY on a successful
+    ' write -- on failure the data is still pending in the handle buffer and a
+    ' future sync must retry it.
     if h_flags[handle] & HF_DIRTY
       DEBUG[CH_FILE]("  [do_sync_h] Flushing dirty buffer for sector ", udec_(h_buf_sector[handle]))
       p_buf := getHandleBuffer(handle)
       bytemove(@buf, p_buf, SECTOR_SIZE)
-      writeSector(h_buf_sector[handle], BUF_DATA)
-      h_flags[handle] &= !HF_DIRTY
+      if writeSector(h_buf_sector[handle], BUF_DATA) < 0
+        DEBUG[CH_FILE]("  [do_sync_h] Dirty buffer write FAILED for sector ", udec_(h_buf_sector[handle]))
+        status := E_IO_ERROR
+      else
+        h_flags[handle] &= !HF_DIRTY
 
-    ' If opened for write, update directory entry with current size
-    status := SUCCESS
-    if h_flags[handle] & HF_WRITE
+    ' If opened for write, update directory entry with current size. Skip when
+    ' the dirty-buffer flush above failed -- writing a dir entry that claims
+    ' a size whose backing data didn't reach disk would corrupt the filesystem.
+    if status == SUCCESS AND (h_flags[handle] & HF_WRITE)
       DEBUG[CH_FILE]("  [do_sync_h] Updating directory: size=", udec_(h_size[handle]))
       if readSector(h_dir_sector[handle], BUF_DIR) < 0
         DEBUG[CH_FILE]("  [do_sync_h] Directory read FAILED for sector ", udec_(h_dir_sector[handle]))
@@ -3991,9 +4024,11 @@ PRI do_sync_h(handle) : status | p_buf
       else
         LONG[@dir_buf + h_dir_offset[handle] + DE_FILESIZE_OFFSET] := h_size[handle]
         LONG[@dir_buf + h_dir_offset[handle] + DE_WRT_TIME_OFFSET] := date_stamp  ' Update modification timestamp
-        writeSector(h_dir_sector[handle], BUF_DIR)
+        if writeSector(h_dir_sector[handle], BUF_DIR) < 0
+          DEBUG[CH_FILE]("  [do_sync_h] Directory write FAILED for sector ", udec_(h_dir_sector[handle]))
+          status := E_IO_ERROR
 
-    DEBUG[CH_FILE]("  [do_sync_h] Sync complete")
+    DEBUG[CH_FILE]("  [do_sync_h] Sync complete, status=", sdec_(status))
 
 PRI do_idle_flush() | idx, bAborted
 ' Auto-flush dirty handles after idle period. Scans all handles for HF_DIRTY,
@@ -4011,21 +4046,28 @@ PRI do_idle_flush() | idx, bAborted
     updateFSInfo()
     flush_done := true
 
-PRI do_sync_all() : status | idx
+PRI do_sync_all() : status | idx, sync_status
 ' Sync all open write handles - flushes all write handles to disk.
 ' Called by unmount() to ensure all data is written before stopping.
 '
-' @returns status - SUCCESS (0) on success
+' Continues syncing remaining handles even if one fails so as much data as
+' possible reaches disk; reports the first failure encountered.
+'
+' @returns status - SUCCESS (0) if every dirty handle synced cleanly; first
+'                   non-SUCCESS returned by do_sync_h otherwise.
 ' @local idx - Loop variable
+' @local sync_status - Per-handle do_sync_h return value
 
+  status := SUCCESS
   DEBUG[CH_FILE]("  [do_sync_all] Syncing all handles")
   repeat idx from 0 TO MAX_OPEN_FILES - 1
     if h_flags[idx] & HF_WRITE
       DEBUG[CH_FILE]("  [do_sync_all] Syncing write handle ", udec_(idx))
-      do_sync_h(idx)
+      sync_status := do_sync_h(idx)
+      if sync_status < 0 AND status == SUCCESS
+        status := sync_status
 
-  DEBUG[CH_FILE]("  [do_sync_all] All handles synced")
-  status := SUCCESS
+  DEBUG[CH_FILE]("  [do_sync_all] All handles synced, status=", sdec_(status))
 
 PRI do_open_dir(p_path) : handle | start_cluster
 ' Open directory for enumeration - returns handle for iterating entries.
@@ -4460,8 +4502,11 @@ PRI do_set_vol_label(p_label) : status | idx, ch, p_entry, label_83[3], pVBR
           quit
         if BYTE[p_entry] <> DIR_ENTRY_DELETED AND dirEntAttr(p_entry) == ATTR_VOLUME_ID  ' Volume label entry found
           bytemove(p_entry, @label_83, SFN_TOTAL_LEN)
-          writeSector(n_sec, BUF_DIR)
-          DEBUG[CH_MOUNT]("  [do_set_vol_label] Updated root dir entry")
+          if writeSector(n_sec, BUF_DIR) < 0
+            DEBUG[CH_MOUNT]("  [do_set_vol_label] FAIL: write root dir entry")
+            status := E_IO_ERROR
+          else
+            DEBUG[CH_MOUNT]("  [do_set_vol_label] Updated root dir entry")
           quit
         idx += DIR_ENTRY_SIZE
         if idx & SECTOR_OFFSET_MASK == 0
@@ -5016,11 +5061,17 @@ PRI updateFSInfo() : bSuccess | pFSI
       fsiSetFreeClusters(pFSI, fsi_free_count)          '  FSI_Free_Count (cached value)
       fsiSetNextFreeHint(pFSI, fsi_nxt_free)            '  FSI_Nxt_Free (keep cached value)
 
-      ' Write updated FSInfo sector (primary at sector 1, backup at sector 7)
-      writeSector(vbr_sec + fsinfo_sec, BUF_DATA)
-      writeSector(vbr_sec + 7, BUF_DATA)                '  backup FSInfo at sector 7
-      DEBUG[CH_MOUNT]("  [updateFSInfo] Updated primary+backup: free_count=", udec(fsi_free_count))
-      bSuccess := true
+      ' Write updated FSInfo sector (primary + backup at sector 7). Report
+      ' success only when BOTH writes land; a successful primary with a failed
+      ' backup is still a partial failure -- the backup exists precisely so
+      ' other OSes can recover from a torn primary.
+      if writeSector(vbr_sec + fsinfo_sec, BUF_DATA) < 0
+        DEBUG[CH_MOUNT]("  [updateFSInfo] Primary FSInfo write FAILED")
+      elseif writeSector(vbr_sec + 7, BUF_DATA) < 0      '  backup FSInfo at sector 7
+        DEBUG[CH_MOUNT]("  [updateFSInfo] Backup FSInfo write FAILED")
+      else
+        DEBUG[CH_MOUNT]("  [updateFSInfo] Updated primary+backup: free_count=", udec(fsi_free_count))
+        bSuccess := true
 
 PRI countFreeClusters() : count | fat_idx, entry
 ' Count free clusters in FAT - scans entire FAT for zero entries.
@@ -5066,8 +5117,14 @@ PRI freeClusterChain(first_cluster) : status | clus, next_clus, last_clus, fat_s
       last_clus := clus
       if (next_clus >> 7) - (clus >> 7) <> 0                                    '  different FAT sector? (explicit precedence)
         fat_sector := clus >> 7
-        writeSector(fat_sector + fat_sec, BUF_FAT)
-        writeSector(fat_sector + fat2_sec, BUF_FAT)
+        if writeSector(fat_sector + fat_sec, BUF_FAT) < 0
+          DEBUG[CH_FILE]("  [freeClusterChain] FAT1 write FAILED at sector ", udec_(fat_sector))
+          status := E_IO_ERROR
+          quit
+        if writeSector(fat_sector + fat2_sec, BUF_FAT) < 0
+          DEBUG[CH_FILE]("  [freeClusterChain] FAT2 write FAILED at sector ", udec_(fat_sector))
+          status := E_IO_ERROR
+          quit
       clus := next_clus
       loop_count++
       if loop_count > 100000                                                    '  safety limit
@@ -5077,8 +5134,12 @@ PRI freeClusterChain(first_cluster) : status | clus, next_clus, last_clus, fat_s
     ' Always write the FAT sector containing the last freed cluster
     if status == SUCCESS
       fat_sector := last_clus >> 7
-      writeSector(fat_sector + fat_sec, BUF_FAT)
-      writeSector(fat_sector + fat2_sec, BUF_FAT)
+      if writeSector(fat_sector + fat_sec, BUF_FAT) < 0
+        DEBUG[CH_FILE]("  [freeClusterChain] final FAT1 write FAILED at sector ", udec_(fat_sector))
+        status := E_IO_ERROR
+      elseif writeSector(fat_sector + fat2_sec, BUF_FAT) < 0
+        DEBUG[CH_FILE]("  [freeClusterChain] final FAT2 write FAILED at sector ", udec_(fat_sector))
+        status := E_IO_ERROR
 
 #ifdef SD_INCLUDE_DEFRAG
 
@@ -5260,11 +5321,14 @@ PRI do_compact_file(p_path) : status | dir_sec, dir_off, start_cluster, file_siz
             bytemove(@entry_buffer, @dir_buf + dir_off, DIR_ENTRY_SIZE)
             dirEntSetStartClus(@entry_buffer, new_first)
             bytemove(@dir_buf + dir_off, @entry_buffer, DIR_ENTRY_SIZE)
-            writeSector(dir_sec, BUF_DIR)
+            if writeSector(dir_sec, BUF_DIR) < 0
+              DEBUG[CH_FILE]("  [do_compact_file] dir entry write FAILED for sector ", udec_(dir_sec))
+              status := E_IO_ERROR
 
-        ' Step 10: Free old clusters
+        ' Step 10: Free old clusters. Propagate failure so caller knows the
+        ' FAT may be in an inconsistent state (clusters leaked).
         if status >= 0
-          freeClusterChain(start_cluster)
+          status := freeClusterChain(start_cluster)
 
         ' Step 11: Invalidate all caches
         invalidateAllCaches()
@@ -5365,8 +5429,14 @@ PRI allocateContiguousChain(first_cluster, count) : status | clus, fat_idx, buf_
     ' Load FAT sector if needed
     if (fat_idx >> SECTOR_SHIFT) <> prev_fat_sector
       if prev_fat_sector >= 0                                                   '  write previous sector before loading new one
-        writeSector(fat_sec + prev_fat_sector, BUF_FAT)
-        writeSector(fat2_sec + prev_fat_sector, BUF_FAT)
+        if writeSector(fat_sec + prev_fat_sector, BUF_FAT) < 0
+          DEBUG[CH_SECTOR]("  [allocateContiguousChain] FAT1 write FAILED at sector ", udec_(prev_fat_sector))
+          status := E_IO_ERROR
+          quit
+        if writeSector(fat2_sec + prev_fat_sector, BUF_FAT) < 0
+          DEBUG[CH_SECTOR]("  [allocateContiguousChain] FAT2 write FAILED at sector ", udec_(prev_fat_sector))
+          status := E_IO_ERROR
+          quit
       prev_fat_sector := fat_idx >> SECTOR_SHIFT
       if readSector(fat_sec + prev_fat_sector, BUF_FAT) < 0
         DEBUG[CH_SECTOR]("  [allocateContiguousChain] FAT read FAILED at cluster ", udec_(clus))
@@ -5380,8 +5450,12 @@ PRI allocateContiguousChain(first_cluster, count) : status | clus, fat_idx, buf_
       LONG[@fat_buf + buf_idx] := high_bits | FAT32_EOC_MARK                    '  end of chain
   ' Write final FAT sector
   if prev_fat_sector >= 0 AND status == SUCCESS
-    writeSector(fat_sec + prev_fat_sector, BUF_FAT)
-    writeSector(fat2_sec + prev_fat_sector, BUF_FAT)
+    if writeSector(fat_sec + prev_fat_sector, BUF_FAT) < 0
+      DEBUG[CH_SECTOR]("  [allocateContiguousChain] final FAT1 write FAILED at sector ", udec_(prev_fat_sector))
+      status := E_IO_ERROR
+    elseif writeSector(fat2_sec + prev_fat_sector, BUF_FAT) < 0
+      DEBUG[CH_SECTOR]("  [allocateContiguousChain] final FAT2 write FAILED at sector ", udec_(prev_fat_sector))
+      status := E_IO_ERROR
   ' Update free cluster tracking
   if status == SUCCESS
     if fsi_free_count <> $FFFF_FFFF
@@ -5776,7 +5850,17 @@ PRI initCard() : bSuccess | timeout, resp, card_version, acmd41_arg, got_respons
 
   DEBUG[CH_INIT]("    [initCard] Starting card init...")
   DEBUG[CH_INIT]("    [initCard] Reference: SPI_SD_Implementation_Reference.md")
+
+  ' Reset per-card discovered state so a failed init does not leak the prior
+  ' card's properties into the next mount attempt. Each init must redetect
+  ' from scratch -- a different card may be in the slot, or the same card may
+  ' have re-IPL'd. Caches are also invalidated (sec_in_buf, fat_sec_in_buf).
   sec_in_buf := -1
+  fat_sec_in_buf := -1
+  card_warning_flags := CW_NONE
+  cmd23_supported := FALSE
+  hcs := 0
+  ocr_value := 0
 
   ' ============================================
   ' STEP 1: Power-on delay
@@ -6011,7 +6095,6 @@ PRI initCard() : bSuccess | timeout, resp, card_version, acmd41_arg, got_respons
     ' See DOCs/Analysis/CMD13-COMPATIBILITY-ANALYSIS.md
     ' ============================================
     cmd13_reliable := TRUE
-    card_warning_flags := CW_NONE
     probeCmd13()
 
     ' STEP 10: Check CMD23 support from SCR CMD_SUPPORT field
