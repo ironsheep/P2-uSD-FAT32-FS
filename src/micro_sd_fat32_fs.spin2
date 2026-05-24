@@ -332,6 +332,7 @@ CON ' CRC-16-CCITT configuration (using P2 GETCRC instruction)
 
 CON ' CRC retry configuration
   MAX_READ_CRC_RETRIES  = 3                                                   ' Number of read retries on CRC mismatch (industry standard)
+  PROBE_SCK_SAMPLES     = 8                                                   ' probeSpiCeiling: clean reads required at each candidate hp; first mismatch derates
 
 CON ' SD SPI command numbers (SD Physical Layer Spec)
   CMD0    = 0                                                                 ' GO_IDLE_STATE
@@ -384,7 +385,8 @@ CON ' Card initialization timing
   POWER_ON_DELAY_MS        = 100                                              ' VDD stabilization delay (spec: 1ms minimum)
   INIT_SPI_FREQ            = 400_000                                          ' 400 kHz per SD spec during init
   SMARTPIN_SETTLE_US       = 100                                              ' Smart pin configuration settle time
-  RECOVERY_FLUSH_CLKS      = 4096                                             ' Enough clocks to flush stuck 512-byte transfer
+  RECOVERY_FLUSH_CLKS      = 4096                                             ' Mandatory baseline clocks during init flush
+  RECOVERY_BUSY_TIMEOUT_CLKS = 65536                                           ' Additional clocks to poll MISO release (~2s @ ~50kHz)
   CMD0_MAX_RETRIES         = 5                                                ' GO_IDLE_STATE retry count
   CMD_RETRY_DELAY_MS       = 10                                               ' Delay between CMD0 retries
   ACMD41_TIMEOUT_SECS      = 2                                                ' ACMD41 init loop timeout
@@ -5761,7 +5763,7 @@ PRI sp_transfer_32(data) : rxLong | _sck, _mosi, _miso, tx_data
               REV       rxLong                          ' Reverse for MSB-first
   END
 
-PRI initCard() : bSuccess | timeout, resp, card_version, acmd41_arg, got_response
+PRI initCard() : bSuccess | timeout, resp, card_version, acmd41_arg, got_response, flush_extra
 ' Initialize SD card - performs complete card initialization sequence per SD spec.
 ' Steps: power-on delay, SPI setup, card presence detection, CMD0, CMD8, ACMD41 loop, CMD58.
 '
@@ -5792,6 +5794,17 @@ PRI initCard() : bSuccess | timeout, resp, card_version, acmd41_arg, got_respons
 
   ' SD card SPI mode 0: CPOL=0, CPHA=0
   ' Data sampled on rising edge, changed on falling edge
+  ' On re-mount, SCK/MOSI may still be in active smart-pin state from a prior
+  ' initSPIPins (P_TRANSITION | P_OE on SCK, P_SYNC_TX | P_OE on MOSI). With
+  ' P_OE set, the smart pin owns the output and DIRL alone does not release it
+  ' ("Smart pin modes may still operate while DIR=0" per P2KB). pinclear()
+  ' both clears DIR=0 AND writes WRPIN=0 (mode register reset) — disabling the
+  ' smart pin so the subsequent pinh/pinl and the recovery flush below actually
+  ' drive the pin. Without this, on remount #2+ the 4096-clock recovery flush
+  ' produces ZERO transitions on the wire, the card is never reset, and CMD0
+  ' fails with -8 E_NO_CARD.
+  pinclear(sck)                                                                 '  WRPIN=0 + DIRL: fully disable SCK smart pin
+  pinclear(mosi)                                                                '  WRPIN=0 + DIRL: fully disable MOSI smart pin
   pinh(cs)                                                                      '  CS HIGH = deselected
   pinh(mosi)                                                                    '  MOSI HIGH (card expects high during idle)
   pinl(sck)                                                                     '  SCK LOW (SPI mode 0 idle state)
@@ -5811,17 +5824,29 @@ PRI initCard() : bSuccess | timeout, resp, card_version, acmd41_arg, got_respons
 
   ' ============================================
   ' STEP 3: Card recovery + init clocks
-  ' If card is stuck mid-transfer, flush with extra clocks
-  ' Then send 74+ clocks per spec for power-on init
+  ' If card is stuck mid-transfer or busy from a prior write, clock with CS HIGH
+  ' until MISO releases (goes high). Some counterfeit SDSC cards re-busy themselves
+  ' after CS deassert (internal GC / wear-leveling), and the spec'd 74-clock minimum
+  ' is insufficient. We clock RECOVERY_FLUSH_CLKS as a baseline (spec + margin), then
+  ' continue clocking up to RECOVERY_BUSY_TIMEOUT_CLKS more if MISO is still held low.
   ' ============================================
-  DEBUG[CH_INIT]("    [initCard] Step 3: Recovery flush (4096 clocks to clear stuck transfer)...")
-  repeat RECOVERY_FLUSH_CLKS                                                    '  Enough to flush a full 512-byte sector
+  DEBUG[CH_INIT]("    [initCard] Step 3: Recovery flush + busy poll...")
+  repeat RECOVERY_FLUSH_CLKS                                                    '  Mandatory baseline (74+ spec clocks plus margin)
     pinh(sck)
     waitus(10)
     pinl(sck)
     waitus(10)
 
-  DEBUG[CH_INIT]("    [initCard] MISO after recovery flush: ", udec_(pinr(miso)), " (should be 1)")
+  ' If MISO still held low, keep clocking until card releases or timeout
+  flush_extra := 0
+  repeat while (pinr(miso) == 0) AND (flush_extra < RECOVERY_BUSY_TIMEOUT_CLKS)
+    pinh(sck)
+    waitus(10)
+    pinl(sck)
+    waitus(10)
+    flush_extra++
+
+  DEBUG[CH_INIT]("    [initCard] MISO after recovery flush: ", udec_(pinr(miso)), " (extra=", udec_(flush_extra), ")")
 
   ' ============================================
   ' STEP 3.5: Initialize smart pins for SPI
@@ -5998,6 +6023,14 @@ PRI initCard() : bSuccess | timeout, resp, card_version, acmd41_arg, got_respons
     ' See DOCs/Analysis/DUMMY-DATA-CRC-ANALYSIS.md
     probeDataCrc()
 
+    ' STEP 12: For dummy-CRC cards, empirically find the highest SCK at which
+    ' streamer-based reads match ground truth. Real-CRC cards rely on runtime
+    ' data-CRC validation for drift detection; dummy-CRC cards have lost that
+    ' detection so the operating SCK must be pinned below the card's actual
+    ' clean-read ceiling at init time. No-op for cards without CW_NO_DATA_CRC.
+    ' See DOCs/Analysis/CLOUDISK-CARD-GROUND-TRUTH.md
+    probeSpiCeiling()
+
     DEBUG[CH_INIT]("    [initCard] === INIT SUCCESS ===")
 
 PRI cmd(op,parm) : response | timeout, timed_out
@@ -6093,6 +6126,8 @@ PRI readSector(sector, buf_type) : status | _sck, _miso, data, loop_ctr, timeout
     stream_mode := STREAM_RX_BASE | (_miso << 17) | (SECTOR_SIZE * 8)           ' RX mode + MISO pin + bit count
     clk_count := SECTOR_SIZE * 8 * 2                                            ' 8192 clock transitions
     xfrq := $4000_0000 / spi_period                                             ' One sample per full clock period
+    if ($4000_0000 // spi_period) == 0                                          ' Exact division (power-of-2 hp)?
+      xfrq -= 1                                                                 ' Match write-path NCO fix: ensure 1-cycle late rollover
     init_phase := $4000_0000                                                    ' Sample mid-bit for stability
     align_delay := spi_period + align_delay_offset                              ' Phase 3: tunable streamer phase
     if align_delay < 2                                                          '  WAITX floor (cog needs 2 sysclks min)
@@ -6259,6 +6294,8 @@ PRI readSectors(start_sector, count, p_buffer) : sectors_read | _sck, _miso, p_b
     stream_mode := STREAM_RX_BASE | (_miso << 17) | (SECTOR_SIZE * 8)           ' RX mode + MISO pin + 4096 bits
     clk_count := SECTOR_SIZE * 8 * 2                                            ' 8192 clock transitions
     xfrq := $4000_0000 / spi_period                                             ' One sample per full clock period
+    if ($4000_0000 // spi_period) == 0                                          ' Exact division (power-of-2 hp)?
+      xfrq -= 1                                                                 ' Match write-path NCO fix: ensure 1-cycle late rollover
     init_phase := $4000_0000                                                    ' Sample mid-bit for stability
     align_delay := spi_period + align_delay_offset                              ' Phase 3: tunable streamer phase
     if align_delay < 2                                                          '  WAITX floor (cog needs 2 sysclks min)
@@ -7009,6 +7046,148 @@ PRI probeDataCrc() | data, idx, timeout, recv_crc, calc_crc, got_token
       DEBUG[CH_INIT]("    [probeDataCrc] card returns dummy data CRC ($", uhex_word_(recv_crc), ", computed $", uhex_word_(calc_crc), ") - read-CRC validation DISABLED for this card")
     else
       DEBUG[CH_INIT]("    [probeDataCrc] data CRC MISMATCH recv=$", uhex_word_(recv_crc), " calc=$", uhex_word_(calc_crc), " (not a dummy value) - validation stays ON")
+
+PRI probeSpiCeiling() | saved_target_hz, default_hp, hp, idx, status, truth_crc, cand_crc, freq_for_hp, data, timeout, got_token, operating_hp, sample, hp_is_clean
+' Empirically find the highest streamer-read SCK that this card can sustain.
+'
+' Runs ONLY on cards flagged CW_NO_DATA_CRC by probeDataCrc. Real-CRC cards
+' rely on runtime data-CRC validation to detect speed-margin failures and
+' would back off reactively; dummy-CRC cards have lost that detection, so
+' the operating SCK must be pinned below the card's actual clean-read
+' ceiling at init time.
+'
+' Algorithm:
+'   1. Capture ground truth: byte-by-byte (no-streamer) read of sector 0 at
+'      1 MHz SCK -- well below any plausible card's ceiling, no streamer NCO
+'      involvement. Store in fat_buf scratch.
+'   2. Mandatory pre-backoff for exact-target SCK: if setOptimalSpeed landed at
+'      EXACTLY the target rate (sysclk an integer multiple of 2*target_hz, no
+'      rounding margin) on a dummy-CRC card, force one hp step of backoff before
+'      probing. Rationale: at non-exact sysclks the ceiling-rounded hp math
+'      already produces SCK < target, which is the natural drift margin. At
+'      exact sysclks (350/14 = 25 MHz, 250/10 = 25 MHz, etc.) the achieved SCK
+'      equals the target precisely with zero natural margin -- precisely the
+'      rate where prior characterization shows marginal cards corrupt rarely
+'      but enough to wedge under load, and where N=8 sampling is statistically
+'      blind to that rare corruption. The pre-backoff compensates.
+'   3. Walk hp upward from the (possibly pre-backed-off) starting point. At
+'      each hp, take PROBE_SCK_SAMPLES streamer reads of sector 0 and compare
+'      each CRC to ground truth. ALL samples must match for the hp to be
+'      accepted -- on a marginal card, a single read can pass by luck
+'      (intermittent single-bit corruption), so one sample is not statistically
+'      meaningful. The first mismatch (or readSector error) at any sample
+'      breaks the inner loop and derates -- no point burning the remaining
+'      samples once we already know this rate is unsafe.
+'
+' On exit: applySPISpeed has set the operating rate; sec_in_buf holds
+' sector 0 from the final clean read (mount's MBR read becomes a cache hit).
+' fat_buf was used as scratch and is invalidated.
+'
+' @local saved_target_hz - Original setOptimalSpeed target (for fallback if probe fails)
+' @local default_hp - Half-period chosen by setOptimalSpeed
+' @local hp - Current candidate half-period
+' @local idx - Byte loop counter for slow read
+' @local status - readSector return code
+' @local truth_crc - CRC of ground-truth slow read
+' @local cand_crc - CRC of candidate streamer read
+' @local freq_for_hp - Frequency that lands applySPISpeed at the target hp
+' @local data - Received byte during slow read
+' @local timeout - Token-wait deadline
+' @local got_token - TRUE once $FE start token is seen
+' @local operating_hp - The hp at which reads were clean (or -1 if exhausted)
+
+  ' Only relevant for dummy-CRC cards
+  if NOT (card_warning_flags & CW_NO_DATA_CRC)
+    return
+
+  saved_target_hz := current_spi_target_hz
+  default_hp := spi_period
+
+  DEBUG[CH_INIT]("    [probeSpiCeiling] dummy-CRC card detected; probing SCK ceiling (default hp=", udec_(default_hp), ", saved target=", udec_(saved_target_hz / 1_000_000), " MHz)")
+
+  ' ---- Step 1: ground truth via byte-by-byte read at 1 MHz SCK ----
+  applySPISpeed(1_000_000)
+  cmd(CMD17, 0)
+  got_token := FALSE
+  timeout := GETMS() + card_read_timeout_ms
+  repeat
+    data := sp_transfer_8($FF)
+    if data == $FE
+      got_token := TRUE
+      quit
+    if data <> $FF OR GETMS() - timeout > 0
+      quit
+
+  if NOT got_token
+    DEBUG[CH_INIT]("    [probeSpiCeiling] ground-truth read FAILED (no start token, got $", uhex_byte_(data), "); aborting probe")
+    pinh(cs)
+    applySPISpeed(saved_target_hz)
+    return
+
+  repeat idx from 0 TO SECTOR_SIZE - 1
+    BYTE[@fat_buf + idx] := sp_transfer_8($FF)
+  sp_transfer_8($FF)                                                            ' discard CRC byte 1
+  sp_transfer_8($FF)                                                            ' discard CRC byte 2
+  pinh(cs)
+  sp_transfer_8($FF)                                                            ' NCS recovery clocks (CS HIGH, SD spec)
+
+  truth_crc := calcDataCRC(@fat_buf, SECTOR_SIZE)
+  DEBUG[CH_INIT]("    [probeSpiCeiling] ground truth captured at 1 MHz (CRC=$", uhex_word_(truth_crc), ")")
+
+  ' ---- Step 2: mandatory pre-backoff if default lands at exact target SCK ----
+  ' Restore the original target SPI rate (the slow ground-truth read changed it),
+  ' then check whether the achieved SPI rate equals the target exactly. If so,
+  ' force one hp step of backoff before the sampling loop -- see the algorithm
+  ' header above. Achieved-equals-target happens only when 2*default_hp*target
+  ' divides clkfreq evenly (e.g., sysclk 350 / target 25 MHz / hp=7).
+  applySPISpeed(saved_target_hz)
+  if spi_freq == saved_target_hz
+    default_hp += 1
+    applySPISpeed((clkfreq + (2 * default_hp) - 1) / (2 * default_hp))
+    DEBUG[CH_INIT]("    [probeSpiCeiling] default landed at exact target (", udec_(saved_target_hz / 1_000_000), " MHz) with zero natural margin; pre-backoff to hp=", udec_(default_hp), " SCK=", udec_(spi_freq / 1_000_000), " MHz before probing")
+
+  ' ---- Step 3: walk hp upward from (possibly pre-backed-off) start until all samples match truth ----
+  ' applySPISpeed ceiling-divides clkfreq by the target frequency to compute hp.
+  ' To land applySPISpeed at exactly hp = N, the target we pass must be the SMALLEST
+  ' integer frequency satisfying ceil(clkfreq / (2*freq)) == N. That's the ceiling
+  ' division of clkfreq by (2*N). Using floor (clkfreq / (2*N)) silently overshoots
+  ' to hp = N+1 whenever 2N does not divide clkfreq evenly.
+  operating_hp := -1
+  repeat hp from default_hp TO 32
+    freq_for_hp := (clkfreq + (2 * hp) - 1) / (2 * hp)
+    applySPISpeed(freq_for_hp)
+
+    ' Sample PROBE_SCK_SAMPLES reads at this hp. ALL must match ground truth
+    ' for the hp to be accepted; the first mismatch (or readSector error)
+    ' derates immediately -- once we have evidence this rate is unsafe, there
+    ' is no value in burning the remaining samples.
+    hp_is_clean := TRUE
+    repeat sample from 1 TO PROBE_SCK_SAMPLES
+      sec_in_buf := -1                                                          ' force re-read (bypass cache)
+      status := readSector(0, BUF_DATA)
+      if status < 0
+        DEBUG[CH_INIT]("    [probeSpiCeiling] hp=", udec_(hp), " SCK=", udec_(spi_freq / 1_000_000), " MHz: sample ", udec_(sample), "/", udec_(PROBE_SCK_SAMPLES), " readSector error ", sdec_(status), " - rejecting hp")
+        hp_is_clean := FALSE
+        quit
+
+      cand_crc := calcDataCRC(@buf, SECTOR_SIZE)
+      if cand_crc <> truth_crc
+        DEBUG[CH_INIT]("    [probeSpiCeiling] hp=", udec_(hp), " SCK=", udec_(spi_freq / 1_000_000), " MHz: sample ", udec_(sample), "/", udec_(PROBE_SCK_SAMPLES), " CRC=$", uhex_word_(cand_crc), " != truth $", uhex_word_(truth_crc), " - too fast, stepping down")
+        hp_is_clean := FALSE
+        quit
+
+    if hp_is_clean
+      operating_hp := hp
+      DEBUG[CH_INIT]("    [probeSpiCeiling] hp=", udec_(hp), " SCK=", udec_(spi_freq / 1_000_000), " MHz: MATCH (all ", udec_(PROBE_SCK_SAMPLES), " samples clean, CRC=$", uhex_word_(cand_crc), ") - operating point found")
+      quit
+
+  ' ---- Cleanup ----
+  fat_sec_in_buf := -1                                                          ' scratch use invalidates FAT cache
+
+  if operating_hp > 0
+    DEBUG[CH_INIT]("    [probeSpiCeiling] DONE: operating SPI = ", udec_(spi_freq / 1_000_000), " MHz, hp = ", udec_(operating_hp), " (default was ", udec_(default_hp), ", backoff ", udec_(operating_hp - default_hp), " steps)")
+  else
+    DEBUG[CH_INIT]("    [probeSpiCeiling] WARNING: exhausted hp ladder, no clean rate found; operating at hp=32")
 
 PRI checkCardStatus(caller) : status | r1, cmd_status
 ' Send CMD13 to verify card status after operation - checks R2 response for errors.

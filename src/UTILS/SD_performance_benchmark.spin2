@@ -24,7 +24,10 @@
         - Includes FAT traversal, cluster allocation, sector caching
         - Real-world throughput an application developer will see
 
-   Run on each card, at both 320 MHz and 270 MHz sysclk, to build performance catalog.
+   Run on each card, at both 350 MHz and 250 MHz sysclk, to build performance catalog.
+   Both sysclks yield an exact 25 MHz SCK on cards that can sustain it
+   (350/14 = 25.00, 250/10 = 25.00), so throughput is directly comparable across
+   cards. See DOCs/cards/CATALOG-PROCEDURE.md for the full per-card procedure.
 
    Test sizes (embedded use cases):
      Write: 512B (log entry), 4KB (config), 32KB (data batch)
@@ -35,12 +38,20 @@ CON
 
     _CLKFREQ        = 350_000_000       ' Change to 250_000_000 for low-sysclk runs
 
-    ' Pin configuration for P2 Edge with SD card
+    ' SD card pin assignments
+    ' Default: P2 Edge module SD slot. Build with -D SD_PINS_EXTERNAL
+    ' to use the external SD header (base pin 16).
+#ifdef SD_PINS_EXTERNAL
+    SD_CS   = 20
+    SD_MOSI = 19
+    SD_MISO = 18
+    SD_SCK  = 21
+#else
     SD_CS   = 60
     SD_MOSI = 59
     SD_MISO = 58
     SD_SCK  = 61
-
+#endif
     ' Test parameters
     ITERATIONS      = 10                ' Number of iterations per test
 
