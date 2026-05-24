@@ -23,15 +23,24 @@
 }
 
 CON
-  _CLKFREQ = 270_000_000
+  _CLKFREQ = 350_000_000
 
   DEBUG_BAUD = 2_000_000
 
-  ' SD card pins - P2 EC32MB Edge Module
+  ' SD card pin assignments
+  ' Default: P2 Edge module SD slot. Build with -D SD_PINS_EXTERNAL
+  ' to use the external SD header (base pin 16).
+#ifdef SD_PINS_EXTERNAL
+  CS_PIN   = 20
+  MOSI_PIN = 19
+  MISO_PIN = 18
+  SCK_PIN  = 21
+#else
   CS_PIN   = 60
   MOSI_PIN = 59
   MISO_PIN = 58
   SCK_PIN  = 61
+#endif
 
   ' Buffer sizes
   CID_SIZE = 16
