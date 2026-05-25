@@ -1,10 +1,13 @@
 {{ =================================================================================================
    File....... SD_dump_mbr_vbr.spin2
-   Purpose.... Forensic capture: full 512-byte hex dump of the MBR (sector 0) and the
-               FAT32-partition VBR (sector 8192) of the as-received counterfeit Cloudisk
-               2GB card, before it is reformatted. Preserves the original factory state.
+   Purpose.... Forensic capture: full 512-byte hex dumps of the four FAT32 ground-truth
+               structures of the as-received counterfeit Cloudisk 2GB card --
+               MBR (sector 0), VBR/BPB (partition LBA start), first FAT sector, and the
+               first root-directory sector -- with the BPB decoded so the FAT and
+               root-dir sector numbers are computed from the card itself.
    Author..... Stephen M Moraco
    Started.... 18 MAY 2026
+   Updated.... 18 MAY 2026 -- extended to FAT + root dir; added serial-flush guard
 ================================================================================================= }}
 
 CON
@@ -35,44 +38,91 @@ OBJ
 DAT
     buf     BYTE    0[512]
 
-PUB go() | status
+PUB go() | status, bytsPerSec, secPerClus, rsvdSecCnt, numFATs, fatSz32, rootClus, fatStartSec, dataStartSec, rootDirSec
 
     debug(" ")
-    debug("=== SD MBR/VBR FORENSIC DUMP (as-received, pre-format) ===")
+    debug("=== SD MBR/VBR/FAT/ROOTDIR FORENSIC DUMP (as-received) ===")
     debug(" ")
 
     status := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
     if status < 0
         debug("FATAL: initCardOnly failed (", sdec_(status), ")")
-        debug("END_SESSION")
+        flushAndEnd()
         return
     debug("  initCardOnly OK")
 
+    ' ---- MBR (sector 0) ----
     debug(" ")
     debug("================ MBR  (sector 0) ================")
-    if sd.readSectorRaw(0, @buf) < 0
-        debug("  ERROR reading sector 0")
-    else
-        dumpSector()
-        debug("  signature[510..511] = ", uhex_byte_(buf[510]), " ", uhex_byte_(buf[511]))
+    status := sd.readSectorRaw(0, @buf)
+    if status < 0
+        debug("  ERROR reading sector 0  (status ", sdec_(status), ")")
+        flushAndEnd()
+        return
+    dumpSector()
+    debug("  signature[510..511] = ", uhex_byte_(buf[510]), " ", uhex_byte_(buf[511]), "  (expect 55 AA)")
+    debug("  part1 type (off 450) = ", uhex_byte_(buf[450]), "  LBA start (off 454) = ", udec_(buf[454] | (buf[455] << 8) | (buf[456] << 16) | (buf[457] << 24)))
 
+    ' ---- VBR (partition LBA start) ----
     debug(" ")
     debug("================ VBR  (sector ", udec_(VBR_SECTOR), ") ================")
-    if sd.readSectorRaw(VBR_SECTOR, @buf) < 0
-        debug("  ERROR reading sector ", udec_(VBR_SECTOR))
-    else
-        dumpSector()
-        debug(" ")
-        debug("  -- BPB decode --")
-        debug("    BytsPerSec  (off 11) = ", udec_(buf[11] | (buf[12] << 8)), "   (expect 512)")
-        debug("    SecPerClus  (off 13) = ", udec_(buf[13]))
-        debug("    RsvdSecCnt  (off 14) = ", udec_(buf[14] | (buf[15] << 8)))
-        debug("    NumFATs     (off 16) = ", udec_(buf[16]))
-        debug("    fstype @82           = '", lstr_(@buf + 82, 8), "'")
-        debug("    signature[510..511]  = ", uhex_byte_(buf[510]), " ", uhex_byte_(buf[511]))
+    status := sd.readSectorRaw(VBR_SECTOR, @buf)
+    if status < 0
+        debug("  ERROR reading sector ", udec_(VBR_SECTOR), "  (status ", sdec_(status), ")")
+        flushAndEnd()
+        return
+    dumpSector()
+
+    bytsPerSec := buf[11] | (buf[12] << 8)
+    secPerClus := buf[13]
+    rsvdSecCnt := buf[14] | (buf[15] << 8)
+    numFATs    := buf[16]
+    fatSz32    := buf[36] | (buf[37] << 8) | (buf[38] << 16) | (buf[39] << 24)
+    rootClus   := buf[44] | (buf[45] << 8) | (buf[46] << 16) | (buf[47] << 24)
 
     debug(" ")
-    debug("END_SESSION")
+    debug("  -- BPB decode --")
+    debug("    BytsPerSec  (off 11) = ", udec_(bytsPerSec), "   (expect 512)")
+    debug("    SecPerClus  (off 13) = ", udec_(secPerClus))
+    debug("    RsvdSecCnt  (off 14) = ", udec_(rsvdSecCnt))
+    debug("    NumFATs     (off 16) = ", udec_(numFATs))
+    debug("    FATSz32     (off 36) = ", udec_(fatSz32))
+    debug("    RootClus    (off 44) = ", udec_(rootClus))
+    debug("    fstype @82           = '", lstr_(@buf + 82, 8), "'")
+    debug("    signature[510..511]  = ", uhex_byte_(buf[510]), " ", uhex_byte_(buf[511]))
+
+    ' ---- derived geometry (computed from the card's own BPB) ----
+    fatStartSec  := VBR_SECTOR + rsvdSecCnt
+    dataStartSec := VBR_SECTOR + rsvdSecCnt + (numFATs * fatSz32)
+    rootDirSec   := dataStartSec + ((rootClus - 2) * secPerClus)
+    debug(" ")
+    debug("  -- derived geometry (absolute LBAs) --")
+    debug("    FAT[0] start sector  = ", udec_(fatStartSec))
+    debug("    data region start    = ", udec_(dataStartSec))
+    debug("    root dir start sector= ", udec_(rootDirSec))
+
+    ' ---- first FAT sector ----
+    debug(" ")
+    debug("================ FAT[0]  (sector ", udec_(fatStartSec), ") ================")
+    status := sd.readSectorRaw(fatStartSec, @buf)
+    if status < 0
+        debug("  ERROR reading FAT sector  (status ", sdec_(status), ")")
+    else
+        dumpSector()
+        debug("  FAT[0] (media+EOC) = ", uhex_long_(buf[0] | (buf[1] << 8) | (buf[2] << 16) | (buf[3] << 24)))
+        debug("  FAT[1] (EOC)       = ", uhex_long_(buf[4] | (buf[5] << 8) | (buf[6] << 16) | (buf[7] << 24)))
+        debug("  FAT[2] (root clus) = ", uhex_long_(buf[8] | (buf[9] << 8) | (buf[10] << 16) | (buf[11] << 24)))
+
+    ' ---- first root-directory sector ----
+    debug(" ")
+    debug("================ ROOT DIR  (sector ", udec_(rootDirSec), ") ================")
+    status := sd.readSectorRaw(rootDirSec, @buf)
+    if status < 0
+        debug("  ERROR reading root dir sector  (status ", sdec_(status), ")")
+    else
+        dumpSector()
+
+    flushAndEnd()
 
 
 PRI dumpSector() | off
@@ -80,3 +130,12 @@ PRI dumpSector() | off
 
     repeat off from 0 to 511 step 16
         debug("  ", uhex_word_(off), ": ", uhex_byte_array_(@buf + off, 16))
+
+
+PRI flushAndEnd()
+' Give the headless terminal time to drain its log backlog before END_SESSION
+' triggers shutdown, otherwise the burst of dump lines is lost.
+
+    waitms(500)
+    debug(" ")
+    debug("END_SESSION")

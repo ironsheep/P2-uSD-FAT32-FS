@@ -1609,18 +1609,31 @@ PRI tree_skip_to(dh, p_past_name) | result, p_name, found
     if strcomp(p_name, p_past_name)
       found := TRUE
 
-PRI show_card_summary() | total_mb, size_gb
+PRI show_card_summary() | total_mb, size_gb, op_hz, op_mhz_int, op_mhz_tenths, claimed_mhz, warnings
 ' Display brief card summary after mount (skips free space scan which takes ~14s on 16GB cards).
 '
 ' @local total_mb - Card capacity in megabytes
 ' @local size_gb - Card capacity in marketed gigabytes
+' @local op_hz - Current SPI operating frequency (Hz, post-init / post-probe)
+' @local op_mhz_int - Integer MHz part for display (e.g., 21 for 21.875 MHz)
+' @local op_mhz_tenths - Tenths digit for display (e.g., 8 for 21.875 -> 21.8)
+' @local claimed_mhz - CSD TRAN_SPEED claim in MHz
+' @local warnings - Driver warning flags bitmask (CW_*)
 
   total_mb := sd.cardSizeSectors() / SECTORS_PER_MB
   size_gb := (total_mb + 953) / 954                     ' decimal GB (marketed card size)
 
+  op_hz := sd.getSPIFrequency()
+  op_mhz_int := op_hz / 1_000_000
+  op_mhz_tenths := (op_hz / 100_000) // 10
+  claimed_mhz := sd.getCardMaxSpeed() / 1_000_000
+  warnings := sd.cardWarnings()
+
   serial.fstr1(@"  Volume: %s\r\n", sd.volumeLabel())
   serial.fstr2(@"  Size: %d MB (%dGB)\r\n", total_mb, size_gb)
-  serial.fstr1(@"  SPI: %d Hz\r\n", sd.getSPIFrequency())
+  serial.fstr3(@"  SPI: %d.%d MHz (card max %d MHz)\r\n", op_mhz_int, op_mhz_tenths, claimed_mhz)
+  if warnings
+    serial.fstr1(@"  Card warnings: $%02x (see cardWarnings() for meanings)\r\n", warnings)
 
 PRI check_mount() : status
 ' Check if the SD card is mounted and print an error message if not.

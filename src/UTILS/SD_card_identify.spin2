@@ -109,6 +109,7 @@ PUB go() | status
     else
         displayCardID()
         sd.unmount()
+    waitms(300)
     debug("END_SESSION")
 
 
@@ -162,6 +163,9 @@ PRI displayCardID() | sd.cid_t cid, sd.scr_t scr, ...
         debug("L2: Class ", udec_(speedClass), ", U", udec_(uhsGrade), ", V", udec_(videoClass), ", SPI ", udec_(spiHz / 1_000_000), " MHz  [", zstr_(@oemBuf), "]")
     else
         debug("L2: SPI ", udec_(spiHz / 1_000_000), " MHz  [", zstr_(@oemBuf), "]  (ACMD13 unavailable)")
+
+    ' Line 3: CSD claim + driver warning flags (for analysis)
+    debug("L3: CSD claims TRAN_SPEED = ", udec_(sd.getCardMaxSpeed() / 1_000_000), " MHz; cardWarnings() = $", uhex_byte_(sd.cardWarnings()))
 
 
 PRI getSDSpecVersion(^sd.scr_t p_scr) : p_version | sdSpec, spec3, spec4, specX

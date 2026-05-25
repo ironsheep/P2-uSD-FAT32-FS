@@ -243,6 +243,21 @@ Class 10, U3, V0, SPI 25 MHz
 
 ---
 
+## Rating E — SDSC (counterfeit class)
+
+### lerdisk-asdfg-1gb
+
+**Label:** "Lerdisk" 1GB Class 4 microSD (suspected counterfeit; silicon PNM `"asdfg"`)
+
+```
+Unknown asdfg SDSC 960MB [FAT32] SD 1.x rev2.2 SN:$0000_01F4 2025/12
+Class 10, U1, V0, SPI 21 MHz  [P2FMTER]
+```
+
+> SPI detuned by probe-fix (CSD claims 25 MHz; settled 21.875 MHz @ sysclk 350, 20.833 MHz @ sysclk 250). `cardWarnings() = $04` (`CW_NO_DATA_CRC`). Counterfeit classifier score 15.
+
+---
+
 ## Re-characterization Status
 
 Cards that need to be re-run through the updated `SD_card_characterize.spin2` to get verified ACMD13 data for Line 2:
@@ -271,8 +286,9 @@ Cards that need to be re-run through the updated `SD_card_characterize.spin2` to
 | samsung-jd1y7-128gb | **verified** | ACMD13 (Class 10, U3, A2, V30) | 350+250 |
 | amazon-basics-usd00-64gb | **verified** | ACMD13 (Class 10, U3, A2, V30) | 350+250 |
 | sandisk-sh32g-32gb | **verified** | ACMD13 (Class 10, U3, A2, V30) | 350+250 |
+| lerdisk-asdfg-1gb | **verified** | ACMD13 (Class 10, U1, V0) — label claims Class 4; counterfeit class | 350@22M+250@21M |
 
 ---
 
 *Created: 2026-02-15*
-*Cards: 22*
+*Cards: 23*

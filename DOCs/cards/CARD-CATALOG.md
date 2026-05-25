@@ -145,8 +145,8 @@ This section documents ALL fields available from SD card registers and indicates
 | Unknown_00000_0.0_0001B9D5_202109 | Gigastone (Shared OEM $9F) | 00000 | 8 GB | **C** | PASS |
 | BudgetOEM_SD16G_2.0_000003FB_202502 | Gigastone (Budget OEM $00) | SD16G | 16 GB | **C** | PASS |
 | Kingston_SD8GB_3.0_43F65DC9_201504 | Kingston ($41) | SD8GB | 8 GB | **C** | PASS |
-| SanDisk_SU08G_8.0_0AA81F11_201010 | Unknown (claims SanDisk $03) - Chinese #1 | SU08G | 8 GB | **C** | PASS |
-| Samsung_00000_1.0_D9FB539C_201408 | Samsung ($1B) - Chinese #2 | 00000 | 8 GB | **C** | PASS |
+| SanDisk_SU08G_8.0_0AA81F11_201010 | Unknown (claims SanDisk $03) - **suspect counterfeit, needs re-characterization** | SU08G | 8 GB | **C** | PASS |
+| Samsung_00000_1.0_D9FB539C_201408 | **LIKELY COUNTERFEIT** — Samsung MID `$1B` with placeholder PNM `"00000"` (brand/PNM mismatch) | 00000 | 8 GB | **C** | PASS |
 | SanDisk_SS08G_3.0_DAAEE8AD_201509 | SanDisk ($03) - Taiwan | SS08G | 8 GB | **C** | PASS |
 | SharedOEM_SPCC_0.7_00940105_202507 | Silicon Power (Shared OEM $9F) | SPCC | 64 GB | **A** | PASS |
 | Longsys/Lexar_USD00_2.0_35841E2E_202507 | Amazon Basics (Longsys $AD) | USD00 | 64 GB | **A** | PASS |
@@ -155,6 +155,7 @@ This section documents ALL fields available from SD card registers and indicates
 | Phison_SD16G_3.0_01CD5CF5_201808 | PNY (Phison $27) | SD16G | 16 GB | **D** | PASS |
 | Phison_SD16G_3.0_DA00094B_201610 | Sony (Phison $27) - Taiwan | SD16G | 16 GB | **D** | PASS |
 | SanDisk_SU01G_8.0_006CD5B2_200706 | SanDisk ($03) — Industrial SDSC | SU01G | 1 GB | **E** | **FAIL** (v1.5.1, 350 MHz) |
+| Unknown_asdfg_2.2_000001F4_202512 | **CONFIRMED COUNTERFEIT** — MID $05 unknown, PNM "asdfg" (label "Lerdisk") | asdfg | 1 GB | **E** | **FAIL** — mount_tests 31/31 PASS, raw_sector_tests 1/14 (streamer-DMA writes/reads fail like SU01G) |
 
 ---
 
@@ -173,11 +174,49 @@ A driver that hard-fails on a data-CRC mismatch rejects every card in this class
 | Card | MID | Capacity | Behavior | Notes |
 |------|-----|----------|----------|-------|
 | Cloudisk `asdfg` (counterfeit) | `$05` | 2 GB SDSC | Sends `$0000` data-block CRC | Wire-confirmed by hardware LA, 2026-05-18 |
+| "Lerdisk" `asdfg` (counterfeit) | `$05` | 1 GB SDSC | Sends dummy data-block CRC (`cardWarnings()=$04`) | Twin of Cloudisk: same PNM/MID/PRV; characterized 2026-05-25 |
 | SanDisk SU01G 1 GB SDSC | `$03` | 1 GB SDSC | **Suspected** — same streamer-read symptom | Re-test with `SD_la_streamer_diag.spin2` to confirm |
 
 > CRC-validation / CRC error-injection regression suites implicitly assume a *real-CRC* card. On a dummy-CRC card those specific tests are **inapplicable** and must not be read as failures.
 
 Full analysis, recognition procedure, and driver fix design: [`DOCs/Analysis/DUMMY-DATA-CRC-ANALYSIS.md`](../Analysis/DUMMY-DATA-CRC-ANALYSIS.md).
+
+### Counterfeit classification (preliminary, under refinement)
+
+Counterfeit SD cards (forged silicon, fake capacity, dummy CRC, lying CSD) cluster — many indicators show up together. Single indicators are noisy; combinations are diagnostic. The classifier below scores observed CID/CSD/empirical fields against a weighted rubric; design rationale and the running investigation log live in [`DOCs/Analysis/CLOUDISK-CARD-GROUND-TRUTH.md`](../Analysis/CLOUDISK-CARD-GROUND-TRUTH.md).
+
+| # | Indicator | Weight |
+|:---:|---|:---:|
+| 1 | PNM not alphanumeric-printable (gibberish like `"asdfg"`) | +3 |
+| 2 | PNM is all zeros (`"00000"`) / all spaces, *alone* | +2 |
+| 3 | **Major-brand MID with placeholder/anomalous PNM** (silicon says SanDisk/Samsung/etc., but PNM doesn't match that brand's conventions — strong forged-silicon tell) | **+4** |
+| 4 | MID not in known-manufacturer list | +2 |
+| 5 | CID CRC7 = `$00` | +2 |
+| 6 | CSD v1.0 (SDSC) with MDT year > 2012 (real SDSC silicon ended ~2010) | +3 |
+| 7 | CSD TRAN_SPEED claims 25 MHz but empirical probe finds ceiling < 23 MHz | +3 |
+| 8 | `CW_NO_DATA_CRC` set (dummy data-block CRC) | +2 |
+| 9 | SD spec 1.x + Class 4 + CSD v1.0 (lowest of everything) | +1 |
+| 10 | Gold standard: CSD-claimed capacity ≠ actual usable sectors | +5 |
+
+**Decision thresholds:**
+- Score < 3 → legitimate
+- Score 3-5 → suspected counterfeit (advisory; empirical SCK probe + drift headroom recommended)
+- Score 6-8 → likely counterfeit (advisory; expose via `cardWarnings()`)
+- Score ≥ 9 → confirmed counterfeit (user-visible warning recommended)
+
+**Cards in this catalog meeting counterfeit thresholds:**
+
+| Card row in summary | Score (no empirics) | Indicators firing | Classification |
+|---|:---:|---|---|
+| `Samsung_00000_1.0_D9FB539C_201408` (Chinese #2) | **6** | #2 PNM zeros (+2), **#3 Samsung MID with `"00000"` PNM (+4)** | **LIKELY COUNTERFEIT** |
+| `SanDisk_SU08G_8.0_0AA81F11_201010` (Chinese #1) | 0 (from CID) | — | needs empirical re-characterization (CID alone looks legitimate; physical-card suspicion not yet confirmed in silicon) |
+
+Cards being investigated in `CLOUDISK-CARD-GROUND-TRUTH.md` that will be added to this catalog once the investigation closes:
+
+| Card | Score | Classification |
+|---|:---:|---|
+| Cloudisk `"asdfg"` 2 GB SDSC (MID `$05`, MDT 2025/11) | **12-16** (with empirics) | **CONFIRMED COUNTERFEIT** |
+| "Lerdisk" `"asdfg"` 1 GB SDSC (MID `$05`, MDT 2025/12) | **15** (with empirics) | **CONFIRMED COUNTERFEIT** — twin of Cloudisk |
 
 ---
 
@@ -353,17 +392,19 @@ Kingston SD8GB SDHC 7GB [FAT32] SD 3.x rev3.0 SN:43F65DC9 2015/04
 Class 10, U1, SPI 25 MHz
 ```
 
-**"Chinese Made" #1 8GB SDHC (claims SanDisk)** — [sandisk-su08g-8gb.md](cards/sandisk-su08g-8gb.md)
+**"Chinese Made" #1 8GB SDHC (claims SanDisk)** — [sandisk-su08g-8gb.md](cards/sandisk-su08g-8gb.md) — **SUSPECT COUNTERFEIT, needs empirical re-characterization**
 ```
 SanDisk SU08G SDHC 7GB [FAT32] SD 3.x rev8.0 SN:0AA81F11 2010/10
 Class 4, SPI 25 MHz
 ```
+> CID alone looks legitimate (MID `$03` SanDisk + PNM `SU08G` matches SanDisk product code conventions). Catalog flag is from physical-card suspicion. Counterfeit classifier requires empirical follow-up (`cardWarnings()`, TRAN_SPEED-vs-probe check) to confirm or refute.
 
-**"Chinese Made" #2 8GB SDHC (Samsung inside)** — [samsung-00000-8gb.md](cards/samsung-00000-8gb.md)
+**"Chinese Made" #2 8GB SDHC (Samsung inside)** — [samsung-00000-8gb.md](cards/samsung-00000-8gb.md) — **LIKELY COUNTERFEIT (classifier score 6)**
 ```
 Samsung 00000 SDHC 7GB [FAT16] SD 3.x rev1.0 SN:D9FB539C 2014/08
 Class 6, SPI 25 MHz
 ```
+> Counterfeit indicators firing: PNM is `"00000"` placeholder (+2), and **Samsung MID `$1B` with placeholder PNM is brand/PNM mismatch** (+4). Real Samsung cards use real product codes (`GD4QT`, `JD1Y7`). The silicon claims Samsung but the conventions don't match — strong forged-silicon tell.
 
 **SanDisk 8GB SDHC (Taiwan)** — [sandisk-ss08g-8gb.md](cards/sandisk-ss08g-8gb.md)
 ```
@@ -377,6 +418,14 @@ Class 4, SPI 25 MHz
 ```
 Phison SD16G SDHC 14GB [FAT32] SD 3.x rev3.0 SN:$01CD_5CF5 2018/08
 Class 4, U0, V0, SPI 25 MHz  [P2FMTER]
+```
+
+**Rating E** - SDSC (counterfeit class):
+
+**"Lerdisk" 1GB SDSC (counterfeit twin of Cloudisk)** — [lerdisk-asdfg-1gb.md](cards/lerdisk-asdfg-1gb.md)
+```
+Unknown asdfg SDSC 960MB [FAT32] SD 1.x rev2.2 SN:$0000_01F4 2025/12
+Class 10, U1, V0, SPI 21 MHz  [P2FMTER]
 ```
 
 ---
@@ -472,5 +521,5 @@ SCR: [8 bytes hex]
 ---
 
 *Catalog created: 2026-01-20*
-*Last updated: 2026-02-25*
-*Cards cataloged: 22 (individual card pages in [DOCs/cards/](cards/))*
+*Last updated: 2026-05-25*
+*Cards cataloged: 23 (individual card pages in [DOCs/cards/](cards/))*
