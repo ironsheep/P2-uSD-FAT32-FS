@@ -27,17 +27,20 @@
 CON
   _clkfreq  = 270_000_000                                       ' 270 MHz system clock
 
-  ' P2 Edge module SD slot pins
+  ' SD card pin assignments
+  ' Default: P2 Edge module SD slot. Build with -D SD_PINS_EXTERNAL
+  ' to use the external SD header (base pin 16).
+#ifdef SD_PINS_EXTERNAL
+  CS_PIN    = 20
+  MOSI_PIN  = 19
+  MISO_PIN  = 18
+  SCK_PIN   = 21
+#else
   CS_PIN    = 60
   MOSI_PIN  = 59
   MISO_PIN  = 58
   SCK_PIN   = 61
-
-  ' External SD header (base pin 16)
-  'CS_PIN    = 20
-  'MOSI_PIN  = 19
-  'MISO_PIN  = 18
-  'SCK_PIN   = 21
+#endif
 
   ' Test Configuration
   TEST_SECTOR_BASE   = 1_000_000                                ' Safe area away from FAT

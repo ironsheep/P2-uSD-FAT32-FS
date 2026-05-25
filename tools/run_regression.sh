@@ -46,6 +46,7 @@ INCLUDE_FORMAT=false
 COMPILE_ONLY=false
 RUN_ONLY=false
 FROM_SUITE=""
+EXTERNAL_PINS=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -60,26 +61,39 @@ while [[ $# -gt 0 ]]; do
         --include-format)  INCLUDE_FORMAT=true; shift ;;
         --compile-only)    COMPILE_ONLY=true; shift ;;
         --run-only)        RUN_ONLY=true; shift ;;
+        --external)        EXTERNAL_PINS=true; shift ;;
         -h|--help)
-            echo "Usage: $0 [--from <name>] [--include-format] [--compile-only] [--run-only]"
+            echo "Usage: $0 [--from <name>] [--include-format] [--compile-only] [--run-only] [--external]"
             echo ""
             echo "Options:"
             echo "  --from <name>      Resume from suite matching <name> (substring match)"
             echo "  --include-format   Include format test (WARNING: erases SD card!)"
             echo "  --compile-only     Only compile, do not run on hardware"
             echo "  --run-only         Only recompile stale .bin files (source or driver newer)"
+            echo "  --external         Compile with -D SD_PINS_EXTERNAL (use external SD header)"
+            echo "                     Default (no flag): P2 Edge onboard SD slot."
             echo ""
             echo "Examples:"
-            echo "  $0                              # Full regression (23 suites)"
+            echo "  $0                              # Full regression (23 suites), Edge socket"
             echo "  $0 --include-format             # Full regression + format (24 suites)"
             echo "  $0 --from volume                # Resume from SD_RT_volume_tests"
             echo "  $0 --compile-only               # Compile check only"
             echo "  $0 --run-only                   # Run only (after prior compile)"
+            echo "  $0 --external                   # Full regression on external SD header"
             exit 0
             ;;
         *) echo -e "${RED}Error: Unknown option: $1${NC}"; exit 1 ;;
     esac
 done
+
+# Build per-test --external flag pass-through (for run_test.sh) and direct
+# pnut-ts preprocessor flag (for compile-only path that calls pnut-ts directly).
+EXTERNAL_FLAG=""
+PIN_DEFINE_FLAG=""
+if [[ "$EXTERNAL_PINS" == "true" ]]; then
+    EXTERNAL_FLAG="--external"
+    PIN_DEFINE_FLAG="-D SD_PINS_EXTERNAL"
+fi
 
 # --- Define test suites in dependency order ---
 # Format: "filename:timeout_secs"
@@ -191,6 +205,7 @@ else
     echo "  Test suites: ${TOTAL_SUITES}"
 fi
 echo "  Format test: $([[ "$INCLUDE_FORMAT" == true ]] && echo "INCLUDED (destructive!)" || echo "excluded")"
+echo "  SD pins:     $([[ "$EXTERNAL_PINS" == true ]] && echo "EXTERNAL header (base pin 16)" || echo "P2 Edge onboard slot")"
 if [[ "$COMPILE_ONLY" == true ]]; then
     echo "  Mode: COMPILE ONLY"
 elif [[ "$RUN_ONLY" == true ]]; then
@@ -249,13 +264,13 @@ if [[ "$RUN_ONLY" == true ]]; then
         BASENAME="${FILE%.spin2}"
 
         if _needs_compile "$FILE"; then
-            if pnut-ts -d $CACHE_FLAGS -I "$SRC_PATH" -I "$UTILS_PATH" -I "$DEMO_PATH" -I . "$FILE" >/dev/null 2>&1; then
+            if pnut-ts -d $CACHE_FLAGS $PIN_DEFINE_FLAG -I "$SRC_PATH" -I "$UTILS_PATH" -I "$DEMO_PATH" -I . "$FILE" >/dev/null 2>&1; then
                 SIZE=$(wc -c < "${BASENAME}.bin" | tr -d ' ')
                 echo -e "  ${GREEN}OK${NC}: $FILE (${SIZE} bytes) [recompiled]"
                 COMPILE_PASS=$((COMPILE_PASS + 1))
             else
                 echo -e "  ${RED}FAIL${NC}: $FILE"
-                pnut-ts -d $CACHE_FLAGS -I "$SRC_PATH" -I "$UTILS_PATH" -I "$DEMO_PATH" -I . "$FILE" 2>&1 | grep -i error || true
+                pnut-ts -d $CACHE_FLAGS $PIN_DEFINE_FLAG -I "$SRC_PATH" -I "$UTILS_PATH" -I "$DEMO_PATH" -I . "$FILE" 2>&1 | grep -i error || true
                 COMPILE_FAIL=$((COMPILE_FAIL + 1))
                 COMPILE_FAILED_FILES+=("$FILE")
             fi
@@ -321,13 +336,13 @@ else
         fi
 
         BASENAME="${FILE%.spin2}"
-        if pnut-ts -d $CACHE_FLAGS -I "$SRC_PATH" -I "$UTILS_PATH" -I "$DEMO_PATH" -I . "$FILE" >/dev/null 2>&1; then
+        if pnut-ts -d $CACHE_FLAGS $PIN_DEFINE_FLAG -I "$SRC_PATH" -I "$UTILS_PATH" -I "$DEMO_PATH" -I . "$FILE" >/dev/null 2>&1; then
             SIZE=$(wc -c < "${BASENAME}.bin" | tr -d ' ')
             echo -e "  ${GREEN}OK${NC}: $FILE (${SIZE} bytes)"
             COMPILE_PASS=$((COMPILE_PASS + 1))
         else
             echo -e "  ${RED}FAIL${NC}: $FILE"
-            pnut-ts -d $CACHE_FLAGS -I "$SRC_PATH" -I "$UTILS_PATH" -I "$DEMO_PATH" -I . "$FILE" 2>&1 | grep -i error || true
+            pnut-ts -d $CACHE_FLAGS $PIN_DEFINE_FLAG -I "$SRC_PATH" -I "$UTILS_PATH" -I "$DEMO_PATH" -I . "$FILE" 2>&1 | grep -i error || true
             COMPILE_FAIL=$((COMPILE_FAIL + 1))
             COMPILE_FAILED_FILES+=("$FILE")
         fi
@@ -390,7 +405,7 @@ for i in "${!SUITES[@]}"; do
 
     # Run the test via run_test.sh
     set +e
-    ./run_test.sh "../src/regression-tests/$FILE" -t "$TIMEOUT" > /dev/null 2>&1
+    ./run_test.sh "../src/regression-tests/$FILE" -t "$TIMEOUT" $EXTERNAL_FLAG > /dev/null 2>&1
     RUN_EXIT=$?
     set -e
 

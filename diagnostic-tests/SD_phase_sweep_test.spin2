@@ -30,11 +30,20 @@ CON
     _CLKFREQ        = 250_000_000               ' Configurable per build
     _XTLFREQ        = 20_000_000
 
-    SD_CS           = 60                        ' P2 Edge default pin layout
-    SD_MOSI         = 59
-    SD_MISO         = 58
-    SD_SCK          = 61
-
+    ' SD card pin assignments
+    ' Default: P2 Edge module SD slot. Build with -D SD_PINS_EXTERNAL
+    ' to use the external SD header (base pin 16).
+#ifdef SD_PINS_EXTERNAL
+    SD_CS   = 20
+    SD_MOSI = 19
+    SD_MISO = 18
+    SD_SCK  = 21
+#else
+    SD_CS   = 60
+    SD_MOSI = 59
+    SD_MISO = 58
+    SD_SCK  = 61
+#endif
     DEBUG_BAUD      = 2_000_000
 
     OFFSET_MIN      = -3                        ' Sweep range low

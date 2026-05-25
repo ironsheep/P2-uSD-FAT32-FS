@@ -48,15 +48,18 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # --- Functions ---
 
 usage() {
-    echo "Usage: $0 <test-file> [-t timeout]"
+    echo "Usage: $0 <test-file> [-t timeout] [--external]"
     echo ""
     echo "Examples:"
     echo "  $0 ../src/regression-tests/SD_RT_mount_tests.spin2"
     echo "  $0 ../TestCard/SD_RT_testcard_validation.spin2 -t 120"
+    echo "  $0 ../src/regression-tests/SD_RT_mount_tests.spin2 --external"
     echo ""
     echo "Arguments:"
     echo "  test-file  - Path to .spin2 test file (relative to tools/)"
     echo "  -t <sec>   - Timeout in seconds (default: 60)"
+    echo "  --external - Compile with -D SD_PINS_EXTERNAL (external SD header, base pin 16)"
+    echo "               Default (no flag): P2 Edge onboard SD slot."
     echo ""
     echo "Exit codes:"
     echo "  0 - Test passed (END_SESSION found)"
@@ -77,6 +80,7 @@ TEST_FILE="$1"
 shift
 
 TIMEOUT_SECS="60"
+PIN_DEFINE_FLAG=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -87,6 +91,10 @@ while [[ $# -gt 0 ]]; do
             fi
             TIMEOUT_SECS="$2"
             shift 2
+            ;;
+        --external)
+            PIN_DEFINE_FLAG="-D SD_PINS_EXTERNAL"
+            shift
             ;;
         -h|--help) usage ;;
         *) echo -e "${RED}Error: Unknown option: $1${NC}"; usage ;;
@@ -125,6 +133,11 @@ fi
 echo -e "${CYAN}Test: $BASENAME${NC}"
 echo -e "${CYAN}From: $TEST_DIR${NC}"
 echo -e "${CYAN}Timeout: ${TIMEOUT_SECS}s${NC}"
+if [[ -n "$PIN_DEFINE_FLAG" ]]; then
+    echo -e "${CYAN}SD pins: EXTERNAL header (base pin 16)${NC}"
+else
+    echo -e "${CYAN}SD pins: P2 Edge onboard slot${NC}"
+fi
 echo ""
 
 # --- Setup log directory ---
@@ -155,7 +168,7 @@ if [[ "$USE_CACHE" == "0" ]]; then
 else
     CACHE_FLAGS="--cache --cache-dir $CACHE_DIR"
 fi
-COMPILE_CMD="pnut-ts -d $CACHE_FLAGS -I $SRC_PATH -I $UTILS_PATH -I $DEMO_PATH -I $REGTEST_PATH $BASENAME.spin2"
+COMPILE_CMD="pnut-ts -d $CACHE_FLAGS $PIN_DEFINE_FLAG -I $SRC_PATH -I $UTILS_PATH -I $DEMO_PATH -I $REGTEST_PATH $BASENAME.spin2"
 echo "  Command: $COMPILE_CMD"
 
 if ! $COMPILE_CMD; then

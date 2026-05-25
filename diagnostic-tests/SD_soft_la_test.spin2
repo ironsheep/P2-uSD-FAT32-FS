@@ -115,18 +115,20 @@ CON
 
     DEBUG_BAUD      = 2_000_000
 
-    ' P2 Edge module SD slot pins
-    'SD_CS   = 60
-    'SD_MOSI = 59
-    'SD_MISO = 58
-    'SD_SCK  = 61
-
-    ' External uSD eval add-on board pins (ACTIVE)
+    ' SD card pin assignments
+    ' Default: P2 Edge module SD slot. Build with -D SD_PINS_EXTERNAL
+    ' to use the external SD header (base pin 16).
+#ifdef SD_PINS_EXTERNAL
     SD_CS   = 20
     SD_MOSI = 19
     SD_MISO = 18
     SD_SCK  = 21
-
+#else
+    SD_CS   = 60
+    SD_MOSI = 59
+    SD_MISO = 58
+    SD_SCK  = 61
+#endif
     ' Streamer 1-pin capture: X_1P_1DAC1_WFBYTE (mode %1100) + write-enable
     ' (D[23]). The captured pin number is OR'd in as (pin << 17); the low
     ' 16 bits carry the sample count. 8 samples pack into each hub byte.

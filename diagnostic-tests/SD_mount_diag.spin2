@@ -11,12 +11,20 @@ CON
     _CLKFREQ        = 350_000_000
     DEBUG_BAUD      = 2_000_000
 
-    ' P2 Edge module SD slot pins
+    ' SD card pin assignments
+    ' Default: P2 Edge module SD slot. Build with -D SD_PINS_EXTERNAL
+    ' to use the external SD header (base pin 16).
+#ifdef SD_PINS_EXTERNAL
+    SD_CS   = 20
+    SD_MOSI = 19
+    SD_MISO = 18
+    SD_SCK  = 21
+#else
     SD_CS   = 60
     SD_MOSI = 59
     SD_MISO = 58
     SD_SCK  = 61
-
+#endif
 #pragma exportdef SD_INCLUDE_ALL
 
 OBJ
@@ -25,7 +33,7 @@ OBJ
 DAT
     sec0    BYTE    0[512]
 
-PUB go() | status, ptype, idx
+PUB go() | status, ptype, idx, actual_hz
 
     debug(" ")
     debug("=== SD MOUNT DIAGNOSTIC (Edge socket) ===")
@@ -37,6 +45,11 @@ PUB go() | status, ptype, idx
         debug("END_SESSION")
         return
     debug("  initCardOnly OK")
+
+    ' Driver auto-probe should have run at end of initCardOnly for dummy-CRC cards.
+    actual_hz := sd.getSPIFrequency()
+    debug("  post-init operating SPI = ", udec_(actual_hz / 1_000_000), " MHz (", udec_(actual_hz), " Hz)")
+    debug("  cardWarnings = $", uhex_byte_(sd.cardWarnings()))
 
     status := sd.readSectorRaw(0, @sec0)
     debug("  readSectorRaw(0) status = ", sdec_(status))

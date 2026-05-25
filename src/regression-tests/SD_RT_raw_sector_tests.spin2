@@ -33,18 +33,20 @@ CON
 
     _CLKFREQ        = 350_000_000
 
-    ' P2 Edge module SD slot pins
+    ' SD card pin assignments
+    ' Default: P2 Edge module SD slot. Build with -D SD_PINS_EXTERNAL
+    ' to use the external SD header (base pin 16).
+#ifdef SD_PINS_EXTERNAL
+    SD_CS   = 20
+    SD_MOSI = 19
+    SD_MISO = 18
+    SD_SCK  = 21
+#else
     SD_CS   = 60
     SD_MOSI = 59
     SD_MISO = 58
     SD_SCK  = 61
-
-    ' External SD header (base pin 16)
-    'SD_CS   = 20
-    'SD_MOSI = 19
-    'SD_MISO = 18
-    'SD_SCK  = 21
-
+#endif
     ' Test sector numbers (in free space area, safe for 64GB+ cards)
     TEST_SECTOR_A   = 100_000   ' Sequential pattern
     TEST_SECTOR_B   = 100_001   ' Alternating AA/55
@@ -315,44 +317,54 @@ PRI addBoundaryMarkers(sector, patternId) | secLow
     write_buf[510] := secLow
     write_buf[511] := secLow
 
-PRI writeAndVerify(sector, expectedPattern) : success
+PRI writeAndVerify(sector, expectedPattern) : success | wrStatus, rdStatus
 ' Write sector and immediately read back to verify
 '
 ' @param sector - sector number to write
 ' @param expectedPattern - expected pattern ID for verification
 ' @returns success - true if write succeeded and readback matches
+' @local wrStatus - writeSectorRaw return code
+' @local rdStatus - readSectorRaw return code (was previously discarded, masking real errors)
 
-    if sd.writeSectorRaw(sector, @write_buf) < 0
-        debug("  WRITE FAILED!")
+    wrStatus := sd.writeSectorRaw(sector, @write_buf)
+    if wrStatus < 0
+        debug("  WRITE FAILED! status=", sdec_(wrStatus))
         return false
 
     ' Read back immediately
     utils.initGuard(@read_buf_guard)
-    sd.readSectorRaw(sector, @read_buf)
+    rdStatus := sd.readSectorRaw(sector, @read_buf)
     utils.checkGuard(@read_buf_guard, @"read_buf guard")
+    if rdStatus < 0
+        debug("  READ FAILED after write! status=", sdec_(rdStatus))
+        return false
 
     ' Quick verify of markers
     success := verifyMarkers(sector, expectedPattern)
     if success
         debug("  -> pass (write + immediate readback)")
     else
-        debug("  -> FAIL (readback mismatch)")
+        debug("  -> FAIL (readback mismatch, both API calls returned SUCCESS)")
 
-PRI verifyPattern(sector, expectedPattern) : success
+PRI verifyPattern(sector, expectedPattern) : success | rdStatus
 ' Read sector and verify boundary markers match expected pattern
 '
 ' @param sector - sector number to read
 ' @param expectedPattern - expected pattern ID
 ' @returns success - true if verified OK, false if mismatch
+' @local rdStatus - readSectorRaw return code (was previously discarded, masking real errors)
 
     utils.initGuard(@read_buf_guard)
-    sd.readSectorRaw(sector, @read_buf)
+    rdStatus := sd.readSectorRaw(sector, @read_buf)
     utils.checkGuard(@read_buf_guard, @"read_buf guard")
+    if rdStatus < 0
+        debug("  READ FAILED! status=", sdec_(rdStatus))
+        return false
     success := verifyMarkers(sector, expectedPattern)
     if success
         debug("  -> pass")
     else
-        debug("  -> FAIL")
+        debug("  -> FAIL (readback mismatch, API returned SUCCESS)")
 
 PRI verifyMarkers(sector, expectedPattern) : success | secLow
 ' Verify head and tail markers in read_buf

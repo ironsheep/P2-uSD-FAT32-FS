@@ -36,17 +36,20 @@ CON { terminal }
 
 CON { SD card pins }
 
-  ' P2 Edge module SD slot pins
+  ' SD card pin assignments
+  ' Default: P2 Edge module SD slot. Build with -D SD_PINS_EXTERNAL
+  ' to use the external SD header (base pin 16).
+#ifdef SD_PINS_EXTERNAL
+  SD_CS    = 20  { O }                                                        ' chip select
+  SD_SCK   = 21  { O }                                                        ' serial clock
+  SD_MOSI  = 19  { O }                                                        ' master out, slave in
+  SD_MISO  = 18  { I }                                                        ' master in, slave out
+#else
   SD_CS    = 60  { O }                                                        ' chip select
   SD_SCK   = 61  { O }                                                        ' serial clock
   SD_MOSI  = 59  { O }                                                        ' master out, slave in
   SD_MISO  = 58  { I }                                                        ' master in, slave out
-
-  ' External SD header (base pin 16)
-  'SD_CS   = 20
-  'SD_MOSI = 19
-  'SD_MISO = 18
-  'SD_SCK  = 21
+#endif
 
 CON { fixed io pins }
 
