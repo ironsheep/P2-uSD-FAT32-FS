@@ -183,7 +183,7 @@ Full analysis, recognition procedure, and driver fix design: [`DOCs/Analysis/DUM
 
 ### Counterfeit classification (preliminary, under refinement)
 
-Counterfeit SD cards (forged silicon, fake capacity, dummy CRC, lying CSD) cluster — many indicators show up together. Single indicators are noisy; combinations are diagnostic. The classifier below scores observed CID/CSD/empirical fields against a weighted rubric; design rationale and the running investigation log live in [`DOCs/Analysis/CLOUDISK-CARD-GROUND-TRUTH.md`](../Analysis/CLOUDISK-CARD-GROUND-TRUTH.md).
+Counterfeit SD cards (forged silicon, fake capacity, dummy CRC, lying CSD) cluster — many indicators show up together. Single indicators are noisy; combinations are diagnostic. The classifier below scores observed CID/CSD/empirical fields against a weighted rubric; design rationale and the running investigation log live in [`DOCs/Analysis/COUNTERFEIT-ASDFG-SDSC-INVESTIGATION.md`](../Analysis/COUNTERFEIT-ASDFG-SDSC-INVESTIGATION.md).
 
 | # | Indicator | Weight |
 |:---:|---|:---:|
@@ -211,7 +211,7 @@ Counterfeit SD cards (forged silicon, fake capacity, dummy CRC, lying CSD) clust
 | `Samsung_00000_1.0_D9FB539C_201408` (Chinese #2) | **6** | #2 PNM zeros (+2), **#3 Samsung MID with `"00000"` PNM (+4)** | **LIKELY COUNTERFEIT** |
 | `SanDisk_SU08G_8.0_0AA81F11_201010` (Chinese #1) | 0 (from CID) | — | needs empirical re-characterization (CID alone looks legitimate; physical-card suspicion not yet confirmed in silicon) |
 
-Cards being investigated in `CLOUDISK-CARD-GROUND-TRUTH.md` that will be added to this catalog once the investigation closes:
+Cards being investigated in `COUNTERFEIT-ASDFG-SDSC-INVESTIGATION.md` that will be added to this catalog once the investigation closes:
 
 | Card | Score | Classification |
 |---|:---:|---|

@@ -6111,7 +6111,7 @@ PRI initCard() : bSuccess | timeout, resp, card_version, acmd41_arg, got_respons
     ' data-CRC validation for drift detection; dummy-CRC cards have lost that
     ' detection so the operating SCK must be pinned below the card's actual
     ' clean-read ceiling at init time. No-op for cards without CW_NO_DATA_CRC.
-    ' See DOCs/Analysis/CLOUDISK-CARD-GROUND-TRUTH.md
+    ' See DOCs/Analysis/COUNTERFEIT-ASDFG-SDSC-INVESTIGATION.md
     probeSpiCeiling()
 
     DEBUG[CH_INIT]("    [initCard] === INIT SUCCESS ===")
