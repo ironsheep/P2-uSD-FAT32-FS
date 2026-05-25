@@ -245,14 +245,20 @@ PUB go() | result, idx, sector
     ' Test: Sector 0 (MBR) - verify MBR signature
     debug("* Test: Read sector 0 (MBR) and verify signature $55 $AA")
     utils.initGuard(@read_buf_guard)
-    sd.readSectorRaw(0, @read_buf)
+    result := sd.readSectorRaw(0, @read_buf)
     utils.checkGuard(@read_buf_guard, @"read_buf guard")
-    if read_buf[510] == $55 and read_buf[511] == $AA
+    if result < 0
+        debug("  READ FAILED! status=", sdec_(result))
+        dumpReadFailDiag()
+        debug("  -> FAIL")
+        recordFail()
+    elseif read_buf[510] == $55 and read_buf[511] == $AA
         debug("  MBR signature verified: $55 $AA at bytes 510-511")
         debug("  -> pass")
         recordPass()
     else
         debug("  ERROR: Expected $55 $AA, got $", uhex_byte_(read_buf[510]), " $", uhex_byte_(read_buf[511]))
+        dumpReadFailDiag()
         debug("  -> FAIL")
         recordFail()
 
@@ -329,6 +335,7 @@ PRI writeAndVerify(sector, expectedPattern) : success | wrStatus, rdStatus
     wrStatus := sd.writeSectorRaw(sector, @write_buf)
     if wrStatus < 0
         debug("  WRITE FAILED! status=", sdec_(wrStatus))
+        dumpWriteFailDiag()
         return false
 
     ' Read back immediately
@@ -337,6 +344,8 @@ PRI writeAndVerify(sector, expectedPattern) : success | wrStatus, rdStatus
     utils.checkGuard(@read_buf_guard, @"read_buf guard")
     if rdStatus < 0
         debug("  READ FAILED after write! status=", sdec_(rdStatus))
+        dumpWriteFailDiag()  ' prior write reported success; show its diag for context
+        dumpReadFailDiag()
         return false
 
     ' Quick verify of markers
@@ -345,6 +354,8 @@ PRI writeAndVerify(sector, expectedPattern) : success | wrStatus, rdStatus
         debug("  -> pass (write + immediate readback)")
     else
         debug("  -> FAIL (readback mismatch, both API calls returned SUCCESS)")
+        dumpWriteFailDiag()
+        dumpReadFailDiag()
 
 PRI verifyPattern(sector, expectedPattern) : success | rdStatus
 ' Read sector and verify boundary markers match expected pattern
@@ -359,12 +370,14 @@ PRI verifyPattern(sector, expectedPattern) : success | rdStatus
     utils.checkGuard(@read_buf_guard, @"read_buf guard")
     if rdStatus < 0
         debug("  READ FAILED! status=", sdec_(rdStatus))
+        dumpReadFailDiag()
         return false
     success := verifyMarkers(sector, expectedPattern)
     if success
         debug("  -> pass")
     else
         debug("  -> FAIL (readback mismatch, API returned SUCCESS)")
+        dumpReadFailDiag()
 
 PRI verifyMarkers(sector, expectedPattern) : success | secLow
 ' Verify head and tail markers in read_buf
@@ -402,16 +415,21 @@ PRI verifyMarkers(sector, expectedPattern) : success | secLow
         debug("  ERROR: Tail sector ID mismatch!")
         success := false
 
-PRI verifyFullPattern(sector, baseOffset) : success | idx, expected, actual
+PRI verifyFullPattern(sector, baseOffset) : success | idx, expected, actual, rdStatus
 ' Verify all 512 bytes of a sequential pattern sector
 '
 ' @param sector - sector number to verify
 ' @param baseOffset - offset added to sequential count (0 for A, $E0 for E)
 ' @returns success - true if all data bytes match
+' @local rdStatus - readSectorRaw return code (was previously discarded, masking real errors)
 
     utils.initGuard(@read_buf_guard)
-    sd.readSectorRaw(sector, @read_buf)
+    rdStatus := sd.readSectorRaw(sector, @read_buf)
     utils.checkGuard(@read_buf_guard, @"read_buf guard")
+    if rdStatus < 0
+        debug("  READ FAILED! status=", sdec_(rdStatus))
+        dumpReadFailDiag()
+        return false
     success := true
 
     repeat idx from 8 to 503
@@ -424,16 +442,24 @@ PRI verifyFullPattern(sector, baseOffset) : success | idx, expected, actual
 
     if success
         debug("  -> pass (496 data bytes verified)")
+    else
+        debug("  -> FAIL (data mismatch, API returned SUCCESS)")
+        dumpReadFailDiag()
 
-PRI verifyFullPatternAlt(sector) : success | idx, expected, actual
+PRI verifyFullPatternAlt(sector) : success | idx, expected, actual, rdStatus
 ' Verify all bytes of alternating AA/55 pattern sector
 '
 ' @param sector - sector number to verify
 ' @returns success - true if all data bytes match AA/55 pattern
+' @local rdStatus - readSectorRaw return code (was previously discarded, masking real errors)
 
     utils.initGuard(@read_buf_guard)
-    sd.readSectorRaw(sector, @read_buf)
+    rdStatus := sd.readSectorRaw(sector, @read_buf)
     utils.checkGuard(@read_buf_guard, @"read_buf guard")
+    if rdStatus < 0
+        debug("  READ FAILED! status=", sdec_(rdStatus))
+        dumpReadFailDiag()
+        return false
     success := true
 
     repeat idx from 8 to 503
@@ -446,6 +472,9 @@ PRI verifyFullPatternAlt(sector) : success | idx, expected, actual
 
     if success
         debug("  -> pass (496 data bytes verified)")
+    else
+        debug("  -> FAIL (data mismatch, API returned SUCCESS)")
+        dumpReadFailDiag()
 
 PRI recordPass()
 ' Record a passing test
@@ -456,6 +485,41 @@ PRI recordFail()
 ' Record a failing test
 
     fail_count++
+
+PRI dumpWriteFailDiag() | code, r1, dresp, sec, cmd13
+' Print the driver's per-write diagnostic state. Call from any failure path
+' inside writeAndVerify -- write-fail, read-after-write-fail, or marker
+' mismatch. The diag fields reflect the most recent writeSector call, so
+' the dump is valid even when the immediate FAILURE is on the read-back.
+'
+' @local code   - getWriteDiag result code (1=CMD24fatal 2=drespTO 3=CRCrej
+'                 4=writeErr 5=unkRej 6=busyTO 7=success)
+' @local r1     - CMD24 R1 response byte from the last write
+' @local dresp  - Data response token (masked) from the last write
+' @local sec    - Sector number the last write attempted
+' @local cmd13  - Most recent non-zero CMD13 R2 (R1 high byte, status low byte)
+
+    code, r1, dresp, sec := sd.getWriteDiag()
+    cmd13 := sd.getLastCMD13Error()
+    debug("    write diag: code=", udec_(code), " R1=$", uhex_byte_(r1), " dresp=$", uhex_byte_(dresp), " sector=", udec_(sec))
+    debug("    write diag: lastCMD13err=$", uhex_word_(cmd13), "  (codes: 1=CMD24fatal 2=drespTO 3=CRCrej 4=writeErr 5=unkRej 6=busyTO 7=success)")
+
+PRI dumpReadFailDiag() | cmd13, warnings, rxCrc, calcCrc
+' Print driver state useful for diagnosing a failed or wrong-data read.
+' Driver has no equivalent of getWriteDiag for the read path -- the most
+' informative pieces are the last CMD13 error, the warning flags
+' (CW_NO_DATA_CRC etc.) and the most recent CRC observed/computed.
+'
+' @local cmd13    - Most recent non-zero CMD13 R2
+' @local warnings - cardWarnings() bitmask (CW_NO_DATA_CRC = $04, etc.)
+' @local rxCrc    - Last data-block CRC received from card
+' @local calcCrc  - Last data-block CRC the driver computed
+
+    cmd13    := sd.getLastCMD13Error()
+    warnings := sd.cardWarnings()
+    rxCrc    := sd.getLastReceivedCRC()
+    calcCrc  := sd.getLastCalculatedCRC()
+    debug("    read diag: lastCMD13err=$", uhex_word_(cmd13), " warnings=$", uhex_byte_(warnings), " rxCRC=$", uhex_word_(rxCrc), " calcCRC=$", uhex_word_(calcCrc))
 
 con { license }
 
