@@ -222,6 +222,8 @@ tasks/
 .vscode/settings.json
 src/backups/
 src/*.backup-*
+*__pre.spin2
+central-skills-staging/
 CLAUDE.md
 README-AGENT.md
 STUDY/
