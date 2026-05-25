@@ -1031,3 +1031,92 @@ The remaining moves from the 2026-05-23/24 list still stand, plus:
 - `DEBUG_MASK = (1 << CH_MOUNT) | (1 << CH_SECTOR)` — TEMPORARY for diagnostic; will revert to 0 before next investigation cycle
 
 These two changes should be reverted before the next investigation session unless we choose to re-run with the same DEBUG_MASK to test determinism.
+
+---
+
+## 2026-05-25 — Lerdisk: minimal reproducer + instrumented evidence of post-CMD24 wedge
+
+**[Lerdisk]** all observations this session are from the Lerdisk card (`SN:$0000_01F4 2025/12`, `cardWarnings()=$04`, probe-settled SPI 21 MHz). Identity confirmed via `SD_card_identify.spin2` between runs.
+
+### ✅ MINIMAL REPRODUCER — two tests, no power cycle between
+
+The yesterday-observed "raw_sector_tests fails 13/14 on Lerdisk" finding distilled to its smallest form: run mount_tests, then immediately raw_sector_tests (no power cycle, no manual intervention). The catalog/format/benchmark sequence that preceded it yesterday is not required.
+
+| Step | Test | Result |
+|---|---|---|
+| 1 | Power-cycle the P2 Edge board | clean state |
+| 2 | `SD_RT_mount_tests.spin2`            | PASS 31/31 |
+| 3 | `SD_RT_raw_sector_tests.spin2`       | **FAIL 1/14** |
+
+Symmetric isolation runs both pass: cold-boot raw_sector_tests alone → 14/14 PASS (`260525-124751`); cold-boot mount_tests alone → 31/31 PASS (`260525-135802`). The failure is exclusively a property of the **sequence**, not either test individually.
+
+### ✅ INSTRUMENTED — diagnostic dumps on every failure path
+
+Commit `4f38168` added `dumpWriteFailDiag()` and `dumpReadFailDiag()` to raw_sector_tests' failure paths (write fail, read-after-write fail, marker mismatch, read fail, byte mismatch). On a healthy card the dumps never fire — zero output noise. On the failing Lerdisk sequence they fire on 13/14 cases. Log: `tools/logs/SD_RT_raw_sector_tests_260525-140017.log`.
+
+### ✅ SMOKING-GUN PROGRESSION — first CMD24 succeeds completely, then card flips
+
+| Op | Outcome | Driver-reported diag |
+|---|---|---|
+| Write #1 → sector 100,000 | API returned SUCCESS, but immediate read-back times out | `code=7 R1=$00 dresp=$05` — full success at the wire (CMD24 accepted, data response accepted, busy complete, CMD13 clean) |
+| Read sector 100,000 (right after write #1) | `status=-1 E_TIMEOUT` (~1 s wait) | (no read-side diag struct; CRC fields frozen from init-time probeDataCrc, see note) |
+| Write #2 → sector 100,001 | `status=-7 E_IO_ERROR`, ~86 ms | `code=2 R1=$00 dresp=$FF` — CMD24 R1 still clean, but **no data response token came back** |
+| Writes #3-5 | identical pattern | `code=2 R1=$00 dresp=$FF` each, ~1.1 s each (busy-window timeout dominates) |
+| All Phase-2 reads of same sectors | `status=-1 E_TIMEOUT` each, ~2.1 s | aborts early in read path |
+| `lastCMD13err` throughout | always `$0000` | driver-internal CMD13 polls observed **no card-reported error** at any point |
+
+### Decoded picture
+
+After **exactly one** successful CMD24 single-block write, the card silently transitions into a stuck state in which:
+1. CMD24 R1 stays clean ($00) — card still accepts the command word
+2. The data response token after the 512-byte payload never arrives — driver sees the wait-for-token timeout (`code=2`, `dresp=$FF`)
+3. CMD17 single-block reads abort before receiving the `$FE` data-start token (frozen `calcCRC` value across all failed reads confirms readSector aborts before line 6320)
+4. The card's own CMD13 status register reports no error — the card believes nothing is wrong
+
+The minimum prior history needed to trigger this is **mount_tests** in the same powered-up session. Mount_tests' CMD25 multi-block writes (during file operations) or the unmount sequence (or both) prime the card; the FIRST subsequent CMD24 finishes successfully but moves the card into the stuck state. Reproducible across both directions:
+- Yesterday: mount_tests → raw_sector_tests (writes wedge, matches today)
+- Today (earlier): raw_sector_tests → identify → mount_tests (mount's first sector read wedges)
+
+### Note on the CRC fields in `dumpReadFailDiag` (corrected in this session)
+
+The original helper printed `rxCRC` and `calcCRC` from `getLastReceivedCRC` / `getLastCalculatedCRC`. On a CW_NO_DATA_CRC card these mislead more than they inform:
+- `rxCRC=$0000` is the dummy CRC the card always sends — expected, not diagnostic
+- `calcCRC` is updated only after the data block is fully received; if a read fails early (as here) the field stays frozen at whatever value it held from the most recent successful CRC computation — which, on a dummy-CRC card, is the init-time `probeDataCrc` value (here `$B14C`, the locally-computed CRC of sector 0)
+
+The *fact* that `calcCRC` is unchanged across all 13 failures is diagnostically meaningful — it confirms readSector aborts before line 6320. The value itself is init residue. The helper should be updated to either drop these fields or annotate them as init residue on dummy-CRC cards.
+
+### Open observation — this is likely the same mechanism as the #3240 wedge
+
+The Cloudisk #3240 wedge (mount returns -8 E_NO_CARD after the first unmount/remount cycle) and Lerdisk's CMD24 failure look like the same underlying state-corruption manifesting on whatever the *next* operation happens to be. Same card class (`asdfg`), same dummy-CRC silicon, same "one operation succeeds then everything wedges" pattern. Earlier in today's session, running `raw_sector_tests → identify → mount_tests` reproduced the #3240 symptom (mount() returning -8, readSectorRaw(0) failing) on Lerdisk — the same card-class wedge, manifesting as a mount failure instead of a CMD24 failure because mount happens to read before it writes.
+
+If the same mechanism: fixing it fixes both #3240 and #3266 at once. If not: they share so many surface features that one will keep masquerading as the other.
+
+### Investigation paths from here (to be picked from)
+
+**A. Is sector 100,000 special, or is it any CMD24 write?**
+Power-cycle, run mount_tests, then write to a *different* sector (e.g., 200,000). Sector-independent → mount_tests leaves a card-wide state. Sector-specific → mount_tests touched something at sector 100,000 (very unlikely given mount_tests does file ops which use FAT-allocated sectors, but verifying rules it out).
+
+**B. Does any operation after mount_tests trigger the wedge, or specifically CMD24?**
+Power-cycle, run mount_tests, then a *read-only* operation (re-mount, read VBR, list root dir). If reads also wedge → not CMD24-specific; mount_tests poisons the card against any subsequent I/O. If reads work fine but the next CMD24 wedges → CMD24 single-block specifically is the trigger. *This is the recommended first experiment — it cleanly separates "general state poisoning" from "CMD24-specific" and tells us where to look in the driver.*
+
+**C. Does unmount matter?**
+Mount_tests unmounts at the end. Add a minimal test that mounts without unmounting, then raw_sector_tests. Wedge still fires → unmount is not the trigger. Wedge doesn't fire → unmount is part of the setup; the wedge is "post-unmount" rather than "post-mount."
+
+**D. Does the wedge depend on the FILE-LEVEL writes mount_tests performs (which use CMD25), or on something else mount_tests does?**
+Power-cycle, mount + immediately unmount (no file ops in between), then raw_sector_tests. If wedge fires → mount/unmount alone is enough. If not → file-level writes (CMD25) are necessary; the prior CMD25 history is what primes the card to wedge on the next CMD24.
+
+### Driver-internal angle — what to look for in writeSector after the "successful" write #1
+
+The fact that write #1 reports code=7 (CMD13 clean, busy released) but the card is wedged from that moment forward suggests one of:
+1. **CMD13 is being read incorrectly on a dummy-CRC card** — what looks like "no error" R2 could be the card returning a placeholder that the driver misinterprets as clean
+2. **The driver's post-write cleanup leaves the smart pins in a state the card can't recover from** — `pinh(cs)` at line 6656, then CMD13 issued. The transition from PASM streamer mode back to smart-pin SPI mode happens at line 6607-6609 (WRPIN/WXPIN/pinh on MOSI). If MOSI is briefly mis-configured between the data CRC bytes and the data-response wait, the card could miss its own response window
+3. **Something about CMD24's single-block stop semantics is unstable on this silicon when preceded by CMD25 multi-block** — the card might still think it's in a multi-block context, and CMD24's "implicit single-block stop" doesn't fully resolve
+
+None of these are claims, only places to look. Specifically: **inventory exactly what the driver does between sending the CRC bytes (line 6620) and receiving the data response token (line 6623), and what state CS / MOSI / SCK are in across that boundary.** The transition from PASM streamer block back to smart-pin SPI happens in this window and is a known fragile area.
+
+### Next-session opening moves
+
+- Run experiment **B** first (read after mount_tests, observe whether it wedges or works)
+- Update `dumpReadFailDiag` to drop or annotate CRC fields for dummy-CRC cards (commit-ready cleanup; won't change findings)
+- Inventory writeSector lines 6606-6660 for state-handoff at the streamer→smart-pin transition
+- Consider whether to characterize a third asdfg card if one becomes available (Cloudisk + Lerdisk both behave this way; a third would be confirmation, not new information)
