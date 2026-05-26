@@ -1120,3 +1120,131 @@ None of these are claims, only places to look. Specifically: **inventory exactly
 - Update `dumpReadFailDiag` to drop or annotate CRC fields for dummy-CRC cards (commit-ready cleanup; won't change findings)
 - Inventory writeSector lines 6606-6660 for state-handoff at the streamer→smart-pin transition
 - Consider whether to characterize a third asdfg card if one becomes available (Cloudisk + Lerdisk both behave this way; a third would be confirmation, not new information)
+
+---
+
+## 2026-05-25 (continued) — Surveys, instrumentation, and the three-bug picture
+
+After the initial findings above, the session continued through three rounds of code surveys, hardware experiments, and driver instrumentation. The picture changed substantially: what looked like one card-specific protocol mystery turned out to be **three driver-side silent-error bugs of the same family**, layered on top of a real card-state progression. Removing the layers reveals a much sharper symptom than the original "CMD24 wedges Lerdisk."
+
+### Experiment B run (mount_tests → identify → dump_mbr_vbr)
+
+Power-cycle, then run mount_tests (PASS 31/31), then identify (PASS — register reads work), then `SD_dump_mbr_vbr.spin2` (which does `initCardOnly` + a sector-0 read).
+
+Result: **`initCardOnly` returned `-8 E_NO_CARD`** before any sector read happened.
+
+This was the original Cloudisk #3240 wedge symptom, reproduced on Lerdisk:
+- Cold-boot → individual tests pass
+- mount_tests → 31/31 pass on first run (but exposes the wedge by passing through `unmount()`)
+- subsequent operations see a wedged card
+
+Reinforced two-cards-same-root-cause hypothesis.
+
+### Experiment "is mount_tests alone sufficient to wedge?"
+
+`mount_tests → dump_mbr_vbr` (no identify between) → mount_tests passed only **16 of 31 tests**. The first 12 tests passed. Test #13 (`unmount()`) returned `-7 E_IO_ERROR` — the unmount's `updateFSInfo` writeSector failed. From that test forward every mount returned `-8`, every unmount returned `-7`, every operation downstream cascaded.
+
+So: **the wedge happens at `updateFSInfo`'s writeSector during unmount, and from that moment forward the card is wedged for any subsequent operation.** This is the same exact symptom commit `a7dc362` started exposing — that commit fixed unmount silently swallowing the writeSector error, so the real failure now surfaces as a -7. Without `a7dc362` we'd never have seen this.
+
+### Code surveys — five areas, four clean, one major finding
+
+In response to the SU01G-precedent reminder (its root cause was a generic timing primitive, not a card-protocol quirk), surveyed five candidate "generic" code paths before more hardware experiments:
+
+| # | Area | Result |
+|---|---|---|
+| 1 | **Timeout primitives** (waitDataResponse, waitBusyComplete, waitDataToken) | CLEAN. GETMS-based deadlines with correct unsigned-subtraction comparison. Comment at line 6814 records an earlier GETCT-based version that overflowed at low sysclk — fixed in v1.5.3. Current code does not have the SU01G early-exit pattern. |
+| 2 | **Streamer ↔ smart-pin transition** in writeSector | Same pattern as read path and as multi-block write. Works on healthy cards. No visible distinct fragility. |
+| 3 | **Dummy-CRC code path** | Write side does NOT branch on `CW_NO_DATA_CRC` — sends a real CRC regardless. `probeDataCrc` leaves no carried state. Flag only affects read-side CRC validation. Not a write-side surface. |
+| 4 | **send_command / lock / COGATN** | Pattern correct. Same primitive used by all commands; works for thousands of operations per regression run. Not the issue. |
+| 5 | **CMD13 / checkCardStatus** | **MAJOR FINDING — see below.** |
+
+### Survey 5 finding — CMD13 cannot distinguish $0000 R2 from stuck-low MISO
+
+`sendCmd13Transaction` at line 6979 accepts any byte with bit 7 = 0 as a valid R1. The byte `$00` satisfies this. On a wedged card with MISO stuck LOW, the driver:
+1. Reads `$00` → "valid R1=$00 no error bits"
+2. Reads next stuck-`$00` → "status=$00 no error"
+3. Returns `(r1=$00, status=$00)`
+
+`checkCardStatus` then sees r1==$00 and status==$00, falls through to success. **The driver cannot distinguish healthy CMD13 from stuck-low MISO** — both produce byte-identical R2 = $0000.
+
+The driver already captures `cmd13_pre_capture[]` — MISO bytes recorded full-duplex during the command transmission. Healthy bus reads `$FF $FF $FF $FF $FF $FF $FF` (idle while we transmit); a stuck-low bus reads `$00 $00 ...`. **`checkCardStatus` doesn't look at `pre_capture`** — the evidence is captured then discarded.
+
+This was the cleanest single survey finding. Test instrumented to surface `pre_capture` in `dumpWriteFailDiag` and `dumpReadFailDiag` (commit `bcffc76`).
+
+### Bonus survey finding — CMD_WRITE_SECTOR_RAW dispatch flattens errors
+
+`CMD_WRITE_SECTOR_RAW` dispatch at line 2712 mapped every writeSector failure to `E_IO_ERROR (-7)`, discarding writeSector's specific code (E_TIMEOUT / E_WRITE_REJECTED / E_CARD_BUSY / E_IO_ERROR). The matching READ dispatch passes through. Same smell pattern as `a7dc362`. Fixed in commit `dbe5cc9`.
+
+### Re-run with pre_capture instrumentation — Hypothesis B refuted
+
+Re-ran the minimal reproducer (mount_tests → raw_sector_tests) with `cmd13_pre_capture` surfaced:
+
+```
+write diag: code=7 R1=$00 dresp=$05 sector=100,000          ← write #1 (success)
+write diag: cmd13_pre=[$FF $FF $FF $FF $FF $FF $FF]         ← bus is clean
+
+write diag: code=2 R1=$00 dresp=$FF sector=100,001          ← write #2 (drespTO)
+write diag: cmd13_pre=[$FF $FF $FF $FF $FF $FF $FF]         ← bus still clean
+...
+```
+
+All failure dumps showed `cmd13_pre = [$FF $FF $FF $FF $FF $FF $FF]`. **Hypothesis B refuted: the bus is NOT stuck LOW.** The CMD13 `$0000` R2 reports throughout the investigation were *real* — the card genuinely responded to CMD13 with "no errors."
+
+(Important caveat: those `cmd13_pre` values are from the last CMD13 call, which on the failure path is from write #1's post-write CMD13. The failures themselves don't trigger a fresh CMD13. So pre_capture confirmed the bus was clean *as of write #1's CMD13* — not at the moment of each subsequent failure. This is acceptable here because nothing between write #1 and the failures would put the bus in a different state, but is worth noting.)
+
+The dispatch fix simultaneously made write failures show `status=-1 (E_TIMEOUT)` instead of `-7 (E_IO_ERROR)`, matching the diag code=2.
+
+### The R1 latency experiment — the third silent-error bug
+
+Added `diag_cmd_r1_ms`, `diag_cmd_r1_polls`, `diag_cmd_last_op` to capture `cmd()`'s R1 wait duration and poll count. Re-ran:
+
+```
+Write+Read #1 cmd(CMD17): R1 latency = 0 ms after 2 polls       ← read R1 fast
+Write #2     cmd(CMD24): R1 latency = 0 ms after 2 polls       ← write #2 R1 fast
+Write #3     cmd(CMD24): R1 latency = -1 (TIMEOUT) after 137,624 polls
+Write #4     cmd(CMD24): R1 latency = -1 (TIMEOUT) after 137,620 polls
+Write #5     cmd(CMD24): R1 latency = -1 (TIMEOUT) after 137,702 polls
+```
+
+**The `R1=$00` reported for writes #3-5 in earlier diagnostics was a LIE.** It wasn't the card returning "clean R1" — it was `cmd()` returning `false` (which is integer `0` in Spin2) after timing out at 1 second of polling. The card sent NOTHING on MISO for the entire poll window.
+
+`writeSector` then captured `diag_write_r1 := 0`, checked `if resp & R1_FATAL_MASK` (zero & anything = zero → not fatal), and **proceeded to send the data block to a card that never acknowledged the command**. The downstream `waitDataResponse` timed out, naturally, because the card never received valid CMD24.
+
+This is the **third silent-error bug** of the same family:
+- `a7dc362`: unmount silently swallowed writeSector failures → caller saw SUCCESS
+- (CMD13) `sendCmd13Transaction`: R2 = $0000 collides with stuck-low MISO → driver cannot tell genuine "card OK" from "card silent"
+- (CMD) `cmd()`: returns `0` on timeout, but `$00` is also a legitimate R1 value → driver cannot tell "command acknowledged with clean R1" from "command never acknowledged"
+
+In all three the same anti-pattern: **a zero return value collides with a legitimate `everything fine` value, and the driver treats the ambiguous zero as success.**
+
+### Three-stage wedge progression (now visible thanks to instrumentation)
+
+| Stage | Card behaviour | Driver perception (before fixes) |
+|---|---|---|
+| 1 | Card processes commands AND sends data tokens normally | All operations succeed (write #1) |
+| 2 | Card responds to commands with fast clean R1, but **silently refuses data-start / data-response tokens** | Driver: "command worked, data phase timed out" (write #2, read-after-#1) |
+| 3 | Card **stops responding to commands entirely** — MISO stays $FF for the full 1-second cmd() timeout | Driver: "must be R1=$00 clean" (writes #3+) — wrongly, because of the timeout-vs-zero collision |
+
+mount_tests primes the card from stage 0 (normal) to stage 1. Write #2 nudges it 2→3. Once in stage 3, no further command is acknowledged on MISO until power-cycle.
+
+### What we plan to do next
+
+**Fix the `cmd()` timeout/zero ambiguity.** This is the third instance of the same anti-pattern in the same investigation; we know how to fix it. Two reasonable approaches:
+
+- **(A)** Change `cmd()` to return a sentinel distinguishable from valid R1=$00 on timeout (e.g., `-1`). Callers updated to check for the sentinel before treating the result as R1 bits. Slight API ripple.
+- **(B)** Add a separate "timed out" diagnostic flag on the existing `diag_cmd_r1_ms` infrastructure (we already set it to `-1` on timeout). `writeSector` checks the flag in addition to the R1 byte before proceeding to data-block transfer. Smaller surface change.
+
+After the fix, expected behaviour change: writes #3-5 will fail at the CMD24-R1 step with a properly-classified error code, *before* the driver sends data bytes to a card that didn't acknowledge the command. The failure surface becomes "CMD24 never acknowledged" instead of "data-response timeout" — a more honest representation of what's happening on the wire.
+
+That probably won't fix the wedge itself (the card is wedged regardless of how we report it), but it will:
+1. Stop the driver from sending data blocks during a wedge (saves time and avoids any state that data-block-transmission might introduce)
+2. Make the writeSector return more honest — surfacing the CMD24 timeout, not the downstream data-response timeout
+3. Let us see if a missing fourth silent-error is hiding behind the third one
+
+After the cmd() fix, re-run the minimal reproducer and observe the new failure shape. Then decide whether to dig further into what causes the stage 1→2 transition (which is the remaining unexplained mechanism — *why* the data-token engine gets suppressed after write #1's successful completion), or to fix waitBusyComplete's "quit on first $FF" vulnerability that may be related.
+
+### Current pending follow-ups (none blocking the next experiment)
+
+- `waitBusyComplete` quits on the first $FF byte. Vulnerable to a transient MISO blip while the card is still busy. May or may not be related to the stage 1→2 transition. Worth investigating after the cmd() fix.
+- `sendCmd13Transaction` and `checkCardStatus` should look at `cmd13_pre_capture` to distinguish stuck-low MISO from a genuine R2 = $0000 — Hypothesis B was refuted in *this* case, but a future wedge variant could manifest as stuck-low and we'd want the driver to catch it.
+- The stage 1→2 transition (write #2's data-response token never arrives despite CMD24 R1 being clean) remains unexplained. Whatever puts the card into that state happens DURING write #1's success sequence (busy-complete + CMD13 + CS-deassert) or in the milliseconds between. This is the genuine card-state mystery; the rest was driver reporting.
