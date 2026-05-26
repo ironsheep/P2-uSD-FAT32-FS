@@ -712,6 +712,11 @@ DAT  ' ---- Singleton Control ----
         diag_write_dresp                        LONG    0                        ' Data response token from card
         diag_write_sector                       LONG    0                        ' Sector number attempted
 
+        ' CMD R1 LATENCY DIAGNOSTICS (set by every cmd() call)
+        diag_cmd_r1_ms                          LONG    0                        ' Elapsed ms in last cmd() between command-end and R1-received (-1 if timed out)
+        diag_cmd_r1_polls                       LONG    0                        ' Bytes polled in last cmd() before R1 arrived (or timeout)
+        diag_cmd_last_op                        LONG    0                        ' Op code of last cmd() call (for context)
+
         ' TEST HOOKS: Error injection for CRC validation testing
         ' Used by SD_RT_crc_validation_tests and SD_RT_recovery_tests
         test_force_read_crc_error               BYTE    0                        ' Counter: force N read CRC mismatches
@@ -1978,6 +1983,19 @@ PUB getWriteDiag() : result_code, r1_resp, data_resp, sector_num
   r1_resp := diag_write_r1
   data_resp := diag_write_dresp
   sector_num := diag_write_sector
+
+PUB getCmdR1Diag() : r1_ms, polls, op
+'' Get R1 latency from last cmd() call. Reveals whether the card responds
+'' promptly to a command word, or whether it stalls (returning $FF on MISO
+'' for many polls before producing a valid R1 with bit 7 = 0).
+''
+'' @returns r1_ms - Elapsed ms from R1-polling start to R1-received (-1 if timed out at 1s)
+'' @returns polls - Number of byte polls executed before R1 (or timeout)
+'' @returns op    - CMD opcode of the last cmd() call (which command this is for)
+
+  r1_ms := diag_cmd_r1_ms
+  polls := diag_cmd_r1_polls
+  op    := diag_cmd_last_op
 
 PUB getLastCMD13() : r2
 '' Get last CMD13 result (R1 in high byte, STATUS in low byte).
@@ -6113,7 +6131,8 @@ PRI initCard() : bSuccess | timeout, resp, card_version, acmd41_arg, got_respons
 
     DEBUG[CH_INIT]("    [initCard] === INIT SUCCESS ===")
 
-PRI cmd(op,parm) : response | timeout, timed_out
+PRI cmd(op,parm) : response | timeout, timed_out, r1_start_ms
+
 ' Send a SPI command using smart pins - sends command byte, argument, and CRC.
 ' Handles R1, R3, and R7 response formats based on command type.
 '
@@ -6122,7 +6141,10 @@ PRI cmd(op,parm) : response | timeout, timed_out
 ' @returns response - R1 response, or R3/R7 32-bit value for CMD8/CMD58
 ' @local timeout - Timeout deadline
 ' @local timed_out - TRUE if response polling timed out
+' @local r1_start_ms - GETMS() at start of R1 polling loop (for diag_cmd_r1_ms)
 
+  diag_cmd_last_op := op
+  diag_cmd_r1_polls := 0
   if op == CMD0
     DEBUG[CH_INIT]("      [cmd] CS before assert: ", udec_(pinr(cs)))
   sp_transfer(-1,8)                                                                 '  required for certain cards (my 512MB card fails if not present)
@@ -6139,15 +6161,19 @@ PRI cmd(op,parm) : response | timeout, timed_out
     sp_transfer(CRC_CMD8,8)                                                         '  send CRC for cmd(8,$1AA)
   ' v1.5.3: GETMS-based deadline (was GETCT-based, overflowed at low sysclk)
   timed_out := false
-  timeout := GETMS() + 1000                                                       '  1s timeout
+  r1_start_ms := GETMS()
+  timeout := r1_start_ms + 1000                                                   '  1s timeout
   repeat
     response := sp_transfer(-1,8)                                                   '  read 1st byte of reply
+    diag_cmd_r1_polls++
     if (response & $80) == 0                                                        '  valid R1 has bit 7 = 0 (SD spec 7.3.2.1)
+      diag_cmd_r1_ms := GETMS() - r1_start_ms
       quit
     if GETMS() - timeout > 0                                                        '  check timeout
       pinh(cs)                                                                      '  CS HIGH = deselected (standard active-LOW)
       response := false
       timed_out := true
+      diag_cmd_r1_ms := -1                                                          '  marker for timeout
       quit
   if NOT timed_out
     if op == CMD8 OR op == CMD58                                                    '  read 32-bit reply for cmd8 and cmd58

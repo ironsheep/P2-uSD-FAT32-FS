@@ -487,7 +487,7 @@ PRI recordFail()
 
     fail_count++
 
-PRI dumpWriteFailDiag() | code, r1, dresp, sec, cmd13
+PRI dumpWriteFailDiag() | code, r1, dresp, sec, cmd13, r1_ms, r1_polls, last_op
 ' Print the driver's per-write diagnostic state. Call from any failure path
 ' inside writeAndVerify -- write-fail, read-after-write-fail, or marker
 ' mismatch. The diag fields reflect the most recent writeSector call, so
@@ -508,10 +508,12 @@ PRI dumpWriteFailDiag() | code, r1, dresp, sec, cmd13
 
     code, r1, dresp, sec := sd.getWriteDiag()
     cmd13 := sd.getLastCMD13Error()
+    r1_ms, r1_polls, last_op := sd.getCmdR1Diag()
     sd.getLastCMD13PreCapture(@cmd13_pre)
     debug("    write diag: code=", udec_(code), " R1=$", uhex_byte_(r1), " dresp=$", uhex_byte_(dresp), " sector=", udec_(sec))
     debug("    write diag: lastCMD13err=$", uhex_word_(cmd13), "  (codes: 1=CMD24fatal 2=drespTO 3=CRCrej 4=writeErr 5=unkRej 6=busyTO 7=success)")
     debug("    write diag: cmd13_pre=[", uhex_byte_(cmd13_pre[0]), " ", uhex_byte_(cmd13_pre[1]), " ", uhex_byte_(cmd13_pre[2]), " ", uhex_byte_(cmd13_pre[3]), " ", uhex_byte_(cmd13_pre[4]), " ", uhex_byte_(cmd13_pre[5]), " ", uhex_byte_(cmd13_pre[6]), "]  (expect $FF*; $00* = bus stuck LOW = wedged)")
+    debug("    write diag: cmd(CMD", udec_(last_op), ") R1 latency=", sdec_(r1_ms), " ms after ", udec_(r1_polls), " byte polls  (fast=<5ms, slow=several hundred ms, timeout=-1)")
 
 PRI dumpReadFailDiag() | cmd13, warnings
 ' Print driver state useful for diagnosing a failed or wrong-data read.
