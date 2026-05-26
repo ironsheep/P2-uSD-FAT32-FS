@@ -1248,3 +1248,92 @@ After the cmd() fix, re-run the minimal reproducer and observe the new failure s
 - `waitBusyComplete` quits on the first $FF byte. Vulnerable to a transient MISO blip while the card is still busy. May or may not be related to the stage 1→2 transition. Worth investigating after the cmd() fix.
 - `sendCmd13Transaction` and `checkCardStatus` should look at `cmd13_pre_capture` to distinguish stuck-low MISO from a genuine R2 = $0000 — Hypothesis B was refuted in *this* case, but a future wedge variant could manifest as stuck-low and we'd want the driver to catch it.
 - The stage 1→2 transition (write #2's data-response token never arrives despite CMD24 R1 being clean) remains unexplained. Whatever puts the card into that state happens DURING write #1's success sequence (busy-complete + CMD13 + CS-deassert) or in the milliseconds between. This is the genuine card-state mystery; the rest was driver reporting.
+
+---
+
+## 2026-05-25 (late evening) — Two timing hypotheses refuted, narrowing the search
+
+After committing the cmd() R1 fix (`bfeb20e`), we tested two specific hypotheses about whether the wedge is a timing-margin issue at the SD signaling level. Both refuted, which substantially narrows what kind of mechanism we're looking for.
+
+### ❌ HYPOTHESIS REFUTED — `waitDataResponse` 100ms timeout too tight
+
+**Hypothesis:** the card's actual data-response time on this counterfeit silicon exceeds 100ms under some condition, and the driver gives up before the response arrives.
+
+**Test:** bumped `waitDataResponse` timeout from 100ms to 1000ms. Reran the minimal reproducer.
+
+**Result:** write #2 still fails with code=2 (drespTO). The card was given a full 1-second window and still **never sent the data-response token**. The card actively refuses the data block, not waiting on a slow card. **Reverted the experimental change.**
+
+### ❌ HYPOTHESIS REFUTED — `waitBusyComplete` quits on first $FF, declaring done while card still committing
+
+**Hypothesis:** SD cards can briefly blip MISO HIGH during internal commit then re-assert LOW. `waitBusyComplete` quits on the first $FF byte, so a transient blip would have it declare "done" prematurely. CMD13 then succeeds on the still-responsive command engine, next CMD24's R1 comes through, but the data block is rejected because the data engine is still internally busy from the prior write.
+
+**Test:** modified `waitBusyComplete` to require **3 consecutive $FF reads** before declaring done. Reran.
+
+**Result:** **identical failure pattern**. Same code=2 on write #2, same code=8 on writes #3-5, same poll counts (138,045 / 138,040 / 138,123 — almost byte-identical to the prior run). The 3-consecutive guard made no difference. **Reverted the experimental change.**
+
+This is significant. With 3 consecutive $FFs required, we know the card's MISO release is a clean signal, not a transient blip. The card **is** genuinely done with write #1's busy period at the signaling level.
+
+### What three independent observable checks now tell us
+
+| Observation | Value | What it means |
+|---|---|---|
+| Write #1 `waitBusyComplete` returns success (even with 3-$FF guard) | clean | Card's MISO release is genuine |
+| Write #1 post-write `CMD13` R2 | $0000 | Card's command engine reports "no errors" |
+| Write #1 post-write `cmd13_pre_capture` | $FF $FF $FF $FF $FF $FF $FF | Bus genuinely idle during CMD13 transmission |
+| Write #2 `cmd(CMD24)` R1 | $00 (fast) | Card accepts the next CMD24 cleanly |
+| Write #2 `waitDataResponse` | timeout (even at 1000ms) | Card silently refuses the data block |
+
+**All four "signaling-level" health checks pass for the card. Yet the next data block is silently refused. The mechanism is not at the signaling level.**
+
+### What's now ruled out
+
+- **Timing margin at data-response wait** — disproven by 10× timeout bump
+- **`waitBusyComplete` returning early on a transient $FF blip** — disproven by 3-consecutive guard
+- **Bus electrical issue (stuck-low MISO)** — disproven earlier by `cmd13_pre_capture = $FF $FF $FF $FF $FF $FF $FF`
+- **Driver init or register-read state corruption** — disproven by identify-passes-but-dump-fails sequence
+- **The dummy-CRC code path being a side-effect surface** — surveyed clean
+- **Lock/COGATN or send_command primitive** — surveyed clean
+- **All three previously-found "silent-error" reporting bugs** (`a7dc362`, `dbe5cc9`, `bfeb20e`) — fixed; surface symptoms are now honest
+
+### What's left worth trying — ordered by decisiveness
+
+**(1) The "internal commit ≠ MISO release" hypothesis — `waitms` after writeSector success.**
+
+The MISO release is at the signaling level, but the card's *internal* flash commit might lag. CMD13 R2 might also return clean during this lag (the card's status register might not reflect "internal commit in progress"). If we add a `waitms(50)` or `waitms(100)` after writeSector success but before returning, we give the card real wall-clock time to finish internal work. If the wedge goes away → the card needs more time than its signaling indicates. If it doesn't → time isn't the issue, mechanism is protocol-level.
+
+**Decisive:** this conclusively separates "card needs more time" from "card has a protocol-level issue."
+
+**(2) CMD24 vs CMD25 single-block — same data, different command.**
+
+`writeSectorRaw` uses CMD24 single-block. `writeSectorsRaw(start, count=1, buf)` would write a single sector via CMD25 + stop token. Same sector range, same data, different protocol. If CMD25 works after mount_tests but CMD24 doesn't → it's specifically the CMD24 protocol path (no stop-token cleanup) the card refuses. If both fail → the wedge is independent of the specific protocol path.
+
+**Decisive:** isolates "specifically CMD24" from "any single-block write attempt."
+
+**(3) Force a fresh CMD13 right before write #2's data block.**
+
+`cmd13_pre_capture` we surface is from write #1's CMD13 (the most recent one) — by the time write #2 fails at the data-response token, no fresh CMD13 has run. If we force a CMD13 between write #2's CMD24+R1 and the data-block transmission, the pre_capture would show whether the bus is healthy at *that* moment. If pre_capture stays $FF → card responsive at command level even during write #2's failure. If it's $00 → the wedge IS bus-electrical and we missed it before.
+
+**Decisive:** distinguishes "card refuses data block while still command-responsive" from "card is going wedged right between R1 and data block."
+
+**(4) CMD12 / abort after write #2 to recover the card mid-test.**
+
+Currently the card stays wedged for the rest of the test. If we issue CMD12 (stop transmission) or a fresh CMD0 reset between writes, does the card recover for write #3? This tells us whether the wedge is "stuck per-operation" (recoverable) or "stuck per-session" (needs power cycle).
+
+### What we plan to do next session
+
+**Run experiment (1) first** — add `waitms(50)` after writeSector success. It's the smallest change with the highest decisiveness. The outcome tells us whether we're chasing a time-related card-internal mechanism or a protocol-level one. From there:
+- If time-related → calibrate the wait to a sustainable value, or find a signaling-level proxy for "truly done"
+- If protocol-related → run experiment (2) to isolate CMD24's specific quirk, then look at protocol-level differences between CMD24 and CMD25
+
+We're closing in. The mechanism is **definitely not** any of the things we'd have expected at the start of this session. Three driver-side silent-error bugs have been removed from the picture; the remaining symptom is sharp and consistent. The SU01G-precedent prediction ("the bug will be something generic and simple") still seems likely — we just haven't found the right generic primitive yet.
+
+### Session-end driver state
+
+Working tree is **CLEAN**. All experimental changes from tonight's session have been reverted. The driver has the committed fixes (`a7dc362`, `dbe5cc9`, `bfeb20e`) plus the diag instrumentation (`696aff7`). The test has its diag dumps (`bcffc76`, `696aff7`).
+
+### Resume points for next session
+
+- Re-read this section to recall the picture (everything refuted so far + the 4 ordered experiments)
+- Start with experiment (1): add `waitms(50)` after writeSector success
+- Don't re-survey what's already clean — it's documented above
+- Look at the todo-mcp resume context key for fuller session details
