@@ -2709,10 +2709,7 @@ PRI fs_worker() | cur_cmd
       CMD_WRITE_SECTOR_RAW:
         bytemove(@buf, pb_param1, SECTOR_SIZE)
         DEBUG[CH_SECTOR]("  [WRITE_RAW] after bytemove: buf[0..3]=$", uhex_byte_(buf[0]), " $", uhex_byte_(buf[1]), " $", uhex_byte_(buf[2]), " $", uhex_byte_(buf[3]), " sig=$", uhex_word_(WORD[@buf + BOOT_SIG_OFFSET]))
-        if writeSector(pb_param0, BUF_DATA) == SUCCESS
-          pb_status := SUCCESS
-        else
-          pb_status := E_IO_ERROR
+        pb_status := writeSector(pb_param0, BUF_DATA)                           ' pass through actual error code (E_TIMEOUT/E_WRITE_REJECTED/E_CARD_BUSY/E_IO_ERROR), mirrors CMD_READ_SECTOR_RAW
 
       CMD_INIT_CARD_ONLY:
         pb_status := do_init_card_only()
