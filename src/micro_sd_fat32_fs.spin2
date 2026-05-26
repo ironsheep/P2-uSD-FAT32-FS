@@ -704,9 +704,9 @@ DAT  ' ---- Singleton Control ----
         diag_crc_enabled                        BYTE    1                        ' CRC validation enabled (1=on, 0=off)
 
         ' WRITE DIAGNOSTICS (set by writeSector, readable from any cog)
-        ' Codes: 0=not called, 1=CMD24 fatal, 2=data-response timeout,
+        ' Codes: 0=not called, 1=CMD24 fatal-R1, 2=data-response timeout,
         '        3=data CRC reject, 4=data write-err reject, 5=data unknown reject,
-        '        6=busy timeout, 7=success
+        '        6=busy timeout, 7=success, 8=CMD24 R1 never arrived (cmd() timed out)
         diag_write_result                       LONG    0                        ' Outcome code of last writeSector call
         diag_write_r1                           LONG    0                        ' CMD24 R1 response byte
         diag_write_dresp                        LONG    0                        ' Data response token from card
@@ -6245,6 +6245,18 @@ PRI readSector(sector, buf_type) : status | _sck, _miso, data, loop_ctr, timeout
 
       ' Send CMD17 (READ_SINGLE_BLOCK)
       cmd(CMD17, sector << hcs)
+      ' Detect cmd() R1 timeout (returns 0, byte-identical to a clean R1=$00).
+      ' Without this check, a card that fails to acknowledge CMD17 leaves the
+      ' driver spinning on the data-start-token wait, mis-classifying the
+      ' failure as "no start token" when the actual problem was "command
+      ' never acknowledged." Bail with E_TIMEOUT immediately - no retry can
+      ' help if the card never received CMD17.
+      if diag_cmd_r1_ms < 0
+        DEBUG[CH_SECTOR]("  [readSector] CMD17 R1 NEVER ARRIVED (cmd() timed out) attempt ", udec_(attempt))
+        pinh(cs)
+        LONG[p_cache] := -1
+        status := E_TIMEOUT
+        quit                                                                  ' break retry loop
 
       ' Wait for start token ($FE) - use sp_transfer_8 for token polling
       ' v1.5.3: GETMS-based deadline (was GETCT-based, overflowed at low sysclk).
@@ -6578,9 +6590,14 @@ PRI writeSector(sector, buf_type) : status | _sck, _mosi, p_buf, stream_mode, cl
 
   resp := cmd(CMD24, sector << hcs)
   diag_write_r1 := resp                                                         ' Capture CMD24 R1 response
-  if resp & R1_FATAL_MASK                                                       ' Fatal R1 bits: illegal cmd ($04), address err ($20), parameter err ($40)
+  if diag_cmd_r1_ms < 0                                                         ' cmd() returns 0 on R1 timeout, byte-identical to a valid R1=$00 clean
+    DEBUG[CH_SECTOR]("  [writeSector] CMD24 R1 NEVER ARRIVED (cmd() timed out)")
+    diag_write_result := 8                                                      ' 8 = R1 timeout (not the same as R1-with-fatal-bits)
+    pinh(cs)
+    status := E_TIMEOUT
+  elseif resp & R1_FATAL_MASK                                                   ' Fatal R1 bits: illegal cmd ($04), address err ($20), parameter err ($40)
     DEBUG[CH_SECTOR]("  [writeSector] CMD24 FATAL, R1=$", uhex_byte_(resp))
-    diag_write_result := 1                                                      ' 1 = CMD24 fatal
+    diag_write_result := 1                                                      ' 1 = CMD24 fatal-R1
     pinh(cs)
     status := E_IO_ERROR
   else

@@ -499,8 +499,8 @@ PRI dumpWriteFailDiag() | code, r1, dresp, sec, cmd13, r1_ms, r1_polls, last_op
 ' and CMD13's "happy" $00 $00 R2 is uninterpretable (driver cannot
 ' distinguish stuck-low from a legitimate clean R2).
 '
-' @local code   - getWriteDiag result code (1=CMD24fatal 2=drespTO 3=CRCrej
-'                 4=writeErr 5=unkRej 6=busyTO 7=success)
+' @local code   - getWriteDiag result code (1=CMD24fatalR1 2=drespTO 3=CRCrej
+'                 4=writeErr 5=unkRej 6=busyTO 7=success 8=CMD24 R1 never arrived)
 ' @local r1     - CMD24 R1 response byte from the last write
 ' @local dresp  - Data response token (masked) from the last write
 ' @local sec    - Sector number the last write attempted
@@ -511,7 +511,7 @@ PRI dumpWriteFailDiag() | code, r1, dresp, sec, cmd13, r1_ms, r1_polls, last_op
     r1_ms, r1_polls, last_op := sd.getCmdR1Diag()
     sd.getLastCMD13PreCapture(@cmd13_pre)
     debug("    write diag: code=", udec_(code), " R1=$", uhex_byte_(r1), " dresp=$", uhex_byte_(dresp), " sector=", udec_(sec))
-    debug("    write diag: lastCMD13err=$", uhex_word_(cmd13), "  (codes: 1=CMD24fatal 2=drespTO 3=CRCrej 4=writeErr 5=unkRej 6=busyTO 7=success)")
+    debug("    write diag: lastCMD13err=$", uhex_word_(cmd13), "  (codes: 1=CMD24fatalR1 2=drespTO 3=CRCrej 4=writeErr 5=unkRej 6=busyTO 7=success 8=R1neverArrived)")
     debug("    write diag: cmd13_pre=[", uhex_byte_(cmd13_pre[0]), " ", uhex_byte_(cmd13_pre[1]), " ", uhex_byte_(cmd13_pre[2]), " ", uhex_byte_(cmd13_pre[3]), " ", uhex_byte_(cmd13_pre[4]), " ", uhex_byte_(cmd13_pre[5]), " ", uhex_byte_(cmd13_pre[6]), "]  (expect $FF*; $00* = bus stuck LOW = wedged)")
     debug("    write diag: cmd(CMD", udec_(last_op), ") R1 latency=", sdec_(r1_ms), " ms after ", udec_(r1_polls), " byte polls  (fast=<5ms, slow=several hundred ms, timeout=-1)")
 
