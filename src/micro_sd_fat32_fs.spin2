@@ -6098,13 +6098,27 @@ PRI initCard() : bSuccess | timeout, resp, card_version, acmd41_arg, got_respons
       ' than the streamer reads, leaving the card mid-block and desynced.
       ' SD Physical Layer Spec section 7.2.3.
       ' ============================================
+      ' SDSC: CMD16 pins block length to 512. CSD READ_BL_LEN default is
+      ' commonly 1024 on 2 GB cards; without CMD16=512 our 512-byte streamer
+      ' reads stay mid-block forever and MISO desyncs silently. If this ever
+      ' fails on an SDSC card we want it loud in the log — every downstream
+      ' read/write failure would otherwise be unattributable.
+      ' Policy: observability only, no behavior change here. Init continues
+      ' regardless; the four log states below let us recognize the exception
+      ' case post-mortem from any captured run.
       if hcs <> 0                                                               '  SDSC: byte-addressed -> block length must be pinned explicitly
         DEBUG[CH_INIT]("    [initCard] Step 7.5: CMD16 (SET_BLOCKLEN=512) for SDSC...")
         resp := cmd(CMD16, SECTOR_SIZE)
         if diag_cmd_r1_ms < 0                                                   ' cmd() returns 0 on R1 timeout, byte-identical to a valid R1=$00 clean
-          DEBUG[CH_INIT]("    [initCard] CMD16 R1 NEVER ARRIVED (cmd() timed out) - block length not set")
-        elseif resp <> 0                                                        '  R1=$00 expected (card out of idle by now); non-zero = error bits set
-          DEBUG[CH_INIT]("    [initCard] WARNING: CMD16 R1=$", uhex_byte_(resp), " - block length may not be set")
+          DEBUG[CH_INIT]("    [initCard] CMD16 NO RESPONSE (R1 timeout) - block length NOT pinned; downstream sector ops likely to fail silently")
+        elseif resp & R1_FATAL_MASK                                             ' Fatal bits: illegal cmd ($04), address err ($20), param err ($40)
+          DEBUG[CH_INIT]("    [initCard] CMD16 REJECTED R1=$", uhex_byte_(resp), " (fatal bits) - card refused SET_BLOCKLEN; downstream sector ops likely to fail silently")
+        elseif resp & R1_STALE_MASK                                             ' Stale bits: idle ($01), erase reset ($02), CRC ($08), erase seq ($10)
+          DEBUG[CH_INIT]("    [initCard] CMD16 R1=$", uhex_byte_(resp), " (stale bits, no fatal error) - block length probably set to 512")
+        else
+          DEBUG[CH_INIT]("    [initCard] CMD16 ACCEPTED R1=$00 - SDSC block length pinned to 512")
+      else
+        DEBUG[CH_INIT]("    [initCard] Step 7.5: CMD16 skipped (SDHC/SDXC hardwires block length to 512)")
 
     ' ============================================
     ' STEP 8: Identify card and set optimal SPI speed
