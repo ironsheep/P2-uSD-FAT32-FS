@@ -6739,7 +6739,7 @@ PRI writeSector(sector, buf_type) : status | _sck, _mosi, p_buf, stream_mode, cl
       if checkCardStatus(@"writeSector") < 0
         status := E_IO_ERROR
 
-PRI writeSectors(start_sector, count, p_buffer) : sectors_written | _sck, _mosi, p_buf, stream_mode, clk_count, xfrq, resp
+PRI writeSectors(start_sector, count, p_buffer) : sectors_written | _sck, _mosi, p_buf, stream_mode, clk_count, xfrq, resp, failure_path
 ' Write multiple consecutive sectors using CMD25 (WRITE_MULTIPLE_BLOCK).
 ' More efficient than individual writeSector() calls because:
 ' - Only one CMD25 command instead of N CMD24 commands
@@ -6763,6 +6763,7 @@ PRI writeSectors(start_sector, count, p_buffer) : sectors_written | _sck, _mosi,
 ' @local clk_count - Number of clock transitions
 ' @local xfrq - Streamer NCO frequency
 ' @local resp - Response byte
+' @local failure_path - Per-block exit reason: 0=ok, 1=no dresp, 2=rejected, 3=stuck busy
 
   if count > 0
     ' Setup variables for streamer
@@ -6786,6 +6787,7 @@ PRI writeSectors(start_sector, count, p_buffer) : sectors_written | _sck, _mosi,
     else
       ' Write each sector
       sectors_written := 0
+      failure_path := 0                                                         ' 0=ok, 1=no dresp, 2=rejected, 3=stuck busy
       repeat count
         p_buf := p_buffer + (sectors_written * SECTOR_SIZE)                     ' Calculate buffer position
 
@@ -6822,34 +6824,54 @@ PRI writeSectors(start_sector, count, p_buffer) : sectors_written | _sck, _mosi,
         resp := waitDataResponse()
         if resp < 0
           DEBUG[CH_SECTOR]("  [writeSectors] No data response for sector ", udec_(start_sector + sectors_written))
+          failure_path := 1                                                     ' card never sent dresp; state indeterminate
           quit
         if (resp & $0F) <> DATA_ACCEPTED
           DEBUG[CH_SECTOR]("  [writeSectors] Data rejected for sector ", udec_(start_sector + sectors_written), " resp=$", uhex_byte_(resp))
+          failure_path := 2                                                     ' clean rejection; per spec, $FD is the required next move
           quit
 
         ' Wait for card to finish programming this block
         if waitBusyComplete() < 0
           DEBUG[CH_SECTOR]("  [writeSectors] Busy timeout for sector ", udec_(start_sector + sectors_written))
+          failure_path := 3                                                     ' card stuck busy; $FD to busy card is undefined
           quit
 
         sectors_written++
 
-      ' Send stop token ($FD) to terminate multi-block write (NOT CMD12!)
-      sp_transfer_8(TOKEN_STOP_TRAN)                                            ' $FD
-      sp_transfer_8($FF)                                                        ' Stuff byte (NWR=1, required by spec)
-
-      ' Wait for card to finish any final programming - card is in PROGRAMMING state
-      if waitBusyComplete() < 0
-        DEBUG[CH_SECTOR]("  [writeSectors] Final busy timeout - card still programming, recovering")
+      ' Path 1 (no dresp) and Path 3 (stuck busy) leave the card in an
+      ' indeterminate or wedged state. Sending $FD now would either be
+      ' interpreted against unknown card state (path 1 may still be in
+      ' data-reception) or against a busy card (path 3, undefined per spec).
+      ' Skip the stop token and go straight to recovery.
+      ' Path 0 (full success) and Path 2 (clean rejection per SD spec
+      ' §7.3.3.1) require the $FD stop transmission token.
+      if failure_path == 1 OR failure_path == 3
+        DEBUG[CH_SECTOR]("  [writeSectors] Skipping $FD; recovering (path=", udec_(failure_path), ")")
         recoverToIdle()                                                         ' Force card back to idle
         sectors_written := 0                                                    ' Write integrity unknown
       else
-        pinh(cs)                                                                ' Deselect card
+        ' Send stop token ($FD) to terminate multi-block write (NOT CMD12!)
+        sp_transfer_8(TOKEN_STOP_TRAN)                                          ' $FD
+        sp_transfer_8($FF)                                                      ' Stuff byte (NWR=1, required by spec)
 
-        ' CMD13: Verify card internal state after multi-block write
-        if checkCardStatus(@"writeSectors") < 0
-          DEBUG[CH_SECTOR]("  [writeSectors] CMD13 status check FAILED after writing ", udec_(sectors_written), " sectors")
-          sectors_written := 0                                                  ' Card reports error - writes can't be trusted
+        ' Wait for card to finish any final programming - card is in PROGRAMMING state
+        if waitBusyComplete() < 0
+          DEBUG[CH_SECTOR]("  [writeSectors] Final busy timeout - card still programming, recovering")
+          recoverToIdle()                                                       ' Force card back to idle
+          sectors_written := 0                                                  ' Write integrity unknown
+        else
+          pinh(cs)                                                              ' Deselect card
+
+          ' CMD13: Verify card internal state after multi-block write
+          if checkCardStatus(@"writeSectors") < 0
+            DEBUG[CH_SECTOR]("  [writeSectors] CMD13 status check FAILED after writing ", udec_(sectors_written), " sectors")
+            sectors_written := 0                                                ' Card reports error - writes can't be trusted
+
+        ' Path 2: clean per-block rejection — $FD sent, card went idle,
+        ' but no sectors were successfully written from the rejected block on.
+        if failure_path == 2
+          sectors_written := 0                                                  ' caller treats 0 as failure
 
 PRI waitDataToken() : status | timeout, resp
 ' Wait for data start token ($FE) - polls for data token before sector data.
