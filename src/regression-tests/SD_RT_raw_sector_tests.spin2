@@ -76,6 +76,7 @@ VAR
     BYTE    write_buf[512]
     BYTE    read_buf[512]
     BYTE    read_buf_guard[16]
+    BYTE    cmd13_pre[7]                                                        ' Buffer for getLastCMD13PreCapture (MISO bytes captured during CMD13 transmission)
     LONG    pass_count
     LONG    fail_count
 
@@ -492,6 +493,12 @@ PRI dumpWriteFailDiag() | code, r1, dresp, sec, cmd13
 ' mismatch. The diag fields reflect the most recent writeSector call, so
 ' the dump is valid even when the immediate FAILURE is on the read-back.
 '
+' Includes cmd13_pre_capture bytes: MISO captured DURING CMD13 transmission.
+' Healthy bus reads $FF $FF ... while we transmit; if the bytes are $00 the
+' bus was stuck LOW before the command started, meaning the card is wedged
+' and CMD13's "happy" $00 $00 R2 is uninterpretable (driver cannot
+' distinguish stuck-low from a legitimate clean R2).
+'
 ' @local code   - getWriteDiag result code (1=CMD24fatal 2=drespTO 3=CRCrej
 '                 4=writeErr 5=unkRej 6=busyTO 7=success)
 ' @local r1     - CMD24 R1 response byte from the last write
@@ -501,25 +508,37 @@ PRI dumpWriteFailDiag() | code, r1, dresp, sec, cmd13
 
     code, r1, dresp, sec := sd.getWriteDiag()
     cmd13 := sd.getLastCMD13Error()
+    sd.getLastCMD13PreCapture(@cmd13_pre)
     debug("    write diag: code=", udec_(code), " R1=$", uhex_byte_(r1), " dresp=$", uhex_byte_(dresp), " sector=", udec_(sec))
     debug("    write diag: lastCMD13err=$", uhex_word_(cmd13), "  (codes: 1=CMD24fatal 2=drespTO 3=CRCrej 4=writeErr 5=unkRej 6=busyTO 7=success)")
+    debug("    write diag: cmd13_pre=[", uhex_byte_(cmd13_pre[0]), " ", uhex_byte_(cmd13_pre[1]), " ", uhex_byte_(cmd13_pre[2]), " ", uhex_byte_(cmd13_pre[3]), " ", uhex_byte_(cmd13_pre[4]), " ", uhex_byte_(cmd13_pre[5]), " ", uhex_byte_(cmd13_pre[6]), "]  (expect $FF*; $00* = bus stuck LOW = wedged)")
 
-PRI dumpReadFailDiag() | cmd13, warnings, rxCrc, calcCrc
+PRI dumpReadFailDiag() | cmd13, warnings
 ' Print driver state useful for diagnosing a failed or wrong-data read.
 ' Driver has no equivalent of getWriteDiag for the read path -- the most
 ' informative pieces are the last CMD13 error, the warning flags
-' (CW_NO_DATA_CRC etc.) and the most recent CRC observed/computed.
+' (CW_NO_DATA_CRC etc.), and cmd13_pre_capture.
+'
+' CRC fields (getLastReceivedCRC / getLastCalculatedCRC) are intentionally
+' omitted -- on CW_NO_DATA_CRC cards rxCRC is always the dummy $0000 the
+' card transmits, and calcCRC stays frozen at the most recent successful
+' CRC computation (typically the init-time probeDataCrc value). Neither
+' tells us anything about the current failing read.
+'
+' cmd13_pre_capture: MISO bytes captured DURING the last CMD13 command
+' transmission. On a healthy bus those bytes are all $FF (idle while we
+' transmit). On a wedged card with MISO stuck LOW they are $00 -- which
+' is the discriminator for whether CMD13's "$0000 R2 = no error" report
+' is genuine or just driver-misread stuck-low MISO.
 '
 ' @local cmd13    - Most recent non-zero CMD13 R2
 ' @local warnings - cardWarnings() bitmask (CW_NO_DATA_CRC = $04, etc.)
-' @local rxCrc    - Last data-block CRC received from card
-' @local calcCrc  - Last data-block CRC the driver computed
 
     cmd13    := sd.getLastCMD13Error()
     warnings := sd.cardWarnings()
-    rxCrc    := sd.getLastReceivedCRC()
-    calcCrc  := sd.getLastCalculatedCRC()
-    debug("    read diag: lastCMD13err=$", uhex_word_(cmd13), " warnings=$", uhex_byte_(warnings), " rxCRC=$", uhex_word_(rxCrc), " calcCRC=$", uhex_word_(calcCrc))
+    sd.getLastCMD13PreCapture(@cmd13_pre)
+    debug("    read diag: lastCMD13err=$", uhex_word_(cmd13), " warnings=$", uhex_byte_(warnings))
+    debug("    read diag: cmd13_pre=[", uhex_byte_(cmd13_pre[0]), " ", uhex_byte_(cmd13_pre[1]), " ", uhex_byte_(cmd13_pre[2]), " ", uhex_byte_(cmd13_pre[3]), " ", uhex_byte_(cmd13_pre[4]), " ", uhex_byte_(cmd13_pre[5]), " ", uhex_byte_(cmd13_pre[6]), "]  (expect $FF*; $00* = bus stuck LOW = wedged)")
 
 con { license }
 
