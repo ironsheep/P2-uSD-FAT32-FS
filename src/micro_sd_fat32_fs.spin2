@@ -6005,8 +6005,12 @@ PRI initCard() : bSuccess | timeout, resp, card_version, acmd41_arg, got_respons
     card_version := 1                                                           '  assume v1.x until proven otherwise
     acmd41_arg := $00000000                                                     '  HCS=0 for v1.x cards
 
-    if resp == 0                                                                '  timeout or no response
-      DEBUG[CH_INIT]("    [initCard] CMD8 no response -> Ver 1.x SD card (SDSC only)")
+    if diag_cmd_r1_ms < 0                                                       ' cmd() returns 0 on R1 timeout, byte-identical to a valid R1=$00 clean
+      DEBUG[CH_INIT]("    [initCard] CMD8 R1 NEVER ARRIVED (cmd() timed out) -> treating as Ver 1.x")
+      card_version := 1
+      acmd41_arg := $00000000                                                   '  no HCS for v1.x
+    elseif resp == 0                                                            '  illegal-command response from v1.x (no echo bytes)
+      DEBUG[CH_INIT]("    [initCard] CMD8 no echo -> Ver 1.x SD card (SDSC only)")
       card_version := 1
       acmd41_arg := $00000000                                                   '  no HCS for v1.x
     elseif (resp & CMD8_ECHO_MASK) == CMD8_ECHO_EXPECTED                        '  check VHS and pattern echo
@@ -6033,12 +6037,17 @@ PRI initCard() : bSuccess | timeout, resp, card_version, acmd41_arg, got_respons
 
     repeat
       resp := cmd(CMD55, 0)                                                     '  APP_CMD prefix
-      if resp > $01                                                             '  error other than "in idle"
+      if diag_cmd_r1_ms < 0                                                     ' cmd() returns 0 on R1 timeout, byte-identical to a valid R1=$00 clean
+        DEBUG[CH_INIT]("    [initCard] CMD55 R1 NEVER ARRIVED (cmd() timed out)")
+        waitms(ACMD41_POLL_DELAY_MS)
+      elseif resp > $01                                                         '  error other than "in idle"
         DEBUG[CH_INIT]("    [initCard] CMD55 error: $", uhex_(resp))
         waitms(ACMD41_POLL_DELAY_MS)
       else
         resp := cmd(ACMD41, acmd41_arg)                                         '  SD_SEND_OP_COND
-        if resp == $00                                                          '  card ready (not in idle anymore)
+        if diag_cmd_r1_ms < 0                                                   ' cmd() returns 0 on R1 timeout, byte-identical to a valid R1=$00 clean
+          DEBUG[CH_INIT]("    [initCard] ACMD41 R1 NEVER ARRIVED (cmd() timed out)")
+        elseif resp == $00                                                      '  card ready (not in idle anymore)
           DEBUG[CH_INIT]("    [initCard] ACMD41 complete - card ready!")
           quit
         elseif resp == R1_IN_IDLE                                               '  still initializing
@@ -6063,32 +6072,39 @@ PRI initCard() : bSuccess | timeout, resp, card_version, acmd41_arg, got_respons
     ' ============================================
     DEBUG[CH_INIT]("    [initCard] Step 7: CMD58 (READ_OCR)...")
     resp := cmd(CMD58, 0)
-    ocr_value := resp                                                           '  Cache OCR for later retrieval
-    DEBUG[CH_INIT]("    [initCard] OCR: $", uhex_long(resp))
-    DEBUG[CH_INIT]("    [initCard]   Bit 31 (ready): ", udec((resp >> 31) & 1))
-    DEBUG[CH_INIT]("    [initCard]   Bit 30 (CCS):   ", udec((resp >> OCR_CCS_SHIFT) & 1))
-
-    if (resp >> OCR_CCS_SHIFT) & 1
-      hcs := 0                                                                  '  SDHC/SDXC: block addressing (no shift)
-      DEBUG[CH_INIT]("    [initCard] Card type: SDHC/SDXC (block addressing)")
+    if diag_cmd_r1_ms < 0                                                       ' cmd() returns 0 on R1 timeout, byte-identical to a valid R1=$00 clean
+      DEBUG[CH_INIT]("    [initCard] CMD58 R1 NEVER ARRIVED (cmd() timed out)")
+      bSuccess := false
+      last_init_error := E_TIMEOUT
     else
-      hcs := 9                                                                  '  SDSC: byte addressing (shift by 9 = multiply by 512)
-      DEBUG[CH_INIT]("    [initCard] Card type: SDSC (byte addressing)")
+      ocr_value := resp                                                         '  Cache OCR for later retrieval
+      DEBUG[CH_INIT]("    [initCard] OCR: $", uhex_long(resp))
+      DEBUG[CH_INIT]("    [initCard]   Bit 31 (ready): ", udec((resp >> 31) & 1))
+      DEBUG[CH_INIT]("    [initCard]   Bit 30 (CCS):   ", udec((resp >> OCR_CCS_SHIFT) & 1))
 
-    ' ============================================
-    ' STEP 7.5: CMD16 - SET_BLOCKLEN (SDSC only)
-    ' SDHC/SDXC hardwire the data block length to 512 and ignore CMD16.
-    ' SDSC cards take their read/write data-token size from CMD16; the
-    ' power-up default is the CSD READ_BL_LEN, which on 2 GB cards is
-    ' commonly 1024. Without CMD16 the card may stream more bytes per block
-    ' than the streamer reads, leaving the card mid-block and desynced.
-    ' SD Physical Layer Spec section 7.2.3.
-    ' ============================================
-    if hcs <> 0                                                                 '  SDSC: byte-addressed -> block length must be pinned explicitly
-      DEBUG[CH_INIT]("    [initCard] Step 7.5: CMD16 (SET_BLOCKLEN=512) for SDSC...")
-      resp := cmd(CMD16, SECTOR_SIZE)
-      if resp <> 0                                                              '  R1=$00 expected (card out of idle by now); non-zero = error bits set
-        DEBUG[CH_INIT]("    [initCard] WARNING: CMD16 R1=$", uhex_byte_(resp), " - block length may not be set")
+      if (resp >> OCR_CCS_SHIFT) & 1
+        hcs := 0                                                                '  SDHC/SDXC: block addressing (no shift)
+        DEBUG[CH_INIT]("    [initCard] Card type: SDHC/SDXC (block addressing)")
+      else
+        hcs := 9                                                                '  SDSC: byte addressing (shift by 9 = multiply by 512)
+        DEBUG[CH_INIT]("    [initCard] Card type: SDSC (byte addressing)")
+
+      ' ============================================
+      ' STEP 7.5: CMD16 - SET_BLOCKLEN (SDSC only)
+      ' SDHC/SDXC hardwire the data block length to 512 and ignore CMD16.
+      ' SDSC cards take their read/write data-token size from CMD16; the
+      ' power-up default is the CSD READ_BL_LEN, which on 2 GB cards is
+      ' commonly 1024. Without CMD16 the card may stream more bytes per block
+      ' than the streamer reads, leaving the card mid-block and desynced.
+      ' SD Physical Layer Spec section 7.2.3.
+      ' ============================================
+      if hcs <> 0                                                               '  SDSC: byte-addressed -> block length must be pinned explicitly
+        DEBUG[CH_INIT]("    [initCard] Step 7.5: CMD16 (SET_BLOCKLEN=512) for SDSC...")
+        resp := cmd(CMD16, SECTOR_SIZE)
+        if diag_cmd_r1_ms < 0                                                   ' cmd() returns 0 on R1 timeout, byte-identical to a valid R1=$00 clean
+          DEBUG[CH_INIT]("    [initCard] CMD16 R1 NEVER ARRIVED (cmd() timed out) - block length not set")
+        elseif resp <> 0                                                        '  R1=$00 expected (card out of idle by now); non-zero = error bits set
+          DEBUG[CH_INIT]("    [initCard] WARNING: CMD16 R1=$", uhex_byte_(resp), " - block length may not be set")
 
     ' ============================================
     ' STEP 8: Identify card and set optimal SPI speed
@@ -6136,9 +6152,24 @@ PRI cmd(op,parm) : response | timeout, timed_out, r1_start_ms
 ' Send a SPI command using smart pins - sends command byte, argument, and CRC.
 ' Handles R1, R3, and R7 response formats based on command type.
 '
+' CALLER CONTRACT - R1 TIMEOUT DISAMBIGUATION:
+'   On R1 timeout this PRI returns 0 (false), which is byte-identical to a clean
+'   R1=$00 success. Callers that treat resp==$00 (or any "resp <> error" check)
+'   as success MUST first check `diag_cmd_r1_ms < 0` to disambiguate timeout
+'   from real success. The marker is set to -1 by this PRI on timeout and to a
+'   non-negative latency on every successful R1 byte.
+'
+'   Failing to consult diag_cmd_r1_ms after cmd() causes the silent-error
+'   anti-pattern that has been root-caused multiple times in this driver
+'   (commits bfeb20e, and the broader audit recorded in
+'   DOCs/Analysis/COUNTERFEIT-ASDFG-SDSC-INVESTIGATION.md). Every cmd() call
+'   site whose return value is consumed must include the diag_cmd_r1_ms check.
+'
 ' @param op - Command number (0-63)
 ' @param parm - 32-bit command argument
-' @returns response - R1 response, or R3/R7 32-bit value for CMD8/CMD58
+' @returns response - R1 response, or R3/R7 32-bit value for CMD8/CMD58.
+'                     Returns 0 (false) on R1 timeout; check diag_cmd_r1_ms < 0
+'                     to disambiguate from a clean R1=$00 result.
 ' @local timeout - Timeout deadline
 ' @local timed_out - TRUE if response polling timed out
 ' @local r1_start_ms - GETMS() at start of R1 polling loop (for diag_cmd_r1_ms)
@@ -6428,13 +6459,20 @@ PRI readSectors(start_sector, count, p_buffer) : sectors_read | _sck, _miso, p_b
       resp := cmd(CMD23, count)
       last_cmd23_r1 := resp
       last_cmd23_used := TRUE
-      DEBUG[CH_SECTOR]("  [readSectors] CMD23 set block count=", udec_(count))
+      if diag_cmd_r1_ms < 0                                                     ' cmd() returns 0 on R1 timeout, byte-identical to a valid R1=$00 clean
+        DEBUG[CH_SECTOR]("  [readSectors] CMD23 R1 NEVER ARRIVED (cmd() timed out)")
+      else
+        DEBUG[CH_SECTOR]("  [readSectors] CMD23 set block count=", udec_(count))
 
     ' Send CMD18 (READ_MULTIPLE_BLOCK) with starting sector
     ' Note: cmd() handles CS assertion and returns R1 response
     resp := cmd(CMD18, start_sector << hcs)
     last_cmd18_r1 := resp
-    if resp <> $00
+    if diag_cmd_r1_ms < 0                                                       ' cmd() returns 0 on R1 timeout, byte-identical to a valid R1=$00 clean
+      last_cmd18_fail := 6                                                      ' Path 6: R1 timeout (CMD18 never acknowledged)
+      DEBUG[CH_SECTOR]("  [readSectors] CMD18 R1 NEVER ARRIVED (cmd() timed out)")
+      pinh(cs)
+    elseif resp <> $00
       last_cmd18_fail := 1                                                      ' Path 1: R1 reject
       DEBUG[CH_SECTOR]("  [readSectors] CMD18 failed, R1=$", uhex_byte_(resp))
       pinh(cs)
@@ -6739,7 +6777,10 @@ PRI writeSectors(start_sector, count, p_buffer) : sectors_written | _sck, _mosi,
     ' Send CMD25 (WRITE_MULTIPLE_BLOCK) with starting sector
     ' Note: cmd() handles CS assertion and returns R1 response
     resp := cmd(CMD25, start_sector << hcs)
-    if resp <> $00
+    if diag_cmd_r1_ms < 0                                                       ' cmd() returns 0 on R1 timeout, byte-identical to a valid R1=$00 clean
+      DEBUG[CH_SECTOR]("  [writeSectors] CMD25 R1 NEVER ARRIVED (cmd() timed out)")
+      pinh(cs)
+    elseif resp <> $00
       DEBUG[CH_SECTOR]("  [writeSectors] CMD25 failed, R1=$", uhex_byte_(resp))
       pinh(cs)
     else
@@ -7099,7 +7140,9 @@ PRI probeCmd23() | scr[2], cmd_support, resp
 
       ' Step 2: Send real CMD23 with count=1 to verify SPI mode support
       resp := cmd(CMD23, 1)
-      if resp == $00
+      if diag_cmd_r1_ms < 0                                                     ' cmd() returns 0 on R1 timeout, byte-identical to a valid R1=$00 clean
+        DEBUG[CH_STATUS]("    [probeCmd23] CMD23 R1 NEVER ARRIVED (cmd() timed out) - leaving cmd23_supported FALSE")
+      elseif resp == $00
         cmd23_supported := TRUE
         card_warning_flags |= CW_CMD23_SUPPORTED
         DEBUG[CH_STATUS]("    [probeCmd23] CMD23 CONFIRMED - card accepts SET_BLOCK_COUNT in SPI mode")
@@ -7723,7 +7766,9 @@ PRI readSCR(p_scr) : bSuccess | resp
 ' @local resp - CMD55 R1 response
 
   resp := sendAppCmdPrefix()
-  if resp > $01                                         '  accept $00 or $01 (idle)
+  if diag_cmd_r1_ms < 0                                 ' cmd() returns 0 on R1 timeout, byte-identical to a valid R1=$00 clean
+    DEBUG[CH_STATUS]("  [readSCR] CMD55 R1 NEVER ARRIVED (cmd() timed out)")
+  elseif resp > $01                                     '  accept $00 or $01 (idle)
     DEBUG[CH_STATUS]("  [readSCR] CMD55 error response: $", uhex_byte_(resp))
   else
     bSuccess := readDataRegister(ACMD51, 0, CRC_ACMD51, p_scr, 8)
@@ -7737,7 +7782,9 @@ PRI readSDStatus(p_buf) : bSuccess | resp
 ' @local resp - CMD55 R1 response
 
   resp := sendAppCmdPrefix()
-  if resp > $01                                         '  accept $00 or $01 (idle)
+  if diag_cmd_r1_ms < 0                                 ' cmd() returns 0 on R1 timeout, byte-identical to a valid R1=$00 clean
+    DEBUG[CH_STATUS]("  [readSDStatus] CMD55 R1 NEVER ARRIVED (cmd() timed out)")
+  elseif resp > $01                                     '  accept $00 or $01 (idle)
     DEBUG[CH_STATUS]("  [readSDStatus] CMD55 error response: $", uhex_byte_(resp))
   else
     bSuccess := readDataRegister(CMD13, 0, CRC_NONE, p_buf, 64)
@@ -7812,21 +7859,33 @@ PRI do_erase_block(start_sector) : status | resp, end_sector, timeout
 ' CMD32: ERASE_WR_BLK_START_ADDR
 
   resp := cmd(CMD32, start_sector << hcs)
-  if resp <> $00
+  if diag_cmd_r1_ms < 0                                                         ' cmd() returns 0 on R1 timeout, byte-identical to a valid R1=$00 clean
+    DEBUG[CH_SECTOR]("  [do_erase_block] CMD32 R1 NEVER ARRIVED (cmd() timed out)")
+    pinh(cs)
+    status := E_TIMEOUT
+  elseif resp <> $00
     DEBUG[CH_SECTOR]("  [do_erase_block] CMD32 R1=$", uhex_byte_(resp))
     pinh(cs)
     status := E_BAD_RESPONSE
   else
     ' CMD33: ERASE_WR_BLK_END_ADDR
     resp := cmd(CMD33, end_sector << hcs)
-    if resp <> $00
+    if diag_cmd_r1_ms < 0                                                       ' cmd() returns 0 on R1 timeout, byte-identical to a valid R1=$00 clean
+      DEBUG[CH_SECTOR]("  [do_erase_block] CMD33 R1 NEVER ARRIVED (cmd() timed out)")
+      pinh(cs)
+      status := E_TIMEOUT
+    elseif resp <> $00
       DEBUG[CH_SECTOR]("  [do_erase_block] CMD33 R1=$", uhex_byte_(resp))
       pinh(cs)
       status := E_BAD_RESPONSE
     else
       ' CMD38: ERASE
       resp := cmd(CMD38, 0)
-      if resp <> $00
+      if diag_cmd_r1_ms < 0                                                     ' cmd() returns 0 on R1 timeout, byte-identical to a valid R1=$00 clean
+        DEBUG[CH_SECTOR]("  [do_erase_block] CMD38 R1 NEVER ARRIVED (cmd() timed out)")
+        pinh(cs)
+        status := E_TIMEOUT
+      elseif resp <> $00
         DEBUG[CH_SECTOR]("  [do_erase_block] CMD38 R1=$", uhex_byte_(resp))
         pinh(cs)
         status := E_BAD_RESPONSE
