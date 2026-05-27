@@ -756,6 +756,34 @@ DAT  ' ---- Singleton Control ----
         h_prealloc_end                          LONG    0[MAX_OPEN_FILES]        ' Last pre-allocated cluster (0 = normal handle)
 #endif
 
+        ' ---- Consolidated debug message strings ----
+        ' Used by methods that consolidate multiple compile-time debug records
+        ' into one parameterised debug() call. Each branch sets a pointer to one
+        ' of these strings; a single debug() at the method's exit emits the
+        ' chosen string. Same runtime fidelity, fewer compiled records.
+        ' See p2kbSpin2DbgDebugStrategyGuide for the 255-record limit context.
+
+        ' CMD16 SET_BLOCKLEN outcomes (initCard step 7.5)
+        msg_cmd16_skipped       BYTE "Step 7.5: CMD16 skipped (SDHC/SDXC hardwires 512)", 0
+        msg_cmd16_no_resp       BYTE "CMD16 NO RESPONSE (R1 timeout) - block length NOT pinned", 0
+        msg_cmd16_fatal         BYTE "CMD16 REJECTED (fatal R1 bits) - block length NOT pinned", 0
+        msg_cmd16_stale         BYTE "CMD16 (stale R1 bits, no fatal error) - block length probably set", 0
+        msg_cmd16_accepted      BYTE "CMD16 ACCEPTED - SDSC block length pinned to 512", 0
+
+        ' do_erase_block CMD outcome labels (consolidated end-of-method emit)
+        msg_erase_no_resp       BYTE "R1 NEVER ARRIVED (cmd() timed out)", 0
+        msg_erase_fatal         BYTE "fatal R1 bits", 0
+        msg_erase_busy          BYTE "busy timeout after CMD38", 0
+
+        ' writeSectors per-block / post-loop outcome labels
+        msg_ws_cmd25_no_resp    BYTE "CMD25 R1 NEVER ARRIVED (cmd() timed out)", 0
+        msg_ws_cmd25_fatal      BYTE "CMD25 rejected (fatal R1 bits)", 0
+        msg_ws_no_dresp         BYTE "No data response (timeout)", 0
+        msg_ws_rejected         BYTE "Data rejected", 0
+        msg_ws_busy_perblock    BYTE "Per-block busy timeout", 0
+        msg_ws_busy_final       BYTE "Final busy timeout - card still programming", 0
+        msg_ws_cmd13_failed     BYTE "CMD13 status check FAILED", 0
+
 CON ' ---- Lifecycle ----
 
 PUB null()
@@ -5852,7 +5880,7 @@ PRI sp_transfer_32(data) : rxLong | _sck, _mosi, _miso, tx_data
               REV       rxLong                          ' Reverse for MSB-first
   END
 
-PRI initCard() : bSuccess | timeout, resp, card_version, acmd41_arg, got_response, flush_extra
+PRI initCard() : bSuccess | timeout, resp, card_version, acmd41_arg, got_response, flush_extra, cmd16_msg_ptr
 ' Initialize SD card - performs complete card initialization sequence per SD spec.
 ' Steps: power-on delay, SPI setup, card presence detection, CMD0, CMD8, ACMD41 loop, CMD58.
 '
@@ -6104,21 +6132,23 @@ PRI initCard() : bSuccess | timeout, resp, card_version, acmd41_arg, got_respons
       ' fails on an SDSC card we want it loud in the log — every downstream
       ' read/write failure would otherwise be unattributable.
       ' Policy: observability only, no behavior change here. Init continues
-      ' regardless; the four log states below let us recognize the exception
+      ' regardless; the five log states below let us recognize the exception
       ' case post-mortem from any captured run.
-      if hcs <> 0                                                               '  SDSC: byte-addressed -> block length must be pinned explicitly
-        DEBUG[CH_INIT]("    [initCard] Step 7.5: CMD16 (SET_BLOCKLEN=512) for SDSC...")
+      ' Consolidated: 1 compiled debug record (was 6) via @msg_cmd16_* strings.
+      if hcs == 0                                                               ' SDHC/SDXC: CMD16 not applicable
+        cmd16_msg_ptr := @msg_cmd16_skipped
+        resp := 0
+      else                                                                      ' SDSC: byte-addressed -> block length must be pinned explicitly
         resp := cmd(CMD16, SECTOR_SIZE)
         if diag_cmd_r1_ms < 0                                                   ' cmd() returns 0 on R1 timeout, byte-identical to a valid R1=$00 clean
-          DEBUG[CH_INIT]("    [initCard] CMD16 NO RESPONSE (R1 timeout) - block length NOT pinned; downstream sector ops likely to fail silently")
+          cmd16_msg_ptr := @msg_cmd16_no_resp
         elseif resp & R1_FATAL_MASK                                             ' Fatal bits: illegal cmd ($04), address err ($20), param err ($40)
-          DEBUG[CH_INIT]("    [initCard] CMD16 REJECTED R1=$", uhex_byte_(resp), " (fatal bits) - card refused SET_BLOCKLEN; downstream sector ops likely to fail silently")
+          cmd16_msg_ptr := @msg_cmd16_fatal
         elseif resp & R1_STALE_MASK                                             ' Stale bits: idle ($01), erase reset ($02), CRC ($08), erase seq ($10)
-          DEBUG[CH_INIT]("    [initCard] CMD16 R1=$", uhex_byte_(resp), " (stale bits, no fatal error) - block length probably set to 512")
+          cmd16_msg_ptr := @msg_cmd16_stale
         else
-          DEBUG[CH_INIT]("    [initCard] CMD16 ACCEPTED R1=$00 - SDSC block length pinned to 512")
-      else
-        DEBUG[CH_INIT]("    [initCard] Step 7.5: CMD16 skipped (SDHC/SDXC hardwires block length to 512)")
+          cmd16_msg_ptr := @msg_cmd16_accepted
+      DEBUG[CH_INIT]("    [initCard] ", zstr_(cmd16_msg_ptr), " R1=$", uhex_byte_(resp))
 
     ' ============================================
     ' STEP 8: Identify card and set optimal SPI speed
@@ -6753,7 +6783,7 @@ PRI writeSector(sector, buf_type) : status | _sck, _mosi, p_buf, stream_mode, cl
       if checkCardStatus(@"writeSector") < 0
         status := E_IO_ERROR
 
-PRI writeSectors(start_sector, count, p_buffer) : sectors_written | _sck, _mosi, p_buf, stream_mode, clk_count, xfrq, resp, failure_path
+PRI writeSectors(start_sector, count, p_buffer) : sectors_written | _sck, _mosi, p_buf, stream_mode, clk_count, xfrq, resp, failure_path, failure_msg_ptr, failure_sector, failure_r1, failure_resp, postloop_msg_ptr, postloop_sectors
 ' Write multiple consecutive sectors using CMD25 (WRITE_MULTIPLE_BLOCK).
 ' More efficient than individual writeSector() calls because:
 ' - Only one CMD25 command instead of N CMD24 commands
@@ -6778,6 +6808,12 @@ PRI writeSectors(start_sector, count, p_buffer) : sectors_written | _sck, _mosi,
 ' @local xfrq - Streamer NCO frequency
 ' @local resp - Response byte
 ' @local failure_path - Per-block exit reason: 0=ok, 1=no dresp, 2=rejected, 3=stuck busy
+' @local failure_msg_ptr - DAT pointer to per-block / CMD25 failure label (0 = no failure)
+' @local failure_sector - Absolute sector that failed (for per-block paths)
+' @local failure_r1 - R1 byte captured on CMD25 fatal-R1 failure
+' @local failure_resp - dresp byte captured on per-block rejection failure
+' @local postloop_msg_ptr - DAT pointer to post-loop ($FD/CMD13) failure label (0 = no failure)
+' @local postloop_sectors - sectors_written captured before recovery zero-out
 
   if count > 0
     ' Setup variables for streamer
@@ -6793,10 +6829,11 @@ PRI writeSectors(start_sector, count, p_buffer) : sectors_written | _sck, _mosi,
     ' Note: cmd() handles CS assertion and returns R1 response
     resp := cmd(CMD25, start_sector << hcs)
     if diag_cmd_r1_ms < 0                                                       ' cmd() returns 0 on R1 timeout, byte-identical to a valid R1=$00 clean
-      DEBUG[CH_SECTOR]("  [writeSectors] CMD25 R1 NEVER ARRIVED (cmd() timed out)")
+      failure_msg_ptr := @msg_ws_cmd25_no_resp
       pinh(cs)
     elseif resp <> $00
-      DEBUG[CH_SECTOR]("  [writeSectors] CMD25 failed, R1=$", uhex_byte_(resp))
+      failure_msg_ptr := @msg_ws_cmd25_fatal
+      failure_r1 := resp
       pinh(cs)
     else
       ' Write each sector
@@ -6837,17 +6874,21 @@ PRI writeSectors(start_sector, count, p_buffer) : sectors_written | _sck, _mosi,
         ' Wait for data response token
         resp := waitDataResponse()
         if resp < 0
-          DEBUG[CH_SECTOR]("  [writeSectors] No data response for sector ", udec_(start_sector + sectors_written))
+          failure_msg_ptr := @msg_ws_no_dresp
+          failure_sector := start_sector + sectors_written
           failure_path := 1                                                     ' card never sent dresp; state indeterminate
           quit
         if (resp & $0F) <> DATA_ACCEPTED
-          DEBUG[CH_SECTOR]("  [writeSectors] Data rejected for sector ", udec_(start_sector + sectors_written), " resp=$", uhex_byte_(resp))
+          failure_msg_ptr := @msg_ws_rejected
+          failure_sector := start_sector + sectors_written
+          failure_resp := resp
           failure_path := 2                                                     ' clean rejection; per spec, $FD is the required next move
           quit
 
         ' Wait for card to finish programming this block
         if waitBusyComplete() < 0
-          DEBUG[CH_SECTOR]("  [writeSectors] Busy timeout for sector ", udec_(start_sector + sectors_written))
+          failure_msg_ptr := @msg_ws_busy_perblock
+          failure_sector := start_sector + sectors_written
           failure_path := 3                                                     ' card stuck busy; $FD to busy card is undefined
           quit
 
@@ -6861,7 +6902,6 @@ PRI writeSectors(start_sector, count, p_buffer) : sectors_written | _sck, _mosi,
       ' Path 0 (full success) and Path 2 (clean rejection per SD spec
       ' §7.3.3.1) require the $FD stop transmission token.
       if failure_path == 1 OR failure_path == 3
-        DEBUG[CH_SECTOR]("  [writeSectors] Skipping $FD; recovering (path=", udec_(failure_path), ")")
         recoverToIdle()                                                         ' Force card back to idle
         sectors_written := 0                                                    ' Write integrity unknown
       else
@@ -6871,7 +6911,8 @@ PRI writeSectors(start_sector, count, p_buffer) : sectors_written | _sck, _mosi,
 
         ' Wait for card to finish any final programming - card is in PROGRAMMING state
         if waitBusyComplete() < 0
-          DEBUG[CH_SECTOR]("  [writeSectors] Final busy timeout - card still programming, recovering")
+          postloop_msg_ptr := @msg_ws_busy_final
+          postloop_sectors := sectors_written
           recoverToIdle()                                                       ' Force card back to idle
           sectors_written := 0                                                  ' Write integrity unknown
         else
@@ -6879,8 +6920,17 @@ PRI writeSectors(start_sector, count, p_buffer) : sectors_written | _sck, _mosi,
 
           ' CMD13: Verify card internal state after multi-block write
           if checkCardStatus(@"writeSectors") < 0
-            DEBUG[CH_SECTOR]("  [writeSectors] CMD13 status check FAILED after writing ", udec_(sectors_written), " sectors")
+            postloop_msg_ptr := @msg_ws_cmd13_failed
+            postloop_sectors := sectors_written
             sectors_written := 0                                                ' Card reports error - writes can't be trusted
+
+  ' Consolidated debug emit: one record for per-block/CMD25 failure family,
+  ' one for post-loop ($FD/CMD13) failure family. Silent on full success.
+  ' Saves 6 compiled records vs the original 8 per-branch DEBUG calls.
+  if failure_msg_ptr <> 0
+    DEBUG[CH_SECTOR]("  [writeSectors] ", zstr_(failure_msg_ptr), " sector=", udec_(failure_sector), " R1=$", uhex_byte_(failure_r1), " resp=$", uhex_byte_(failure_resp))
+  if postloop_msg_ptr <> 0
+    DEBUG[CH_SECTOR]("  [writeSectors] post-loop: ", zstr_(postloop_msg_ptr), " sectors_written=", udec_(postloop_sectors))
 
         ' Path 2: clean per-block rejection — $FD sent, card went idle,
         ' but no sectors were successfully written from the rejected block on.
@@ -7878,51 +7928,70 @@ PRI readSectorSlow(sector, p_buffer) : status | data, idx, timeout
 
   pinh(cs)                                              '  Deselect card
 
-PRI do_erase_block(start_sector) : status | resp, end_sector, timeout
+PRI do_erase_block(start_sector) : status | resp, end_sector, timeout, failed_cmd, failed_r1, failed_msg_ptr
 ' DEBUG: Erase one erase-block-sized region via CMD32/CMD33/CMD38 sequence.
 ' End address is computed as start_sector + (eraseBlockSectors - 1) so exactly
 ' one erase block is erased. After CMD38 we wait for MISO to return to $FF
 ' (busy completion) using card_write_timeout_ms.
+'
+' Consolidated debug: every failure path captures (failed_cmd, failed_r1,
+' failed_msg_ptr) and emits one debug record at the end of the method. Saves
+' 6 compiled records vs the original per-branch DEBUG[CH_SECTOR] calls.
 '
 ' @param start_sector - First sector of erase block (caller alignment-responsible)
 ' @returns status - 0 on success, negative error code on timeout/IO error
 ' @local resp - R1 response from card
 ' @local end_sector - Last sector address in the range
 ' @local timeout - Timeout deadline
+' @local failed_cmd - CMD number that failed (32, 33, 38, 0=none)
+' @local failed_r1 - R1 byte captured on fatal-R1 failure
+' @local failed_msg_ptr - DAT pointer to the captured failure-kind label (0 = no failure)
 
   end_sector := start_sector + card_erase_block_sectors - 1
+  failed_cmd := 0
+  failed_r1 := 0
+  failed_msg_ptr := 0
 
 ' CMD32: ERASE_WR_BLK_START_ADDR
 
   resp := cmd(CMD32, start_sector << hcs)
   if diag_cmd_r1_ms < 0                                                         ' cmd() returns 0 on R1 timeout, byte-identical to a valid R1=$00 clean
-    DEBUG[CH_SECTOR]("  [do_erase_block] CMD32 R1 NEVER ARRIVED (cmd() timed out)")
+    failed_cmd := 32
+    failed_msg_ptr := @msg_erase_no_resp
     pinh(cs)
     status := E_TIMEOUT
   elseif resp <> $00
-    DEBUG[CH_SECTOR]("  [do_erase_block] CMD32 R1=$", uhex_byte_(resp))
+    failed_cmd := 32
+    failed_r1 := resp
+    failed_msg_ptr := @msg_erase_fatal
     pinh(cs)
     status := E_BAD_RESPONSE
   else
     ' CMD33: ERASE_WR_BLK_END_ADDR
     resp := cmd(CMD33, end_sector << hcs)
     if diag_cmd_r1_ms < 0                                                       ' cmd() returns 0 on R1 timeout, byte-identical to a valid R1=$00 clean
-      DEBUG[CH_SECTOR]("  [do_erase_block] CMD33 R1 NEVER ARRIVED (cmd() timed out)")
+      failed_cmd := 33
+      failed_msg_ptr := @msg_erase_no_resp
       pinh(cs)
       status := E_TIMEOUT
     elseif resp <> $00
-      DEBUG[CH_SECTOR]("  [do_erase_block] CMD33 R1=$", uhex_byte_(resp))
+      failed_cmd := 33
+      failed_r1 := resp
+      failed_msg_ptr := @msg_erase_fatal
       pinh(cs)
       status := E_BAD_RESPONSE
     else
       ' CMD38: ERASE
       resp := cmd(CMD38, 0)
       if diag_cmd_r1_ms < 0                                                     ' cmd() returns 0 on R1 timeout, byte-identical to a valid R1=$00 clean
-        DEBUG[CH_SECTOR]("  [do_erase_block] CMD38 R1 NEVER ARRIVED (cmd() timed out)")
+        failed_cmd := 38
+        failed_msg_ptr := @msg_erase_no_resp
         pinh(cs)
         status := E_TIMEOUT
       elseif resp <> $00
-        DEBUG[CH_SECTOR]("  [do_erase_block] CMD38 R1=$", uhex_byte_(resp))
+        failed_cmd := 38
+        failed_r1 := resp
+        failed_msg_ptr := @msg_erase_fatal
         pinh(cs)
         status := E_BAD_RESPONSE
       else
@@ -7935,9 +8004,16 @@ PRI do_erase_block(start_sector) : status | resp, end_sector, timeout
             status := 0
             quit
           if GETMS() - timeout > 0
-            DEBUG[CH_SECTOR]("  [do_erase_block] busy timeout")
+            failed_cmd := 38
+            failed_msg_ptr := @msg_erase_busy
             quit
         pinh(cs)
+
+  ' Consolidated end-of-method debug: 1 compiled record covers all failure
+  ' paths. Silent on success (matches prior behavior). The captured state
+  ' makes which-command/which-failure unambiguous.
+  if failed_msg_ptr <> 0
+    DEBUG[CH_SECTOR]("  [do_erase_block] CMD", udec_(failed_cmd), " ", zstr_(failed_msg_ptr), " R1=$", uhex_byte_(failed_r1))
 
 #endif
 
