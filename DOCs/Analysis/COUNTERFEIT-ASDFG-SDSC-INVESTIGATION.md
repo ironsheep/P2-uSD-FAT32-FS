@@ -1337,3 +1337,100 @@ Working tree is **CLEAN**. All experimental changes from tonight's session have 
 - Start with experiment (1): add `waitms(50)` after writeSector success
 - Don't re-survey what's already clean — it's documented above
 - Look at the todo-mcp resume context key for fuller session details
+
+## 2026-05-26 — Driver audit pass, three more hypotheses refuted, new prime suspect
+
+### Driver audit and observability fixes — 4 commits
+
+This session opened with a "the driver may be lying to us" framing: silent-error anti-patterns in the failure paths (where a function returns 0 on timeout, byte-identical to a clean success value) could be masking what the card is actually doing. A full audit ran first to give the experiments honest diagnostic ground to stand on.
+
+- `704c9ce` — Full cmd() R1-timeout disambiguation audit across all 19 call sites. Eight sites (CMD55/ACMD41 loop, CMD58, CMD16, CMD18, CMD25, probeCmd23, sendAppCmdPrefix consumers, CMD32/33/38 erase) previously consumed `cmd()`'s return value without checking `diag_cmd_r1_ms < 0`, so an R1 timeout (returns 0, byte-identical to clean R1=$00) passed as success. All eight closed.
+- `aba0209` — writeSectors per-block failure paths (no-dresp, stuck-busy) route around the $FD stop token via `recoverToIdle()`. The previous code unconditionally sent $FD even to a card in indeterminate or stuck-busy state.
+- `db75e9d` — CMD16 SET_BLOCKLEN gets full four-state logging (skipped / no-response / fatal-R1 / stale-R1 / accepted). Observability only, no behavior change.
+- `2f29b71` — Debug-record consolidation: CMD16, do_erase_block, and writeSectors refactored to use captured-state-plus-single-emit pattern. 16 compile-time records returned to the 255-slot budget; CH_INIT 87→82, CH_SECTOR 67→56.
+
+`cmd()`'s declaration block now documents the side-channel contract explicitly so future call sites cannot silently miss the disambiguator.
+
+### ❌ Experiment 1: 50 ms wait after writeSector success — REFUTED
+
+**Hypothesis:** card's internal flash commit lags MISO release; a wall-clock wait after the busy-complete signal would give the card time to truly finish before the next write.
+
+**Change:** added `waitms(50)` in `writeSector` between `diag_write_result := 7` and the post-write CMD13.
+
+**Result:** byte-for-byte identical wedge progression to baseline. Write #3-5 byte-poll counts: 138,045 / 138,041 / 138,123 — same to the unit as the no-wait run. Card is **not** in a time-extendable busy state between writes. **Timing is not the wedge mechanism.**
+
+### ❌ Experiment 2: CMD24 vs CMD25 single-block — REFUTED
+
+**Hypothesis:** CMD24's no-stop-token protocol path is what the card refuses on write #2; CMD25 + $FD stop token is more spec-faithful and might be accepted.
+
+**Method:** new `diagnostic-tests/SD_cmd25_single_repro.spin2` performs mount → writeSectorRaw sec 100,000 (CMD24, expected to succeed per pattern) → writeSectorsRaw(sec 100,001, 1, buf) (CMD25 single-block + $FD). Same payload, same sector class, different command.
+
+**Result:**
+- CMD24 write #1: success (code=7, dresp=$05, R1 latency 0 ms)
+- CMD25 write #2: **rejected at same exact protocol stage** — CMD25 R1 came back fast (1 ms, 2 polls, R1=$00), data block sent, dresp **NEVER ARRIVED**. Failure cascade total: 3.99 s (100 ms dresp timeout + ~3.8 s `recoverToIdle()`).
+
+The wedge is **independent of which write command** initiated. Card refuses dresp at the same point whether the host used CMD24 or CMD25.
+
+### ❌ Experiment 3: Send $FF $FF as CRC for CW_NO_DATA_CRC cards — REFUTED
+
+**Reasoning chain:**
+1. Lerdisk/Cloudisk are flagged `CW_NO_DATA_CRC` because they return placeholder `$0000`/`$FFFF` as CRC on reads — non-standard CRC handling.
+2. Driver was sending **real calculated CRC** on writes regardless of the flag (asymmetric: flag honors reads, writes ignore it).
+3. SD spec §7.2: CRC validation is OFF by default in SPI mode; the 2 CRC bytes are *packet framing* (mandatory in the data block packet structure) but their content is unchecked. Card is supposed to ignore them.
+4. On counterfeit silicon "supposed to ignore" and "actually ignores" may differ — sending real CRC content into the data-response state machine could plausibly be the wedge trigger.
+
+**Method:** gated change in `writeSector` and `writeSectors`: if `card_warning_flags & CW_NO_DATA_CRC`, send `$FF $FF` (idle filler) instead of calculated CRC. Real cards: unchanged.
+
+**Result:** byte-for-byte identical wedge progression (138,045 / 138,040 / 138,123). Card truly does not validate write CRC — the CRC content is irrelevant. **CRC is not the wedge mechanism.**
+
+**Useful side-finding:** confirms that for CW_NO_DATA_CRC cards, write-side CRC content is pure filler. This is a real data point about the silicon and the symmetric extension of the flag's semantics is defensible as a consistency cleanup (separate from the wedge investigation).
+
+### 🎯 New leading hypothesis — post-write CMD13 as wedge trigger
+
+Cross-referencing memory and this session's results:
+- **mount_tests** (handle-based writes through writeSector internally): **passes 31/31**
+- **benchmark CMD25 multi-block with count > 1**: passes (per prior session memory)
+- **raw single-block writeSectorRaw** (CMD24 single + post-write CMD13): **fails at write #2**
+- **raw "CMD25 single-block" writeSectorsRaw count=1** (CMD25 + $FD + post-write CMD13): **fails at write #2** (experiment 2)
+
+The wedge is NOT distinguished by CMD24-vs-CMD25, NOR by single-block-vs-multi-block-command. It is distinguished by **whether single-block packaging is used at all**.
+
+What single-block-issued-separately does that multi-block-with-count>1 does NOT:
+1. CS goes HIGH between every write
+2. A fresh command (CMD24 or CMD25) is issued per block, with its own R1 cycle
+3. **`checkCardStatus()` runs after every block, sending CMD13**
+
+The third bullet is the sharpest candidate. CMD13 between two raw writes is a new variable in the picture — and on `CW_NO_DATA_CRC` counterfeit silicon, the CMD13 may interact badly with the card's commit state machine.
+
+### Why this hypothesis is high-value
+
+- Multi-block writes with count > 1 don't run CMD13 between data blocks → they don't wedge → consistent with "CMD13 is the trigger"
+- mount_tests' file ops do trigger CMD13 (through writeHandle → writeSector → checkCardStatus), but they don't wedge → would refute the hypothesis... **unless** the wedge requires a *specific sector range* OR a *specific subsequent operation* that mount_tests doesn't hit. The user-visible test logs need re-examination on this point.
+- The handle-write path may write to FAT/dir/data-region sectors at low LBAs (FAT32 root and below). The raw test writes to LBA 100,000+. Sector-range-dependence remains an alternative variable.
+
+### Experiment 4 (next session opening move)
+
+**Skip `checkCardStatus()` in `writeSector`** — either universally (test build only) or gated on `CW_NO_DATA_CRC`. Re-run the same minimal reproducer (power-cycle → mount_tests → raw_sector_tests, no power cycle between).
+
+- If write #2 now succeeds: post-write CMD13 is the wedge trigger. Next steps: characterize whether CMD13 itself is the issue, or whether removing CMD13 just changes timing in some incidental way. Then decide on a fix path.
+- If write #2 still fails: CMD13 is not the cause. Falls back to the remaining candidates:
+  - **CS toggle between writes** — keep CS LOW across two consecutive raw writes (requires a different driver API or test-only hook)
+  - **Sector range dependence** — try writeSectorRaw at a low LBA (e.g., sec 1000) instead of 100,000 to see if the wedge is range-dependent
+  - **Unmount/remount between writes** — does full re-init clear the wedge mid-session?
+
+### Session-end driver state
+
+**Working tree is NOT clean.** Experiment 3 ($FF $FF CRC for CW_NO_DATA_CRC writes in `writeSector` and `writeSectors`) is uncommitted. The 50 ms wait from experiment 1 has been reverted. The CMD25 diagnostic test file `diagnostic-tests/SD_cmd25_single_repro.spin2` is committed-worthy (cleanly designed, documented, reusable) but is currently untracked.
+
+**Decision pending:**
+- Experiment 3 working-tree change: keep as a consistency cleanup (symmetrizes the asymmetric CW_NO_DATA_CRC handling) or revert
+- `SD_cmd25_single_repro.spin2`: commit as a permanent diagnostic test for the wedge
+
+Either choice is fine; both should be made before the next session resumes.
+
+### Resume points for next session
+
+- All three new experiments (timing wait, CMD24-vs-CMD25, CRC content) have been refuted
+- The post-write CMD13 hypothesis is the next sharpest probe (experiment 4)
+- The single-block-vs-multi-block-with-count>1 distinction is the key new framing — focus there, not on CMD24/25 anymore
+- Driver-side audit pass is committed (4 commits, +137 lines net). Future investigation has fewer silent-error sites to worry about, plus 16 records of debug-budget headroom restored.

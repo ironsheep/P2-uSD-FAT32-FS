@@ -6730,16 +6730,30 @@ PRI writeSector(sector, buf_type) : status | _sck, _mosi, p_buf, stream_mode, cl
     WXPIN(_mosi, %1_00111)                                                      ' Start-stop mode, 8 bits
     pinh(_mosi)                                                                 ' DIRH - enable smart pin
 
-    ' Calculate CRC-16 of the data we just sent and transmit it
-    ' SD protocol: CRC high byte first, then low byte
-    diag_sent_crc := calcDataCRC(p_buf, SECTOR_SIZE)
-    ' TEST HOOK: Corrupt write CRC for error injection testing (one-shot)
-    if test_force_write_crc_error
-      diag_sent_crc ^= $FFFF
-      test_force_write_crc_error := 0
-      test_error_count++
-    sp_transfer_8(diag_sent_crc >> 8)                                           ' CRC high byte
-    sp_transfer_8(diag_sent_crc & $FF)                                          ' CRC low byte
+    ' EXPERIMENT 3 (asdfg counterfeit wedge investigation, 2026-05-26):
+    ' For CW_NO_DATA_CRC cards (which return placeholder $0000/$FFFF as CRC on
+    ' reads, indicating non-spec CRC handling), send $FF $FF idle bytes in the
+    ' CRC packet slot instead of a calculated CRC. Per SD spec section 7.2,
+    ' CRC validation is OFF by default in SPI mode and the 2 CRC bytes are
+    ' part of the packet framing — the card is supposed to ignore their
+    ' content. But on counterfeit silicon "supposed to ignore" and "actually
+    ' ignores" may differ; this test asks whether the real CRC bytes are
+    ' confusing the card's data-response state machine.
+    ' Normal cards: unchanged (real calculated CRC).
+    if card_warning_flags & CW_NO_DATA_CRC
+      diag_sent_crc := $FFFF                                                    ' record what was sent for diag
+      sp_transfer_8($FF)                                                        ' CRC high byte: idle filler
+      sp_transfer_8($FF)                                                        ' CRC low byte: idle filler
+    else
+      ' SD protocol: CRC high byte first, then low byte
+      diag_sent_crc := calcDataCRC(p_buf, SECTOR_SIZE)
+      ' TEST HOOK: Corrupt write CRC for error injection testing (one-shot)
+      if test_force_write_crc_error
+        diag_sent_crc ^= $FFFF
+        test_force_write_crc_error := 0
+        test_error_count++
+      sp_transfer_8(diag_sent_crc >> 8)                                         ' CRC high byte
+      sp_transfer_8(diag_sent_crc & $FF)                                        ' CRC low byte
 
     ' Wait for data-response token (should be immediate, within a few bytes)
     resp := waitDataResponse()
@@ -6866,10 +6880,18 @@ PRI writeSectors(start_sector, count, p_buffer) : sectors_written | _sck, _mosi,
         WXPIN(_mosi, %1_00111)
         pinh(_mosi)
 
-        ' Calculate and send CRC-16 for this sector's data
-        diag_sent_crc := calcDataCRC(p_buf, SECTOR_SIZE)
-        sp_transfer_8(diag_sent_crc >> 8)                                       ' CRC high byte
-        sp_transfer_8(diag_sent_crc & $FF)                                      ' CRC low byte
+        ' EXPERIMENT 3 (matches writeSector single-block): for CW_NO_DATA_CRC
+        ' cards send $FF $FF idle bytes in the CRC slot instead of a calculated
+        ' CRC. See writeSector for the full rationale.
+        if card_warning_flags & CW_NO_DATA_CRC
+          diag_sent_crc := $FFFF
+          sp_transfer_8($FF)
+          sp_transfer_8($FF)
+        else
+          ' Calculate and send CRC-16 for this sector's data
+          diag_sent_crc := calcDataCRC(p_buf, SECTOR_SIZE)
+          sp_transfer_8(diag_sent_crc >> 8)                                     ' CRC high byte
+          sp_transfer_8(diag_sent_crc & $FF)                                    ' CRC low byte
 
         ' Wait for data response token
         resp := waitDataResponse()
