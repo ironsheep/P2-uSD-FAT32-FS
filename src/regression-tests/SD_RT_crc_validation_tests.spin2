@@ -200,8 +200,18 @@ PUB go() | result, handle, bytesRead, bytesWritten, retryBefore, retryAfter, mis
         sd.closeFileHandle(handle)
     errCount := sd.getTestErrorCount()
     debug("  bytesWritten=", sdec_(bytesWritten), " errCount=", udec_(errCount))
-    ' The write may fail or the error may be detected differently depending on card behavior
-    utils.evaluateSubBool(errCount > 0, @"error was injected", true)
+    if dummyCRC
+        ' Dummy-CRC card: write-side CRC injection is INAPPLICABLE on this card class.
+        ' The driver (commit de9998a) sends $FF $FF idle bytes in place of a calculated
+        ' CRC because the card does not validate write CRC anyway. This bypasses the
+        ' test_force_write_crc_error hook entirely - errCount stays 0 and the write
+        ' completes normally. Pass condition: hook correctly bypassed.
+        utils.evaluateSingleValue(errCount, @"error count == 0 (write-CRC injection bypassed on dummy-CRC card)", 0)
+    else
+        ' Real-CRC card: hook should fire and corrupt the CRC sent to the card.
+        ' The card may reject or accept the bad CRC depending on its CRC enforcement,
+        ' but the hook should have triggered at least once.
+        utils.evaluateBool(errCount > 0, @"error was injected", true)
 
     ' Test 5: Normal write after forced error succeeds
     utils.startTest(@"Normal write after forced error succeeds")
