@@ -156,6 +156,7 @@ This section documents ALL fields available from SD card registers and indicates
 | Phison_SD16G_3.0_DA00094B_201610 | Sony (Phison $27) - Taiwan | SD16G | 16 GB | **D** | PASS |
 | SanDisk_SU01G_8.0_006CD5B2_200706 | SanDisk ($03) — Industrial SDSC | SU01G | 1 GB | **E** | **FAIL** (v1.5.1, 350 MHz) |
 | Unknown_asdfg_2.2_000001F4_202512 | **CONFIRMED COUNTERFEIT** — MID $05 unknown, PNM "asdfg" (label "Lerdisk") | asdfg | 1 GB | **E (FAIL) / X (PASS 25/25)** | **External only** — Edge fails raw_sector_tests 1/14 (#3240 wedge); External passes all 25 suites 467/467. See lerdisk-asdfg-1gb.md for full External regression + benchmarks (350+250). |
+| Unknown_asdfg_2.2_00001680_202511 | **CONFIRMED COUNTERFEIT** — MID $05 unknown, PNM "asdfg" (label "Cloudisk"); silicon twin of Lerdisk | asdfg | 2 GB | **E (FAIL) / X (PASS 25/25)** | **External only** — same Edge-socket wedge as Lerdisk; External passes all 25 suites 467/467 in a single run. See cloudisk-asdfg-2gb.md for full External regression + benchmarks (350+250). |
 
 ---
 
@@ -426,6 +427,12 @@ Class 4, U0, V0, SPI 25 MHz  [P2FMTER]
 ```
 Unknown asdfg SDSC 960MB [FAT32] SD 1.x rev2.2 SN:$0000_01F4 2025/12
 Class 10, U1, V0, SPI 21 MHz  [P2FMTER]
+```
+
+**"Cloudisk" 2GB SDSC (counterfeit twin of Lerdisk)** — [cloudisk-asdfg-2gb.md](cards/cloudisk-asdfg-2gb.md)
+```
+Unknown asdfg SDSC 1GB [FAT32] SD 1.x rev2.2 SN:$0000_1680 2025/11
+Class 4, U0, V0, SPI 21 MHz  [P2FMTER]
 ```
 
 ---
