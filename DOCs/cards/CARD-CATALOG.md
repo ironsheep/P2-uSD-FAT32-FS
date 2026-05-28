@@ -155,7 +155,7 @@ This section documents ALL fields available from SD card registers and indicates
 | Phison_SD16G_3.0_01CD5CF5_201808 | PNY (Phison $27) | SD16G | 16 GB | **D** | PASS |
 | Phison_SD16G_3.0_DA00094B_201610 | Sony (Phison $27) - Taiwan | SD16G | 16 GB | **D** | PASS |
 | SanDisk_SU01G_8.0_006CD5B2_200706 | SanDisk ($03) — Industrial SDSC | SU01G | 1 GB | **E** | **FAIL** (v1.5.1, 350 MHz) |
-| Unknown_asdfg_2.2_000001F4_202512 | **CONFIRMED COUNTERFEIT** — MID $05 unknown, PNM "asdfg" (label "Lerdisk") | asdfg | 1 GB | **E** | **FAIL** — mount_tests 31/31 PASS, raw_sector_tests 1/14 (streamer-DMA writes/reads fail like SU01G) |
+| Unknown_asdfg_2.2_000001F4_202512 | **CONFIRMED COUNTERFEIT** — MID $05 unknown, PNM "asdfg" (label "Lerdisk") | asdfg | 1 GB | **E (FAIL) / X (PASS 25/25)** | **External only** — Edge fails raw_sector_tests 1/14 (#3240 wedge); External passes all 25 suites 467/467. See lerdisk-asdfg-1gb.md for full External regression + benchmarks (350+250). |
 
 ---
 

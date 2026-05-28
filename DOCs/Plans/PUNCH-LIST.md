@@ -4,6 +4,37 @@ Items to investigate when time permits.
 
 ---
 
+### Counterfeit asdfg-class — characterize LBA-failure-mode boundary
+
+**Cards:** Lerdisk (`Unknown_asdfg_2.2_000001F4_202512`), Cloudisk (`Unknown_asdfg_2.2_00001680_202511`) — same `asdfg` silicon class, both CW_NO_DATA_CRC.
+
+**Context:** From the 2026-05-27 wedge investigation, write #2 of a single-block-write pair always wedges these cards, but the *failure mode* varies by LBA:
+
+| LBA #2 | Failure mode |
+|---|---|
+| 1,001 | busyTO (dresp=$05, then busy stuck ~4 s) |
+| 50,001 | busyTO |
+| 100,000 (same as #1) | busyTO |
+| 100,001 | drespTO (dresp=$FF, never arrived) |
+
+The mode-boundary is bracketed between LBA 50,001 and LBA 100,001 — only one drespTO data point so far. The transition probably corresponds to a wear-leveling zone or FTL region boundary in the counterfeit silicon (it's NOT an erase block boundary; all the tested pairs sit inside a single 128-sector erase block).
+
+**Why this is on the punch list, not the active investigation:** Mapping the boundary characterizes the card's FTL internals but does not move us toward a fix. Both failure modes are wedges; no LBA we've tested escapes the wedge. The boundary location is an academic curiosity for the card-catalog data sheet, not a fix path. Deferred until the active wedge-mechanism investigation is concluded or a separate "card-characterization" cycle picks it up.
+
+**Suggested scan if/when picked up:**
+- LBA 75,000 (binary search between 50K and 100K)
+- LBA 500,000 (does drespTO persist at much higher LBAs, or is there an upper boundary too?)
+- LBA 10 (very low — does busyTO persist all the way down?)
+- LBA `cardSize - 10` (near-end of card)
+
+Requires one power-cycle per scan point. Approach: extend `diagnostic-tests/SD_lba_scan_50K.spin2` (already created and reusable) with a #define-able LBA, or copy-and-edit per test.
+
+**Doc:** [`COUNTERFEIT-ASDFG-SDSC-INVESTIGATION.md`](../Analysis/COUNTERFEIT-ASDFG-SDSC-INVESTIGATION.md) — see 2026-05-26/27 sections.
+
+*Noted: 2026-05-27*
+
+---
+
 ### ~~Silicon Power SPCC 64GB -- CMD18 multi-block read times out~~ RESOLVED v1.2.9
 
 **Card:** siliconpower-spcc-64gb

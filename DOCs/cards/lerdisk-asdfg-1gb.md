@@ -2,9 +2,18 @@
 
 **Label:** microSD 1GB Class 4 — "Lerdisk"
 **Unique ID:** `Unknown_asdfg_2.2_000001F4_202512`
-**Test Date:** 2026-05-24 (Edge socket, P2 Edge module)
+**Initial Test Date:** 2026-05-24 (Edge socket, P2 Edge module)
+**External Re-characterization:** 2026-05-27 (External SD header, P2 Edge module)
 **Reporter:** stephen@ironsheep.biz
-**Status:** Characterization in progress — see Test Results
+**Status:** Characterized. Supported on External SD header **only** until Edge-socket wedge is resolved.
+
+### ⚠️ Temporary Support Restriction (2026-05-27)
+
+This card is currently **supported on the External SD header only** (build flag `SD_PINS_EXTERNAL`, pins CS=20 / MOSI=19 / MISO=18 / SCK=21). On the P2 Edge module's onboard SD socket the card exhibits a reproducible flash-commit-pipeline wedge (any single-block write after mount permanently wedges subsequent operations until power-cycle). The wedge does **not** fire on the External SD header — believed to be electrical-margin (trace length / capacitance) at the Edge socket exacerbating an already-buggy counterfeit silicon.
+
+A driver workaround that routes single-block writes through multi-block CMD25 protocol on `CW_NO_DATA_CRC` cards has been designed (see `DOCs/Analysis/COUNTERFEIT-ASDFG-SDSC-INVESTIGATION.md` experiment 7 sequence) but is not yet implemented. Until that workaround ships, **use the External SD header for this card class**.
+
+Full External-connector regression results: see "External Connector — Test Results" section below.
 
 ### Card Designator (pre-format, FAT16 as shipped)
 
@@ -254,5 +263,107 @@ Single→multi improvement (64 sectors via CMD18): **64%** speedup (42,677 → 1
 - **No format on arrival**: shipped as FAT16. This is normal for the actual capacity (sub-2GB cards typically default to FAT16); not a counterfeit indicator on its own.
 - **TRAN_SPEED $32** = 25 MHz max — same as every catalog card. The driver-probed ceiling (after `probeSpiCeiling`) is the real number to record.
 - **Format requires sysclk=350 with probe-fix**: at sysclk=270 (`SD_format_card.spin2` default), the VBR write returned `drespTimeout`, MBR readback was zeros, and the card never acked the data block. At sysclk=350 the probe-fix detunes SCK to 21.875 MHz and format completes cleanly. The default formatter sysclk should be reconsidered for SDSC counterfeit support, or the cards added to a "format at 350" exception list.
-- **Wedge bug #3240 reproduces consistently**: every fresh `mount()` (or `initCardOnly()`) after a prior unmount on this card *requires a P2 Edge power-cycle*. The driver eventually times out, but no software-level reset clears the wedge. Same pattern as Cloudisk.
+- **Wedge bug #3240 reproduces consistently on Edge socket**: every fresh `mount()` (or `initCardOnly()`) after a prior unmount on this card *requires a P2 Edge power-cycle*. The driver eventually times out, but no software-level reset clears the wedge. Same pattern as Cloudisk. **Does NOT fire on External SD header** — see External Connector results below.
 - **Performance comparable to Cloudisk class** (per resume context). At sysclk=350 the multi-read peaks at 2,359 KB/s — slower than mainstream SDHC cards (~7-15 MB/s at 25 MHz) but consistent with a counterfeit SDSC controller running below 22 MHz.
+
+---
+
+## External Connector — Test Results & Benchmarks (2026-05-27)
+
+Card moved from Edge SD socket to External SD header (pins CS=20 / MOSI=19 / MISO=18 / SCK=21). Tests built with `--external` flag (`-D SD_PINS_EXTERNAL`). Per the investigation doc, the External connector has less aggressive trace-length / capacitance than the Edge socket, and the wedge pattern that fires on Edge does **not** fire here.
+
+### Card identification (External, 2026-05-27)
+
+```
+L1: Unknown asdfg SDSC 960MB [FAT32] SD 1.x rev2.2 SN:$0000_01F4 2025/12
+L2: Class 10, U1, V0, SPI 21 MHz  [P2FMTER]
+L3: CSD claims TRAN_SPEED = 25 MHz; cardWarnings() = $04
+```
+
+Identical fingerprint to the Edge characterization — same silicon, same probe-settled SPI (21.875 MHz at sysclk 350, 20.833 MHz at sysclk 250), same `CW_NO_DATA_CRC` flag.
+
+### Full Regression — External Connector
+
+Full `run_regression.sh --external --include-format` plus standalone re-run of `SD_RT_format_tests.spin2 --external`. With the Test #4 fix in commit `d89e7e6` (crc_validation_tests handles dummy-CRC cards correctly), all 25 suites pass.
+
+| # | Suite | Pass | Fail | Time |
+|---:|---|---:|---:|---:|
+| 1 | SD_RT_mount_tests | 31 | 0 | 17s |
+| 2 | SD_RT_raw_sector_tests | 14 | 0 | 3s |
+| 3 | SD_RT_multiblock_tests | 6 | 0 | 4s |
+| 4 | SD_RT_register_tests | 10 | 0 | 6s |
+| 5 | SD_RT_speed_tests | 15 | 0 | 5s |
+| 6 | SD_RT_crc_diag_tests | 14 | 0 | 6s |
+| 7 | SD_RT_error_handling_tests | 14 | 0 | 3s |
+| 8 | SD_RT_crc_validation_tests | 6 | 0 | (with d89e7e6 fix) |
+| 9 | SD_RT_recovery_tests | 7 | 0 | 5s |
+| 10 | SD_RT_file_ops_tests | 26 | 0 | 4s |
+| 11 | SD_RT_read_write_tests | 48 | 0 | 10s |
+| 12 | SD_RT_multihandle_tests | 21 | 0 | 4s |
+| 13 | SD_RT_seek_tests | 37 | 0 | 5s |
+| 14 | SD_RT_volume_tests | 31 | 0 | 10s |
+| 15 | SD_RT_subdir_ops_tests | 18 | 0 | 3s |
+| 16 | SD_RT_directory_tests | 30 | 0 | 5s |
+| 17 | SD_RT_dirhandle_tests | 25 | 0 | 5s |
+| 18 | SD_RT_fifo_tests | 21 | 0 | 2s |
+| 19 | SD_RT_multicog_tests | 14 | 0 | 3s |
+| 20 | SD_RT_cogcwd_tests | 5 | 0 | 4s |
+| 21 | SD_RT_timestamp_tests | 6 | 0 | 13s |
+| 22 | SD_RT_stress_tests | 4 | 0 | 4s |
+| 23 | SD_RT_async_tests | 6 | 0 | 4s |
+| 24 | SD_RT_defrag_tests | 12 | 0 | 6s |
+| 25 | SD_RT_format_tests | 46 | 0 | (standalone re-run) |
+| **TOTAL** | | **467** | **0** | |
+
+**Note on suite 2 (`SD_RT_raw_sector_tests`)**: this is the exact suite that fails 1/14 on the Edge socket. On External it passes **14/14**. The same hardware (Lerdisk) running on a different connector produces opposite outcomes — the proof point for the Edge-vs-External electrical-margin hypothesis.
+
+### Benchmark — External Connector
+
+Catalog notation: `350+250` (both runs land on probe-settled SPI; no SPI mismatch annotation needed).
+
+#### Sysclk 350 MHz / settled SPI 21.875 MHz
+
+| Test | Min (us) | Avg (us) | Max (us) | Throughput |
+|---|---:|---:|---:|---:|
+| **RAW read 1×512B** | 545 | 559 | 686 | **915 KB/s** |
+| **RAW write 1×512B** | 839 | 840 | 845 | **609 KB/s** |
+| RAW read 8×512B (CMD18) | 2,025 | 2,039 | 2,172 | 2,008 KB/s |
+| RAW read 32×512B (CMD18) | 7,099 | 7,115 | 7,252 | 2,302 KB/s |
+| **RAW read 64×512B (CMD18)** | 13,865 | 13,879 | 14,006 | **2,360 KB/s** |
+| RAW write 8×512B (CMD25) | 2,297 | 3,461 | 13,927 | 1,183 KB/s (high variance) |
+| RAW write 32×512B (CMD25) | 7,257 | 7,263 | 7,268 | 2,255 KB/s |
+| **RAW write 64×512B (CMD25)** | 14,145 | 14,152 | 14,157 | **2,315 KB/s** |
+| File write 512 B | 5,064 | 6,348 | 13,129 | 80 KB/s |
+| File write 4 KB | 11,317 | 12,074 | 18,083 | 339 KB/s |
+| **File write 32 KB** | 94,032 | 94,341 | 94,572 | **347 KB/s** |
+| File read 4 KB | 3,658 | 3,707 | 4,126 | 1,104 KB/s |
+| File read 32 KB | 28,183 | 28,455 | 29,945 | 1,151 KB/s |
+| File read 128 KB | 110,763 | 111,049 | 112,518 | 1,180 KB/s |
+| **File read 256 KB** | 222,223 | 222,479 | 224,412 | **1,178 KB/s** |
+| File Open | 149 | 199 | 647 | — |
+| File Close | 37 | 37 | 38 | — |
+| Unmount | — | 2 ms | — | — |
+
+#### Sysclk 250 MHz / settled SPI 20.833 MHz
+
+| Test | Min (us) | Avg (us) | Max (us) | Throughput |
+|---|---:|---:|---:|---:|
+| **RAW read 1×512B** | 659 | 673 | 740 | **760 KB/s** |
+| **RAW write 1×512B** | 923 | 1,592 | 7,605 | 321 KB/s (one outlier; min/512B → 555 KB/s steady-state) |
+| RAW read 8×512B (CMD18) | 2,269 | 2,274 | 2,311 | 1,801 KB/s |
+| RAW read 32×512B (CMD18) | 7,791 | 7,800 | 7,881 | 2,100 KB/s |
+| **RAW read 64×512B (CMD18)** | 15,154 | 15,162 | 15,243 | **2,161 KB/s** |
+| RAW write 8×512B (CMD25) | 2,517 | 2,522 | 2,527 | 1,624 KB/s |
+| RAW write 32×512B (CMD25) | 7,960 | 7,960 | 7,962 | 2,058 KB/s |
+| **RAW write 64×512B (CMD25)** | 15,484 | 15,486 | 15,492 | **2,115 KB/s** |
+| File write 512 B | 5,590 | 6,752 | 13,595 | 75 KB/s |
+| File write 4 KB | 11,564 | 13,172 | 18,983 | 310 KB/s |
+| **File write 32 KB** | 96,698 | 97,464 | 102,686 | **336 KB/s** |
+| File read 4 KB | 4,350 | 4,399 | 4,836 | 931 KB/s |
+| File read 32 KB | 32,666 | 32,947 | 34,408 | 994 KB/s |
+| File read 128 KB | 130,107 | 130,397 | 131,815 | 1,005 KB/s |
+| **File read 256 KB** | 259,836 | 260,149 | 262,578 | **1,007 KB/s** |
+
+### Operating note
+
+When this card is used on the External connector path, the full driver feature surface works. The card behaves like every other catalog card with respect to the driver API. The wedge that defines this card's class on Edge does not manifest on External in any of the 25 regression suites or in two full benchmark passes. Until the Edge-socket workaround ships, **External is the only supported topology for this card.**

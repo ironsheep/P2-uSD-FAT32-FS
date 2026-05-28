@@ -1383,54 +1383,313 @@ The wedge is **independent of which write command** initiated. Card refuses dres
 
 **Result:** byte-for-byte identical wedge progression (138,045 / 138,040 / 138,123). Card truly does not validate write CRC — the CRC content is irrelevant. **CRC is not the wedge mechanism.**
 
-**Useful side-finding:** confirms that for CW_NO_DATA_CRC cards, write-side CRC content is pure filler. This is a real data point about the silicon and the symmetric extension of the flag's semantics is defensible as a consistency cleanup (separate from the wedge investigation).
+**Useful side-finding:** confirms that for CW_NO_DATA_CRC cards, write-side CRC content is pure filler. This is a real data point about the silicon and the symmetric extension of the flag's semantics is defensible as a consistency cleanup. Committed as `de9998a` (separate from the wedge investigation).
 
-### 🎯 New leading hypothesis — post-write CMD13 as wedge trigger
+### ❌ Experiment 4: Skip post-write CMD13 for CW_NO_DATA_CRC cards — REFUTED
 
-Cross-referencing memory and this session's results:
-- **mount_tests** (handle-based writes through writeSector internally): **passes 31/31**
-- **benchmark CMD25 multi-block with count > 1**: passes (per prior session memory)
-- **raw single-block writeSectorRaw** (CMD24 single + post-write CMD13): **fails at write #2**
-- **raw "CMD25 single-block" writeSectorsRaw count=1** (CMD25 + $FD + post-write CMD13): **fails at write #2** (experiment 2)
+**Hypothesis:** the post-write CMD13 in `writeSector` (via `checkCardStatus`) is the wedge trigger. Multi-block writes (CMD25 with count > 1) don't run CMD13 between blocks and they pass; single-block raw writes run CMD13 after every block and they wedge. The CMD13 between writes is the new variable.
 
-The wedge is NOT distinguished by CMD24-vs-CMD25, NOR by single-block-vs-multi-block-command. It is distinguished by **whether single-block packaging is used at all**.
+**Method:** gated change in `writeSector` — `if NOT (card_warning_flags & CW_NO_DATA_CRC)` wrapper around the `checkCardStatus(@"writeSector")` call. Other cards continue to run CMD13 as a verification step.
 
-What single-block-issued-separately does that multi-block-with-count>1 does NOT:
-1. CS goes HIGH between every write
-2. A fresh command (CMD24 or CMD25) is issued per block, with its own R1 cycle
-3. **`checkCardStatus()` runs after every block, sending CMD13**
+**Result:** byte-for-byte identical wedge progression. Write #2 still fails at dresp ($FF for 100 ms); writes #3+ still hit the CMD24 R1 wall at 138,045 / 138,040 / 138,123 byte polls — **exactly identical to all prior runs** to the unit. CMD13 between writes is NOT the wedge trigger.
 
-The third bullet is the sharpest candidate. CMD13 between two raw writes is a new variable in the picture — and on `CW_NO_DATA_CRC` counterfeit silicon, the CMD13 may interact badly with the card's commit state machine.
+The reproducibility of byte-poll counts across experiments where the inter-write driver behavior changed is itself a strong signal — the card's failure mode is deterministic to the unit. Whatever wedges it, wedges it the same way every time, regardless of what the driver does in the window between writes.
 
-### Why this hypothesis is high-value
+### ⚠️ Experiment 5: Sector range — LBA 1000 vs LBA 100,000 — PARTIAL — different failure mode at low LBA
 
-- Multi-block writes with count > 1 don't run CMD13 between data blocks → they don't wedge → consistent with "CMD13 is the trigger"
-- mount_tests' file ops do trigger CMD13 (through writeHandle → writeSector → checkCardStatus), but they don't wedge → would refute the hypothesis... **unless** the wedge requires a *specific sector range* OR a *specific subsequent operation* that mount_tests doesn't hit. The user-visible test logs need re-examination on this point.
-- The handle-write path may write to FAT/dir/data-region sectors at low LBAs (FAT32 root and below). The raw test writes to LBA 100,000+. Sector-range-dependence remains an alternative variable.
+**Hypothesis (revised after audit of prior doc entries):** unmount/remount-between-writes was originally proposed but the doc audit confirmed wedge persists through full re-init (2026-05-19 entry, 2026-05-23/24 entry: "the wedge persists" with all recovery attempts). Substituted sector-range test as the cheapest unknown variable — every prior wedge test used LBA 100,000+.
 
-### Experiment 4 (next session opening move)
+**Method:** new `diagnostic-tests/SD_lba_range_repro.spin2` performs mount → writeSectorRaw(1000, buf) → writeSectorRaw(1001, buf). Same two-write minimal reproducer at LBA 1,000 instead of LBA 100,000.
 
-**Skip `checkCardStatus()` in `writeSector`** — either universally (test build only) or gated on `CW_NO_DATA_CRC`. Re-run the same minimal reproducer (power-cycle → mount_tests → raw_sector_tests, no power cycle between).
+**Result:** Both writes fail, but **differently** at low LBA than at high LBA:
 
-- If write #2 now succeeds: post-write CMD13 is the wedge trigger. Next steps: characterize whether CMD13 itself is the issue, or whether removing CMD13 just changes timing in some incidental way. Then decide on a fix path.
-- If write #2 still fails: CMD13 is not the cause. Falls back to the remaining candidates:
-  - **CS toggle between writes** — keep CS LOW across two consecutive raw writes (requires a different driver API or test-only hook)
-  - **Sector range dependence** — try writeSectorRaw at a low LBA (e.g., sec 1000) instead of 100,000 to see if the wedge is range-dependent
-  - **Unmount/remount between writes** — does full re-init clear the wedge mid-session?
+| Stage | LBA 100,001 (baseline) | LBA 1,001 (this test) |
+|---|---|---|
+| CMD24 R1 | $00, 2 polls, 0 ms | $00, 2 polls, 0 ms (same) |
+| Data + CRC sent | yes | yes (same) |
+| **dresp arrived** | **NO** ($FF for 100 ms) | **YES — `$05 ACCEPTED`** |
+| Busy state | n/a (no dresp) | **stuck busy ~3.99 s** |
+| Status returned | -1 (E_TIMEOUT, code=2 drespTO) | -6 (E_CARD_BUSY, code=6 busyTO) |
+
+At LBA 1,001 the card **gets further into the write protocol** before wedging. It accepts the command, accepts the data, sends `$05` (data accepted), and only then fails by never releasing the busy MISO signal. At LBA 100,001 the card refuses to even send dresp.
+
+**Interpretation:**
+- The wedge IS sector-range-dependent — different LBAs produce different failure modes
+- The wedge mechanism is in the card's **flash commit pipeline**, not in command parsing or data reception
+- At low LBA the commit pipeline gets to "ack accepted, then stuck programming"
+- At high LBA the commit pipeline fails earlier — won't even acknowledge the data
+- Suggests the counterfeit silicon's FTL block-mapping or wear-leveling state behaves differently across address ranges
+
+**Both LBAs still wedge.** Neither is a "working" path. But the difference rules out the simpler hypothesis "card refuses second single-block write regardless of address" and replaces it with "card's commit pipeline reacts variably to second single-block write, with the failure stage depending on target LBA."
+
+### ❌ Experiment 6.1: Same-LBA-twice — wedge still fires (with busyTO failure mode)
+
+**Hypothesis:** if the wedge trigger is "fresh LBA / changing target address", then writing to the SAME sector twice in a row should escape the wedge. If the wedge trigger is "any second single-block write regardless of address", the wedge will fire on the same LBA too.
+
+**Method:** new `diagnostic-tests/SD_same_lba_twice_repro.spin2` performs mount → writeSectorRaw(100_000, buf1) → writeSectorRaw(100_000, buf2). Same sector address, different buffer content.
+
+**Result:** Write #2 at the SAME LBA also fails — but with the **busyTO** failure mode (code=6, dresp=`$05` accepted, then busy stuck for ~4 s), NOT the drespTO mode that fired at adjacent LBA 100,001.
+
+**Critical pattern now emerging:** the failure mode depends on the **relationship** between write #1's and write #2's addresses, not just on absolute LBA. Three data points:
+
+| Test | LBA #1 | LBA #2 | dresp on write #2 | Failure code |
+|---|---|---|---|---|
+| Baseline (raw_sector_tests) | 100,000 | 100,001 (fresh, adjacent, high) | **`$FF` never arrived** | code=2 **drespTO** |
+| Experiment 5 | 1,000 | 1,001 (fresh, adjacent, low) | **`$05` accepted** | code=6 **busyTO** |
+| Experiment 6.1 | 100,000 | 100,000 (SAME) | **`$05` accepted** | code=6 **busyTO** |
+
+The wedge has **at least two distinct stuck states**:
+- **drespTO mode** (won't even acknowledge data): only seen so far at high-LBA-fresh-adjacent
+- **busyTO mode** (acknowledges data, then hangs busy): seen at low-LBA-fresh-adjacent AND at same-LBA-rewrite
+
+What's *special* about the LBA 100,001 case? The card must allocate a NEW flash physical block (write #1 occupied the just-allocated block at LBA 100,000; write #2 to 100,001 needs a different physical block). The other two cases either rewrite the same physical block (same-LBA) or are in a region (low-LBA) where the FTL behaves differently.
+
+**This refutes both:**
+- "Fresh LBA is the trigger" — false, same-LBA also fails
+- "Wedge is a clean binary at write #2" — false, the failure mode varies systematically
+
+### ⚠️ Experiment 6.2 (first scan point): LBA 50,001 — busyTO mode
+
+**Method:** new `diagnostic-tests/SD_lba_scan_50K.spin2` performs mount → writeSectorRaw(50,000, buf1) → writeSectorRaw(50,001, buf2). Adjacent fresh sectors at the midpoint between our existing 1K and 100K data points.
+
+**Result:** Write #2 at LBA 50,001 fails with **busyTO mode** (code=6, dresp=$05 accepted, busy stuck ~4 s) — same mode as LBA 1,001.
+
+**Mode-boundary now bracketed:**
+
+| LBA #2 | Mode |
+|---|---|
+| 1,001 | busyTO |
+| 50,001 | busyTO |
+| 100,000 (same as write #1) | busyTO |
+| 100,001 | **drespTO** ← boundary lies above 50K, at-or-below 100K |
+
+The drespTO failure mode is confined to (so far observed at) only one LBA: 100,001. Boundary-mapping is deferred to the punch list (`DOCs/Plans/PUNCH-LIST.md`) — characterizing it doesn't move us toward a fix.
+
+### ❌ Experiment 6.3: CS held LOW across two writes — wedge still fires (but failure mode changes)
+
+**Hypothesis:** the CS HIGH → CS LOW toggle between single-block writes is the wedge trigger. Multi-block CMD25 with count > 1 keeps CS LOW continuously across all blocks and does NOT wedge these cards; raw single-block writes toggle CS between every call and DO wedge.
+
+**Method:** added a temporary driver-side test hook `test_skip_cs_release` (DAT byte). When armed via `setTestSkipCsRelease(1)`, `writeSector`'s success path leaves CS LOW and skips the post-write CMD13. The next `writeSectorRaw` call enters `cmd()` with CS already asserted — the host's only structural difference vs multi-block protocol. New `diagnostic-tests/SD_cs_low_across_repro.spin2` exercises the hook with two writes at LBA 100,000 / 100,001.
+
+**Result:** Write #2 still fails — but now with a **different failure mode** than the baseline at this LBA:
+
+| | Baseline (CS toggled) | CS-LOW-across (this test) |
+|---|---|---|
+| Write #1 | ✓ success | ✓ success |
+| Write #2 dresp | `$FF` (never arrived) | `$05` (accepted!) |
+| Write #2 result | code=2 drespTO | code=6 busyTO |
+| Outcome | wedged | wedged |
+
+**Two important findings from this test:**
+
+1. **CS toggle is NOT the wedge trigger** — the wedge fires identically with CS held LOW. The card still cannot complete write #2.
+
+2. **CS toggle DOES exacerbate the wedge at high-LBA-fresh-adjacent**: with CS toggled the card flips into drespTO ("hard mode"), but without the toggle the same LBA pair gives busyTO ("easy mode") matching every other tested combination. This reframes experiment 6.1's mode-mapping:
+
+   | Configuration | Mode |
+   |---|---|
+   | Low/mid LBA, fresh adjacent (1K, 50K) | busyTO |
+   | Same-LBA rewrite (any LBA) | busyTO |
+   | High-LBA fresh adjacent, CS-LOW-across | busyTO |
+   | **High-LBA fresh adjacent, CS toggled** | **drespTO** ← unique condition |
+
+The drespTO mode only appears when BOTH conditions are present: a high-LBA fresh-adjacent target AND a CS toggle between writes. Either condition alone produces busyTO.
+
+### 🎯 What is now eliminated as a wedge trigger
+
+After six experiments (2026-05-26 through 2026-05-27), every driver-side structural variable has been tested:
+
+| Variable | Experiment | Result |
+|---|---|---|
+| Timing (more wait after success) | 1 | ❌ Refuted (50ms wait) |
+| Command type | 2 | ❌ Refuted (CMD25 single also wedges) |
+| CRC content | 3 | ❌ Refuted ($FF $FF vs calculated identical) |
+| Post-write CMD13 | 4 | ❌ Refuted (skipping makes no difference) |
+| Same vs different LBA #2 | 6.1 | ❌ Refuted (same LBA still wedges, busyTO) |
+| Sector range | 5, 6.2 | ⚠️ Failure *mode* varies, but every LBA wedges |
+| CS toggle between writes | 6.3 | ❌ Refuted (changes mode at one LBA, but every config still wedges) |
+
+**The wedge always fires.** No driver-side configuration we've tried lets the second consecutive single-block write succeed. The mechanism is fundamentally in the card's flash commit pipeline state after a successful prior single-block write.
+
+### The one remaining path that demonstrably works
+
+Per the card catalog (memory: "raw_sector_tests 13/14 FAIL (CMD24 single-block write path broken; **CMD25 multi-block in benchmarks passes**)"), **multi-block CMD25 with count > 1 does work on these cards in benchmarks**. The benchmarks issue ONE big multi-block call. Whether the card tolerates *consecutive* multi-block calls (one ends, another begins) is unknown — benchmarks don't pattern that way.
+
+This is the remaining unanswered question: does the multi-block protocol genuinely protect against the second-call wedge, or does it only work because benchmarks bundle everything into one call?
+
+### ✅ Experiment 7: Consecutive multi-block CMD25 with count=2 — **BOTH SUCCEED**
+
+**Method:** new `diagnostic-tests/SD_consecutive_multiblock_repro.spin2` performs:
+- mount → writeSectorsRaw(100_000, 2, buf_a) → writeSectorsRaw(100_002, 2, buf_b)
+
+Two multi-block CMD25 calls in sequence, each writing 2 adjacent sectors, no power-cycle between mount_tests primer and this test.
+
+**Result:** Both calls succeeded.
+
+```
+Write CALL #1: writeSectorsRaw(100_000, count=2)  → sectors_written = 2  ✓
+Write CALL #2: writeSectorsRaw(100_002, count=2)  → sectors_written = 2  ✓
+```
+
+Total elapsed for both writes: ~2 ms. No wedge. The card committed all 4 sectors cleanly across two consecutive multi-block transactions. **This is the first software pattern in the entire investigation that lets the card perform arbitrary repeated raw writes after the mount_tests primer.**
+
+### 🎯 Decisive finding — the wedge is specifically about single-block packaging
+
+The investigation now has a clean mechanical model:
+
+- The wedge fires when **two consecutive write transactions** each use **single-block packaging** (CMD24 OR CMD25-count=1, with or without CS toggle, regardless of CRC content, regardless of CMD13, regardless of timing, regardless of LBA — the failure *mode* varies but the wedge always fires).
+- The wedge does NOT fire when **at least one of the transactions** is multi-block CMD25 with count ≥ 2.
+
+Multi-block CMD25 with count ≥ 2 creates **genuine cross-transaction immunity** to the wedge — not just within a single multi-block transaction (which we already knew from benchmarks), but across consecutive transactions too.
+
+### Fix path — implementation sketch
+
+For cards flagged `CW_NO_DATA_CRC` at init time, the driver re-routes single-block writes through multi-block protocol:
+
+- `writeSectorRaw(sector, buf)` internally becomes `writeSectorsRaw(sector, 2, paddedBuf)`
+- The `paddedBuf` contains the caller's sector at offset 0, plus a pad sector at offset 512
+- Pad sector content options (TBD by implementation):
+  - **All `$FF`** — matches typical "erased" flash state; cheapest
+  - **All `$00`** — alternative neutral fill
+  - **Read-modify-write** of `sector + 1` — preserves any existing data at that location at the cost of 1 extra sector read per write
+- Cost: 2× write bandwidth per logical sector
+- Benefit: card actually works for raw single-sector writes
+
+### Open questions before driver implementation
+
+1. **Does count=2 always work, or do we need count ≥ 3 for some LBA ranges?** (Test: writeSectorsRaw at various LBAs with count=2; if drespTO ever appears at any LBA boundary, bump count.)
+2. **Does the *first* write after mount also need multi-block treatment?** (Test: mount → writeSectorRaw(single) → writeSectorsRaw(multi). If the FIRST single-block write needs to be re-routed too, the workaround is universal; if only writes-after-the-first need re-routing, the driver can keep a per-mount-session counter.)
+3. **What about CMD24 specifically vs CMD25-count=1?** Experiment 2 showed both wedge, but is there a difference in behavior we should mirror in the re-route logic?
+4. **Mixed sequences** — does writeSectorsRaw(2) → writeSectorRaw(single) wedge? If single-block following multi-block also wedges, every write needs to be multi-block.
+
+These can be characterized later if implementation reveals edge cases. The workaround path is real and ready to design.
+
+### Code state at experiment 7 completion
+
+Working tree is clean (driver matches HEAD post-revert of experiment 6.3's `test_skip_cs_release` hook). Untracked diagnostic test files in `diagnostic-tests/` (all reusable for future characterization or regression):
+- `SD_cmd25_single_repro.spin2` — experiment 2
+- `SD_lba_range_repro.spin2` — experiment 5
+- `SD_same_lba_twice_repro.spin2` — experiment 6.1
+- `SD_lba_scan_50K.spin2` — experiment 6.2
+- `SD_cs_low_across_repro.spin2` — experiment 6.3
+- `SD_consecutive_multiblock_repro.spin2` — experiment 7 (the success)
+
+### Path forward (chosen 2026-05-27 after experiment 7 success): Path A — characterize before implementing
+
+Two follow-up confirmatory tests before committing to a driver-side workaround. Each requires its own power-cycle and mount_tests primer.
+
+**Experiment 7.1 — ✅ count=2 multi-block works at higher LBAs**
+
+Test: mount → writeSectorsRaw(500_000, 2, buf_a) → writeSectorsRaw(500_002, 2, buf_b).
+
+**Result:** Both calls succeeded. `sectors_written = 2` for each. Total elapsed ~2 ms. Multi-block count=2 immunity holds at LBA 500K identically to LBA 100K. **The workaround design proceeds without LBA-specific routing.**
+
+**Experiment 7.2 — ❌ single THEN multi WEDGES — every write must be multi-block**
+
+Test: mount → writeSectorRaw(100_000, buf_a) *[single]* → writeSectorsRaw(100_002, 2, buf_b) *[multi]*.
+
+**Result:**
+- Write #1 (single CMD24 at LBA 100_000): SUCCESS (code=7, dresp=$05)
+- Write #2 (multi CMD25 count=2 at LBA 100_002): **FAILED, sectors_written = 0** (~4 s elapsed — likely busyTO mode)
+
+**A prior single-block transaction primes the wedge so deeply that even a follow-up multi-block CMD25 call cannot recover.** The wedge state is not just "between two single-block writes" — it's "after ANY single-block write on this card."
+
+### Updated wedge mechanism (post-7.2)
+
+The wedge fires whenever **the FIRST write transaction of any sequence uses single-block packaging**. Multi-block CMD25 with count ≥ 2 only creates immunity when it's used from the very beginning — not as a recovery from a prior single-block write.
+
+| Write #1 | Write #2 | Outcome |
+|---|---|---|
+| single (CMD24 or CMD25 count=1) | single | ❌ wedge (baseline, all our LBA experiments) |
+| single | multi (count=2) | ❌ wedge (experiment 7.2) |
+| multi (count=2) | multi (count=2) | ✅ both succeed (experiment 7, 7.1) |
+
+### Workaround design implications
+
+The driver workaround for CW_NO_DATA_CRC cards must **unconditionally re-route every write through multi-block CMD25 count ≥ 2** — including the very first write after mount. Design simplifications from this finding:
+
+- **No per-session "first-write-done" counter needed** — unconditional behavior
+- **No special-case for mount-time writes** — same re-route applies
+- Single-sector logical writes become `writeSectorsRaw(sector, 2, paddedBuf)` with a pad sector at offset 512
+
+### Important open question — why does mount_tests pass? (still open after 7.3)
+
+Inspection of `do_write_h` (line 3878+) confirms `writeHandle` uses **single-block** `writeSector` for its sector flushes. Reads are interleaved at sector-boundary crossings. This raised the hypothesis that an interleaved read might clear the wedge state.
+
+### ❌ Experiment 7.3: Read between two single-block writes — wedge persists, AND reads fail too
+
+Test: mount → writeSectorRaw(100_000, buf_a) → readSectorRaw(0, readbuf) → writeSectorRaw(100_001, buf_b).
+
+**Result:** Both the read AND the second write failed.
+
+| Step | Result |
+|---|---|
+| Write #1 at LBA 100_000 | ✓ SUCCESS (code=7, dresp=$05) |
+| Read at LBA 0 (MBR) | ❌ FAILED (status=-1 E_TIMEOUT) |
+| Write #2 at LBA 100_001 | ❌ FAILED (code=2 drespTO) — same wedge as baseline |
+
+**Critical new finding:** A single single-block write wedges the card for **subsequent reads** too — not just writes. The reads-clear-wedge hypothesis is refuted.
+
+### What the wedge actually is (post-7.3)
+
+The wedge mechanism is broader than "two consecutive single-block writes fail":
+
+**Any single-block write (CMD24 or CMD25 count=1) puts the card into a state where every subsequent operation (read OR write, single OR multi) fails — until a power-cycle.**
+
+The one exception is when the very first transaction is multi-block CMD25 with count ≥ 2. Then subsequent multi-block transactions work too (experiments 7, 7.1).
+
+### The mount_tests mystery — still unresolved but no longer blocking the workaround
+
+mount_tests passes 31/31 doing both reads and writes through handle APIs. By the post-7.3 wedge model, *any* single-block writeSector should wedge everything afterward — yet mount_tests doesn't observe this.
+
+Theories not yet ruled out:
+- LBA-region effect: file metadata writes go to FAT/dir region (LBAs 8K-ish on this card) which may not trigger the wedge, while our experiments hit deep data region (LBAs 1K-100K+)
+- Write spacing or some other timing/context variable we haven't characterized
+
+This mystery is academic now — it doesn't block the workaround design. The path forward is to implement strict multi-block routing for all writes on CW_NO_DATA_CRC cards and verify against raw_sector_tests (which exercises the wedge pattern); if it passes, the workaround works. If raw_sector_tests still has issues, we revisit the mystery.
+
+### Workaround design (settled by experiments 7, 7.1, 7.2, 7.3)
+
+For cards flagged `CW_NO_DATA_CRC` at init:
+- **Every** writeSector / writeSectorRaw call is internally re-routed through `writeSectorsRaw(sector, 2, paddedBuf)` (multi-block CMD25 with count=2)
+- `paddedBuf` contains the caller's sector at offset 0 plus a pad sector at offset 512
+- Pad sector content: all `$FF` (matches typical "erased" flash state; cheapest; no read-modify-write needed)
+- Cost: 2× write bandwidth per logical sector
+- Benefit: card works for raw single-sector writes (and reads no longer wedge as a side effect)
+
+Reads (readSector / readSectorRaw): no special handling needed if writes are always multi-block — the card won't be in the wedged state for them to hit.
+
+Path B (driver implementation) proceeds next.
+
+### What we now know about the card
+
+The wedge isn't a single state; it's a family of failure modes that all stem from the second-single-block-write-after-mount-and-write-#1 condition. The card's flash commit pipeline reacts to that situation differently depending on target LBA — but always badly. The fact that low-LBA writes reach `$05 accepted` and only then hang in busy is actually a new piece of usable signal: it confirms the data path is intact and the commit-to-flash step is what's failing.
+
+### Next-session opening moves (revised after experiment 5)
+
+**Experiment 6 candidates, ordered by decisiveness:**
+
+1. **Multi-LBA scan**: extend the LBA-range diagnostic to test several LBA points (10, 100, 1000, 10_000, 50_000, 100_000, 500_000, near-end-of-card) and map the failure-mode-vs-LBA picture. Decisive about whether the LBA-range dependence is gradual or has sharp boundaries (suggests block-size or wear-leveling-zone boundaries).
+
+2. **Same-LBA twice**: rewrite the same sector twice in a row (`writeSectorRaw(100_000, buf)` × 2). Tests whether the wedge is "fresh sector" or "any second write." If the wedge fires at write #2 even when both writes go to the same LBA, sector address per se is not the trigger; the act of issuing a second write to ANY address after a successful first write is.
+
+3. **CS-LOW-across-writes** (driver hack): add a temporary `writeSectorRawCS(s1, b1, s2, b2)` test-only API that holds CS LOW from the first CMD24 through the second CMD24's data block. If write #2 succeeds, the CS toggle is the trigger.
+
+4. **Data-pattern variation**: write same sector twice, second time with `0x00`-fill vs `0xFF`-fill vs walking-1s. If data content matters, the trigger is some bit pattern hitting the card's commit pipeline.
+
+Recommended order: **(2) same-LBA twice first** — easiest, sharpest test of "is it address change or is it just the second write?". Then **(1) multi-LBA scan** to characterize the LBA-failure relationship. Then **(3) CS-LOW-across-writes** as the most invasive but most decisive isolation of CS toggle vs fresh command.
 
 ### Session-end driver state
 
-**Working tree is NOT clean.** Experiment 3 ($FF $FF CRC for CW_NO_DATA_CRC writes in `writeSector` and `writeSectors`) is uncommitted. The 50 ms wait from experiment 1 has been reverted. The CMD25 diagnostic test file `diagnostic-tests/SD_cmd25_single_repro.spin2` is committed-worthy (cleanly designed, documented, reusable) but is currently untracked.
+**Working tree:** experiment 4 driver change (`if NOT (card_warning_flags & CW_NO_DATA_CRC)` around `checkCardStatus`) is currently uncommitted. Since it was refuted, this should be reverted before commit. The diagnostic test files `diagnostic-tests/SD_cmd25_single_repro.spin2` and `diagnostic-tests/SD_lba_range_repro.spin2` are untracked per user preference (not committed yet).
 
-**Decision pending:**
-- Experiment 3 working-tree change: keep as a consistency cleanup (symmetrizes the asymmetric CW_NO_DATA_CRC handling) or revert
-- `SD_cmd25_single_repro.spin2`: commit as a permanent diagnostic test for the wedge
-
-Either choice is fine; both should be made before the next session resumes.
+**Already committed this session:** `de9998a` (CW_NO_DATA_CRC write-side $FF $FF symmetry) — a separate consistency cleanup independent of the wedge.
 
 ### Resume points for next session
 
-- All three new experiments (timing wait, CMD24-vs-CMD25, CRC content) have been refuted
-- The post-write CMD13 hypothesis is the next sharpest probe (experiment 4)
-- The single-block-vs-multi-block-with-count>1 distinction is the key new framing — focus there, not on CMD24/25 anymore
-- Driver-side audit pass is committed (4 commits, +137 lines net). Future investigation has fewer silent-error sites to worry about, plus 16 records of debug-budget headroom restored.
+- Five experiments run, refuted: timing wait, CMD24-vs-CMD25, CRC content, post-write CMD13, sector-range-as-single-trigger
+- One experiment partial: LBA range matters — different LBAs produce different failure modes
+- Leading remaining hypotheses: CS toggle between writes, sector-range-block-mapping behavior
+- Card behavior at low LBA (gets to busy-stuck) is a new signal worth exploiting — the data path is intact, the commit-to-flash step is what fails
+- Driver-side audit pass committed (5 commits this session). The wedge investigation has lost zero observability ground; we now have honest diagnostics at every protocol stage.
+- Both untracked diagnostic files (`SD_cmd25_single_repro.spin2`, `SD_lba_range_repro.spin2`) are valuable for further experiments — they can be reused/extended for experiments 6.1, 6.2, 6.3 above.
