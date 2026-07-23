@@ -75,6 +75,24 @@ dual-driver advice doc (§8c).
   overlay the suite is expected 100% green. Stephen runs the entry hardware
   baseline at sprint start (`sprint-start` invokes `baseline-health`).
 
+## Sprint-start record (2026-07-23)
+
+- **Build number:** ships as **v1.5.4** (git tag; current `v1.5.3`).
+- **Branch:** `sprint/write-path-corruption-fix` (cut from `main`).
+- **Working-tree audit (Stephen's decisions):**
+  - Diagnostic `DEBUG_MASK` edits in `SD_RT_mount_tests` / `SD_RT_raw_sector_tests`
+    are **intentional** (tests may carry non-zero masks; driver stays
+    `DEBUG_MASK=0`) — committed as-is (`83a220b`).
+  - Handoff + this plan committed as sprint foundation (`c3528d7`).
+  - Housekeeping (SDSC analysis + 11 `diagnostic-tests/` repros) committed
+    (`de443b4`). `diagnostic-tests/` does not ship.
+  - `.claude/` is gitignored — skill-conventions/overlays/marker are local-only,
+    left as-is by decision.
+- **Tracking-readiness (entry):** READY — 0 tasks, 0 context keys, `MEMORY.md`
+  10 lines. Nothing to prune.
+- **Baseline-health (entry):** build clean (24/24 compile). Hardware test
+  baseline is host-side, established by Stephen at execution.
+
 ---
 
 ## 1. Driver introspection helper — `clusterBytes()`
@@ -418,6 +436,28 @@ new regression suite's ship/exclude status is deliberate, not accidental. Error 
 release workflow dry-run surfaces any missing enumerated file before the tag.
 
 ---
+
+## Section ↔ task cross-reference
+
+Tasks tagged `write-path-fix`. **`seq` deliberately departs from plan-section
+order** to enforce the handoff's detect-before-fix discipline: the DETECT run
+(§7) and the harness/runner upgrades (§4, §6) execute *before* the driver fix
+(§5), so the fatchain suite proves it catches the bug on the unfixed driver
+before the fix exists.
+
+| Plan § | Deliverable | Task | seq | Where |
+| ------ | ----------- | ---- | --- | ----- |
+| §1 | `clusterBytes()` helper | «#1» | 1 | container |
+| §2 | shared helpers `assertFreeSpace`/`clustersForBytes` | «#2» | 2 | container |
+| §3 | `SD_RT_fatchain_tests.spin2` + runner wiring | «#3» | 3 | container |
+| §4 | harness precondition audit (24 suites) | «#4» | 4 | container |
+| §6 | runner head-to-tail reformat infra | «#5» | 5 | container |
+| §7 DETECT | reproduce bug on unfixed driver (capture FAIL) | «#6» | 6 | **hardware** |
+| §5 | driver fix — `writeAdvanceCluster` + guards + Bug B | «#7» | 7 | container |
+| §7 CONFIRM | confirm PASS + full regression, 2 geometries | «#8» | 8 | **hardware** |
+| §8b+§8c | theory update + dual-driver advice doc | «#9» | 9 | container |
+| §8a | CHANGELOG v1.5.4 | «#10» | 10 | container |
+| §9 | release v1.5.4 | «#11» | 11 | container/host |
 
 ## Exit-gate notes
 
