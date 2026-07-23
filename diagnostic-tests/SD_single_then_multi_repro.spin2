@@ -1,0 +1,135 @@
+{{ =================================================================================================
+   File....... SD_single_then_multi_repro.spin2
+   Purpose.... Experiment 7.2 (asdfg counterfeit SDSC wedge investigation, 2026-05-27):
+               Does the FIRST write need multi-block treatment too?
+
+               Background: experiment 7 showed consecutive multi-block calls (count=2)
+               both succeed - the only working pattern. But mount_tests already writes
+               through writeSector (single-block) internally via handle-based file ops,
+               and mount_tests PASSES. So the very first single-block write doesn't
+               wedge. The wedge fires on the SECOND single-block write.
+
+               Question: if the first write is single-block (CMD24) but the second
+               is multi-block CMD25 count=2, does the second one work? Or did the
+               first single-block already "prime" the card into a state that even
+               multi-block can't escape?
+
+               This experiment writes:
+                 - writeSectorRaw(100_000, buf_a)        [single, CMD24]
+                 - writeSectorsRaw(100_002, 2, buf_b)    [multi, CMD25 count=2]
+
+               Run sequence (no power cycle between):
+                 1. Power-cycle Lerdisk in Edge socket
+                 2. Run SD_RT_mount_tests  (the wedge-primer)
+                 3. Run this diagnostic
+
+   Expected outcomes:
+     - Both writes succeed:
+         -> Only writes-after-the-first need re-routing through multi-block.
+         -> Driver workaround can keep a per-mount-session counter and treat the
+            first single-block write normally.
+     - Single succeeds, multi fails (sectors_written = 0 or partial):
+         -> Multi-block can't recover from a prior single-block transaction.
+         -> EVERY write must be multi-block on this card class - stricter workaround.
+         -> Also tells us "the first single-block write" is what primes the wedge,
+            confirming the trigger condition more precisely.
+
+   Author..... Stephen M Moraco
+   Started.... 27 MAY 2026
+================================================================================================= }}
+
+CON
+    _CLKFREQ        = 350_000_000
+    DEBUG_BAUD      = 2_000_000
+
+    DEBUG_MASK      = (1 << 0) | (1 << 4) | (1 << 9)
+
+#ifdef SD_PINS_EXTERNAL
+    SD_CS   = 20
+    SD_MOSI = 19
+    SD_MISO = 18
+    SD_SCK  = 21
+#else
+    SD_CS   = 60
+    SD_MOSI = 59
+    SD_MISO = 58
+    SD_SCK  = 61
+#endif
+
+    SECTOR_SIZE = 512
+    LBA_SINGLE  = 100_000
+    LBA_MULTI   = 100_002
+
+#pragma exportdef SD_INCLUDE_ALL
+
+OBJ
+    sd : "micro_sd_fat32_fs"
+
+DAT
+    buf_a       BYTE    0[SECTOR_SIZE]
+    bigbuf_b    BYTE    0[SECTOR_SIZE * 2]
+
+PUB go() | mountStatus, w1Status, w2Count, idx, code, r1, dresp, sec, r1_ms, polls, op
+
+    debug(" ")
+    debug("=== Experiment 7.2: single (CMD24) THEN multi (CMD25 count=2) ===")
+    debug(" ")
+
+    repeat idx from 0 to SECTOR_SIZE - 1
+        buf_a[idx] := $11
+    repeat idx from 0 to (SECTOR_SIZE * 2) - 1
+        bigbuf_b[idx] := $22
+
+    mountStatus := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    debug("  mount() status = ", sdec_(mountStatus))
+    if mountStatus <> 0
+        debug("FATAL: mount failed")
+        flushAndEnd()
+        return
+
+    debug("  cardWarnings = $", uhex_(sd.cardWarnings()))
+    debug(" ")
+
+    debug("--- Write #1: writeSectorRaw(sector=", udec_(LBA_SINGLE), ") [CMD24 single-block] ---")
+    w1Status := sd.writeSectorRaw(LBA_SINGLE, @buf_a)
+    debug("  writeSectorRaw status = ", sdec_(w1Status))
+    code, r1, dresp, sec := sd.getWriteDiag()
+    debug("    writeDiag: code=", udec_(code), " R1=$", uhex_byte_(r1), " dresp=$", uhex_byte_(dresp), " sector=", udec_(sec))
+    debug(" ")
+
+    if w1Status < 0
+        debug("UNEXPECTED: single-block write #1 failed.")
+        sd.unmount()
+        flushAndEnd()
+        return
+
+    debug("--- Write #2: writeSectorsRaw(start=", udec_(LBA_MULTI), ", count=2) [CMD25 multi-block] ---")
+    w2Count := sd.writeSectorsRaw(LBA_MULTI, 2, @bigbuf_b)
+    debug("  writeSectorsRaw returned sectors_written = ", udec_(w2Count), " (expected 2)")
+    debug(" ")
+
+    if w2Count == 2
+        debug("RESULT: Single THEN multi BOTH succeeded.")
+        debug("        -> Only writes-after-the-first need re-routing.")
+        debug("        -> Driver can keep a per-mount-session 'first-done' flag and treat")
+        debug("           the first single-block write normally; re-route every subsequent")
+        debug("           write through multi-block CMD25 count>=2.")
+    elseif w2Count == 0
+        debug("RESULT: Single succeeded, multi WEDGED (sectors_written = 0).")
+        debug("        -> A prior single-block transaction primes the wedge such that")
+        debug("           even multi-block can't recover from it.")
+        debug("        -> Driver workaround must re-route EVERY write (including the first)")
+        debug("           through multi-block CMD25 count>=2.")
+    else
+        debug("RESULT: Multi returned partial count ", udec_(w2Count), ".")
+        debug("        -> Mid-multi-block failure; investigate which sub-block wedged.")
+    debug(" ")
+
+    sd.unmount()
+    flushAndEnd()
+
+PRI flushAndEnd()
+    debug(" ")
+    debug("=== END OF EXPERIMENT ===")
+    waitms(100)
+    debug("END_SESSION")

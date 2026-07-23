@@ -1,0 +1,117 @@
+{{ =================================================================================================
+   File....... SD_multiblock_high_lba_repro.spin2
+   Purpose.... Experiment 7.1 (asdfg counterfeit SDSC wedge investigation, 2026-05-27):
+               Confirm consecutive multi-block CMD25 count=2 works at HIGHER LBAs.
+
+               Background: experiment 7 (LBA 100,000) showed consecutive multi-block
+               calls with count=2 succeed - the only software pattern that gives us
+               cross-transaction immunity to the wedge. Experiment 5 showed the wedge
+               failure mode varies by LBA (drespTO at high LBA, busyTO at low/mid).
+               Need to confirm the multi-block immunity is LBA-uniform before
+               committing to a driver-wide workaround.
+
+               This test: same pattern as experiment 7 but at LBA 500,000 (much higher
+               than 100K baseline).
+
+               Run sequence (no power cycle between):
+                 1. Power-cycle Lerdisk in Edge socket
+                 2. Run SD_RT_mount_tests  (the wedge-primer)
+                 3. Run this diagnostic
+
+   Expected outcomes:
+     - Both multi-block calls succeed at LBA 500K:
+         -> Multi-block count=2 immunity is LBA-uniform.
+         -> Workaround can be applied without LBA-specific logic.
+     - Write CALL #2 fails:
+         -> Multi-block immunity has LBA-dependent gaps.
+         -> Workaround may need count > 2 in some LBA ranges, or LBA-specific routing.
+
+   Author..... Stephen M Moraco
+   Started.... 27 MAY 2026
+================================================================================================= }}
+
+CON
+    _CLKFREQ        = 350_000_000
+    DEBUG_BAUD      = 2_000_000
+
+    DEBUG_MASK      = (1 << 0) | (1 << 4) | (1 << 9)
+
+#ifdef SD_PINS_EXTERNAL
+    SD_CS   = 20
+    SD_MOSI = 19
+    SD_MISO = 18
+    SD_SCK  = 21
+#else
+    SD_CS   = 60
+    SD_MOSI = 59
+    SD_MISO = 58
+    SD_SCK  = 61
+#endif
+
+    SECTOR_SIZE = 512
+    LBA_BLOCK_A_START = 500_000
+    LBA_BLOCK_B_START = 500_002
+
+#pragma exportdef SD_INCLUDE_ALL
+
+OBJ
+    sd : "micro_sd_fat32_fs"
+
+DAT
+    bigbuf_a    BYTE    0[SECTOR_SIZE * 2]
+    bigbuf_b    BYTE    0[SECTOR_SIZE * 2]
+
+PUB go() | mountStatus, w1Count, w2Count, idx
+
+    debug(" ")
+    debug("=== Experiment 7.1: Consecutive multi-block at HIGH LBA (500K) ===")
+    debug(" ")
+
+    repeat idx from 0 to (SECTOR_SIZE * 2) - 1
+        bigbuf_a[idx] := $C0 | (idx & $0F)
+        bigbuf_b[idx] := $D0 | (idx & $0F)
+
+    mountStatus := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    debug("  mount() status = ", sdec_(mountStatus))
+    if mountStatus <> 0
+        debug("FATAL: mount failed")
+        flushAndEnd()
+        return
+
+    debug("  cardWarnings = $", uhex_(sd.cardWarnings()))
+    debug(" ")
+
+    debug("--- Write CALL #1: writeSectorsRaw(start=", udec_(LBA_BLOCK_A_START), ", count=2) ---")
+    w1Count := sd.writeSectorsRaw(LBA_BLOCK_A_START, 2, @bigbuf_a)
+    debug("  sectors_written = ", udec_(w1Count), " (expected 2)")
+    debug(" ")
+
+    if w1Count <> 2
+        debug("UNEXPECTED: write CALL #1 wrote ", udec_(w1Count), " of 2 sectors at LBA 500K.")
+        sd.unmount()
+        flushAndEnd()
+        return
+
+    debug("--- Write CALL #2: writeSectorsRaw(start=", udec_(LBA_BLOCK_B_START), ", count=2) ---")
+    w2Count := sd.writeSectorsRaw(LBA_BLOCK_B_START, 2, @bigbuf_b)
+    debug("  sectors_written = ", udec_(w2Count), " (expected 2)")
+    debug(" ")
+
+    if w2Count == 2
+        debug("RESULT: Both multi-block calls SUCCEEDED at LBA 500K.")
+        debug("        -> Multi-block count=2 immunity is LBA-uniform (or at least covers 100K and 500K).")
+        debug("        -> Workaround design can proceed without LBA-specific routing.")
+    else
+        debug("RESULT: Write CALL #2 returned ", udec_(w2Count), " of 2 sectors at LBA 500K.")
+        debug("        -> Multi-block immunity has LBA-dependent gaps.")
+        debug("        -> Workaround may need count > 2 in some LBA ranges.")
+    debug(" ")
+
+    sd.unmount()
+    flushAndEnd()
+
+PRI flushAndEnd()
+    debug(" ")
+    debug("=== END OF EXPERIMENT ===")
+    waitms(100)
+    debug("END_SESSION")

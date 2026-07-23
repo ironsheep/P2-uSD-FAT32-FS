@@ -1,0 +1,99 @@
+{{ =================================================================================================
+   File....... SD_tempcog_repro.spin2
+   Purpose.... Isolate the audit's readSectorRaw(0) -> -7 failure to the temp-cog context.
+               The audit runs initCardOnly + readSectorRaw on a cogspin'd temp cog and
+               fails; the same calls on Cog0 (SD_audit_repro) succeed. This tool runs the
+               identical sequence FIRST on Cog0, then on a cogspin'd temp cog, with no
+               fsck / fifo / large-VAR baggage -- so a difference points squarely at the
+               temp-cog hand-off, not at the fsck object.
+   Author..... Stephen M Moraco
+   Started.... 19 MAY 2026
+================================================================================================= }}
+
+CON
+    _CLKFREQ        = 320_000_000
+    DEBUG_BAUD      = 2_000_000
+
+    ' SD card pin assignments
+    ' Default: P2 Edge module SD slot. Build with -D SD_PINS_EXTERNAL
+    ' to use the external SD header (base pin 16).
+#ifdef SD_PINS_EXTERNAL
+    SD_CS   = 20
+    SD_MOSI = 19
+    SD_MISO = 18
+    SD_SCK  = 21
+#else
+    SD_CS   = 60
+    SD_MOSI = 59
+    SD_MISO = 58
+    SD_SCK  = 61
+#endif
+    NUM_READS       = 4
+    STACK_LONGS     = 256
+
+#pragma exportdef SD_INCLUDE_ALL
+
+OBJ
+    sd : "micro_sd_fat32_fs"
+
+DAT
+    buf         BYTE    0[512]
+    cogStack    LONG    0[STACK_LONGS]
+    phase       LONG    0                                                       ' 0=cog0 turn, 1=tempcog turn, 2=done
+
+PUB go() | cogNum
+
+    debug(" ")
+    debug("=== SD TEMP-COG REPRO (clkfreq 320 MHz) ===")
+    debug(" ")
+
+    ' ---- Phase A: Cog0 runs the sequence ----
+    debug("--- PHASE A: sequence on Cog0 (main) ---")
+    runSequence(@"Cog0")
+    sd.stop()                                                                   ' release worker + pins for clean restart
+
+    ' ---- Phase B: a cogspin'd temp cog runs the identical sequence ----
+    debug(" ")
+    debug("--- PHASE B: sequence on cogspin'd temp cog ---")
+    phase := 1
+    cogNum := cogspin(NEWCOG, tempCogEntry(), @cogStack)
+    debug("  launched temp cog id = ", sdec_(cogNum))
+    repeat until phase == 2                                                     ' wait for temp cog to finish
+
+    flushAndEnd()
+
+
+PRI tempCogEntry()
+' Entry point for the cogspin'd temp cog -- mirrors isp_fsck_utility.run().
+
+    runSequence(@"TempCog")
+    sd.stop()
+    phase := 2                                                                  ' signal main cog we are done
+
+
+PRI runSequence(pWho) | status, idx, sectors, hp
+
+    status := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    debug("  [", zstr_(pWho), "] initCardOnly status = ", sdec_(status))
+    if status < 0
+        debug("  [", zstr_(pWho), "] FATAL: init failed")
+        return
+
+    debug("  [", zstr_(pWho), "] cardWarnings = $", uhex_(sd.cardWarnings()))
+    sectors := sd.cardSizeSectors()
+    debug("  [", zstr_(pWho), "] cardSizeSectors = ", udec_(sectors))
+
+    repeat idx from 1 to NUM_READS
+        bytefill(@buf, $EE, 512)
+        status := sd.readSectorRaw(0, @buf)
+        hp := sd.debugGetCurrentHp()
+        debug("  [", zstr_(pWho), "] read ", udec_(idx), ": status=", sdec_(status), "  sig=", uhex_byte_(buf[510]), " ", uhex_byte_(buf[511]), "  recvCRC=$", uhex_word_(sd.getLastReceivedCRC()), "  lastCMD13=$", uhex_(sd.getLastCMD13()))
+        debug("  [", zstr_(pWho), "]   NCO: hp=", udec_(hp), "  xfrq=$", uhex_($4000_0000 / hp), "  ncoRemainder=", udec_($4000_0000 // hp), "  alignDelay=", udec_(sd.debugGetEffectiveAlignDelay()))
+
+
+PRI flushAndEnd()
+' Drain the headless terminal log backlog before END_SESSION triggers shutdown.
+
+    waitms(500)
+    debug(" ")
+    debug("END_SESSION")

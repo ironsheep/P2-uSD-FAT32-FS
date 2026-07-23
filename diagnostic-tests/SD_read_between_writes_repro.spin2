@@ -1,0 +1,154 @@
+{{ =================================================================================================
+   File....... SD_read_between_writes_repro.spin2
+   Purpose.... Experiment 7.3 (asdfg counterfeit SDSC wedge investigation, 2026-05-27):
+               Does an interleaved read clear the wedge state between two single-block writes?
+
+               Background: experiments through 7.2 showed:
+                 - Two single-block writes (CMD24) in a row wedge the card (baseline)
+                 - Single-then-multi (CMD24 then CMD25 count=2) ALSO wedges (7.2)
+                 - Multi-then-multi (both CMD25 count=2) WORKS (7, 7.1)
+
+               BUT mount_tests passes 31/31 using writeHandle, which uses single-block
+               writeSector internally - with reads interleaved at sector boundaries.
+               If a read between two writes clears the wedge state, the wedge mechanism
+               is more nuanced than "any single-block primes the wedge" and the driver
+               workaround could be a cheap "insert a read between adjacent writes"
+               instead of the expensive "every write becomes multi-block count=2".
+
+               This experiment:
+                 - writeSectorRaw(100_000, buf1)   [single, expected to succeed]
+                 - readSectorRaw(0, readbuf)        [the proposed neutralizer]
+                 - writeSectorRaw(100_001, buf2)   [single, would normally wedge]
+
+               Run sequence (no power cycle between):
+                 1. Power-cycle Lerdisk in Edge socket
+                 2. Run SD_RT_mount_tests  (the wedge-primer)
+                 3. Run this diagnostic
+
+   Expected outcomes:
+     - Write #2 succeeds after the interleaved read:
+         -> READS clear the wedge state.
+         -> mount_tests-mystery solved: writeHandle works because of interleaved reads.
+         -> Cheap workaround design: insert one readSectorRaw between consecutive
+            writeSectorRaw calls on CW_NO_DATA_CRC cards.
+     - Write #2 fails (same wedge as baseline):
+         -> Reads do NOT clear the wedge state.
+         -> mount_tests-mystery deepens (something else explains its success).
+         -> Workaround design: strict "every write must be multi-block".
+
+   Author..... Stephen M Moraco
+   Started.... 27 MAY 2026
+================================================================================================= }}
+
+CON
+    _CLKFREQ        = 350_000_000
+    DEBUG_BAUD      = 2_000_000
+
+    DEBUG_MASK      = (1 << 0) | (1 << 4) | (1 << 9)
+
+#ifdef SD_PINS_EXTERNAL
+    SD_CS   = 20
+    SD_MOSI = 19
+    SD_MISO = 18
+    SD_SCK  = 21
+#else
+    SD_CS   = 60
+    SD_MOSI = 59
+    SD_MISO = 58
+    SD_SCK  = 61
+#endif
+
+    SECTOR_SIZE = 512
+    LBA_WRITE_A = 100_000
+    LBA_WRITE_B = 100_001
+    LBA_READ    = 0                                                             ' MBR sector - safe to read
+
+#pragma exportdef SD_INCLUDE_ALL
+
+OBJ
+    sd : "micro_sd_fat32_fs"
+
+DAT
+    buf1        BYTE    0[SECTOR_SIZE]
+    buf2        BYTE    0[SECTOR_SIZE]
+    readbuf     BYTE    0[SECTOR_SIZE]
+
+PUB go() | mountStatus, w1Status, rdStatus, w2Status, idx, code, r1, dresp, sec, r1_ms, polls, op
+
+    debug(" ")
+    debug("=== Experiment 7.3: read between two single-block writes ===")
+    debug(" ")
+
+    repeat idx from 0 to SECTOR_SIZE - 1
+        buf1[idx]    := $33
+        buf2[idx]    := $44
+        readbuf[idx] := $00
+
+    mountStatus := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    debug("  mount() status = ", sdec_(mountStatus))
+    if mountStatus <> 0
+        debug("FATAL: mount failed")
+        flushAndEnd()
+        return
+
+    debug("  cardWarnings = $", uhex_(sd.cardWarnings()))
+    debug(" ")
+
+    ' ---------- WRITE #1 (single-block) ----------
+    debug("--- Write #1: writeSectorRaw(sector=", udec_(LBA_WRITE_A), ") [single CMD24] ---")
+    w1Status := sd.writeSectorRaw(LBA_WRITE_A, @buf1)
+    debug("  writeSectorRaw status = ", sdec_(w1Status))
+    code, r1, dresp, sec := sd.getWriteDiag()
+    debug("    writeDiag: code=", udec_(code), " R1=$", uhex_byte_(r1), " dresp=$", uhex_byte_(dresp), " sector=", udec_(sec))
+    debug(" ")
+
+    if w1Status < 0
+        debug("UNEXPECTED: single-block write #1 failed.")
+        sd.unmount()
+        flushAndEnd()
+        return
+
+    ' ---------- READ between writes (the proposed neutralizer) ----------
+    debug("--- Neutralizer: readSectorRaw(sector=", udec_(LBA_READ), ") ---")
+    rdStatus := sd.readSectorRaw(LBA_READ, @readbuf)
+    debug("  readSectorRaw status = ", sdec_(rdStatus))
+    if rdStatus < 0
+        debug("  WARN: neutralizing read failed; test continues but result is ambiguous.")
+    else
+        debug("  Read OK. First bytes of MBR: $", uhex_byte_(readbuf[0]), " $", uhex_byte_(readbuf[1]), " $", uhex_byte_(readbuf[2]), " $", uhex_byte_(readbuf[3]))
+    debug(" ")
+
+    ' ---------- WRITE #2 (single-block) - the test of the hypothesis ----------
+    debug("--- Write #2: writeSectorRaw(sector=", udec_(LBA_WRITE_B), ") [single CMD24, after interleaved read] ---")
+    w2Status := sd.writeSectorRaw(LBA_WRITE_B, @buf2)
+    debug("  writeSectorRaw status = ", sdec_(w2Status))
+    code, r1, dresp, sec := sd.getWriteDiag()
+    r1_ms, polls, op := sd.getCmdR1Diag()
+    debug("    writeDiag: code=", udec_(code), " R1=$", uhex_byte_(r1), " dresp=$", uhex_byte_(dresp), " sector=", udec_(sec))
+    debug("    cmdR1Diag: latency=", sdec_(r1_ms), " ms after ", udec_(polls), " polls (op=", udec_(op), ")")
+    debug(" ")
+
+    if w2Status == 0
+        debug("RESULT: Write #2 SUCCEEDED after the interleaved read!")
+        debug("        -> READS clear the wedge state.")
+        debug("        -> Cheap workaround possible: insert one readSectorRaw between")
+        debug("           consecutive writeSectorRaw calls on CW_NO_DATA_CRC cards.")
+        debug("        -> Bandwidth cost: 1 read per 2 writes (~33% overhead) vs the")
+        debug("           strict multi-block workaround's 2x cost.")
+        debug("        -> Solves the mount_tests-mystery: writeHandle's interleaved")
+        debug("           reads-at-sector-boundary are what keep it working.")
+    else
+        debug("RESULT: Write #2 FAILED (status=", sdec_(w2Status), " code=", udec_(code), ").")
+        debug("        -> Reads do NOT clear the wedge state.")
+        debug("        -> The mount_tests-mystery is something else (not interleaved reads).")
+        debug("        -> Workaround design defaults back to strict 'every write multi-block'.")
+    debug(" ")
+
+    sd.unmount()
+    flushAndEnd()
+
+PRI flushAndEnd()
+    debug(" ")
+    debug("=== END OF EXPERIMENT ===")
+    waitms(100)
+    debug("END_SESSION")

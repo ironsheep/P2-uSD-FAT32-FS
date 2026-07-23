@@ -1,0 +1,140 @@
+{{ =================================================================================================
+   File....... SD_lba_range_repro.spin2
+   Purpose.... Experiment 5 (asdfg counterfeit SDSC wedge investigation, 2026-05-26):
+               LBA range isolation.
+
+               Hypothesis: prior experiments have shown the wedge fires reproducibly
+               between write #1 and write #2 at LBA 100,000+. Variables already
+               eliminated as triggers: timing (50ms wait), command (CMD24 vs CMD25),
+               CRC content, post-write CMD13. The sector range (LBA) has never been
+               varied - all prior tests used LBA 100,000+.
+
+               This diagnostic does the same minimal repro (mount, two consecutive
+               single-block writes) but at LBA 1000 instead of 100,000.
+
+               Run sequence (no power cycle between):
+                 1. Power-cycle Lerdisk in Edge socket
+                 2. Run SD_RT_mount_tests  (the wedge-primer)
+                 3. Run this diagnostic
+
+   Expected outcomes:
+     - Wedge fires identically at LBA 1000:
+         -> sector range / FTL block-mapping is NOT the trigger
+         -> the mechanism is purely "second single-block write" regardless of LBA
+     - Wedge does NOT fire at LBA 1000:
+         -> sector range matters
+         -> the card's FTL has range-dependent state that the high-LBA writes hit
+
+   Sector choice notes:
+     LBA 1000 is below the typical FAT32 partition boundary (2048). On this test
+     card data loss is acceptable; we are observing wedge behavior, not preserving
+     content.
+
+   Author..... Stephen M Moraco
+   Started.... 26 MAY 2026
+================================================================================================= }}
+
+CON
+    _CLKFREQ        = 350_000_000
+    DEBUG_BAUD      = 2_000_000
+
+    ' Debug channel mask: INIT + SECTOR + RECOVER
+    DEBUG_MASK      = (1 << 0) | (1 << 4) | (1 << 9)
+
+    ' SD card pin assignments
+#ifdef SD_PINS_EXTERNAL
+    SD_CS   = 20
+    SD_MOSI = 19
+    SD_MISO = 18
+    SD_SCK  = 21
+#else
+    SD_CS   = 60
+    SD_MOSI = 59
+    SD_MISO = 58
+    SD_SCK  = 61
+#endif
+
+    SECTOR_SIZE = 512
+    LBA_TEST_A  = 1_000                                                         ' low LBA - pre-partition area on most FAT32 cards
+    LBA_TEST_B  = 1_001                                                         ' adjacent sector
+
+#pragma exportdef SD_INCLUDE_ALL
+
+OBJ
+    sd : "micro_sd_fat32_fs"
+
+DAT
+    buf1    BYTE    0[SECTOR_SIZE]
+    buf2    BYTE    0[SECTOR_SIZE]
+
+PUB go() | mountStatus, w1Status, w2Status, idx, code, r1, dresp, sec, r1_ms, polls, op
+
+    debug(" ")
+    debug("=== LBA range isolation (experiment 5): writes at LBA 1000 ===")
+    debug(" ")
+
+    ' Distinct fill patterns
+    repeat idx from 0 to SECTOR_SIZE - 1
+        buf1[idx] := $C1
+        buf2[idx] := $D2
+
+    mountStatus := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    debug("  mount() status = ", sdec_(mountStatus))
+    if mountStatus <> 0
+        debug("FATAL: mount failed; cannot run experiment")
+        flushAndEnd()
+        return
+
+    debug("  cardWarnings = $", uhex_(sd.cardWarnings()))
+    debug(" ")
+
+    ' ---------- WRITE #1 at LBA 1000 ----------
+    debug("--- Write #1 at sector ", udec_(LBA_TEST_A), " via writeSectorRaw (CMD24) ---")
+    w1Status := sd.writeSectorRaw(LBA_TEST_A, @buf1)
+    debug("  writeSectorRaw status = ", sdec_(w1Status))
+    code, r1, dresp, sec := sd.getWriteDiag()
+    r1_ms, polls, op := sd.getCmdR1Diag()
+    debug("    writeDiag: code=", udec_(code), " R1=$", uhex_byte_(r1), " dresp=$", uhex_byte_(dresp), " sector=", udec_(sec))
+    debug("    (codes: 1=CMD24fatalR1 2=drespTO 3=CRCrej 4=writeErr 5=unkRej 6=busyTO 7=success 8=R1neverArrived)")
+    debug("    cmdR1Diag: latency=", sdec_(r1_ms), " ms after ", udec_(polls), " polls (op=", udec_(op), ")")
+    debug(" ")
+
+    if w1Status < 0
+        debug("UNEXPECTED: write #1 at LBA ", udec_(LBA_TEST_A), " failed - wedge fired on FIRST write.")
+        debug("            Possible: card is even more aggressive about range OR the primer state was different.")
+        sd.unmount()
+        flushAndEnd()
+        return
+
+    ' ---------- WRITE #2 at LBA 1001 ----------
+    debug("--- Write #2 at sector ", udec_(LBA_TEST_B), " via writeSectorRaw (CMD24) ---")
+    w2Status := sd.writeSectorRaw(LBA_TEST_B, @buf2)
+    debug("  writeSectorRaw status = ", sdec_(w2Status))
+    code, r1, dresp, sec := sd.getWriteDiag()
+    r1_ms, polls, op := sd.getCmdR1Diag()
+    debug("    writeDiag: code=", udec_(code), " R1=$", uhex_byte_(r1), " dresp=$", uhex_byte_(dresp), " sector=", udec_(sec))
+    debug("    (codes: 1=CMD24fatalR1 2=drespTO 3=CRCrej 4=writeErr 5=unkRej 6=busyTO 7=success 8=R1neverArrived)")
+    debug("    cmdR1Diag: latency=", sdec_(r1_ms), " ms after ", udec_(polls), " polls (op=", udec_(op), ")")
+    debug(" ")
+
+    if w2Status == 0
+        debug("RESULT: Write #2 at LBA ", udec_(LBA_TEST_B), " SUCCEEDED.")
+        debug("        -> WEDGE DOES NOT FIRE at low LBAs.")
+        debug("        -> Sector range / FTL block-mapping is implicated as the wedge trigger.")
+        debug("        -> Compare to known wedge behavior at LBA 100_000+.")
+    else
+        debug("RESULT: Write #2 at LBA ", udec_(LBA_TEST_B), " FAILED (status = ", sdec_(w2Status), ").")
+        debug("        -> Wedge fires identically at low LBA.")
+        debug("        -> Sector range is NOT the wedge trigger.")
+        debug("        -> Mechanism is in the act of issuing a second single-block write, regardless of address.")
+    debug(" ")
+
+    sd.unmount()
+
+    flushAndEnd()
+
+PRI flushAndEnd()
+    debug(" ")
+    debug("=== END OF EXPERIMENT ===")
+    waitms(100)
+    debug("END_SESSION")

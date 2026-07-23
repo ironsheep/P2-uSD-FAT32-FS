@@ -1,0 +1,76 @@
+{{ =================================================================================================
+   File....... SD_audit_repro.spin2
+   Purpose.... Root-cause the audit's readSectorRaw(0) -> -7 failure. Reproduces the
+               audit's environment piece by piece on Cog0:
+                 - clkfreq 320 MHz (the audit uses 320; SD_dump_mbr_vbr uses 350 and works)
+                 - initCardOnly + cardSizeSectors() + repeated readSectorRaw(0)
+               Reports per-read status plus card warning flags and read diagnostics so
+               we can see whether the failure is clkfreq-related and whether it is
+               consistent or intermittent.
+   Author..... Stephen M Moraco
+   Started.... 18 MAY 2026
+================================================================================================= }}
+
+CON
+    _CLKFREQ        = 320_000_000                                               ' MATCH the audit (SD_FAT32_audit uses 320)
+    DEBUG_BAUD      = 2_000_000
+
+    ' SD card pin assignments
+    ' Default: P2 Edge module SD slot. Build with -D SD_PINS_EXTERNAL
+    ' to use the external SD header (base pin 16).
+#ifdef SD_PINS_EXTERNAL
+    SD_CS   = 20
+    SD_MOSI = 19
+    SD_MISO = 18
+    SD_SCK  = 21
+#else
+    SD_CS   = 60
+    SD_MOSI = 59
+    SD_MISO = 58
+    SD_SCK  = 61
+#endif
+    NUM_READS       = 6
+
+#pragma exportdef SD_INCLUDE_ALL
+
+OBJ
+    sd : "micro_sd_fat32_fs"
+
+DAT
+    buf     BYTE    0[512]
+
+PUB go() | status, idx, sectors, dSec, dBt, dTok, dB0, dB1, dB2, dB3, dPbuf
+
+    debug(" ")
+    debug("=== SD AUDIT REPRO (Cog0, clkfreq 320 MHz) ===")
+    debug(" ")
+
+    status := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    debug("  initCardOnly status = ", sdec_(status))
+    if status < 0
+        debug("FATAL: initCardOnly failed")
+        flushAndEnd()
+        return
+
+    debug("  cardWarnings = $", uhex_(sd.cardWarnings()), "  ($01=CMD13_UNRELIABLE $04=NO_DATA_CRC)")
+
+    sectors := sd.cardSizeSectors()                                             ' the audit calls this between init and read
+    debug("  cardSizeSectors = ", udec_(sectors), "  (", udec_(sectors / 2048), " MB)")
+    debug(" ")
+
+    repeat idx from 1 to NUM_READS
+        bytefill(@buf, $EE, 512)
+        status := sd.readSectorRaw(0, @buf)
+        sd.debugGetReadSectorDiag(@dSec, @dBt, @dTok, @dB0, @dB1, @dB2, @dB3, @dPbuf)
+        debug("  read ", udec_(idx), "/", udec_(NUM_READS), ": status=", sdec_(status), "  token=$", uhex_byte_(dTok), "  buf[0..3]=", uhex_byte_(buf[0]), " ", uhex_byte_(buf[1]), " ", uhex_byte_(buf[2]), " ", uhex_byte_(buf[3]), "  sig=", uhex_byte_(buf[510]), " ", uhex_byte_(buf[511]))
+        debug("            recvCRC=$", uhex_word_(sd.getLastReceivedCRC()), "  calcCRC=$", uhex_word_(sd.getLastCalculatedCRC()), "  lastCMD13(R2)=$", uhex_(sd.getLastCMD13()))
+
+    flushAndEnd()
+
+
+PRI flushAndEnd()
+' Drain the headless terminal log backlog before END_SESSION triggers shutdown.
+
+    waitms(500)
+    debug(" ")
+    debug("END_SESSION")

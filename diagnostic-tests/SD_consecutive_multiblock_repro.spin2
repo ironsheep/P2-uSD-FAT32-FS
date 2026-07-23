@@ -1,0 +1,143 @@
+{{ =================================================================================================
+   File....... SD_consecutive_multiblock_repro.spin2
+   Purpose.... Experiment 7 (asdfg counterfeit SDSC wedge investigation, 2026-05-27):
+               Consecutive multi-block writeSectorsRaw(count=2) calls.
+
+               Background: experiments 1-6.3 (this session) eliminated every driver-side
+               structural variable as a wedge trigger. The wedge fires on the second
+               single-block raw write regardless of timing, command, CRC, CMD13, LBA,
+               or CS toggling. The card's flash commit pipeline is in some state after
+               a successful single-block write that makes the next one fail.
+
+               BUT — per card-catalog memory, multi-block CMD25 with count > 1 passes
+               on these cards in benchmarks. Benchmarks issue ONE big multi-block call.
+               The unanswered question: does the multi-block protocol genuinely create
+               immunity to the wedge, or does it just work in benchmarks because the
+               benchmark bundles everything into a single transaction?
+
+               This test answers that. Two CONSECUTIVE multi-block writeSectorsRaw
+               calls, each with count=2. If both succeed, we have a workaround path:
+               driver could route asdfg-class single-block writes through internal
+               multi-block calls (with a pad sector) to avoid the wedge entirely.
+
+               Run sequence (no power cycle between):
+                 1. Power-cycle Lerdisk in Edge socket
+                 2. Run SD_RT_mount_tests  (the wedge-primer)
+                 3. Run this diagnostic
+
+   Expected outcomes:
+     - Both multi-block calls succeed:
+         -> Real workaround path. Multi-block protocol DOES protect against the
+            second-call wedge. Driver can route writeSectorRaw through internal
+            writeSectorsRaw(count >= 2) for asdfg-class cards.
+     - First call succeeds, second fails (sectors_written = 0):
+         -> Multi-block "passes" only because benchmarks bundle everything.
+         -> Wedge is fundamental: every "new write transaction" after the first
+            wedges, regardless of single-block or multi-block protocol.
+         -> No software workaround exists; this becomes a documented card-class
+            limitation.
+
+   Author..... Stephen M Moraco
+   Started.... 27 MAY 2026
+================================================================================================= }}
+
+CON
+    _CLKFREQ        = 350_000_000
+    DEBUG_BAUD      = 2_000_000
+
+    DEBUG_MASK      = (1 << 0) | (1 << 4) | (1 << 9)
+
+#ifdef SD_PINS_EXTERNAL
+    SD_CS   = 20
+    SD_MOSI = 19
+    SD_MISO = 18
+    SD_SCK  = 21
+#else
+    SD_CS   = 60
+    SD_MOSI = 59
+    SD_MISO = 58
+    SD_SCK  = 61
+#endif
+
+    SECTOR_SIZE = 512
+    LBA_BLOCK_A_START = 100_000                                                 ' First multi-block call: sectors 100_000-100_001
+    LBA_BLOCK_B_START = 100_002                                                 ' Second multi-block call: sectors 100_002-100_003
+
+#pragma exportdef SD_INCLUDE_ALL
+
+OBJ
+    sd : "micro_sd_fat32_fs"
+
+DAT
+    bigbuf_a    BYTE    0[SECTOR_SIZE * 2]                                      ' 2 sectors = 1024 bytes
+    bigbuf_b    BYTE    0[SECTOR_SIZE * 2]                                      ' 2 sectors = 1024 bytes
+
+PUB go() | mountStatus, w1Count, w2Count, idx
+
+    debug(" ")
+    debug("=== Consecutive multi-block writeSectorsRaw(count=2) (experiment 7) ===")
+    debug(" ")
+
+    ' Distinct fill patterns
+    repeat idx from 0 to (SECTOR_SIZE * 2) - 1
+        bigbuf_a[idx] := $A0 | (idx & $0F)
+        bigbuf_b[idx] := $B0 | (idx & $0F)
+
+    mountStatus := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    debug("  mount() status = ", sdec_(mountStatus))
+    if mountStatus <> 0
+        debug("FATAL: mount failed; cannot run experiment")
+        flushAndEnd()
+        return
+
+    debug("  cardWarnings = $", uhex_(sd.cardWarnings()))
+    debug(" ")
+
+    ' ---------- WRITE CALL #1: multi-block CMD25 with count=2, sectors 100_000-100_001 ----------
+    debug("--- Write CALL #1: writeSectorsRaw(start=", udec_(LBA_BLOCK_A_START), ", count=2) [CMD25 multi-block] ---")
+    w1Count := sd.writeSectorsRaw(LBA_BLOCK_A_START, 2, @bigbuf_a)
+    debug("  writeSectorsRaw returned sectors_written = ", udec_(w1Count), " (expected 2)")
+    debug(" ")
+
+    if w1Count <> 2
+        debug("UNEXPECTED: write CALL #1 wrote ", udec_(w1Count), " of 2 sectors.")
+        debug("            The wedge fired on the very first multi-block call.")
+        debug("            This contradicts the catalog memory ('CMD25 multi-block passes')")
+        debug("            and means even multi-block is broken on this card.")
+        sd.unmount()
+        flushAndEnd()
+        return
+
+    ' ---------- WRITE CALL #2: multi-block CMD25 with count=2, sectors 100_002-100_003 ----------
+    debug("--- Write CALL #2: writeSectorsRaw(start=", udec_(LBA_BLOCK_B_START), ", count=2) [CMD25 multi-block] ---")
+    w2Count := sd.writeSectorsRaw(LBA_BLOCK_B_START, 2, @bigbuf_b)
+    debug("  writeSectorsRaw returned sectors_written = ", udec_(w2Count), " (expected 2)")
+    debug(" ")
+
+    if w2Count == 2
+        debug("RESULT: Both multi-block calls SUCCEEDED.")
+        debug("        -> Multi-block CMD25 protocol DOES protect against the second-call wedge.")
+        debug("        -> Workaround path exists: route asdfg-class single-block writes through")
+        debug("           internal writeSectorsRaw(count >= 2) with a synthetic pad sector.")
+        debug("        -> Cost: 2x bandwidth per logical sector. Benefit: card actually works.")
+    elseif w2Count == 0
+        debug("RESULT: Write CALL #2 FAILED (sectors_written = 0).")
+        debug("        -> The wedge ALSO fires between consecutive multi-block calls.")
+        debug("        -> The benchmark 'CMD25 multi-block passes' only worked because")
+        debug("           benchmarks bundle everything into a single transaction.")
+        debug("        -> No software workaround exists on this silicon.")
+        debug("        -> Document as card-class limitation; close the wedge investigation.")
+    else
+        debug("RESULT: Write CALL #2 returned partial count ", udec_(w2Count), ".")
+        debug("        -> Wedge fired mid-way through the second multi-block call.")
+        debug("        -> Tells us about WHERE within a multi-block the wedge fires.")
+    debug(" ")
+
+    sd.unmount()
+    flushAndEnd()
+
+PRI flushAndEnd()
+    debug(" ")
+    debug("=== END OF EXPERIMENT ===")
+    waitms(100)
+    debug("END_SESSION")
