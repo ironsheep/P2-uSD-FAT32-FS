@@ -33,6 +33,12 @@ CON
 
     _CLKFREQ        = 350_000_000
 
+    ' Enable INIT + SECTOR + RECOVER debug channels for this diagnostic run.
+    ' Bits per driver: CH_INIT=0, CH_SECTOR=4, CH_RECOVER=9.
+    ' (Three channels combined; well under the 255-record limit.)
+    DEBUG_MASK      = (1 << 0) | (1 << 4) | (1 << 9)
+    DEBUG_BAUD      = 2_000_000
+
     ' SD card pin assignments
     ' Default: P2 Edge module SD slot. Build with -D SD_PINS_EXTERNAL
     ' to use the external SD header (base pin 16).
