@@ -661,8 +661,16 @@ PUB go() | result, hndl1, hndl2, bytesWritten, pLabel, idx, pEntry, wrtDate, wrt
     debug(" ")
     debug("END_SESSION")
 
-PRI cleanupTestFiles()
-' Delete all test files
+PRI cleanupTestFiles() | idx
+' Delete every fixture this suite owns.
+'
+' Called both BEFORE the body and as teardown, so it must cover the disk-full
+' group's DF00..DF29 / DFTEST.BIN / DFVERFY.BIN and the auto-flush group's
+' VLFLUSH.TXT as well -- those are only removed inline today, so an abort partway
+' through leaves them behind and the next run starts with less free space than it
+' thinks. deleteFile() on a missing item just returns an error we ignore.
+'
+' @local idx - Disk-full file number 0..29 for the generated DFnn.BIN names
 
     sd.deleteFile(@vlTestFile1)
     sd.deleteFile(@vlTestFile2)
@@ -671,7 +679,16 @@ PRI cleanupTestFiles()
     sd.deleteFile(@vlDateFile)
     sd.deleteFile(@vlDateFile2)
     sd.deleteFile(@vlLegacyFile)
+    sd.deleteFile(@vlFlushFile)
     sd.deleteFile(@vlDateDir)
+
+    ' Disk-full simulation fixtures
+    repeat idx from 0 to 29
+        dfNameBuf[2] := $30 + idx / 10
+        dfNameBuf[3] := $30 + idx // 10
+        sd.deleteFile(@dfNameBuf)
+    sd.deleteFile(@dfTestFile)
+    sd.deleteFile(@dfVerifyFile)
 
 PRI strncmp(p1, p2, maxLen) : match | idx
 ' Compare first maxLen bytes of two strings

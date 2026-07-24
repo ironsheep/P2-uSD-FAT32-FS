@@ -104,10 +104,11 @@ PUB go() | result, handle, h1, h2, h3, fileSize, bytesWritten, bytesRead, root_s
     debug("   Sec/FAT: ", udec_(sd.debugGetSecPerFat()))
     debug("   Root sec: ", udec_(sd.debugGetRootSec()))
 
-    ' WORKAROUND: Clear corrupted root directory if detected
-    debug("  CLEARING ROOT DIRECTORY...")
-    result := sd.debugClearRootDir()
-    debug("  Clear result: ", sdec_(result))
+    ' NOTE: this suite must NOT call debugClearRootDir(). That helper zeroes only
+    ' the first root sector and frees NO FAT clusters, so every entry it erases
+    ' leaks its cluster chain permanently -- and it destroys whatever another
+    ' suite left in root, making this suite order-dependent. This suite creates
+    ' and deletes its own fixtures below, which is all it needs.
 
     ' EARLY DIAGNOSTIC: Test multiple sectors to find pattern
     debug("  EARLY-DIAG: Testing sector reads...")

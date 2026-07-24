@@ -69,6 +69,7 @@ emptyFile      BYTE    "EMPTY.TXT", 0
 renamedEmpty   BYTE    "RENAMED.TXT", 0
 dotPath        BYTE    ".", 0
 dotdotPath     BYTE    "..", 0
+rootPath       BYTE    "/", 0
 testContent1   BYTE    "Hello from subdir", 0
 
 PUB go() | result, handle, dh, count, pEntry
@@ -92,10 +93,12 @@ PUB go() | result, handle, dh, count, pEntry
     debug("* SD Card Information:")
     debug("   Volume Label: ", zstr_(sd.volumeLabel()))
 
-    ' Clear root directory for clean slate
-    debug("  CLEARING ROOT DIRECTORY...")
-    result := sd.debugClearRootDir()
-    debug("  Clear result: ", sdec_(result))
+    ' NOTE: do NOT call debugClearRootDir() for a "clean slate". It zeroes only
+    ' the first root sector and frees NO FAT clusters, so every entry it erases
+    ' leaks its cluster chain permanently -- and it destroys other suites'
+    ' fixtures, making this suite order-dependent. Each test below deletes the
+    ' fixtures it owns, both before use and in the teardown.
+    cleanupTestItems()
 
     ' ══════════════════════════════════════════════════════════════════════
     ' TEST GROUP: Empty file operations in root directory
@@ -388,13 +391,7 @@ PUB go() | result, handle, dh, count, pEntry
     debug(" ")
     debug("* Cleaning up test files...")
 
-    ' Delete remaining files in subdirectory
-    sd.deleteFile(@testfile3)
-    sd.deleteFile(@renamedEmpty)
-
-    ' cd back to root and remove test directory
-    sd.changeDirectory(@dotdotPath)
-    sd.deleteFile(@testdir)                                                        ' rmdir
+    cleanupTestItems()
 
     ' Unmount
     sd.unmount()
@@ -405,3 +402,28 @@ PUB go() | result, handle, dh, count, pEntry
     debug(" ")
     debug("* Subdirectory Ops Tests Complete")
     debug("END_SESSION")
+
+PRI cleanupTestItems()
+' Remove every fixture this suite owns, in root and in the test subdirectory.
+' Safe to call before the body (residue from an aborted run) and as teardown --
+' deleteFile() on a missing item just returns an error we ignore. The subdir must
+' be emptied before it can be removed, so order matters here.
+
+    sd.changeDirectory(@rootPath)
+
+    ' Empty the test subdirectory (if it survived a previous run), then remove it
+    if sd.changeDirectory(@testdir) == sd.SUCCESS
+        sd.deleteFile(@testfile1)
+        sd.deleteFile(@testfile2)
+        sd.deleteFile(@testfile3)
+        sd.deleteFile(@emptyFile)
+        sd.deleteFile(@renamedEmpty)
+        sd.changeDirectory(@rootPath)
+    sd.deleteFile(@testdir)                                                        ' rmdir
+
+    ' Root-level fixtures
+    sd.deleteFile(@testfile1)
+    sd.deleteFile(@testfile2)
+    sd.deleteFile(@testfile3)
+    sd.deleteFile(@emptyFile)
+    sd.deleteFile(@renamedEmpty)

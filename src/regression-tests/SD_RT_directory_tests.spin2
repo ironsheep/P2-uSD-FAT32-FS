@@ -28,6 +28,13 @@ CON
      SD_MISO = 58
      SD_SCK  = 61
 #endif
+
+     ' Peak on-card footprint: the stale-cluster group writes a 32 KB polluter
+     ' file (64 x 512) to occupy and then free a cluster, on top of the 20-file
+     ' and 5-level-deep directory groups.
+     STALE_POLLUTER_BYTES = 64 * 512
+     PEAK_BYTES           = STALE_POLLUTER_BYTES + 32 * 1024
+
 ' Uncomment SD_INCLUDE_STACK_CHECK to measure worker cog stack depth
 #ifdef __SPINTOOLS__
 #elseifdef __FLEXSPIN__
@@ -77,7 +84,7 @@ staleBuf        BYTE    0[512]
 staleBuf_guard  BYTE    0[16]
 staleGenName    BYTE    0[16]
 
-PUB go() | result, pEntry, pFilename, attrs, fileCount, idx, handle, bytesRead
+PUB go() | result, pEntry, pFilename, attrs, fileCount, idx, handle, bytesRead, secPerClus, cBytes, freeSec, freeClus, needClus
 '' Main entry point for directory regression tests
 ''
 '' Tests directory creation, navigation, listing, and nested directories
@@ -102,6 +109,28 @@ PUB go() | result, pEntry, pFilename, attrs, fileCount, idx, handle, bytesRead
 
     ' Clean up any existing test directories/files
     cleanupTestItems()
+
+    ' ------------------------------------------------------------------
+    ' Precondition gate -- geometry + free space.  Local-first idiom: resolve
+    ' each driver query into its own local BEFORE combining, so two worker-routed
+    ' calls are never chained in one Spin2 expression.
+    ' ------------------------------------------------------------------
+    secPerClus := sd.sectorsPerCluster()
+    cBytes     := sd.clusterBytes()
+    freeSec    := sd.freeSpace()
+    freeClus   := 0
+    if secPerClus > 0
+        freeClus := freeSec / secPerClus
+    needClus := utils.clustersForBytes(PEAK_BYTES, cBytes) + 8                  ' + margin for the directory clusters themselves
+
+    debug("* Geometry: ", udec(secPerClus), " sec/clus, ", udec(cBytes), " bytes/clus, ", udec(freeClus), " free clusters")
+
+    if cBytes == 0 or not utils.assertFreeSpace(freeClus, needClus)
+        debug("  *** SETUP NOT MET: need ", udec_(needClus), " free clusters, have ", udec_(freeClus), " (cBytes=", udec_(cBytes), ") -- directory tests NOT run ***")
+        sd.unmount()
+        utils.ShowTestEndCounts()
+        debug("END_SESSION")
+        return
 
     ' ----------------------------------
     ' TEST GROUP: Directory creation
@@ -563,19 +592,26 @@ PRI buildStaleFileName(fileNum) | d10, d1
   BYTE[@staleGenName + 9] := 0
 
 
-PRI cleanupTestItems()
-' Delete test files and directories
+PRI cleanupTestItems() | idx
+' Delete every fixture this suite owns, files before directories and nested
+' items first (a directory can only be removed once it is empty).
 '
-' Note: Must delete files before directories, and nested items first
+' Called both BEFORE the body and as teardown, so it must cover every item any
+' test group creates -- including the deep-nesting, many-files and stale-cluster
+' groups whose own inline cleanup never runs if the suite aborts partway. Residue
+' from an aborted run would otherwise fail the very first newDirectory() test
+' with E_FILE_EXISTS.
+'
+' @local idx - File number 1..20 for the generated FILEnn.TXT / STRnn.TXT names
 
-    ' Clean nested items
+    ' Clean nested items under testDir1
     sd.changeDirectory(@"/")
     sd.changeDirectory(@testDir1)
     sd.changeDirectory(@subDir1)
     sd.deleteFile(@testFile2)
     sd.changeDirectory(@"..")
     sd.deleteFile(@testFile1)
-    sd.deleteFile(@subDir1)  ' Try to delete as file (won't work for dir, but harmless)
+    sd.deleteFile(@subDir1)
     sd.changeDirectory(@"/")
 
     ' Clean testDir2 contents
@@ -583,8 +619,44 @@ PRI cleanupTestItems()
     sd.deleteFile(@"MOVEME.TXT")
     sd.changeDirectory(@"/")
 
-    ' Delete root-level test items
-    sd.deleteFile(@testDir1)  ' Try (won't work if has contents)
+    ' Clean the many-files directory (20 generated files + max-name file)
+    sd.changeDirectory(@manyFilesDir)
+    repeat idx from 1 to 20
+        buildFileName(idx)
+        sd.deleteFile(@genFileName)
+    sd.deleteFile(@maxNameFile)
+    sd.changeDirectory(@"/")
+
+    ' Clean the stale-cluster directory (20 generated files) and its polluter
+    sd.changeDirectory(@staleDir)
+    repeat idx from 1 to 20
+        buildStaleFileName(idx)
+        sd.deleteFile(@staleGenName)
+    sd.changeDirectory(@"/")
+    sd.deleteFile(@stalePolluter)
+
+    ' Unwind the 5-level deep nesting, deepest first
+    sd.changeDirectory(@deepDir1)
+    sd.changeDirectory(@deepDir2)
+    sd.changeDirectory(@deepDir3)
+    sd.changeDirectory(@deepDir4)
+    sd.changeDirectory(@deepDir5)
+    sd.deleteFile(@"DEEP.TXT")
+    sd.changeDirectory(@"..")
+    sd.deleteFile(@deepDir5)
+    sd.changeDirectory(@"..")
+    sd.deleteFile(@deepDir4)
+    sd.changeDirectory(@"..")
+    sd.deleteFile(@deepDir3)
+    sd.changeDirectory(@"..")
+    sd.deleteFile(@deepDir2)
+    sd.changeDirectory(@"/")
+
+    ' Delete root-level test directories (now empty)
+    sd.deleteFile(@deepDir1)
+    sd.deleteFile(@manyFilesDir)
+    sd.deleteFile(@staleDir)
+    sd.deleteFile(@testDir1)
     sd.deleteFile(@testDir2)
 
 con { license }

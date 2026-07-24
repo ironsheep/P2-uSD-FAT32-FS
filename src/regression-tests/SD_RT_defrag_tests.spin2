@@ -34,6 +34,12 @@ CON
      PATTERN_BYTE    = $A5           ' Known byte pattern for integrity checks
      GUARD_SIZE      = 16
 
+     ' Peak on-card footprint, in units of one 64 KB fill (FILL_WRITES x
+     ' WRITE_SIZE): 3 of them alive at once -- DEFRAG_A, SPACER, and the 64 KB
+     ' appended to DEFRAG_A -- plus 2 more for the contiguous copy compactFile()
+     ' builds of the 128 KB result before releasing the fragmented original.
+     PEAK_BYTES      = 5 * FILL_WRITES * WRITE_SIZE
+
 ' Enable defrag and debug features
 #ifdef __SPINTOOLS__
 #define SD_INCLUDE_DEFRAG
@@ -72,7 +78,7 @@ readBuffer      BYTE    0[WRITE_SIZE]
 readBuffer_guard BYTE   0[GUARD_SIZE]
 
 
-PUB go() | result, handle, h2, frags, bytesWritten, bytesRead, idx
+PUB go() | result, handle, h2, frags, bytesWritten, bytesRead, idx, secPerClus, cBytes, freeSec, freeClus, needClus
 '' Main entry point for defragmentation regression tests
 
     debug(" ")
@@ -97,6 +103,30 @@ PUB go() | result, handle, h2, frags, bytesWritten, bytesRead, idx
 
     ' Clean up any leftover test files from previous runs
     cleanupAllFiles()
+
+    ' ------------------------------------------------------------------
+    ' Precondition gate -- geometry + free space.  Local-first idiom: resolve
+    ' each driver query into its own local BEFORE combining, so two worker-routed
+    ' calls are never chained in one Spin2 expression.  Without this gate a card
+    ' short on space silently short-writes the fragmentation builds and the
+    ' fragment-count assertions fail for the wrong reason.
+    ' ------------------------------------------------------------------
+    secPerClus := sd.sectorsPerCluster()
+    cBytes     := sd.clusterBytes()
+    freeSec    := sd.freeSpace()
+    freeClus   := 0
+    if secPerClus > 0
+        freeClus := freeSec / secPerClus
+    needClus := utils.clustersForBytes(PEAK_BYTES, cBytes) + 1
+
+    debug("* Geometry: ", udec(secPerClus), " sec/clus, ", udec(cBytes), " bytes/clus, ", udec(freeClus), " free clusters")
+
+    if cBytes == 0 or not utils.assertFreeSpace(freeClus, needClus)
+        debug("  *** SETUP NOT MET: need ", udec_(needClus), " free clusters, have ", udec_(freeClus), " (cBytes=", udec_(cBytes), ") -- defrag tests NOT run ***")
+        sd.unmount()
+        utils.ShowTestEndCounts()
+        debug("END_SESSION")
+        return
 
     ' =========================================================================
     ' TEST GROUP 1: Fragment Query API

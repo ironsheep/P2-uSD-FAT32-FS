@@ -1,0 +1,256 @@
+'' =================================================================================================
+''
+''   File....... SD_RT_fatchain_tests.spin2
+''   Purpose.... Regression tests for the write-path FAT-chain corruption fixes (v1.5.4).
+''               Group A proves a cross-boundary in-place overwrite FOLLOWS the FAT chain
+''               (does not truncate it, orphaning the tail).  Group B proves a mid-sector
+''               append preserves the existing leading bytes (does not zero-fill them).
+''               This suite is designed to FAIL on the pre-fix driver and PASS after the fix.
+''   Author..... Stephen M Moraco
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... JUL 2026
+''
+'' =================================================================================================
+''
+'' Why the tests are shaped this way (do NOT "simplify" them):
+''   Group A - a FULL overwrite does not expose the bug (the reader follows the rewritten-but-
+''     consistent chain and sees all the new data).  The test builds a 3-cluster file and
+''     overwrites only the FIRST TWO clusters in place, then proves the untouched 3rd cluster
+''     (the tail) survives.  On the buggy driver the boundary-advance re-links the current cluster
+''     to a freshly allocated one, orphaning the tail -> the whole-file readback short-reads at a
+''     premature end-of-chain.
+''   Group B - an append that starts mid-sector (position == size) must LOAD the tail sector so the
+''     existing leading bytes are preserved.  The buggy driver chooses zero-fill by file position
+''     and wipes the leading bytes.
+''
+'' Sizes are derived from clusterBytes() at run time, so the suite is cluster-geometry-agnostic.
+''
+'' =================================================================================================
+
+CON
+
+     _CLKFREQ        = 350_000_000
+
+     ' SD card pin assignments
+     ' Default: P2 Edge module SD slot. Build with -D SD_PINS_EXTERNAL
+     ' to use the external SD header (base pin 16).
+#ifdef SD_PINS_EXTERNAL
+     SD_CS   = 20
+     SD_MOSI = 19
+     SD_MISO = 18
+     SD_SCK  = 21
+#else
+     SD_CS   = 60
+     SD_MOSI = 59
+     SD_MISO = 58
+     SD_SCK  = 61
+#endif
+
+     ' Per-cluster fill values -- distinct so a mis-linked/orphaned cluster is detectable.
+     A_ORIG_C0 = $A1                                    ' cluster 0 original
+     A_ORIG_C1 = $B2                                    ' cluster 1 original
+     A_ORIG_C2 = $C3                                    ' cluster 2 original (the TAIL under test)
+     A_NEW_C0  = $D4                                    ' cluster 0 overwrite
+     A_NEW_C1  = $E5                                    ' cluster 1 overwrite
+
+     B_LEAD    = $5A                                    ' Group B leading 100 bytes
+     B_APPEND  = $A5                                    ' Group B appended 50 bytes
+
+' Raw sector access enables geometry helpers used by the precondition gate.
+#ifdef __SPINTOOLS__
+#define SD_INCLUDE_RAW
+#elseifdef __FLEXSPIN__
+#define SD_INCLUDE_RAW
+#pragma exportdef SD_INCLUDE_RAW
+#else
+#pragma exportdef SD_INCLUDE_RAW
+#endif
+
+OBJ
+    sd    : "micro_sd_fat32_fs"
+    utils : "isp_rt_utilities"
+
+DAT
+
+' Test filenames
+fcFileA         BYTE    "FCHAINA.BIN", 0                ' Group A: 3-cluster chain file
+fcFileB         BYTE    "FCHAINB.BIN", 0                ' Group B: mid-sector append file
+
+' Buffers (one sector each is sufficient; we loop sector-by-sector)
+wBuf            BYTE    0[sd.SECTOR_SIZE]
+rBuf            BYTE    0[sd.SECTOR_SIZE]
+
+PUB go() | result, handle, secPerClus, cBytes, freeSec, freeClus, needClus, totalSec, secIdx, clusIdx, bytesRW, bytesTotal, expectVal, fullReadOk, headOk, tailOk, leadingOk, appendOk
+
+    debug(" ")
+    debug("==============================================")
+    debug("  SD Card Driver - FAT-Chain Write-Path Tests")
+    debug("  (Bug A: cross-boundary overwrite / Bug B: mid-sector append)")
+    debug("==============================================")
+
+    ' Mount the card first
+    result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    if result < 0
+        debug("ERROR: Could not mount SD card!")
+        debug("END_SESSION")
+        return
+
+    ' ------------------------------------------------------------------
+    ' Precondition gate -- geometry + free space.  Local-first idiom:
+    ' resolve each driver query into its own local BEFORE combining, so
+    ' two worker-routed calls are never chained in one Spin2 expression.
+    ' ------------------------------------------------------------------
+    secPerClus := sd.sectorsPerCluster()
+    cBytes     := sd.clusterBytes()
+    freeSec    := sd.freeSpace()
+    freeClus   := 0
+    if secPerClus > 0
+        freeClus := freeSec / secPerClus
+    needClus := utils.clustersForBytes(3 * cBytes, cBytes) + 1
+
+    debug("* Geometry: ", udec(secPerClus), " sec/clus, ", udec(cBytes), " bytes/clus, ", udec(freeClus), " free clusters")
+
+    if cBytes == 0 or not utils.assertFreeSpace(freeClus, needClus)
+        debug("  *** SETUP NOT MET: need ", udec_(needClus), " free clusters, have ", udec_(freeClus), " (cBytes=", udec_(cBytes), ") -- fatchain groups NOT run ***")
+    else
+        ' ==============================================================
+        ' GROUP A - cross-boundary overwrite follows the FAT chain
+        ' ==============================================================
+        utils.startTestGroup(@"Bug A: cross-boundary overwrite follows FAT chain")
+
+        ' Build a 3-cluster file: each cluster filled with its own value.
+        sd.deleteFile(@fcFileA)
+        handle := sd.createFileNew(@fcFileA)
+        if handle >= 0
+            repeat clusIdx from 0 to 2
+                expectVal := clusterValue(clusIdx, A_ORIG_C0, A_ORIG_C1, A_ORIG_C2)
+                repeat secIdx from 0 to secPerClus - 1
+                    utils.fillBufferWithValue(@wBuf, sd.SECTOR_SIZE, expectVal)
+                    sd.writeHandle(handle, @wBuf, sd.SECTOR_SIZE)
+            sd.closeFileHandle(handle)
+
+        ' Overwrite ONLY the first two clusters IN PLACE (crosses the c0->c1 boundary).
+        ' openFileWrite opens at end-of-file, so seek back to 0 first.
+        handle := sd.openFileWrite(@fcFileA)
+        if handle >= 0
+            sd.seekHandle(handle, 0)
+            repeat clusIdx from 0 to 1
+                expectVal := clusterValue(clusIdx, A_NEW_C0, A_NEW_C1, A_NEW_C1)
+                repeat secIdx from 0 to secPerClus - 1
+                    utils.fillBufferWithValue(@wBuf, sd.SECTOR_SIZE, expectVal)
+                    sd.writeHandle(handle, @wBuf, sd.SECTOR_SIZE)
+            sd.closeFileHandle(handle)
+
+        ' Read the whole file back and verify.  The decisive check is that the untouched
+        ' 3rd cluster still holds A_ORIG_C2 and the read reaches the full 3*cBytes (no
+        ' premature end-of-chain).
+        utils.startTest(@"3-cluster overwrite-first-2 preserves tail")
+        utils.setCheckCountPerTest(3)
+        totalSec   := 3 * secPerClus
+        bytesTotal := 0
+        fullReadOk := true
+        headOk     := true
+        tailOk     := true
+        handle := sd.openFileRead(@fcFileA)
+        if handle >= 0
+            repeat secIdx from 0 to totalSec - 1
+                bytesRW := sd.readHandle(handle, @rBuf, sd.SECTOR_SIZE)
+                if bytesRW <> sd.SECTOR_SIZE
+                    fullReadOk := false                 ' short read -> orphaned tail
+                    quit
+                clusIdx   := secIdx / secPerClus
+                expectVal := clusterValue(clusIdx, A_NEW_C0, A_NEW_C1, A_ORIG_C2)
+                if not utils.verifyBufferValue(@rBuf, sd.SECTOR_SIZE, expectVal)
+                    if clusIdx == 2
+                        tailOk := false
+                    else
+                        headOk := false
+                bytesTotal += bytesRW
+            sd.closeFileHandle(handle)
+        else
+            fullReadOk := false
+
+        utils.evaluateSubBool(fullReadOk and (bytesTotal == 3 * cBytes), @"full file read (no premature EOC)", true)
+        utils.evaluateSubBool(headOk, @"first two clusters overwritten", true)
+        utils.evaluateSubBool(tailOk, @"third (untouched) cluster tail survives", true)
+        utils.showSubTestResults()
+
+        sd.deleteFile(@fcFileA)
+
+        ' ==============================================================
+        ' GROUP B - mid-sector append preserves leading bytes
+        ' ==============================================================
+        utils.startTestGroup(@"Bug B: mid-sector append preserves leading bytes")
+
+        utils.startTest(@"append at position==size keeps leading bytes")
+        utils.setCheckCountPerTest(2)
+        leadingOk := false
+        appendOk  := false
+
+        sd.deleteFile(@fcFileB)
+        handle := sd.createFileNew(@fcFileB)
+        if handle >= 0
+            utils.fillBufferWithValue(@wBuf, 100, B_LEAD)
+            sd.writeHandle(handle, @wBuf, 100)
+            sd.closeFileHandle(handle)
+
+        ' openFileWrite positions at end-of-file == size == 100 (mid-sector); append 50.
+        handle := sd.openFileWrite(@fcFileB)
+        if handle >= 0
+            utils.fillBufferWithValue(@wBuf, 50, B_APPEND)
+            sd.writeHandle(handle, @wBuf, 50)
+            sd.closeFileHandle(handle)
+
+        handle := sd.openFileRead(@fcFileB)
+        if handle >= 0
+            bytesRW   := sd.readHandle(handle, @rBuf, 150)
+            leadingOk := (bytesRW >= 150) and utils.verifyBufferValue(@rBuf, 100, B_LEAD)
+            appendOk  := utils.verifyBufferValue(@rBuf + 100, 50, B_APPEND)
+            sd.closeFileHandle(handle)
+
+        utils.evaluateSubBool(leadingOk, @"leading 100 bytes intact (not zero-filled)", true)
+        utils.evaluateSubBool(appendOk, @"appended 50 bytes correct", true)
+        utils.showSubTestResults()
+
+        sd.deleteFile(@fcFileB)
+
+    ' ------------------------------------------------------------------
+    ' Teardown
+    ' ------------------------------------------------------------------
+    sd.unmount()
+    utils.ShowTestEndCounts()
+    debug(" ")
+    debug("END_SESSION")
+
+PRI clusterValue(idx, v0, v1, v2) : value
+' Select a per-cluster fill value by cluster index (0, 1, or 2+).
+    case idx
+        0 : value := v0
+        1 : value := v1
+        other : value := v2
+
+con { license }
+
+{{
+  =================================================================================================
+
+  Terms of Use: MIT License
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+  associated documentation files (the "Software"), to deal in the Software without restriction,
+  including without limitation the rights to use, copy, modify, merge, publish, distribute,
+  sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies or
+  substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT
+  NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+  NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+  DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+  =================================================================================================
+}}

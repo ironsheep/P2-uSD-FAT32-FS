@@ -4,6 +4,46 @@ Items to investigate when time permits.
 
 ---
 
+### `debugClearRootDir()` leaks FAT clusters and clears only one root sector
+
+**Where:** `src/micro_sd_fat32_fs.spin2` — public wrapper `:2449`, worker case
+`CMD_DEBUG_CLEAR_ROOT` `:2736-2743`.
+
+**What's wrong:** the implementation is
+
+```
+bytefill(@buf, 0, SECTOR_SIZE)
+if writeSector(root_sec, BUF_DATA) == SUCCESS
+  dir_sec_in_buf := -1
+  pb_status := SUCCESS
+```
+
+so it (a) zeroes **only `root_sec`**, the first sector of the root directory —
+entries in the second and later root sectors survive untouched — and (b) frees
+**no FAT clusters**, so every entry it erases leaks its whole cluster chain
+permanently. The docstring's claim, *"Clears the root directory… This DELETES all
+files and folders!"*, is wrong on both counts.
+
+**Why it matters:** two regression suites called it unconditionally at start-up
+(`SD_RT_file_ops_tests:109`, `SD_RT_subdir_ops_tests:97`) — both call sites
+removed during the v1.5.4 harness precondition audit. Until then every regression
+run silently lost free space that no `deleteFile()` would ever return, which is a
+sufficient standalone explanation for the regression card progressively filling up
+and needing a manual reformat — independent of the Bug A write-path corruption.
+
+**Options when picked up:**
+- Fix it: walk every root-directory sector and release each live entry's cluster
+  chain, so it means what the docstring says; or
+- Narrow it: rename to reflect the actual behaviour (clears the first root sector,
+  leaks chains, diagnostic only) and correct the docstring.
+
+Do **not** leave the current behaviour behind the current name. No regression
+suite should call it either way.
+
+*Noted: 2026-07-23 (v1.5.4 sprint, §4 harness precondition audit)*
+
+---
+
 ### Counterfeit asdfg-class — characterize LBA-failure-mode boundary
 
 **Cards:** Lerdisk (`Unknown_asdfg_2.2_000001F4_202512`), Cloudisk (`Unknown_asdfg_2.2_00001680_202511`) — same `asdfg` silicon class, both CW_NO_DATA_CRC.

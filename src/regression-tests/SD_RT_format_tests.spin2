@@ -45,6 +45,11 @@ CON
     EXT_BOOT_SIG        = $29        ' Extended boot signature
     PARTITION_START     = 8192       ' 4MB alignment
 
+    ' FAT32 requires a 64 MB minimum, and the partition starts 4 MB in, so the
+    ' card must be comfortably larger than PARTITION_START. Asserted at run time
+    ' rather than left to the file header as an unchecked instruction.
+    MIN_CARD_SECTORS    = 131_072    ' 64 MB
+
 ' Enable full driver features for format testing
 ' Uncomment SD_INCLUDE_STACK_CHECK to measure worker cog stack depth
 #ifdef __SPINTOOLS__
@@ -109,6 +114,14 @@ PUB go() | result, dataStart, fat1Start, fat2Start, idx, mismatch, cardSectors
 
     cardSectors := sd.cardSizeSectors()
     debug("  Card size: ", udec(cardSectors), " sectors (", udec(cardSectors / 2048), " MB)")
+
+    utils.startTest(@"Card meets FAT32 64MB minimum")
+    utils.evaluateBool(cardSectors >= MIN_CARD_SECTORS, @"card >= 64MB", true)
+    if cardSectors < MIN_CARD_SECTORS
+        debug("  *** SETUP NOT MET: card has ", udec_(cardSectors), " sectors, FAT32 needs >= ", udec_(MIN_CARD_SECTORS), " -- remaining format checks NOT run ***")
+        utils.ShowTestEndCounts()
+        debug("END_SESSION")
+        return
 
     ' ========================================
     ' MBR VERIFICATION (Sector 0)

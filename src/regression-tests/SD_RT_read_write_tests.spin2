@@ -37,6 +37,12 @@ CON
 #endif
      LARGE_BUFFER_SIZE = 2048
 
+     ' Peak on-card footprint of the large-file groups: the 128 KB and 256 KB
+     ' files are alive at the same time (RTLG256 is not deleted until after
+     ' RTLG128 has been written), plus the 64 KB boundary file. Rounded up to
+     ' give the precondition gate a little headroom.
+     LARGE_PEAK_BYTES  = 458_752    ' 448 KB
+
 ' Enable raw sector access for cluster boundary tests (VBR read)
 ' Uncomment SD_INCLUDE_STACK_CHECK to measure worker cog stack depth
 #ifdef __SPINTOOLS__
@@ -76,7 +82,6 @@ readBuffer_guard BYTE   0[16]
 largeWriteBuf   BYTE    0[LARGE_BUFFER_SIZE]
 largeReadBuf    BYTE    0[LARGE_BUFFER_SIZE]
 largeReadBuf_guard BYTE 0[16]
-vbrBuf          BYTE    0[sd.SECTOR_SIZE]
 
 ' Test strings
 testStr1        BYTE    "Hello, World!", 0
@@ -86,7 +91,7 @@ testStr3        BYTE    "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", 0
 ' Temp byte for single-byte writes
 tempByte        BYTE    0
 
-PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize, secPerClus, clusterBytes, writeLen, chunkIdx, seekPos
+PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize, secPerClus, clusterBytes, writeLen, chunkIdx, seekPos, freeSec, freeClus, needClus, largeOk
 '' Main entry point for read/write regression tests
 ''
 '' Tests various data patterns and file sizes
@@ -111,11 +116,27 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize, secPerClus, c
     debug("   Free Space: ", udec(sd.freeSpace()), " sectors")
 
     ' Clean up any existing test files
-    sd.deleteFile(@testBytes)
-    sd.deleteFile(@testString)
-    sd.deleteFile(@testLarge)
-    sd.deleteFile(@testMulti)
-    sd.deleteFile(@testPattern)
+    cleanupTestFiles()
+
+    ' ------------------------------------------------------------------
+    ' Geometry + capacity gate for the large-file groups.  Local-first idiom:
+    ' resolve each driver query into its own local BEFORE combining, so two
+    ' worker-routed calls are never chained in one Spin2 expression.
+    ' The small-file groups below always run; only the multi-hundred-KB groups
+    ' are gated, and an unmet gate says so loudly rather than reporting green.
+    ' ------------------------------------------------------------------
+    secPerClus   := sd.sectorsPerCluster()
+    clusterBytes := sd.clusterBytes()
+    freeSec      := sd.freeSpace()
+    freeClus     := 0
+    if secPerClus > 0
+        freeClus := freeSec / secPerClus
+    needClus := utils.clustersForBytes(LARGE_PEAK_BYTES, clusterBytes) + 1
+    largeOk  := (clusterBytes <> 0) and utils.assertFreeSpace(freeClus, needClus)
+
+    debug("* Geometry: ", udec(secPerClus), " sec/clus, ", udec(clusterBytes), " bytes/clus, ", udec(freeClus), " free clusters")
+    if not largeOk
+        debug("  *** SETUP NOT MET: large-file groups need ", udec_(needClus), " free clusters, have ", udec_(freeClus), " (cBytes=", udec_(clusterBytes), ") -- 64KB/128KB/256KB groups NOT run ***")
 
     ' ----------------------------------
     ' TEST GROUP: Byte-level writes
@@ -525,28 +546,29 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize, secPerClus, c
         sd.closeFileHandle(handle)
 
     ' Test: Large file (64KB = 128 sectors) - tests cluster chain
-    utils.startTest(@"Large file - 64KB (128 sectors)")
-    sd.deleteFile(@testBoundary)
-    handle := sd.createFileNew(@testBoundary)
-    if handle >= 0
-        ' Write 64KB in 2KB chunks (32 chunks)
-        utils.fillBufferWithPattern(@largeWriteBuf, LARGE_BUFFER_SIZE, $D0)
-        repeat idx from 0 to 31
-            sd.writeHandle(handle, @largeWriteBuf, LARGE_BUFFER_SIZE)
-        sd.closeFileHandle(handle)
-        debug("  Wrote 64KB (32 x 2KB chunks)")
-    handle := sd.openFileRead(@testBoundary)
-    if handle >= 0
-        fileSize := sd.fileSizeHandle(handle)
-        utils.evaluateSubValue(fileSize, @"fileSize 65536 bytes", 65536)
-        ' Read back and verify first chunk
-        utils.initGuard(@largeReadBuf_guard)
-        bytesRead := sd.readHandle(handle, @largeReadBuf, LARGE_BUFFER_SIZE)
-        utils.checkGuard(@largeReadBuf_guard, @"largeReadBuf guard")
-        utils.evaluateSubValue(bytesRead, @"read first 2KB", LARGE_BUFFER_SIZE)
-        result := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, $D0)
-        utils.evaluateSubBool(result, @"first chunk pattern", true)
-        sd.closeFileHandle(handle)
+    if largeOk
+        utils.startTest(@"Large file - 64KB (128 sectors)")
+        sd.deleteFile(@testBoundary)
+        handle := sd.createFileNew(@testBoundary)
+        if handle >= 0
+            ' Write 64KB in 2KB chunks (32 chunks)
+            utils.fillBufferWithPattern(@largeWriteBuf, LARGE_BUFFER_SIZE, $D0)
+            repeat idx from 0 to 31
+                sd.writeHandle(handle, @largeWriteBuf, LARGE_BUFFER_SIZE)
+            sd.closeFileHandle(handle)
+            debug("  Wrote 64KB (32 x 2KB chunks)")
+        handle := sd.openFileRead(@testBoundary)
+        if handle >= 0
+            fileSize := sd.fileSizeHandle(handle)
+            utils.evaluateSubValue(fileSize, @"fileSize 65536 bytes", 65536)
+            ' Read back and verify first chunk
+            utils.initGuard(@largeReadBuf_guard)
+            bytesRead := sd.readHandle(handle, @largeReadBuf, LARGE_BUFFER_SIZE)
+            utils.checkGuard(@largeReadBuf_guard, @"largeReadBuf guard")
+            utils.evaluateSubValue(bytesRead, @"read first 2KB", LARGE_BUFFER_SIZE)
+            result := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, $D0)
+            utils.evaluateSubBool(result, @"first chunk pattern", true)
+            sd.closeFileHandle(handle)
 
     ' Clean up boundary test file
     sd.deleteFile(@testBoundary)
@@ -554,173 +576,174 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize, secPerClus, c
     ' ----------------------------------
     ' TEST GROUP: Large File Multi-Cluster Verification
     ' ----------------------------------
-    utils.startTestGroup(@"Large File Multi-Cluster Verification")
+    if largeOk
+        utils.startTestGroup(@"Large File Multi-Cluster Verification")
 
-    ' Test 1: Create 128KB file (256 sectors, spans 16 clusters at 16 sec/cluster)
-    utils.startTest(@"Create 128KB file (256 sectors)")
-    sd.deleteFile(@testLarge128)
-    handle := sd.createFileNew(@testLarge128)
-    utils.evaluateSubBool(handle >= 0, @"createFileNew()", true)
-    if handle >= 0
-        ' Write 64 chunks of 2KB, each with unique pattern
-        repeat idx from 0 to 63
-            utils.fillBufferWithPattern(@largeWriteBuf, LARGE_BUFFER_SIZE, (idx * 8) & $FF)
-            sd.writeHandle(handle, @largeWriteBuf, LARGE_BUFFER_SIZE)
-        sd.closeFileHandle(handle)
-        debug("  Wrote 128KB (64 x 2KB chunks)")
-    handle := sd.openFileRead(@testLarge128)
-    if handle >= 0
-        fileSize := sd.fileSizeHandle(handle)
-        utils.evaluateSubValue(fileSize, @"file size 131072", 131072)
-        sd.closeFileHandle(handle)
+        ' Test 1: Create 128KB file (256 sectors, spans 16 clusters at 16 sec/cluster)
+        utils.startTest(@"Create 128KB file (256 sectors)")
+        sd.deleteFile(@testLarge128)
+        handle := sd.createFileNew(@testLarge128)
+        utils.evaluateSubBool(handle >= 0, @"createFileNew()", true)
+        if handle >= 0
+            ' Write 64 chunks of 2KB, each with unique pattern
+            repeat idx from 0 to 63
+                utils.fillBufferWithPattern(@largeWriteBuf, LARGE_BUFFER_SIZE, (idx * 8) & $FF)
+                sd.writeHandle(handle, @largeWriteBuf, LARGE_BUFFER_SIZE)
+            sd.closeFileHandle(handle)
+            debug("  Wrote 128KB (64 x 2KB chunks)")
+        handle := sd.openFileRead(@testLarge128)
+        if handle >= 0
+            fileSize := sd.fileSizeHandle(handle)
+            utils.evaluateSubValue(fileSize, @"file size 131072", 131072)
+            sd.closeFileHandle(handle)
 
-    ' Test 2: Verify first chunk (pattern starts at 0)
-    utils.startTest(@"Verify first 2KB chunk of 128KB file")
-    handle := sd.openFileRead(@testLarge128)
-    if handle >= 0
-        utils.initGuard(@largeReadBuf_guard)
-        bytesRead := sd.readHandle(handle, @largeReadBuf, LARGE_BUFFER_SIZE)
-        utils.checkGuard(@largeReadBuf_guard, @"largeReadBuf guard")
-        utils.evaluateSubValue(bytesRead, @"read 2KB", LARGE_BUFFER_SIZE)
-        result := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, 0)
-        utils.evaluateSubBool(result, @"first chunk pattern(0)", true)
-        sd.closeFileHandle(handle)
-
-    ' Test 3: Verify middle chunk (chunk 32, pattern starts at 32*8=256)
-    utils.startTest(@"Verify middle chunk (seek to 65536)")
-    handle := sd.openFileRead(@testLarge128)
-    if handle >= 0
-        result := sd.seekHandle(handle, 65536)
-        utils.evaluateSubValue(result, @"seek to 65536", 0)
-        utils.initGuard(@largeReadBuf_guard)
-        bytesRead := sd.readHandle(handle, @largeReadBuf, LARGE_BUFFER_SIZE)
-        utils.checkGuard(@largeReadBuf_guard, @"largeReadBuf guard")
-        utils.evaluateSubValue(bytesRead, @"read middle 2KB", LARGE_BUFFER_SIZE)
-        result := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, 256)
-        utils.evaluateSubBool(result, @"middle chunk pattern", true)
-        sd.closeFileHandle(handle)
-
-    ' Test 4: Verify last chunk (chunk 63, pattern starts at 63*8=504)
-    utils.startTest(@"Verify last chunk (seek to 129024)")
-    handle := sd.openFileRead(@testLarge128)
-    if handle >= 0
-        result := sd.seekHandle(handle, 129024)
-        utils.evaluateSubValue(result, @"seek to 129024", 0)
-        utils.initGuard(@largeReadBuf_guard)
-        bytesRead := sd.readHandle(handle, @largeReadBuf, LARGE_BUFFER_SIZE)
-        utils.checkGuard(@largeReadBuf_guard, @"largeReadBuf guard")
-        utils.evaluateSubValue(bytesRead, @"read last 2KB", LARGE_BUFFER_SIZE)
-        ' Pattern start: chunk 63 * 8 = 504, but masked to 8 bits = $F8
-        result := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, (63 * 8) & $FF)
-        utils.evaluateSubBool(result, @"last chunk pattern", true)
-        sd.closeFileHandle(handle)
-
-    ' Test 5: Sequential read all 128KB
-    utils.startTest(@"Sequential read all 128KB verifies all chunks")
-    utils.setCheckCountPerTest(64)
-    handle := sd.openFileRead(@testLarge128)
-    if handle >= 0
-        utils.initGuard(@largeReadBuf_guard)
-        repeat idx from 0 to 63
+        ' Test 2: Verify first chunk (pattern starts at 0)
+        utils.startTest(@"Verify first 2KB chunk of 128KB file")
+        handle := sd.openFileRead(@testLarge128)
+        if handle >= 0
+            utils.initGuard(@largeReadBuf_guard)
             bytesRead := sd.readHandle(handle, @largeReadBuf, LARGE_BUFFER_SIZE)
-            utils.initAndCheckGuard(@largeReadBuf_guard, @"largeReadBuf guard")
-            result := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, (idx * 8) & $FF)
-            utils.evaluateSubBool(result, @"chunk pattern match", true)
-        sd.closeFileHandle(handle)
-    utils.setCheckCountPerTest(1)
+            utils.checkGuard(@largeReadBuf_guard, @"largeReadBuf guard")
+            utils.evaluateSubValue(bytesRead, @"read 2KB", LARGE_BUFFER_SIZE)
+            result := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, 0)
+            utils.evaluateSubBool(result, @"first chunk pattern(0)", true)
+            sd.closeFileHandle(handle)
 
-    ' Test 6: Create 256KB file (512 sectors, spans 32 clusters)
-    utils.startTest(@"Create 256KB file (512 sectors)")
-    sd.deleteFile(@testLarge256)
-    handle := sd.createFileNew(@testLarge256)
-    utils.evaluateSubBool(handle >= 0, @"createFileNew()", true)
-    if handle >= 0
-        repeat idx from 0 to 127
-            utils.fillBufferWithPattern(@largeWriteBuf, LARGE_BUFFER_SIZE, (idx * 8) & $FF)
-            sd.writeHandle(handle, @largeWriteBuf, LARGE_BUFFER_SIZE)
-        sd.closeFileHandle(handle)
-        debug("  Wrote 256KB (128 x 2KB chunks)")
-    handle := sd.openFileRead(@testLarge256)
-    if handle >= 0
-        fileSize := sd.fileSizeHandle(handle)
-        utils.evaluateSubValue(fileSize, @"file size 262144", 262144)
-        sd.closeFileHandle(handle)
+        ' Test 3: Verify middle chunk (chunk 32, pattern starts at 32*8=256)
+        utils.startTest(@"Verify middle chunk (seek to 65536)")
+        handle := sd.openFileRead(@testLarge128)
+        if handle >= 0
+            result := sd.seekHandle(handle, 65536)
+            utils.evaluateSubValue(result, @"seek to 65536", 0)
+            utils.initGuard(@largeReadBuf_guard)
+            bytesRead := sd.readHandle(handle, @largeReadBuf, LARGE_BUFFER_SIZE)
+            utils.checkGuard(@largeReadBuf_guard, @"largeReadBuf guard")
+            utils.evaluateSubValue(bytesRead, @"read middle 2KB", LARGE_BUFFER_SIZE)
+            result := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, 256)
+            utils.evaluateSubBool(result, @"middle chunk pattern", true)
+            sd.closeFileHandle(handle)
 
-    ' Test 7: Random access across cluster boundaries
-    utils.startTest(@"Random access across cluster boundaries in 256KB file")
-    utils.setCheckCountPerTest(4)
-    handle := sd.openFileRead(@testLarge256)
-    if handle >= 0
-        ' Position 0 (cluster 0)
-        sd.seekHandle(handle, 0)
-        utils.initGuard(@largeReadBuf_guard)
-        bytesRead := sd.readHandle(handle, @largeReadBuf, LARGE_BUFFER_SIZE)
-        utils.checkGuard(@largeReadBuf_guard, @"largeReadBuf guard")
-        result := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, 0)
-        utils.evaluateSubBool(result, @"pos 0 pattern", true)
+        ' Test 4: Verify last chunk (chunk 63, pattern starts at 63*8=504)
+        utils.startTest(@"Verify last chunk (seek to 129024)")
+        handle := sd.openFileRead(@testLarge128)
+        if handle >= 0
+            result := sd.seekHandle(handle, 129024)
+            utils.evaluateSubValue(result, @"seek to 129024", 0)
+            utils.initGuard(@largeReadBuf_guard)
+            bytesRead := sd.readHandle(handle, @largeReadBuf, LARGE_BUFFER_SIZE)
+            utils.checkGuard(@largeReadBuf_guard, @"largeReadBuf guard")
+            utils.evaluateSubValue(bytesRead, @"read last 2KB", LARGE_BUFFER_SIZE)
+            ' Pattern start: chunk 63 * 8 = 504, but masked to 8 bits = $F8
+            result := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, (63 * 8) & $FF)
+            utils.evaluateSubBool(result, @"last chunk pattern", true)
+            sd.closeFileHandle(handle)
 
-        ' Position 32768 (cluster boundary area)
-        sd.seekHandle(handle, 32768)
-        utils.initGuard(@largeReadBuf_guard)
-        bytesRead := sd.readHandle(handle, @largeReadBuf, LARGE_BUFFER_SIZE)
-        utils.checkGuard(@largeReadBuf_guard, @"largeReadBuf guard")
-        result := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, (16 * 8) & $FF)
-        utils.evaluateSubBool(result, @"pos 32768 pattern", true)
+        ' Test 5: Sequential read all 128KB
+        utils.startTest(@"Sequential read all 128KB verifies all chunks")
+        utils.setCheckCountPerTest(64)
+        handle := sd.openFileRead(@testLarge128)
+        if handle >= 0
+            utils.initGuard(@largeReadBuf_guard)
+            repeat idx from 0 to 63
+                bytesRead := sd.readHandle(handle, @largeReadBuf, LARGE_BUFFER_SIZE)
+                utils.initAndCheckGuard(@largeReadBuf_guard, @"largeReadBuf guard")
+                result := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, (idx * 8) & $FF)
+                utils.evaluateSubBool(result, @"chunk pattern match", true)
+            sd.closeFileHandle(handle)
+        utils.setCheckCountPerTest(1)
 
-        ' Position 131072 (halfway, cluster 16)
-        sd.seekHandle(handle, 131072)
-        utils.initGuard(@largeReadBuf_guard)
-        bytesRead := sd.readHandle(handle, @largeReadBuf, LARGE_BUFFER_SIZE)
-        utils.checkGuard(@largeReadBuf_guard, @"largeReadBuf guard")
-        result := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, (64 * 8) & $FF)
-        utils.evaluateSubBool(result, @"pos 131072 pattern", true)
+        ' Test 6: Create 256KB file (512 sectors, spans 32 clusters)
+        utils.startTest(@"Create 256KB file (512 sectors)")
+        sd.deleteFile(@testLarge256)
+        handle := sd.createFileNew(@testLarge256)
+        utils.evaluateSubBool(handle >= 0, @"createFileNew()", true)
+        if handle >= 0
+            repeat idx from 0 to 127
+                utils.fillBufferWithPattern(@largeWriteBuf, LARGE_BUFFER_SIZE, (idx * 8) & $FF)
+                sd.writeHandle(handle, @largeWriteBuf, LARGE_BUFFER_SIZE)
+            sd.closeFileHandle(handle)
+            debug("  Wrote 256KB (128 x 2KB chunks)")
+        handle := sd.openFileRead(@testLarge256)
+        if handle >= 0
+            fileSize := sd.fileSizeHandle(handle)
+            utils.evaluateSubValue(fileSize, @"file size 262144", 262144)
+            sd.closeFileHandle(handle)
 
-        ' Position 260096 (near end, last 2KB chunk)
-        sd.seekHandle(handle, 260096)
-        utils.initGuard(@largeReadBuf_guard)
-        bytesRead := sd.readHandle(handle, @largeReadBuf, LARGE_BUFFER_SIZE)
-        utils.checkGuard(@largeReadBuf_guard, @"largeReadBuf guard")
-        result := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, (127 * 8) & $FF)
-        utils.evaluateSubBool(result, @"pos 260096 pattern", true)
+        ' Test 7: Random access across cluster boundaries
+        utils.startTest(@"Random access across cluster boundaries in 256KB file")
+        utils.setCheckCountPerTest(4)
+        handle := sd.openFileRead(@testLarge256)
+        if handle >= 0
+            ' Position 0 (cluster 0)
+            sd.seekHandle(handle, 0)
+            utils.initGuard(@largeReadBuf_guard)
+            bytesRead := sd.readHandle(handle, @largeReadBuf, LARGE_BUFFER_SIZE)
+            utils.checkGuard(@largeReadBuf_guard, @"largeReadBuf guard")
+            result := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, 0)
+            utils.evaluateSubBool(result, @"pos 0 pattern", true)
 
-        sd.closeFileHandle(handle)
-    utils.setCheckCountPerTest(1)
+            ' Position 32768 (cluster boundary area)
+            sd.seekHandle(handle, 32768)
+            utils.initGuard(@largeReadBuf_guard)
+            bytesRead := sd.readHandle(handle, @largeReadBuf, LARGE_BUFFER_SIZE)
+            utils.checkGuard(@largeReadBuf_guard, @"largeReadBuf guard")
+            result := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, (16 * 8) & $FF)
+            utils.evaluateSubBool(result, @"pos 32768 pattern", true)
 
-    ' Test 8: Backward seek in large file
-    utils.startTest(@"Backward seek in 256KB file")
-    handle := sd.openFileRead(@testLarge256)
-    if handle >= 0
-        ' Read near end first
-        sd.seekHandle(handle, 260096)
-        utils.initGuard(@largeReadBuf_guard)
-        bytesRead := sd.readHandle(handle, @largeReadBuf, LARGE_BUFFER_SIZE)
-        utils.checkGuard(@largeReadBuf_guard, @"largeReadBuf guard")
-        result := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, (127 * 8) & $FF)
-        utils.evaluateSubBool(result, @"near-end read OK", true)
+            ' Position 131072 (halfway, cluster 16)
+            sd.seekHandle(handle, 131072)
+            utils.initGuard(@largeReadBuf_guard)
+            bytesRead := sd.readHandle(handle, @largeReadBuf, LARGE_BUFFER_SIZE)
+            utils.checkGuard(@largeReadBuf_guard, @"largeReadBuf guard")
+            result := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, (64 * 8) & $FF)
+            utils.evaluateSubBool(result, @"pos 131072 pattern", true)
 
-        ' Seek backward to beginning
-        sd.seekHandle(handle, 0)
-        utils.initGuard(@largeReadBuf_guard)
-        bytesRead := sd.readHandle(handle, @largeReadBuf, LARGE_BUFFER_SIZE)
-        utils.checkGuard(@largeReadBuf_guard, @"largeReadBuf guard")
-        result := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, 0)
-        utils.evaluateSubBool(result, @"backward seek read OK", true)
+            ' Position 260096 (near end, last 2KB chunk)
+            sd.seekHandle(handle, 260096)
+            utils.initGuard(@largeReadBuf_guard)
+            bytesRead := sd.readHandle(handle, @largeReadBuf, LARGE_BUFFER_SIZE)
+            utils.checkGuard(@largeReadBuf_guard, @"largeReadBuf guard")
+            result := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, (127 * 8) & $FF)
+            utils.evaluateSubBool(result, @"pos 260096 pattern", true)
 
-        sd.closeFileHandle(handle)
+            sd.closeFileHandle(handle)
+        utils.setCheckCountPerTest(1)
 
-    ' Test 9: Delete reclaims space
-    utils.startTest(@"Delete 256KB file reclaims space")
-    result := sd.freeSpace()
-    debug("   Free space before: ", udec(result), " sectors")
-    sd.deleteFile(@testLarge256)
-    fileSize := sd.freeSpace()
-    debug("   Free space after: ", udec(fileSize), " sectors")
-    ' 256KB = 512 sectors, free space should increase by approximately that
-    debug("   sectors reclaimed: ", udec(fileSize - result))
-    utils.evaluateRange(fileSize - result, @"sectors reclaimed", 400, 530)
+        ' Test 8: Backward seek in large file
+        utils.startTest(@"Backward seek in 256KB file")
+        handle := sd.openFileRead(@testLarge256)
+        if handle >= 0
+            ' Read near end first
+            sd.seekHandle(handle, 260096)
+            utils.initGuard(@largeReadBuf_guard)
+            bytesRead := sd.readHandle(handle, @largeReadBuf, LARGE_BUFFER_SIZE)
+            utils.checkGuard(@largeReadBuf_guard, @"largeReadBuf guard")
+            result := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, (127 * 8) & $FF)
+            utils.evaluateSubBool(result, @"near-end read OK", true)
 
-    ' Clean up remaining large file
-    sd.deleteFile(@testLarge128)
+            ' Seek backward to beginning
+            sd.seekHandle(handle, 0)
+            utils.initGuard(@largeReadBuf_guard)
+            bytesRead := sd.readHandle(handle, @largeReadBuf, LARGE_BUFFER_SIZE)
+            utils.checkGuard(@largeReadBuf_guard, @"largeReadBuf guard")
+            result := utils.verifyBufferPattern(@largeReadBuf, LARGE_BUFFER_SIZE, 0)
+            utils.evaluateSubBool(result, @"backward seek read OK", true)
+
+            sd.closeFileHandle(handle)
+
+        ' Test 9: Delete reclaims space
+        utils.startTest(@"Delete 256KB file reclaims space")
+        result := sd.freeSpace()
+        debug("   Free space before: ", udec(result), " sectors")
+        sd.deleteFile(@testLarge256)
+        fileSize := sd.freeSpace()
+        debug("   Free space after: ", udec(fileSize), " sectors")
+        ' 256KB = 512 sectors, free space should increase by approximately that
+        debug("   sectors reclaimed: ", udec(fileSize - result))
+        utils.evaluateRange(fileSize - result, @"sectors reclaimed", 400, 530)
+
+        ' Clean up remaining large file
+        sd.deleteFile(@testLarge128)
 
     ' ----------------------------------
     ' TEST GROUP: Constant Data Pattern Verification (O-14)
@@ -791,12 +814,17 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize, secPerClus, c
     ' ----------------------------------
     utils.startTestGroup(@"Cluster Boundary Verification")
 
-    ' Determine cluster size from VBR
-    result := sd.readVBRRaw(@vbrBuf)
-    secPerClus := vbrBuf[$0D]
-    clusterBytes := secPerClus * sd.SECTOR_SIZE
-    writeLen := clusterBytes + sd.SECTOR_SIZE
+    ' Determine cluster size from the driver's own geometry accessors rather than
+    ' hand-parsing the VBR: readVBRRaw()'s result was previously discarded, so a
+    ' failed read left secPerClus holding whatever was in the buffer and writeLen
+    ' could become an absurd size. Local-first idiom -- one driver query per local.
+    secPerClus   := sd.sectorsPerCluster()
+    clusterBytes := sd.clusterBytes()
+    writeLen     := clusterBytes + sd.SECTOR_SIZE
     debug("   sec_per_clus=", udec_(secPerClus), " cluster_bytes=", udec_(clusterBytes), " writeLen=", udec_(writeLen))
+
+    utils.startTest(@"Cluster geometry is valid")
+    utils.evaluateBool(secPerClus > 0 and clusterBytes > 0, @"geometry sane", true)
 
     ' Test A: Write and verify bytes straddling cluster boundary
     utils.startTest(@"Write file spanning cluster boundary")
@@ -863,11 +891,7 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize, secPerClus, c
     ' ----------------------------------
     debug(" ")
     debug("* Cleaning up test files...")
-    sd.deleteFile(@testBytes)
-    sd.deleteFile(@testString)
-    sd.deleteFile(@testLarge)
-    sd.deleteFile(@testMulti)
-    sd.deleteFile(@testPattern)
+    cleanupTestFiles()
 
     ' Report stack depth while worker cog is still running
 #ifdef SD_INCLUDE_STACK_CHECK
@@ -886,6 +910,27 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize, secPerClus, c
     debug(" ")
     debug("* Read/Write Tests Complete")
     debug("END_SESSION")
+
+PRI cleanupTestFiles()
+' Delete every fixture this suite owns.
+'
+' Called both BEFORE the body and as teardown. It must cover the large-file
+' fixtures too: their inline deletes sit INSIDE the largeOk gate, so on a card
+' that fails the capacity gate they never run -- and residue from an earlier,
+' ungated run would then survive indefinitely. deleteFile() on a missing file
+' just returns an error we ignore.
+
+    sd.deleteFile(@testBytes)
+    sd.deleteFile(@testString)
+    sd.deleteFile(@testLarge)
+    sd.deleteFile(@testMulti)
+    sd.deleteFile(@testPattern)
+    sd.deleteFile(@testBoundary)
+    sd.deleteFile(@testLarge128)
+    sd.deleteFile(@testLarge256)
+    sd.deleteFile(@testZeros)
+    sd.deleteFile(@testOnes)
+    sd.deleteFile(@testCluster)
 
 con { license }
 

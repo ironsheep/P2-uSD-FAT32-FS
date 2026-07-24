@@ -238,6 +238,104 @@ triggers the §6 reformat rather than silently depending on it.
 **Note:** the audit procedure (sweep suites for precondition establishment) is
 not covered by a current skill — logged as a skill-evolution candidate (§ Exit).
 
+### 4.1 Findings table (audit completed 2026-07-23)
+
+All 26 files in `src/regression-tests/` audited (25 in the `run_regression.sh`
+order plus the opt-in `SD_RT_format_tests`). Legend: **P** pass · **F** fail ·
+**n/a** criterion does not apply to this suite.
+
+| # | Suite | C1 mount/geometry | C2 own fixtures | C3 capacity/geometry gate | C4 leaves card clean |
+|---|---|---|---|---|---|
+| 1 | mount | P `:137-138` | P `:278`,`:298`,`:303` / `:316-319` | n/a | P `:327` |
+| 2 | raw_sector | P `:106-109` | n/a (raw) | **F** — writes LBA 100 000-100 004, no `cardSizeSectors()` gate | **F** — no `stop()`; leaves 5 scratch sectors, undocumented |
+| 3 | multiblock | P `:101-104` | n/a (raw) | **F** — writes LBA 200 000-200 113, needs ≥102 MB card, ungated | **F** — never unmounts (`:155`) |
+| 4 | register | P `:77-80`, `:151-155` | n/a | n/a | P `:196` |
+| 5 | speed | P `:87-90` | P `:107-108` / `:290-291` | n/a (2×512 B) | P `:293` |
+| 6 | crc_diag | P `:81-84` | P `:102-103` / `:287-288` | n/a (512 B) | P `:290` |
+| 7 | error_handling | P `:91-94` | P `:101-106` / `:368-373` — **reference pattern** | n/a | P `:376` |
+| 8 | crc_validation | P `:83-86` | P `:101-102` / `:269-270` | n/a | P `:272` |
+| 9 | recovery | P `:91-94`, `:264-265` | P `:108-111` / `:357-360` | n/a (~2 KB) | P `:362` |
+| 10 | file_ops | P `:91-94` | P `:151-154` / `:533-536` | n/a | **F** — `debugClearRootDir()` `:109` (see 4.2) |
+| 11 | read_write | P `:102-105` | P (inline pre-delete per fixture) | **F** — ~384 KB live (128 KB + 256 KB coexist `:562`-`:715`), no gate; `readVBRRaw` result unchecked `:795` → garbage `secPerClus` | P `:866-870` |
+| 12 | fatchain | P `:94-97` | P `:123`,`:191` / `:179`,`:216` | P `:104-115` gate | P `:221` |
+| 13 | multihandle | P `:76-79` | P `:88` / `:525` | n/a | P `:527` |
+| 14 | seek | P `:60-63` | P `:72`,`:356` / `:374`,`:381` | n/a (2 KB) | P `:384` |
+| 15 | volume | P `:110-113` | **F** — `cleanupTestFiles` `:664-674` omits `DF00`-`DF29`, `DFTEST.BIN`, `DFVERFY.BIN`, `VLFLUSH.TXT` | n/a (uses `setTestMaxClusters`) | **F** — same omission; aborted run leaks fixtures + altered volume label |
+| 16 | subdir_ops | P `:85-88` | P `:157`,`:194-195` / `:392-397` | n/a | **F** — `debugClearRootDir()` `:97` (see 4.2) |
+| 17 | directory | P `:92-95` | **F** — `cleanupTestItems` `:566-588` omits `DEEP1`-`DEEP5`, `DEEP.TXT`, `RTMANY`, `12345678.123`, `STALE`, `STPOLL.TXT` | **F** — 32 KB polluter write `:445-446` ungated | **F** — same omission |
+| 18 | dirhandle | P `:84-87` | P `:96` / `:474` | n/a | P `:476` |
+| 19 | fifo | n/a (no SD) | n/a | n/a | n/a |
+| 20 | multicog | P `:113-119` | P `:450-452` / `:282` | n/a | P `:285` |
+| 21 | cogcwd | P `:118-121` | P `:576` / `:144` | n/a | P `:146` |
+| 22 | timestamp | P `:67-70` | P `:73-74` / `:88-89` | n/a | P `:91` |
+| 23 | stress | P `:112-115` | P `:511-512` / `:137` | **F** — 5 KB + 3 KB ungated; `createStressFiles` `:516-518` returns early on failure, so all four tests fail confusingly instead of reporting SETUP NOT MET | P `:139` |
+| 24 | async | P `:80-83` | P `:432` / `:115` | n/a | P `:117` |
+| 25 | defrag | P `:86-89` | P `:99` / `:346` | **F** — Test 3 and Test 5 each write ~192 KB (3 × `FILL_WRITES`×`WRITE_SIZE`), no free-space gate | P `:348` |
+| 26 | format (opt-in) | P `:98`,`:105-108`,`:410` | n/a (formats card) | **F** — header requires ≥64 MB; `cardSizeSectors()` read `:110` but only printed, never asserted | P `:428` (fresh FAT32) |
+
+**Score:** 17 of 26 clean on all applicable criteria. 9 suites fail at least one
+criterion: `raw_sector`, `multiblock`, `file_ops`, `read_write`, `volume`,
+`subdir_ops`, `directory`, `stress`, `defrag`, `format`.
+
+### 4.2 Headline finding — `debugClearRootDir()` leaks FAT clusters
+
+`SD_RT_file_ops_tests.spin2:109` and `SD_RT_subdir_ops_tests.spin2:97` both call
+`sd.debugClearRootDir()` unconditionally at start-up as a "clear corrupted root"
+workaround. The driver implementation (`micro_sd_fat32_fs.spin2:2736-2743`)
+zero-fills **only `root_sec`** — the first sector of the root directory — and
+frees **no FAT clusters**:
+
+```
+CMD_DEBUG_CLEAR_ROOT:
+  bytefill(@buf, 0, SECTOR_SIZE)
+  if writeSector(root_sec, BUF_DATA) == SUCCESS
+    dir_sec_in_buf := -1
+    pb_status := SUCCESS
+```
+
+Two consequences, both directly relevant to this sprint:
+
+1. **Permanent free-space leak.** Every root entry it erases keeps its cluster
+   chain marked allocated in the FAT with nothing referencing it. Free space
+   drops a little on every regression run and never comes back — which is a
+   sufficient explanation on its own for the card progressively filling up and
+   needing a manual reformat, independent of Bug A.
+2. **Cross-suite destruction.** It deletes whatever another suite left in the
+   first root sector, so it both depends on and damages global card state — the
+   exact order-dependence criterion 4 exists to prevent.
+
+It is also incomplete as a repair: it clears one sector, so entries living in the
+second and later root sectors survive untouched.
+
+**Remediation:** remove both call sites. Neither suite needs it — both already
+pre-delete their own fixtures. Keep the driver API itself (it is a
+`SD_INCLUDE_DEBUG` recovery tool), but no regression suite may call it.
+
+### 4.3 Remediation list (risk-ordered)
+
+1. **`file_ops:107-110`, `subdir_ops:95-98`** — remove the `debugClearRootDir()`
+   calls (§4.2). Highest risk: silent, cumulative, card-wide.
+2. **`directory`** — extend `cleanupTestItems()` to cover `DEEP1`-`DEEP5` (+
+   `DEEP.TXT`), `RTMANY` (+ `12345678.123`), `STALE`, `STPOLL.TXT`, so an aborted
+   run cannot poison the next one's `newDirectory()` assertions.
+3. **`volume`** — extend `cleanupTestFiles()` to cover `DF00`-`DF29`,
+   `DFTEST.BIN`, `DFVERFY.BIN`, `VLFLUSH.TXT`.
+4. **`read_write`** — add a `clusterBytes()`/`freeSpace()` capacity gate for the
+   ~384 KB peak, and check the `readVBRRaw()` result at `:795` (prefer the
+   driver's `sectorsPerCluster()` / `clusterBytes()` over hand-parsing the VBR).
+5. **`defrag`** — add a capacity gate ahead of the ~192 KB fragmentation builds.
+6. **`stress`** — add a capacity gate and make `createStressFiles()` failure
+   report SETUP NOT MET instead of cascading into four opaque failures.
+7. **`raw_sector`, `multiblock`** — gate the scratch LBA range on
+   `cardSizeSectors()`; document the range as scratch; give `multiblock` an
+   `unmount()`.
+8. **`format`** — assert the ≥64 MB card-size precondition it already reads.
+
+Gates use the §2 helpers (`clustersForBytes`, `assertFreeSpace`) and the §1
+`clusterBytes()`, with the fatchain suite's local-first idiom (`:104-115`) as the
+model, so a card that is genuinely too small reports SETUP NOT MET rather than
+failing opaquely.
+
 ---
 
 ## 5. Driver fix — `do_write_h` follow-or-allocate + guards
@@ -320,6 +418,76 @@ grow returns partial `bytes_written`, not corruption; FAT read failure surfaces
 `false`/partial, never a silent wrong-link. Invariant — `root_sec` guard never
 fires in a passing run.
 
+### 5.1 Pre-analysis (container, 2026-07-23) — read-only, no driver edit
+
+Done ahead of the fix because it needs no hardware; **no driver line was
+changed** (the edit must follow the §7 DETECT run). Confirm on re-read at fix time.
+
+**Line numbers have shifted** from the §5 text above (the plan warned they would):
+`do_write_h` now at `:3822`; boundary-advance **site 1 at `:3880`** (was `:3870`),
+**site 2 at `:3958`** (was `:3948`); Bug B predicate at **`:3904`** (was `:3894`);
+top of `repeat while count > 0` at **`:3889`**.
+
+**§5e — DEFRAG prealloc path is immune. Answer: it CAN run during an in-place
+cross-boundary overwrite, and it is still correct, by construction.**
+`h_prealloc_end` is written in exactly one place, `do_create_contiguous:5282`,
+after `allocateContiguousChain(new_first, cluster_count)` (`:5216`) has **already
+written the FAT links** for the whole reserved run — so for those clusters
+`FAT[N] == N+1`. It is cleared at `do_close_h:3716`, and the DAT array
+(`:756`) initialises to 0, so every handle from `openFileWrite`/`createFileNew`
+takes the normal path. Within one open a caller *can* seek back and overwrite
+across a boundary; the prealloc branch then advances to `h_cluster + 1`, which is
+**the same cluster the FAT chain names** — it follows rather than allocates, so it
+cannot orphan a tail and never calls `allocateCluster`. Bug A is therefore
+structurally impossible on that branch, and it needs no correction. One
+pre-existing asymmetry to leave alone: past `h_prealloc_end` the branch reports
+"Pre-allocated space exhausted" and returns partial instead of growing — that is
+the documented contiguous-file contract, not Bug A.
+
+**§5f — confirmed: `do_write_h` is the only file-data write path.** It has exactly
+one caller, the worker dispatch at `:2832` (`CMD_WRITE_H`). Both public entry
+points funnel there — `writeHandle:998` (blocking) and `startWriteHandle:1367`
+(async, same `pb_cmd := CMD_WRITE_H`). No legacy non-handle `do_write` exists;
+`do_open_write:3531` only opens. The remaining `PUB *write*` methods are raw-sector
+(`writeSectorRaw:1683`, `writeSectorsRaw:1718`) which bypass the filesystem
+entirely, plus diagnostics/getters. The other `allocateCluster` callers remain
+directory-extend / new-chain (append-only) as recorded in §5f.
+
+### 5.2 Implemented (2026-07-24) — driver fix landed, compile-verified
+
+Applied to `src/micro_sd_fat32_fs.spin2` after the DETECT gate proved red
+(`DOCs/Agent-Reports/BASELINE-DETECT-RUN-2026-07-23.md`: fatchain 0/2, 25/26 green).
+
+- **5a — `PRI writeAdvanceCluster(handle)`** added immediately before `do_write_h`
+  (now `:3822`). Mirrors `do_read_h`'s chain-follow idiom verbatim
+  (`readSector(cluster >> 7 + fat_sec, BUF_FAT)`, `fat_addr := @fat_buf +
+  ((cluster << 2) & SECTOR_OFFSET_MASK)`, `next_cluster +>= FAT32_EOC_MIN`).
+  EOC → `allocateCluster(cluster)` (grow); else FOLLOW the link. Returns
+  `false` on FAT-read or alloc failure.
+- **5b — both boundary-advance sites** now call
+  `if not writeAdvanceCluster(handle)` in the non-prealloc `else` branch — site 1
+  (`:3918`) sets `count := 0`; site 2 (`:4003`) does `quit`. The
+  `#ifdef SD_INCLUDE_DEFRAG` prealloc fast paths are unchanged.
+- **5c — `root_sec` data-region guard** at the top of `repeat while count > 0`
+  (`:3927`): `if h_sector[handle] < root_sec` → debug `REFUSING metadata-region
+  write` + `quit` (returns partial `bytes_written`, never metadata corruption).
+- **5d — Bug B predicate** at `:3948` is now
+  `if (h_position[handle] & !SECTOR_OFFSET_MASK) < h_size[handle]` — loads the
+  existing sector when its first byte is in-file, so a mid-sector append keeps
+  the leading bytes.
+- **Locals:** `new_cluster` kept — still live in the DEFRAG prealloc branch.
+  No consumer change (read/seek already follow chains).
+
+**Compile-verified both conditional paths:** `--compile-only --include-format`
+→ 26/26 suites + reformat vehicle (DEFRAG on via `SD_INCLUDE_ALL`); a throwaway
+core-only consumer with **no** `SD_INCLUDE_*` (DEFRAG off, `new_cluster` unused,
+prealloc branch elided) → clean 32 KB build. `writeAdvanceCluster` and both new
+call sites are outside any `#ifdef`, so they compile identically on both paths.
+
+**Behavioral PASS still owed by the hardware CONFIRM gate (§7 Step 2 / task «#8»):**
+reformat the DETECT card, rerun `SD_RT_fatchain_tests`, expect 2/2, then the
+full two-geometry regression — all other suites must stay green.
+
 ---
 
 ## 6. Runner upgrade — head-to-tail regression with in-run reformat
@@ -351,6 +519,50 @@ two-geometry head-to-tail runs.
 leaves a mountable card. Edge — resume via `--from` still works; a run that hits
 a real failure still stops-on-first-failure and reports. Error — reformat failure
 is surfaced loudly, not swallowed; single-suite `run_test.sh` is unaffected.
+
+### 6.1 Implemented (2026-07-23) — `tools/run_regression.sh`
+
+**Reformat vehicle:** `src/UTILS/SD_format_card.spin2` — already non-interactive,
+prints `FORMAT SUCCESSFUL` / `FORMAT FAILED` and `END_SESSION`, honours
+`-D SD_PINS_EXTERNAL`. Launched through the *unmodified* `run_test.sh`
+(300 s timeout), so the destructive logic lives entirely in the regression runner.
+
+**Policy (hardware runs, default on):**
+- baseline reformat before the first suite — including on a `--from` resume,
+  since §4 made the suites self-establishing;
+- `REFORMAT_BEFORE` = `SD_RT_fatchain_tests` (needs a known free-space baseline
+  for its capacity gate);
+- `REFORMAT_AFTER` = `SD_RT_fatchain_tests` (on the unfixed driver its writes
+  damage FAT/VBR — Bug A), `SD_RT_format_tests` (leaves its own label/geometry);
+- de-duplicated by a `CARD_IS_FRESH` flag, so a `--from fatchain` resume formats
+  once, not twice.
+
+**Deliberate non-behavior — no auto-reformat after a suite FAILURE.** The §7
+DETECT step needs the post-failure on-card damage as evidence; wiping it would
+destroy the proof. The runner instead reports "card left as-is … when done:
+`./run_regression.sh --reformat-only`".
+
+**New flags:** `--no-reformat` (preserve card contents), `--reformat-only`
+(reformat and exit — the recovery path; mutually exclusive with `--compile-only`).
+
+**Reformat success is verified, not assumed:** a clean `run_test.sh` exit is not
+enough — the runner re-reads the format log (stripping pnut-term-ts per-line
+timestamps first, since they split words mid-line) and requires the literal
+`FORMAT SUCCESSFUL` marker. Failure prints a red block naming the phase and log
+path, then aborts the run (exit 1) rather than continuing on an unknown card.
+
+**Other integration:** Phase 1b compiles the reformat vehicle up front (fail fast
+rather than halfway through a hardware run) and reports it on its own line, so the
+26/26 suite compile count is unchanged; the summary table gained a
+`card reformats (N)` time row; the banner prints the card policy in effect.
+
+**Verified without hardware:** `--compile-only --include-format` → 26/26 plus the
+vehicle; `bash -n` clean; and a stubbed-hardware simulation (fake `run_test.sh` in
+a scratch tree) exercised full run, `--from` resume + de-dup, suite failure
+(no after-reformat, hint shown), mid-run reformat failure (summary + ABORTED),
+clean-exit-but-failed-format detection, `--no-reformat` (zero formats),
+`--reformat-only`, and the `--reformat-only --compile-only` rejection.
+`git diff tools/run_test.sh` is empty — the guard holds.
 
 ---
 

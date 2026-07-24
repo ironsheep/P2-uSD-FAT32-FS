@@ -37,6 +37,10 @@ CON
      OPEN_CLOSE_CYCLES = 20          ' Rapid open/close iteration count
      DUAL_READ_CYCLES  = 20          ' Dual-reader iteration count
 
+     ' Peak on-card footprint: STRESS_R.TXT (NUM_SECTORS sectors) plus the
+     ' STRESS_W.TXT the writer worker grows to STRESS_ITERATIONS * WRITE_SIZE.
+     PEAK_BYTES        = NUM_SECTORS * READ_SIZE + STRESS_ITERATIONS * WRITE_SIZE
+
      ' Multi-cog configuration
      NUM_WORKER_COGS = 1
      STACK_SIZE      = 128
@@ -92,7 +96,7 @@ sector_errors   LONG    0             ' Data mismatch count (main reader)
 main_cycles_ok  LONG    0             ' Successful open/close cycles (main)
 
 
-PUB go() | result
+PUB go() | result, secPerClus, cBytes, freeSec, freeClus, needClus
 '' Main entry point -- runs concurrent stress tests.
 
     debug(" ")
@@ -114,8 +118,37 @@ PUB go() | result
         debug("END_SESSION")
         return
 
-    ' Create test files
-    createStressFiles()
+    ' ------------------------------------------------------------------
+    ' Precondition gate -- geometry + free space.  Local-first idiom: resolve
+    ' each driver query into its own local BEFORE combining, so two worker-routed
+    ' calls are never chained in one Spin2 expression.
+    ' ------------------------------------------------------------------
+    secPerClus := sd.sectorsPerCluster()
+    cBytes     := sd.clusterBytes()
+    freeSec    := sd.freeSpace()
+    freeClus   := 0
+    if secPerClus > 0
+        freeClus := freeSec / secPerClus
+    needClus := utils.clustersForBytes(PEAK_BYTES, cBytes) + 1
+
+    debug("* Geometry: ", udec(secPerClus), " sec/clus, ", udec(cBytes), " bytes/clus, ", udec(freeClus), " free clusters")
+
+    if cBytes == 0 or not utils.assertFreeSpace(freeClus, needClus)
+        debug("  *** SETUP NOT MET: need ", udec_(needClus), " free clusters, have ", udec_(freeClus), " (cBytes=", udec_(cBytes), ") -- stress tests NOT run ***")
+        sd.unmount()
+        utils.ShowTestEndCounts()
+        debug("END_SESSION")
+        return
+
+    ' Create test files -- a setup failure here must be reported as a setup
+    ' failure, not left to cascade into four opaque test failures below.
+    if not createStressFiles()
+        debug("  *** SETUP NOT MET: could not create stress fixtures -- stress tests NOT run ***")
+        cleanupStressFiles()
+        sd.unmount()
+        utils.ShowTestEndCounts()
+        debug("END_SESSION")
+        return
 
     ' ----------------------------------
     ' TEST GROUP 1: Sustained Concurrent Read + Write
@@ -501,11 +534,16 @@ PRI stopWorkerCogs()
         launched_cogs[0] := -1
 
 
-PRI createStressFiles() | handle, sector_idx, fill_byte
+PRI createStressFiles() : bOk | handle, sector_idx, fill_byte, bytesWritten
     ' Create STRESS_R.TXT with 10 sectors of known fill patterns
     ' and STRESS_W.TXT as empty file.
+    '
+    ' @returns bOk - TRUE when both fixtures exist with the expected content.
+    '                FALSE lets the caller report SETUP NOT MET instead of
+    '                running four tests against missing/short files.
 
     debug("  Creating stress test files...")
+    bOk := true
 
     ' Clean up any leftovers
     sd.deleteFile(@stressReadFile)
@@ -515,12 +553,15 @@ PRI createStressFiles() | handle, sector_idx, fill_byte
     handle := sd.createFileNew(@stressReadFile)
     if handle < 0
         debug("  ERROR: Could not create STRESS_R.TXT: ", sdec_(handle))
-        return
+        return false
 
     repeat sector_idx from 0 to NUM_SECTORS - 1
         fill_byte := sector_idx * $11
         bytefill(@setup_buf, fill_byte, READ_SIZE)
-        sd.writeHandle(handle, @setup_buf, READ_SIZE)
+        bytesWritten := sd.writeHandle(handle, @setup_buf, READ_SIZE)
+        if bytesWritten <> READ_SIZE
+            debug("  ERROR: short write to STRESS_R.TXT at sector ", udec_(sector_idx), ": ", sdec_(bytesWritten))
+            bOk := false
 
     sd.closeFileHandle(handle)
     debug("    Created STRESS_R.TXT (", udec_(NUM_SECTORS * READ_SIZE), " bytes)")
@@ -532,6 +573,7 @@ PRI createStressFiles() | handle, sector_idx, fill_byte
         debug("    Created STRESS_W.TXT (empty)")
     else
         debug("  ERROR: Could not create STRESS_W.TXT: ", sdec_(handle))
+        bOk := false
 
 
 PRI cleanupStressFiles()

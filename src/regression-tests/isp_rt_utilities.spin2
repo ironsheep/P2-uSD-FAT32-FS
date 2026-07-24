@@ -610,6 +610,34 @@ PUB profileReport()
     debug("  [profile] readTimeout=", udec_(profileReadTimeoutMs), "ms  writeTimeout=", udec_(profileWriteTimeoutMs), "ms")
     debug("  [profile] maxSpi=", udec_(profileMaxSpiHz / 1_000_000), " MHz  mfrId=$", uhex_byte_(profileMfrId), "  class=", udec_(profileCardClass), " (0=SDSC, 1=SDHC/SDXC)")
 
+PUB clustersForBytes(nBytes, bytesPerCluster) : nClusters
+'' Convert a byte count to the number of whole clusters needed (round up).
+'' Pure computation -- the caller passes the mounted volume's bytes/cluster
+'' (e.g. sd.clusterBytes()), keeping worker-routed driver queries out of this
+'' utility. Returns 0 when bytesPerCluster is 0 (card not mounted) or nBytes <= 0.
+''
+'' @param nBytes - byte count to cover
+'' @param bytesPerCluster - bytes per cluster of the mounted volume
+'' @returns nClusters - ceil(nBytes / bytesPerCluster), or 0 when inputs invalid
+
+    if bytesPerCluster <= 0 or nBytes <= 0
+        nClusters := 0
+    else
+        nClusters := (nBytes + bytesPerCluster - 1) / bytesPerCluster
+
+PUB assertFreeSpace(freeClusters, needClusters) : bOk
+'' TRUE when the volume has at least needClusters free clusters.
+'' Pure comparison -- the caller resolves freeClusters first via the local-first
+'' idiom (freeSectors := sd.freeSpace(); spc := sd.sectorsPerCluster();
+'' freeClusters := freeSectors / spc) so two worker-routed driver calls are
+'' never chained in one Spin2 expression.
+''
+'' @param freeClusters - free clusters on the mounted volume (caller-resolved)
+'' @param needClusters - clusters the test requires
+'' @returns bOk - TRUE if freeClusters >= needClusters
+
+    bOk := freeClusters >= needClusters
+
 con { license }
 
 {{

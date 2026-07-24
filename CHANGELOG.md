@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.4] - PENDING
+
+<!-- DRAFT (container, 2026-07-24). Bug-Fixes/Tests entries are final — the driver
+     fix is landed and compile-verified. Still owed before release: fill the
+     release DATE. The "Validated by:" line below is now filled from the hardware
+     CONFIRM run (task «#8»). Do NOT ship this section until the DATE is in and
+     [Unreleased] is empty. -->
+
+**Write-path corruption fixes: cross-boundary overwrite and mid-sector append.**
+
+<!-- Validated by: SD_RT_fatchain_tests old-FAIL (0/2) → fixed-PASS (2/2), plus
+     full 26-suite regression (471/0, incl. format) on two cluster geometries —
+     4 KB (SharedOEM 7GB) and 8 KB (Gigastone 14GB). No REFUSING metadata-write
+     line, no corruption (audit 39/39) on either card. See
+     DOCs/Agent-Reports/CONFIRM-RUN-2026-07-24.md. -->
+
+### Bug Fixes
+
+- **`writeHandle()`: Overwrites that cross a cluster boundary now follow the existing FAT chain, preserving all data beyond the overwritten region.**
+- **`writeHandle()`: Appending at a mid-sector position preserves the sector's existing leading bytes instead of zero-filling them.**
+- `writeHandle()`: Added a metadata-region write guard so file data can never reach FAT, VBR, or reserved sectors.
+
+### Tests
+
+- `SD_RT_fatchain_tests`: New suite certifying cross-boundary overwrite (chain-follow) and mid-sector append (leading-byte preservation).
+
 ## [1.5.3] - 2026-05-07
 
 **Timeout calculation overflow fix; SDSC long-write support.**

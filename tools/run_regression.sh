@@ -12,10 +12,33 @@
 #                      Compiles only that suite and remaining, then runs from there.
 #   --include-format   Include format test (WARNING: erases SD card!)
 #   --compile-only     Only compile all tests, do not run on hardware
+#   --no-reformat      Do NOT reformat the card during the run (see below)
+#   --reformat-only    Reformat the card and exit (recovery after a failed run)
+#
+# CARD IS SCRATCH (regression runner only)
+# ----------------------------------------
+# Project policy: authorizing a regression run authorizes formatting the card.
+# So a hardware run treats the card as scratch by default: it establishes a
+# clean FAT32 baseline before the first suite and reformats around the suites
+# that are genuinely destructive (see REFORMAT_BEFORE / REFORMAT_AFTER), so a
+# full run goes end-to-end unattended and leaves the card mountable.
+#
+# GUARD: this destructive behavior lives in THIS script only. Single-suite
+# tools/run_test.sh never reformats — it is used here purely as the launcher
+# for the format vehicle (src/UTILS/SD_format_card.spin2), unmodified.
+# --compile-only never touches hardware, so it never reformats.
+#
+# Reformats are the backstop, not the routine: suites are expected to
+# self-establish and self-clean their own fixtures.
+#
+# On a suite FAILURE the runner does NOT auto-reformat — that would destroy
+# the on-card forensic evidence (e.g. the fatchain DETECT run, where the
+# post-failure FAT/VBR damage IS the evidence). It prints a recovery hint
+# instead; use --reformat-only when you are done inspecting the card.
 #
 # Exit codes:
 #   0 - All tests passed
-#   1 - One or more tests failed
+#   1 - One or more tests failed (or a reformat failed)
 #
 
 set -e
@@ -47,6 +70,8 @@ COMPILE_ONLY=false
 RUN_ONLY=false
 FROM_SUITE=""
 EXTERNAL_PINS=false
+REFORMAT=true
+REFORMAT_ONLY=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -62,8 +87,11 @@ while [[ $# -gt 0 ]]; do
         --compile-only)    COMPILE_ONLY=true; shift ;;
         --run-only)        RUN_ONLY=true; shift ;;
         --external)        EXTERNAL_PINS=true; shift ;;
+        --no-reformat)     REFORMAT=false; shift ;;
+        --reformat-only)   REFORMAT_ONLY=true; shift ;;
         -h|--help)
-            echo "Usage: $0 [--from <name>] [--include-format] [--compile-only] [--run-only] [--external]"
+            echo "Usage: $0 [--from <name>] [--include-format] [--compile-only] [--run-only]"
+            echo "          [--external] [--no-reformat] [--reformat-only]"
             echo ""
             echo "Options:"
             echo "  --from <name>      Resume from suite matching <name> (substring match)"
@@ -72,14 +100,23 @@ while [[ $# -gt 0 ]]; do
             echo "  --run-only         Only recompile stale .bin files (source or driver newer)"
             echo "  --external         Compile with -D SD_PINS_EXTERNAL (use external SD header)"
             echo "                     Default (no flag): P2 Edge onboard SD slot."
+            echo "  --no-reformat      Do not reformat the card during the run"
+            echo "  --reformat-only    Reformat the card and exit (recovery after a failed run)"
+            echo ""
+            echo "The card is treated as SCRATCH on hardware runs: a clean FAT32 baseline is"
+            echo "established before the first suite and the card is reformatted around the"
+            echo "destructive suites. This runner is the ONLY place that reformats;"
+            echo "single-suite run_test.sh never does."
             echo ""
             echo "Examples:"
-            echo "  $0                              # Full regression (23 suites), Edge socket"
-            echo "  $0 --include-format             # Full regression + format (24 suites)"
+            echo "  $0                              # Full regression, Edge socket, card as scratch"
+            echo "  $0 --include-format             # Full regression + format suite"
             echo "  $0 --from volume                # Resume from SD_RT_volume_tests"
-            echo "  $0 --compile-only               # Compile check only"
+            echo "  $0 --compile-only               # Compile check only (never touches the card)"
             echo "  $0 --run-only                   # Run only (after prior compile)"
             echo "  $0 --external                   # Full regression on external SD header"
+            echo "  $0 --no-reformat                # Preserve card contents across the run"
+            echo "  $0 --reformat-only              # Restore a card left dirty by a failed run"
             exit 0
             ;;
         *) echo -e "${RED}Error: Unknown option: $1${NC}"; exit 1 ;;
@@ -93,6 +130,115 @@ PIN_DEFINE_FLAG=""
 if [[ "$EXTERNAL_PINS" == "true" ]]; then
     EXTERNAL_FLAG="--external"
     PIN_DEFINE_FLAG="-D SD_PINS_EXTERNAL"
+fi
+
+# --- Card-as-scratch (reformat) machinery -------------------------------------
+# DESTRUCTIVE. Regression runner only — see the header block. Nothing here is
+# reachable from tools/run_test.sh; it is only used as the launcher below.
+
+FORMAT_VEHICLE_BASE="SD_format_card"
+FORMAT_VEHICLE="$PROJECT_ROOT/src/UTILS/${FORMAT_VEHICLE_BASE}.spin2"
+REFORMAT_TIMEOUT=300
+
+# Suites that need a guaranteed-clean card going IN (capacity/geometry gates).
+REFORMAT_BEFORE=(
+    "SD_RT_fatchain_tests"
+)
+
+# Suites that can leave the card unusable/altered on the way OUT.
+#   fatchain — on an unfixed driver its writes damage the FAT/VBR (Bug A)
+#   format   — leaves whatever label/geometry the format suite chose
+REFORMAT_AFTER=(
+    "SD_RT_fatchain_tests"
+    "SD_RT_format_tests"
+)
+
+REFORMAT_COUNT=0
+REFORMAT_TIME=0
+
+_in_list() {   # _in_list <needle> <haystack...>
+    local needle="$1"; shift
+    local item
+    for item in "$@"; do
+        [[ "$item" == "$needle" ]] && return 0
+    done
+    return 1
+}
+
+# Reformat the card to a clean FAT32 baseline. Returns non-zero on failure.
+_reformat_card() {
+    local why="$1"
+    local start end elapsed exit_code log clean ok
+
+    printf "  ${CYAN}[reformat]${NC} %-36s " "$why"
+    start=$(date +%s)
+    set +e
+    "$SCRIPT_DIR/run_test.sh" "$FORMAT_VEHICLE" -t "$REFORMAT_TIMEOUT" $EXTERNAL_FLAG > /dev/null 2>&1
+    exit_code=$?
+    set -e
+    end=$(date +%s)
+    elapsed=$((end - start))
+    REFORMAT_COUNT=$((REFORMAT_COUNT + 1))
+    REFORMAT_TIME=$((REFORMAT_TIME + elapsed))
+
+    # Confirm the card really was formatted — a clean exit is not proof.
+    ok=false
+    log=$(ls -t "$LOG_DIR/${FORMAT_VEHICLE_BASE}_"*.log 2>/dev/null | head -1)
+    if [[ $exit_code -eq 0 && -n "$log" ]]; then
+        # pnut-term-ts timestamps can split lines mid-word: strip per-line
+        # timestamps, then join so the marker is contiguous again.
+        clean=$(sed -E 's/^\[[-0-9T:.]+\] //' "$log" | tr -d '\r\0' | tr -d '\n')
+        # Marker choice matters: the vehicle's own "FORMAT SUCCESSFUL!" is only
+        # two debug lines ahead of END_SESSION, and pnut-term-ts stops logging
+        # the moment it sees END_SESSION — so on a SUCCESSFUL format that line
+        # is routinely truncated mid-word out of the log. isp_format_utility's
+        # "FORMAT COMPLETE" is emitted only under `if ok` and is followed by
+        # four more lines, so it lands intact. Accept either; "FORMAT FAILED"
+        # is decisive regardless.
+        if [[ "$clean" != *"FORMAT FAILED"* ]]; then
+            if [[ "$clean" == *"FORMAT COMPLETE"* || "$clean" == *"FORMAT SUCCESSFUL"* ]]; then
+                ok=true
+            fi
+        fi
+    fi
+
+    if [[ "$ok" == true ]]; then
+        printf "${GREEN}OK${NC} [%3ds]\n" "$elapsed"
+        return 0
+    fi
+
+    printf "${RED}FAILED${NC} [%3ds]\n" "$elapsed"
+    echo ""
+    echo -e "${RED}============================================================${NC}"
+    echo -e "${RED}  CARD REFORMAT FAILED — $why${NC}"
+    echo -e "${RED}============================================================${NC}"
+    echo -e "  run_test.sh exit code: $exit_code"
+    if [[ -n "$log" ]]; then
+        echo -e "  ${CYAN}Log: $log${NC}"
+    else
+        echo -e "  ${YELLOW}No format log found in $LOG_DIR${NC}"
+    fi
+    echo -e "  The card is NOT in a known state. Regression aborted."
+    echo ""
+    return 1
+}
+
+if [[ "$REFORMAT_ONLY" == true ]]; then
+    if [[ "$COMPILE_ONLY" == true ]]; then
+        echo -e "${RED}Error: --reformat-only and --compile-only are mutually exclusive${NC}"
+        exit 1
+    fi
+    mkdir -p "$LOG_DIR"
+    echo ""
+    echo -e "${BOLD}  Reformatting SD card (erases all data)${NC}"
+    echo ""
+    if _reformat_card "on request"; then
+        echo ""
+        echo -e "  ${GREEN}Card reformatted — clean FAT32 baseline restored.${NC}"
+        echo ""
+        exit 0
+    fi
+    exit 1
 fi
 
 # --- Define test suites in dependency order ---
@@ -128,6 +274,7 @@ SUITES+=(
 SUITES+=(
     "SD_RT_file_ops_tests.spin2:120"
     "SD_RT_read_write_tests.spin2:90"
+    "SD_RT_fatchain_tests.spin2:120"
     "SD_RT_multihandle_tests.spin2:120"
 )
 
@@ -206,6 +353,13 @@ else
 fi
 echo "  Format test: $([[ "$INCLUDE_FORMAT" == true ]] && echo "INCLUDED (destructive!)" || echo "excluded")"
 echo "  SD pins:     $([[ "$EXTERNAL_PINS" == true ]] && echo "EXTERNAL header (base pin 16)" || echo "P2 Edge onboard slot")"
+if [[ "$COMPILE_ONLY" == true ]]; then
+    echo "  Card:        untouched (compile only)"
+elif [[ "$REFORMAT" == true ]]; then
+    echo "  Card:        SCRATCH — baseline reformat + reformat around destructive suites"
+else
+    echo "  Card:        preserved (--no-reformat) — suites must self-establish"
+fi
 if [[ "$COMPILE_ONLY" == true ]]; then
     echo "  Mode: COMPILE ONLY"
 elif [[ "$RUN_ONLY" == true ]]; then
@@ -365,6 +519,32 @@ else
     fi
 fi
 
+# --- Phase 1b: Compile the reformat vehicle ---
+# Built here so a broken format utility fails the run up front, not halfway
+# through on hardware. run_test.sh recompiles it at launch time anyway.
+if [[ "$REFORMAT" == true ]]; then
+    UTILS_DIR="$PROJECT_ROOT/src/UTILS"
+    V_SRC_PATH="$(_relpath "$PROJECT_ROOT/src" "$UTILS_DIR")"
+    V_DEMO_PATH="$(_relpath "$PROJECT_ROOT/src/DEMO" "$UTILS_DIR")"
+    cd "$UTILS_DIR"
+    if [[ "$RUN_ONLY" == true ]] && ! _needs_compile "${FORMAT_VEHICLE_BASE}.spin2"; then
+        echo -e "  ${GREEN}OK${NC}: ${FORMAT_VEHICLE_BASE}.spin2 (reformat vehicle, up-to-date)"
+    elif pnut-ts -d $CACHE_FLAGS $PIN_DEFINE_FLAG -I "$V_SRC_PATH" -I . -I "$V_DEMO_PATH" "${FORMAT_VEHICLE_BASE}.spin2" >/dev/null 2>&1; then
+        V_SIZE=$(wc -c < "${FORMAT_VEHICLE_BASE}.bin" | tr -d ' ')
+        echo -e "  ${GREEN}OK${NC}: ${FORMAT_VEHICLE_BASE}.spin2 (${V_SIZE} bytes) [reformat vehicle]"
+    else
+        echo -e "  ${RED}FAIL${NC}: ${FORMAT_VEHICLE_BASE}.spin2 [reformat vehicle]"
+        pnut-ts -d $CACHE_FLAGS $PIN_DEFINE_FLAG -I "$V_SRC_PATH" -I . -I "$V_DEMO_PATH" "${FORMAT_VEHICLE_BASE}.spin2" 2>&1 | grep -i error || true
+        cd "$SCRIPT_DIR"
+        echo ""
+        echo -e "${RED}The reformat vehicle does not compile — the runner cannot establish${NC}"
+        echo -e "${RED}a clean card. Fix it, or rerun with --no-reformat.${NC}"
+        exit 1
+    fi
+    cd "$SCRIPT_DIR"
+    echo ""
+fi
+
 if [[ "$COMPILE_ONLY" == true ]]; then
     if [[ $COMPILE_PASS -gt 0 ]]; then
         echo -e "${GREEN}All ${COMPILE_PASS} test suites compiled successfully.${NC}"
@@ -388,6 +568,20 @@ TOTAL_FAIL=0
 TOTAL_TIME=0
 SUITES_RUN=0
 FAILED_SUITE=""
+REFORMAT_FAILED=false
+CARD_LEFT_DIRTY=false
+CARD_IS_FRESH=false        # true = nothing has touched the card since the last format
+
+# Establish a known-clean FAT32 baseline before the first suite. Also applies
+# to a --from resume: suites self-establish their own fixtures, so a clean card
+# is the correct starting state. Use --no-reformat to preserve card contents.
+if [[ "$REFORMAT" == true ]]; then
+    if ! _reformat_card "baseline (clean FAT32)"; then
+        exit 1
+    fi
+    CARD_IS_FRESH=true
+    echo ""
+fi
 
 for i in "${!SUITES[@]}"; do
     if [[ $i -lt $START_INDEX ]]; then
@@ -401,6 +595,17 @@ for i in "${!SUITES[@]}"; do
     SUITES_RUN=$((SUITES_RUN + 1))
     SUITE_NUM=$((i + 1))
 
+    # Suites that require a guaranteed-clean card going in. Skipped when the
+    # card was just formatted and nothing has run since (avoids a double format
+    # at the head of a --from resume).
+    if [[ "$REFORMAT" == true && "$CARD_IS_FRESH" == false ]] && _in_list "$BASENAME" "${REFORMAT_BEFORE[@]}"; then
+        if ! _reformat_card "before $BASENAME"; then
+            REFORMAT_FAILED=true
+            break
+        fi
+    fi
+
+    CARD_IS_FRESH=false
     START_TIME=$(date +%s)
 
     # Run the test via run_test.sh
@@ -458,10 +663,24 @@ for i in "${!SUITES[@]}"; do
         printf "  ${RED}[%2d/%d] %-38s %4d pass, %3d fail  [%3ds]${NC}\n" \
             "$SUITE_NUM" "$TOTAL_SUITES" "$BASENAME" "$SUITE_PASS" "$SUITE_FAIL" "$ELAPSED"
         FAILED_SUITE="$BASENAME"
+        # Deliberately NO reformat here: a failed destructive suite leaves the
+        # on-card evidence that explains the failure. Preserve it for inspection.
+        if _in_list "$BASENAME" "${REFORMAT_AFTER[@]}"; then
+            CARD_LEFT_DIRTY=true
+        fi
         break
     else
         printf "  ${GREEN}[%2d/%d]${NC} %-38s %4d pass, %3d fail  [%3ds]\n" \
             "$SUITE_NUM" "$TOTAL_SUITES" "$BASENAME" "$SUITE_PASS" "$SUITE_FAIL" "$ELAPSED"
+    fi
+
+    # Suites that can leave the card unusable/altered on the way out
+    if [[ "$REFORMAT" == true ]] && _in_list "$BASENAME" "${REFORMAT_AFTER[@]}"; then
+        if ! _reformat_card "after $BASENAME"; then
+            REFORMAT_FAILED=true
+            break
+        fi
+        CARD_IS_FRESH=true
     fi
 done
 
@@ -486,12 +705,28 @@ done
 
 printf "  %-4s %-38s %5s %5s %5s\n" "--" "--------------------------------------" "----" "----" "----"
 printf "  %-4s %-38s %5d %5d %4ds\n" "" "TOTAL" "$TOTAL_PASS" "$TOTAL_FAIL" "$TOTAL_TIME"
+if [[ $REFORMAT_COUNT -gt 0 ]]; then
+    printf "  %-4s %-38s %5s %5s %4ds\n" "" "card reformats (${REFORMAT_COUNT})" "" "" "$REFORMAT_TIME"
+fi
 echo ""
+
+if [[ "$REFORMAT_FAILED" == true ]]; then
+    echo -e "  ${RED}ABORTED: card reformat failed — see the block above.${NC}"
+    echo -e "  ${YELLOW}The card is in an unknown state; results after this point are void.${NC}"
+    echo ""
+    exit 1
+fi
 
 if [[ -n "$FAILED_SUITE" ]]; then
     echo -e "  ${RED}STOPPED: $FAILED_SUITE failed (suite $SUITE_NUM of $TOTAL_SUITES)${NC}"
     if [[ -n "$LATEST_LOG" ]]; then
         echo -e "  ${CYAN}Log: $LATEST_LOG${NC}"
+    fi
+    if [[ "$CARD_LEFT_DIRTY" == true ]]; then
+        echo ""
+        echo -e "  ${YELLOW}$FAILED_SUITE is destructive — the card was left as-is so you can${NC}"
+        echo -e "  ${YELLOW}inspect the damage (e.g. run the SD FAT32 audit).${NC}"
+        echo -e "  ${CYAN}When done: ./run_regression.sh --reformat-only${NC}"
     fi
     echo ""
     exit 1

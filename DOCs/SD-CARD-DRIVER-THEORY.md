@@ -569,6 +569,42 @@ The driver uses a next-fit allocator rather than first-fit. After each allocatio
 
 The driver maintains `fsi_free_count` and `fsi_nxt_free` incrementally during operation (rather than scanning the entire FAT). Both are persisted to the FSInfo sector at unmount.
 
+## Write Path — Follow or Allocate
+
+All file data is written by `do_write_h` (the sole file-data write path; both `writeHandle()` and the async `startWriteHandle()` dispatch to it). It writes a sector at a time out of the per-handle buffer, advancing position as it goes. Three rules govern what happens at the edges — and each rule exists because getting it wrong corrupts data:
+
+### Crossing a cluster boundary: follow the chain, allocate only at end-of-chain
+
+When a write fills the last sector of a cluster and more data remains, the handle must move to the next cluster. There are two distinct cases, and the driver must tell them apart:
+
+- **Overwrite (the cluster already links forward).** When a file is reopened and written over existing content, the current cluster's FAT entry already points to the next cluster in the file's chain. The driver must **follow** that link.
+- **Growth (the cluster is end-of-chain).** When the write extends past the file's current allocation, the current cluster's FAT entry is an EOC marker (`>= $0FFF_FFF8`). Only then does the driver **allocate** a fresh cluster and link it on.
+
+`writeAdvanceCluster()` decides between the two by reading the current cluster's FAT entry (mirroring the read path's chain-follow logic exactly): if the entry is `+>= FAT32_EOC_MIN` it grows via `allocateCluster()`, otherwise it follows the existing link. Unconditionally allocating here — the historical Bug A — overwrites a live FAT link during an in-place overwrite, orphaning the remainder of the chain and silently truncating the file on the next read. On a healthy card this loss is *data-level* and does not necessarily trip a structural FAT/VBR audit.
+
+> **DEFRAG note.** With `SD_INCLUDE_DEFRAG`, a pre-allocated contiguous file (`h_prealloc_end > 0`) takes a fast path that advances to `h_cluster + 1` without reading the FAT. This is safe by construction: `allocateContiguousChain()` has already written the sequential FAT links for the whole reserved run, so `h_cluster + 1` *is* the chain's next cluster — the fast path follows the same link `writeAdvanceCluster` would, just without the read. It never allocates across a boundary, so Bug A cannot occur on it.
+
+### Mid-sector writes: load the existing sector, do not zero-fill
+
+Before modifying a sector's buffer, the driver decides whether to read the existing on-disk sector or start from a zero-filled buffer. The test is **whether the sector's first byte lies within the file**, not whether the write position does:
+
+```spin2
+if (h_position & !SECTOR_OFFSET_MASK) < h_size    ' sector-aligned base position
+```
+
+Appending at a position that is mid-sector (for example, a 100-byte file reopened and extended) leaves `h_position == h_size`, both inside the same sector. Testing `h_position < h_size` directly (the historical Bug B) reports "past end of file" and zero-fills the buffer, wiping the file's existing leading bytes. Sector-aligning the position first makes the test ask the correct question, so the existing bytes are loaded and preserved.
+
+### Metadata-region guard
+
+At the top of the write loop the driver refuses to write any sector below `root_sec`:
+
+```spin2
+if h_sector[handle] < root_sec
+  ' REFUSING metadata-region write -> return partial bytes_written
+```
+
+File data always lives at or after `root_sec` (the first data cluster maps to `root_sec`). A target below it means the chain walk has gone wrong and landed in the FAT, VBR, or reserved region. This is a correct-by-construction backstop: it must **never** fire during a passing run, and if it does it stops before corrupting filesystem metadata, returning the bytes written so far rather than an error. Its firing is treated as a real defect, not a recoverable condition.
+
 ## Auto-Flush on Idle
 
 The worker cog monitors idle time between commands. When no command arrives for 200ms (`IDLE_FLUSH_MS`), the worker scans all handles for dirty buffers and flushes them to disk:

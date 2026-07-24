@@ -1212,6 +1212,16 @@ PUB sectorsPerCluster() : count
 
   count := sec_per_clus
 
+PUB clusterBytes() : n
+'' Get the number of bytes per cluster of the mounted volume.
+'' Returns 0 if no card is mounted. Direct DAT read (not worker-routed).
+'' Test helper: lets a suite place a write exactly on a cluster boundary
+'' and size fixtures to cluster geometry at run time.
+''
+'' @returns n - Bytes per cluster (sec_per_clus * 512), or 0 when unmounted
+
+  n := sec_per_clus << SECTOR_SHIFT
+
 PUB setDate(year, month, day, hour, minute, second) : status
 '' Set the current date and time for file timestamps.
 '' Starts the auto-incrementing clock (CT1-based, 2-second tick).
@@ -3809,6 +3819,43 @@ PRI do_read_h(handle, p_buffer, count) : bytes_read | p_hbuf, available, offset,
 
     DEBUG[CH_FILE]("  [do_read_h] Read ", udec_(bytes_read), " bytes, pos now ", udec_(h_position[handle]))
 
+PRI writeAdvanceCluster(handle) : ok | cluster, fat_addr, next_cluster, new_cluster
+' Advance a write handle across a cluster boundary: FOLLOW the existing FAT link
+' when the current cluster already links forward (in-place overwrite), and only
+' allocate a fresh cluster when the current cluster is truly end-of-chain (growth).
+'
+' Mirrors do_read_h's chain-follow idiom exactly. The unconditional allocate that
+' used to live at the boundary-advance sites re-linked a live FAT entry on a
+' cross-boundary overwrite, orphaning the tail of the chain (Bug A).
+'
+' @param handle - Valid write handle, positioned at a cluster boundary
+' @returns ok - TRUE on success (h_cluster/h_sector advanced), FALSE on I/O or alloc failure
+' @local cluster - Current cluster whose FAT entry we read
+' @local fat_addr - Address of the current cluster's FAT entry in fat_buf
+' @local next_cluster - The FAT link out of the current cluster
+' @local new_cluster - Freshly allocated cluster when growing the chain
+
+  cluster := h_cluster[handle]
+  if readSector(cluster >> 7 + fat_sec, BUF_FAT) < 0
+    DEBUG[CH_FILE]("  [writeAdvanceCluster] FAT read FAILED for cluster ", udec_(cluster))
+    return false
+  fat_addr := @fat_buf + ((cluster << 2) & SECTOR_OFFSET_MASK)
+  next_cluster := LONG[fat_addr]
+  if next_cluster +>= FAT32_EOC_MIN
+    ' Truly end-of-chain -- grow the file by allocating a new cluster
+    new_cluster := allocateCluster(cluster)
+    if new_cluster < 0
+      DEBUG[CH_FILE]("  [writeAdvanceCluster] Failed to allocate cluster at EOC")
+      return false
+    DEBUG[CH_FILE]("  [writeAdvanceCluster] Grew chain: allocated cluster ", udec_(new_cluster))
+    h_cluster[handle] := new_cluster
+    h_sector[handle] := clus2sec(new_cluster)
+  else
+    ' Cluster already links forward (in-place overwrite) -- FOLLOW it, do not allocate
+    h_cluster[handle] := next_cluster
+    h_sector[handle] := clus2sec(next_cluster)
+  return true
+
 PRI do_write_h(handle, p_buffer, count) : bytes_written | p_hbuf, offset, to_write, new_cluster
 ' Handle-based write - writes data from user buffer to file handle.
 ' Uses per-handle buffer with dirty tracking. File grows as needed.
@@ -3867,16 +3914,19 @@ PRI do_write_h(handle, p_buffer, count) : bytes_written | p_hbuf, offset, to_wri
             h_sector[handle] := clus2sec(new_cluster)
         else
 #endif
-          new_cluster := allocateCluster(h_cluster[handle])
-          if new_cluster < 0
-            DEBUG[CH_FILE]("  [do_write_h] Failed to allocate cluster at boundary advance")
-            count := 0                                  ' Skip main loop
-          else
-            h_cluster[handle] := new_cluster
-            h_sector[handle] := clus2sec(new_cluster)
+          ' Follow the FAT chain on overwrite; allocate only at genuine EOC (Bug A fix)
+          if not writeAdvanceCluster(handle)
+            count := 0                                  ' Skip main loop (I/O or alloc failure)
 
     bytes_written := 0
     repeat while count > 0
+      ' Data-region write guard: file data lives at/after root_sec. A target below
+      ' it means the chain walk landed in FAT/VBR/reserved space -- refuse rather
+      ' than corrupt metadata. Correct-by-construction backstop; must never fire
+      ' in a passing run.
+      if h_sector[handle] < root_sec
+        DEBUG[CH_FILE]("  [do_write_h] REFUSING metadata-region write at sector ", udec_(h_sector[handle]))
+        quit                                            ' Return bytes_written so far (partial), never metadata corruption
       ' Ensure current sector is in handle's buffer
       if h_buf_sector[handle] <> h_sector[handle]
         ' Flush dirty buffer first if needed
@@ -3890,8 +3940,12 @@ PRI do_write_h(handle, p_buffer, count) : bytes_written | p_hbuf, offset, to_wri
             quit                                       ' Otherwise return partial write count to caller
           h_flags[handle] &= !HF_DIRTY
 
-        ' Load sector (or zero-fill if writing past end)
-        if h_position[handle] < h_size[handle]
+        ' Load sector (or zero-fill if writing past end).
+        ' Load when this sector's FIRST byte is within the file, so a mid-sector
+        ' append (pos == size, both mid-sector) preserves the existing leading
+        ' bytes instead of zero-filling them (Bug B fix). SECTOR_OFFSET_MASK is
+        ' bitwise-negated to sector-align the position.
+        if (h_position[handle] & !SECTOR_OFFSET_MASK) < h_size[handle]
           ' Within existing file - load sector
           if readSector(h_sector[handle], BUF_DATA) < 0
             DEBUG[CH_FILE]("  [do_write_h] Sector read FAILED for sector ", udec_(h_sector[handle]))
@@ -3945,13 +3999,9 @@ PRI do_write_h(handle, p_buffer, count) : bytes_written | p_hbuf, offset, to_wri
             h_sector[handle] := clus2sec(new_cluster)
           else
 #endif
-            new_cluster := allocateCluster(h_cluster[handle])
-            if new_cluster < 0
-              DEBUG[CH_FILE]("  [do_write_h] Failed to allocate cluster")
-              quit                                      ' Return what we've written so far
-            DEBUG[CH_FILE]("  [do_write_h] Allocated new cluster ", udec_(new_cluster))
-            h_cluster[handle] := new_cluster
-            h_sector[handle] := clus2sec(new_cluster)
+            ' Follow the FAT chain on overwrite; allocate only at genuine EOC (Bug A fix)
+            if not writeAdvanceCluster(handle)
+              quit                                      ' Return what we've written so far (I/O or alloc failure)
 
     DEBUG[CH_FILE]("  [do_write_h] Wrote ", udec_(bytes_written), " bytes, size now ", udec_(h_size[handle]))
 

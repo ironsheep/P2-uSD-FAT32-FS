@@ -42,12 +42,18 @@ CON
     SD_MISO = 58
     SD_SCK  = 61
 #endif
-    ' Test sector numbers (in free space area, safe for 64GB+ cards)
+    ' Scratch sector base. These are RAW LBAs written while the card is also
+    ' mounted as a filesystem -- sanctioned because a regression card is project
+    ' scratch, but the range must be verified to exist on the card before use so a
+    ' small card reports a precondition failure instead of confusing I/O errors.
     TEST_SECTOR_BASE = 200_000
 
     ' Test sizes
     SMALL_COUNT      = 8            ' Standard multi-block test size
     LARGE_COUNT      = 64           ' Large multi-block test
+
+    ' Highest scratch LBA touched: TEST 5 starts at base+50 and runs LARGE_COUNT.
+    TEST_SECTOR_MAX  = TEST_SECTOR_BASE + 50 + LARGE_COUNT - 1
 
 
 ' Enable full driver features for multi-block testing
@@ -81,7 +87,7 @@ VAR
     BYTE    cmd12_buf[16]
     BYTE    cmd12_pre_buf[7]
 
-PUB go() | result
+PUB go() | result, cardSectors
 '' Main entry point for multi-block data integrity tests
 ''
 '' Tests readSectorsRaw/writeSectorsRaw operations
@@ -114,6 +120,17 @@ PUB go() | result
       debug("  CMD23: SUPPORTED (pre-defined block count)")
     else
       debug("  CMD23: not supported in SPI mode")
+
+    ' ----------------------------------------
+    ' Precondition gate: the scratch LBA range must exist on this card.
+    ' ----------------------------------------
+    cardSectors := sd.cardSizeSectors()
+    debug("Card size: ", udec_(cardSectors), " sectors; scratch range ", udec_(TEST_SECTOR_BASE), "..", udec_(TEST_SECTOR_MAX))
+    if cardSectors <= TEST_SECTOR_MAX
+        debug("  *** SETUP NOT MET: card has ", udec_(cardSectors), " sectors, scratch range needs > ", udec_(TEST_SECTOR_MAX), " -- multi-block tests NOT run ***")
+        sd.unmount()
+        debug("END_SESSION")
+        return
     debug(" ")
 
     ' ========================================
@@ -146,6 +163,10 @@ PUB go() | result
     debug(" ")
     debug("* Worker cog stack: ", udec_(sd.reportStackDepth()), " of ", udec_(sd.STACK_SIZE), " longs used")
 #endif
+
+    ' Release the filesystem cleanly -- this suite left the card mounted, which
+    ' skipped the final cache flush that every other suite performs on teardown.
+    sd.unmount()
 
     debug(" ")
     debug("============================================================")

@@ -53,12 +53,21 @@ CON
     SD_MISO = 58
     SD_SCK  = 61
 #endif
-    ' Test sector numbers (in free space area, safe for 64GB+ cards)
+    ' Scratch sector numbers. These are RAW LBAs -- the suite runs in MODE_RAW
+    ' (initCardOnly, no filesystem), so it writes whatever lives at these
+    ' addresses. That is sanctioned: a regression card is project scratch. The
+    ' range must still be verified to exist on the card before use, otherwise a
+    ' small card fails with confusing I/O errors instead of a clear precondition
+    ' message.
     TEST_SECTOR_A   = 100_000   ' Sequential pattern
     TEST_SECTOR_B   = 100_001   ' Alternating AA/55
     TEST_SECTOR_C   = 100_002   ' All FF
     TEST_SECTOR_D   = 100_003   ' All 00
     TEST_SECTOR_E   = 100_004   ' Incrementing with offset
+
+    ' Highest scratch LBA touched, plus the high-LBA addressing probe at 1,000,000
+    ' (that probe tolerates an out-of-range result, so it is not part of the gate).
+    TEST_SECTOR_MAX = TEST_SECTOR_E
 
 
 ' Enable full driver features for raw sector testing
@@ -86,7 +95,7 @@ VAR
     LONG    pass_count
     LONG    fail_count
 
-PUB go() | result, idx, sector
+PUB go() | result, idx, sector, cardSectors
 '' Main entry point for raw sector round-trip tests
 ''
 '' Tests readSectorRaw/writeSectorRaw operations with various patterns
@@ -109,6 +118,16 @@ PUB go() | result, idx, sector
         return
 
     debug("Card initialized successfully")
+
+    ' ----------------------------------------
+    ' Precondition gate: the scratch LBA range must exist on this card.
+    ' ----------------------------------------
+    cardSectors := sd.cardSizeSectors()
+    debug("Card size: ", udec_(cardSectors), " sectors; scratch range ", udec_(TEST_SECTOR_A), "..", udec_(TEST_SECTOR_MAX))
+    if cardSectors <= TEST_SECTOR_MAX
+        debug("  *** SETUP NOT MET: card has ", udec_(cardSectors), " sectors, scratch range needs > ", udec_(TEST_SECTOR_MAX), " -- raw sector tests NOT run ***")
+        debug("END_SESSION")
+        return
     debug(" ")
 
     ' ========================================
