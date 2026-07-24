@@ -190,7 +190,7 @@ echo ""
 echo -e "${GREEN}=== Running test (headless mode) ===${NC}"
 echo "  Binary:  $BIN_FILE"
 echo "  Timeout: ${TIMEOUT_SECS} seconds"
-echo "  Baud:    2000000"
+echo "  Baud:    from binary (_baud_)"
 echo ""
 
 # Create logs subdirectory in test location for pnut-term-ts
@@ -199,9 +199,14 @@ mkdir -p "./logs"
 # Record time before running (to find new log files)
 BEFORE_TIME=$(date +%s)
 
-# Run pnut-term-ts in headless mode
+# Run pnut-term-ts in headless mode.
+# NOTE: do NOT pass -b/--debugbaud on a -r download. pnut-term-ts reads the
+# compiled debug baud (_baud_) out of the binary and listens at that exact rate;
+# a -b flag OVERRIDES that authoritative value with a guess and produces garbage
+# if it disagrees. The sources bake DEBUG_BAUD = 2_000_000, so the binary already
+# carries the right rate. (-b is only for attach-to-running-P2 with no download.)
 RUN_START=$(date +%s)
-pnut-term-ts --headless -r "$BIN_FILE" -b 2000000 --end-marker --timeout "$TIMEOUT_SECS"
+pnut-term-ts --headless -r "$BIN_FILE" --end-marker --timeout "$TIMEOUT_SECS"
 PNUT_EXIT_CODE=$?
 RUN_END=$(date +%s)
 RUN_ELAPSED=$((RUN_END - RUN_START))
