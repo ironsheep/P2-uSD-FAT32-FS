@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Write-path corruption fixes; broader card compatibility; write-error reliability.**
 
-Two data-corruption defects are fixed, both in **rewriting an existing file**. Files created once and written front to back — the common case, including data loggers that only append sector-aligned records — were never affected.
+Two data-corruption defects are fixed, both in **rewriting an existing file**. Files created once and written front to back — including data loggers that only append sector-aligned records — were never affected.
 
 ### Bug Fixes
 
