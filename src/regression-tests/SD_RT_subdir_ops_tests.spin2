@@ -93,7 +93,7 @@ PUB go() | result, handle, dh, count, pEntry
     debug("* SD Card Information:")
     debug("   Volume Label: ", zstr_(sd.volumeLabel()))
 
-    ' NOTE: do NOT call debugClearRootDir() for a "clean slate". It zeroes only
+    ' NOTE: do NOT call debugZeroRootSector() for a "clean slate". It zeroes only
     ' the first root sector and frees NO FAT clusters, so every entry it erases
     ' leaks its cluster chain permanently -- and it destroys other suites'
     ' fixtures, making this suite order-dependent. Each test below deletes the

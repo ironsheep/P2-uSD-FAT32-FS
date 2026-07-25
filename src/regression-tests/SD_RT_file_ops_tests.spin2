@@ -104,7 +104,7 @@ PUB go() | result, handle, h1, h2, h3, fileSize, bytesWritten, bytesRead, root_s
     debug("   Sec/FAT: ", udec_(sd.debugGetSecPerFat()))
     debug("   Root sec: ", udec_(sd.debugGetRootSec()))
 
-    ' NOTE: this suite must NOT call debugClearRootDir(). That helper zeroes only
+    ' NOTE: this suite must NOT call debugZeroRootSector(). That helper zeroes only
     ' the first root sector and frees NO FAT clusters, so every entry it erases
     ' leaks its cluster chain permanently -- and it destroys whatever another
     ' suite left in root, making this suite order-dependent. This suite creates

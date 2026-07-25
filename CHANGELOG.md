@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- **`debugClearRootDir()` is renamed `debugZeroRootSector()`** (`SD_INCLUDE_DEBUG` only). The old name and its documentation claimed it deleted all files and folders. It does not: it zeroes only the first sector of the root directory, leaves entries in later root sectors intact, and frees no cluster chains — so everything it erases becomes lost clusters. The name and docs now say that, and point at `SD_FAT32_fsck` to reclaim the space or `SD_format_card` for a genuinely clean card.
+
 ### Bug Fixes
 
 - **`SD_FAT32_audit` no longer reports repairs it did not make.** A read-only audit lists each problem as `needs repair:` and states plainly that nothing on the card was changed; `SD_FAT32_fsck` reports the same findings as `repaired:`. Previously both printed the same past-tense line, so an audit log read as though the card had been modified.

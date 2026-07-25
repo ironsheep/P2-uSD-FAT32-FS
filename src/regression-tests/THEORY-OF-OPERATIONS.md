@@ -1158,7 +1158,7 @@ This matrix maps every public driver API method to the test file(s) that exercis
 | `setCRCValidation()` | **Y** | Enable/disable toggle |
 | `getWriteDiag()` | | Debug-only; tested manually |
 | `debugDumpRootDir()` | | Debug utility — not testable |
-| `debugClearRootDir()` | **Y** | Used in test setup |
+| `debugZeroRootSector()` | | Debug-only; deliberately not called by any suite (zeroes one sector, leaks chains) |
 
 ---
 

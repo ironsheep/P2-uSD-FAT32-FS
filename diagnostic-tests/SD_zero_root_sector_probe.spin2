@@ -1,0 +1,206 @@
+{{ =================================================================================================
+   File....... SD_zero_root_sector_probe.spin2
+   Purpose.... Certify that debugZeroRootSector()'s docstring is TRUE.
+
+               The method used to be called debugClearRootDir() and claimed "This
+               DELETES all files and folders!". It does not. It zeroes ONE sector
+               and leaks every chain it erases. This probe proves all three facts
+               the corrected docstring now states:
+
+                 FACT 1  only the FIRST root sector is zeroed -- entries in the
+                         second and later root sectors survive the call
+                 FACT 2  entries in that first sector are gone
+                 FACT 3  NO cluster chains are freed -- free space is unchanged,
+                         i.e. the erased entries' clusters are leaked
+
+               DESTRUCTIVE. Wipes part of the root directory and deliberately
+               leaks free space. Run only on a scratch card, and run
+               SD_FAT32_fsck afterwards to reclaim what this leaks (that recovery
+               is itself part of the certification -- see the operator steps).
+
+               OPERATOR STEPS (the full certification):
+                 1. tools/run_regression.sh --reformat-only        (clean card)
+                 2. run this probe                                 (facts 1-3)
+                 3. run SD_FAT32_audit    -> expect LOST CLUSTERS reported
+                 4. run SD_FAT32_fsck     -> expect them reclaimed
+                 5. run SD_FAT32_audit    -> expect STATUS: CLEAN
+
+               Steps 3-5 prove the docstring's recommended recovery path works,
+               using the deep audit certified in v1.6.0.
+
+   Author..... Stephen M Moraco
+   Started.... 25 JUL 2026
+================================================================================================= }}
+
+CON
+    _CLKFREQ        = 350_000_000
+    DEBUG_BAUD      = 2_000_000
+
+    ' SD card pin assignments
+    ' Default: P2 Edge module SD slot. Build with -D SD_PINS_EXTERNAL
+    ' to use the external SD header (base pin 16).
+#ifdef SD_PINS_EXTERNAL
+    SD_CS   = 20
+    SD_MOSI = 19
+    SD_MISO = 18
+    SD_SCK  = 21
+#else
+    SD_CS   = 60
+    SD_MOSI = 59
+    SD_MISO = 58
+    SD_SCK  = 61
+#endif
+
+    ' A root-directory sector holds 16 32-byte entries. Create enough files to
+    ' spill well past the first sector so FACT 1 is observable: files 0-15 land
+    ' in sector 0 (minus the volume label, if present), the rest follow.
+    FILE_COUNT      = 40
+    ENTRIES_PER_SEC = 16
+
+#pragma exportdef SD_INCLUDE_ALL
+
+OBJ
+    sd  : "micro_sd_fat32_fs"
+
+DAT
+    nameBuf     BYTE    "ZRS00.TXT", 0
+    payload     BYTE    "zero-root-sector probe payload", 0
+
+VAR
+    LONG    freeBefore, freeAfter
+    LONG    survivorsBefore, survivorsAfter
+    LONG    firstSecBefore, firstSecAfter
+
+PUB go() | i, handle, status
+
+    debug(" ")
+    debug("=== debugZeroRootSector() contract probe ===")
+    debug("DESTRUCTIVE -- scratch card only.")
+    debug(" ")
+
+    if sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK) <> 0
+        debug("FATAL: mount failed -- is a card inserted?")
+        finish()
+        return
+
+    ' ---- Build the fixture: enough root entries to span several sectors ----
+    debug("Creating ", udec_(FILE_COUNT), " files in the root directory...")
+    repeat i from 0 to FILE_COUNT - 1
+        makeName(i)
+        sd.deleteFile(@nameBuf)                                                 ' ignore result; may not exist
+        handle := sd.createFileNew(@nameBuf)
+        if handle < 0
+            debug("FATAL: createFileNew failed at file ", udec_(i), ", status ", sdec_(handle))
+            sd.unmount()
+            finish()
+            return
+        sd.writeHandle(handle, @payload, 31)
+        sd.closeFileHandle(handle)
+
+    sd.syncAllHandles()
+
+    freeBefore      := sd.freeSpace()
+    survivorsBefore := countFiles()
+    firstSecBefore  := countFirstSectorEntries()
+
+    debug(" ")
+    debug("Before the call:")
+    debug("  files found in root...... ", udec_(survivorsBefore))
+    debug("  entries in FIRST sector.. ", udec_(firstSecBefore))
+    debug("  free sectors............. ", udec_(freeBefore))
+    debug(" ")
+
+    ' ---- The call under test ----
+    debug("Calling debugZeroRootSector()...")
+    status := sd.debugZeroRootSector()
+    debug("  returned ", sdec_(status))
+
+    ' Remount so nothing is served from a stale cache -- we want the on-card truth.
+    sd.unmount()
+    sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+
+    freeAfter      := sd.freeSpace()
+    survivorsAfter := countFiles()
+    firstSecAfter  := countFirstSectorEntries()
+
+    debug(" ")
+    debug("After the call:")
+    debug("  files found in root...... ", udec_(survivorsAfter))
+    debug("  entries in FIRST sector.. ", udec_(firstSecAfter))
+    debug("  free sectors............. ", udec_(freeAfter))
+    debug(" ")
+
+    ' ---- The three documented facts ----
+    debug("=== CONTRACT ===")
+
+    if survivorsAfter > 0
+        debug("  FACT 1 HOLDS: ", udec_(survivorsAfter), " files in later root sectors survived")
+    else
+        debug("  FACT 1 VIOLATED: root is empty -- it deleted more than one sector")
+
+    if firstSecAfter == 0 AND firstSecBefore > 0
+        debug("  FACT 2 HOLDS: the first root sector was cleared")
+    else
+        debug("  FACT 2 VIOLATED: first sector still holds ", udec_(firstSecAfter), " entries")
+
+    if freeAfter == freeBefore
+        debug("  FACT 3 HOLDS: free space unchanged -- erased entries' clusters are LEAKED")
+    else
+        debug("  FACT 3 VIOLATED: free space moved by ", sdec_(freeAfter - freeBefore), " sectors")
+
+    debug(" ")
+    debug("Leaked clusters are now on the card by design.")
+    debug("Next: run SD_FAT32_audit (expect lost clusters), then SD_FAT32_fsck to reclaim.")
+
+    sd.unmount()
+    finish()
+
+
+PRI makeName(idx)
+' Build ZRSnn.TXT in nameBuf for index idx (0..99).
+
+    BYTE[@nameBuf][3] := "0" + (idx / 10)
+    BYTE[@nameBuf][4] := "0" + (idx // 10)
+
+
+PRI countFiles() : count | dh, nameP
+' Count entries currently enumerable in the root directory.
+
+    count := 0
+    dh := sd.openDirectory(string("/"))
+    if dh < 0
+        return 0
+    repeat
+        nameP := sd.readDirectoryHandle(dh)
+        if nameP == 0
+            quit
+        count++
+    sd.closeDirectoryHandle(dh)
+
+
+PRI countFirstSectorEntries() : count | pBuf, idx, first
+' Count live directory entries living in the FIRST root sector, read raw so the
+' answer reflects the card rather than any enumeration path.
+
+    count := 0
+    pBuf := @rawBuf
+    if sd.readSectorRaw(sd.debugGetRootSec(), pBuf) <> 0
+        return -1
+    repeat idx from 0 to ENTRIES_PER_SEC - 1
+        first := BYTE[pBuf + (idx * 32)]
+        if first == $00                                                         ' end of entries in this sector
+            quit
+        if first <> $E5                                                         ' $E5 = deleted
+            count++
+
+
+PRI finish()
+' Drain the headless terminal log backlog before END_SESSION triggers shutdown.
+
+    waitms(500)
+    debug(" ")
+    debug("END_SESSION")
+
+
+DAT
+    rawBuf      BYTE    0[512]

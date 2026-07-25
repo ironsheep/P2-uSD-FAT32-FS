@@ -239,7 +239,7 @@ All cog-to-worker communication flows through shared hub RAM variables:
 | `CMD_GET_CARD_SIZE` | 23 | `SD_INCLUDE_RAW` | Card capacity in sectors |
 | `CMD_READ_SCR` | 24 | `SD_INCLUDE_REGISTERS` | Read SCR register |
 | `CMD_DEBUG_SLOW_READ` | 25 | `SD_INCLUDE_DEBUG` | Byte-by-byte sector read |
-| `CMD_DEBUG_CLEAR_ROOT` | 26 | `SD_INCLUDE_DEBUG` | Clear root directory |
+| `CMD_DEBUG_ZERO_ROOT_SEC` | 26 | `SD_INCLUDE_DEBUG` | Zero the first root-directory sector only |
 | `CMD_READ_CID` | 27 | `SD_INCLUDE_REGISTERS` | Read CID register |
 | `CMD_READ_CSD` | 28 | `SD_INCLUDE_REGISTERS` | Read CSD register |
 | `CMD_READ_SD_STATUS` | 29 | `SD_INCLUDE_REGISTERS` | Read SD Status (ACMD13) |
@@ -928,7 +928,7 @@ All structs are packed (Spin2 default) with offsets matching their respective ha
 | `debugGetFatSec() : sector` | FAT start sector |
 | `debugGetSecPerFat() : count` | Sectors per FAT |
 | `debugDumpRootDir()` | Print root entries to debug |
-| `debugClearRootDir() : result` | Zero root directory (destructive) |
+| `debugZeroRootSector() : result` | Zero the FIRST root sector only; leaks the erased entries' chains (destructive) |
 | `debugReadSectorSlow(sector, pBuf) : result` | Byte-by-byte read (no streamer) |
 | `debugEraseBlock(start_sector) : result` | Erase one erase-block region via CMD32/33/38 |
 | `debugGetReadSectorDiag(...)` | Last readSector diagnostic data |

@@ -1522,7 +1522,7 @@ For driver development, debugging, and regression testing. Includes CRC diagnost
 | `debugGetFatSec()` | FAT start sector number |
 | `debugGetSecPerFat()` | Sectors per FAT |
 | `debugDumpRootDir()` | Print root directory entries to debug |
-| `debugClearRootDir()` | Zero root directory sector (destructive!) |
+| `debugZeroRootSector()` | Zero the FIRST root sector only; entries in later root sectors survive and the erased entries' clusters are leaked. Run `SD_FAT32_fsck` after, or `SD_format_card` for a clean card. |
 | `debugReadSectorSlow(sector, buffer)` | Byte-by-byte read without streamer |
 | `getWriteDiag()` | Last writeSector diagnostic (returns 4 values: result_code, r1_resp, data_resp, sector_num) |
 | `setTestForceReadError(count)` | Inject N forced CRC mismatches on reads (test hook) |

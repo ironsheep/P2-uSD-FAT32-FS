@@ -386,7 +386,7 @@ The driver is organized into numbered sections. Optional features occupy their o
 | Section 8: Raw Sector Access | `SD_INCLUDE_RAW` | `initCardOnly()`, `readSectors()`, `writeSectors()`, `cardSizeSectors()` |
 | Section 9: Card Registers | `SD_INCLUDE_REGISTERS` | `readCIDRaw()`, `readCSDRaw()`, `readSCRRaw()`, `readSDStatusRaw()`, `getReadTimeout()`, `getWriteTimeout()`, `getCardMaxSpeed()` |
 | Section 10: Speed Control | `SD_INCLUDE_SPEED` | `attemptHighSpeed()`, `checkHighSpeedCapability()`, `setSPISpeed()`, `isHighSpeedActive()` |
-| Section 11: Debug / Diagnostics | `SD_INCLUDE_DEBUG` | `getReadDiag()`, `getWriteDiag()`, `getCRCDiag()`, `debugSlowRead()`, `debugClearRootDir()` |
+| Section 11: Debug / Diagnostics | `SD_INCLUDE_DEBUG` | `getReadDiag()`, `getWriteDiag()`, `getCRCDiag()`, `debugSlowRead()`, `debugZeroRootSector()` |
 
 If a flag is not defined, calling any of its methods causes a **linker error** at compile time. There is no silent failure -- you get a clear "method not found" message pointing you to the missing feature flag.
 

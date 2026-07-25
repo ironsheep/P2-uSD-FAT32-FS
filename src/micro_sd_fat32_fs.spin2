@@ -111,7 +111,7 @@ CON ' command codes for worker cog
   CMD_MOVEFILE             = 17                                               ' Move file: param0=name, param1=dest folder
 #ifdef SD_INCLUDE_DEBUG
   CMD_DEBUG_SLOW_READ      = 25                                               ' DEBUG: Byte-by-byte sector read (no streamer)
-  CMD_DEBUG_CLEAR_ROOT     = 26                                               ' DEBUG: Clear root directory (fixes corruption)
+  CMD_DEBUG_ZERO_ROOT_SEC  = 26                                               ' DEBUG: Zero the FIRST root-directory sector only (leaks chains)
   CMD_DEBUG_ERASE_BLOCK    = 42                                               ' DEBUG: Erase one erase-block region: param0=start_sector
 #endif
 #ifdef SD_INCLUDE_STACK_CHECK
@@ -2446,15 +2446,24 @@ PUB debugGetSecPerFat() : count
 
   count := sec_per_fat
 
-PUB debugClearRootDir() : status
-'' DEBUG: Clear root directory (fixes corruption).
-'' Clears the root directory by writing zeros to root_sec.
-'' Use this to fix a corrupted root directory.
-'' WARNING: This DELETES all files and folders!
+PUB debugZeroRootSector() : status
+'' DEBUG: Zero the FIRST sector of the root directory. Diagnostic sledgehammer for
+'' a root directory too corrupt to enumerate -- it does NOT delete all files.
+''
+'' Exactly what it does, and does not do:
+''   - Zeroes ONLY root_sec, the first root-directory sector (16 entries).
+''     Entries in the second and later root sectors are left untouched and remain
+''     visible after the call.
+''   - Frees NO cluster chains. Every entry it erases leaks its whole chain: that
+''     space becomes lost clusters and no deleteFile() will ever return it.
+''
+'' After using this, run SD_FAT32_fsck to reclaim the lost clusters, or
+'' SD_format_card for a genuinely clean card. To delete everything, format --
+'' there is no delete-all in this driver.
 ''
 '' @returns status - 0 on success, -1 on error
 
-  status := send_command(CMD_DEBUG_CLEAR_ROOT, 0, 0, 0, 0)
+  status := send_command(CMD_DEBUG_ZERO_ROOT_SEC, 0, 0, 0, 0)
 
 PUB debugReadSectorSlow(sector, p_buffer) : status
 '' DEBUG: Read sector byte-by-byte (no streamer) - for comparison with streamer.
@@ -2733,8 +2742,10 @@ PRI fs_worker() | cur_cmd
         ' DEBUG: Read sector byte-by-byte without streamer for comparison
         pb_status := readSectorSlow(pb_param0, pb_param1)
 
-      CMD_DEBUG_CLEAR_ROOT:
-        ' DEBUG: Clear root directory by writing zeros
+      CMD_DEBUG_ZERO_ROOT_SEC:
+        ' DEBUG: Zero the FIRST root-directory sector only. Later root sectors are
+        ' untouched and the erased entries' cluster chains are NOT freed -- see
+        ' debugZeroRootSector() for the full contract.
         bytefill(@buf, 0, SECTOR_SIZE)                                          ' Zero the buffer
         if writeSector(root_sec, BUF_DATA) == SUCCESS                           ' Write to root directory
           dir_sec_in_buf := -1                                                  ' Invalidate cache

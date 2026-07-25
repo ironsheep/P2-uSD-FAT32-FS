@@ -4,7 +4,7 @@ Items to investigate when time permits.
 
 ---
 
-### `debugClearRootDir()` leaks FAT clusters and clears only one root sector
+### ~~`debugClearRootDir()` leaks FAT clusters and clears only one root sector~~ RESOLVED 2026-07-25
 
 **Where:** `src/micro_sd_fat32_fs.spin2` — public wrapper `:2449`, worker case
 `CMD_DEBUG_CLEAR_ROOT` `:2736-2743`.
@@ -39,6 +39,23 @@ and needing a manual reformat — independent of the Bug A write-path corruption
 
 Do **not** leave the current behaviour behind the current name. No regression
 suite should call it either way.
+
+**Resolved 2026-07-25 by the second option — narrowed to the truth.** A correct
+"delete all files and folders" is a recursive tree delete (freeing a subdirectory's
+own chain still leaks everything inside it): 100+ lines in the worker cog with a
+512-long stack, duplicating what `SD_format_card` and `SD_FAT32_fsck` already do.
+The real use for this method is the diagnostic sledgehammer — zero an unreadable
+root so the card will mount — so it was renamed to say that.
+
+- `debugClearRootDir()` -> `debugZeroRootSector()`; `CMD_DEBUG_CLEAR_ROOT` ->
+  `CMD_DEBUG_ZERO_ROOT_SEC`. Behaviour and opcode unchanged.
+- Docstring now states all three facts it hid: first sector only, later root
+  sectors survive, chains are not freed. Points at fsck/format for the real jobs.
+- Corrected in `CONDITIONAL-COMPILATION-GUIDE.md`, `SD-CARD-DRIVER-THEORY.md`
+  (x2), `SD-CARD-DRIVER-TUTORIAL.md`, `regression-tests/THEORY-OF-OPERATIONS.md`.
+- `diagnostic-tests/SD_zero_root_sector_probe.spin2` asserts the three facts on
+  hardware; the operator steps in its header (audit -> fsck -> audit) certify the
+  documented recovery path. **Not yet run on hardware.**
 
 *Noted: 2026-07-23 (v1.5.4 sprint, §4 harness precondition audit)*
 
