@@ -64,6 +64,10 @@ PUB go() | status
         debug(" ")
         debug("FORMAT FAILED!")
 
+    ' Drain the headless terminal log backlog before END_SESSION triggers
+    ' shutdown -- without this the FORMAT SUCCESSFUL/FAILED line above is cut
+    ' off mid-word and never reaches the log.
+    waitms(500)
     debug(" ")
     debug("END_SESSION")
 

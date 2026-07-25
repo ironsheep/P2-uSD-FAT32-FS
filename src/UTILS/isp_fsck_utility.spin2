@@ -185,6 +185,12 @@ cog_guard   LONG    0[STACK_GUARD_LONGS]
 
 tmpStr      BYTE    0[32]                ' temp buffer for string extraction
 
+' Repair-line voice. Each message names the PROBLEM, never the action, so the
+' one text reads correctly under either tag: "needs repair: 2 lost clusters"
+' (audit) and "repaired: 2 lost clusters" (fsck). See repairTag().
+tagRepair   BYTE    "repaired", 0
+tagWould    BYTE    "needs repair", 0
+
 
 '' =========================================================================
 '' Caller API (call from main cog)
@@ -355,8 +361,8 @@ PRI runFsck(cardSectors)
     fatBufDirty := false
 
     if dryRun
-        fifo.put(@"=== FAT32 Filesystem Audit (read-only -- no writes) ===")
-        fifo.put(@"*** AUDIT MODE: every REPAIR line below is hypothetical ***")
+        fifo.put(@"=== FAT32 Filesystem Audit ===")
+        fifo.put(@"Read-only -- nothing on this card is changed.")
     else
         fifo.put(@"=== FAT32 Filesystem Check & Repair ===")
     fifo.putFmt2(@"Card: %d sectors (%d MB)", cardSectors, cardSectors / 2048)
@@ -402,12 +408,16 @@ PRI runFsck(cardSectors)
             fifo.putFmt2(@"Fragmented files: %d (%d fragments total)", v_fragmentedFileCount, v_totalFragments)
         if v_errorCount == 0
             if v_repairCount == 0
+                fifo.put(@"This filesystem is healthy.")
                 fifo.put(@"STATUS: CLEAN")
             elseif dryRun
+                fifo.put(@"Nothing was repaired -- run SD_FAT32_fsck to fix what is listed above.")
                 fifo.put(@"STATUS: REPAIRS NEEDED")             '  read-only run -- nothing was written
             else
+                fifo.put(@"Everything listed above has been repaired.")
                 fifo.put(@"STATUS: REPAIRED")
         else
+            fifo.put(@"Some problems could not be repaired -- see the errors above.")
             fifo.put(@"STATUS: ERRORS REMAIN")
 
 
@@ -628,7 +638,7 @@ PRI fsckPass1() | idx, mismatch, fsinfoDirty, startRepairs
             quit
 
     if mismatch
-        fifo.put(@"  REPAIR: Backup VBR mismatch - copying")
+        fifo.putFmt1(@"  %s: backup VBR out of sync with the primary", repairTag())
         doRepairWrite(partitionStart + 6, @buf)
         v_repairCount++
     else
@@ -639,19 +649,19 @@ PRI fsckPass1() | idx, mismatch, fsinfoDirty, startRepairs
     fsinfoDirty := false
 
     if LONG[@buf] <> sd.FSINFO_LEAD_SIG
-        fifo.put(@"  REPAIR: FSInfo lead signature")
+        fifo.putFmt1(@"  %s: FSInfo lead signature wrong", repairTag())
         LONG[@buf] := sd.FSINFO_LEAD_SIG
         fsinfoDirty := true
         v_repairCount++
 
     if LONG[@buf + FSINFO_SIG2_OFFSET] <> sd.FSINFO_STRUCT_SIG
-        fifo.put(@"  REPAIR: FSInfo struct signature")
+        fifo.putFmt1(@"  %s: FSInfo structure signature wrong", repairTag())
         LONG[@buf + FSINFO_SIG2_OFFSET] := sd.FSINFO_STRUCT_SIG
         fsinfoDirty := true
         v_repairCount++
 
     if LONG[@buf + $1FC] <> FSINFO_TRAIL_SIG
-        fifo.put(@"  REPAIR: FSInfo trail signature")
+        fifo.putFmt1(@"  %s: FSInfo trailing signature wrong", repairTag())
         LONG[@buf + $1FC] := FSINFO_TRAIL_SIG
         fsinfoDirty := true
         v_repairCount++
@@ -672,7 +682,7 @@ PRI fsckPass1() | idx, mismatch, fsinfoDirty, startRepairs
             quit
 
     if mismatch
-        fifo.put(@"  REPAIR: Backup FSInfo mismatch - copying")
+        fifo.putFmt1(@"  %s: backup FSInfo out of sync with the primary", repairTag())
         doRepairWrite(partitionStart + 7, @buf)
         v_repairCount++
     else
@@ -685,7 +695,7 @@ PRI fsckPass1() | idx, mismatch, fsinfoDirty, startRepairs
     sd.readSectorRaw(fat1Start, @buf)
 
     if (LONG[@buf] & sd.FAT32_ENTRY_MASK) <> (($0FFFFF00 | mediaType) & sd.FAT32_ENTRY_MASK)
-        fifo.put(@"  REPAIR: FAT[0] media type")
+        fifo.putFmt1(@"  %s: FAT[0] media type byte wrong", repairTag())
         LONG[@buf] := ($0FFFFF00 | mediaType) | (LONG[@buf] & $F0000000)
         doRepairWrite(fat1Start, @buf)
         v_repairCount++
@@ -694,7 +704,7 @@ PRI fsckPass1() | idx, mismatch, fsinfoDirty, startRepairs
 
     ' === FAT[1] EOC marker ===
     if (LONG[@buf + 4] & sd.FAT32_ENTRY_MASK) <> sd.FAT32_EOC_MARK
-        fifo.put(@"  REPAIR: FAT[1] EOC marker")
+        fifo.putFmt1(@"  %s: FAT[1] end-of-chain marker wrong", repairTag())
         LONG[@buf + 4] := sd.FAT32_EOC_MARK | (LONG[@buf + 4] & $F0000000)
         doRepairWrite(fat1Start, @buf)
         v_repairCount++
@@ -703,7 +713,7 @@ PRI fsckPass1() | idx, mismatch, fsinfoDirty, startRepairs
 
     ' === FAT[2] root cluster ===
     if (LONG[@buf + 8] & sd.FAT32_ENTRY_MASK) == FAT_FREE
-        fifo.put(@"  REPAIR: FAT[2] root cluster was free")
+        fifo.putFmt1(@"  %s: root cluster marked free", repairTag())
         LONG[@buf + 8] := sd.FAT32_EOC_MARK | (LONG[@buf + 8] & $F0000000)
         doRepairWrite(fat1Start, @buf)
         v_repairCount++
@@ -763,10 +773,7 @@ PRI fsckPass2() | startRepairs
 
     fifo.putFmt2(@"  Dirs: %d  Files: %d", v_dirCount, v_fileCount)
     if v_lostCount > 0
-        if dryRun
-            fifo.putFmt1(@"  REPAIR: Would free %d lost clusters", v_lostCount)   '  read-only -- nothing freed
-        else
-            fifo.putFmt1(@"  REPAIR: Freed %d lost clusters", v_lostCount)
+        fifo.putFmt2(@"  %s: %d lost clusters", repairTag(), v_lostCount)
         v_repairCount += v_lostCount
     else
         fifo.put(@"  [OK] No lost clusters")
@@ -934,7 +941,7 @@ PRI fsckValidateChain(startClus, fSize, isDir) | clus, nextClus, chainLen, expec
             if currentWindow == 0
                 fifo.putFmt1(@"  ERROR: Bad ref %d in chain", nextClus)
                 writeFAT(clus, sd.FAT32_EOC_MARK)
-                fifo.putFmt1(@"  REPAIR: Truncated at cluster %d", clus)
+                fifo.putFmt2(@"  %s: chain runs past the file size at cluster %d", repairTag(), clus)
                 v_repairCount++
             quit
 
@@ -943,7 +950,7 @@ PRI fsckValidateChain(startClus, fSize, isDir) | clus, nextClus, chainLen, expec
                 if currentWindow == 0
                     fifo.putFmt1(@"  ERROR: Bad ref %d in chain", nextClus)
                     writeFAT(clus, sd.FAT32_EOC_MARK)
-                    fifo.putFmt1(@"  REPAIR: Truncated at cluster %d", clus)
+                    fifo.putFmt2(@"  %s: chain runs past the file size at cluster %d", repairTag(), clus)
                     v_repairCount++
                 quit
 
@@ -1047,7 +1054,7 @@ PRI fsckPass4() | fatSector, entIdx, clus, fatVal, freeCount, syncCount, mismatc
             syncCount++
 
     if syncCount > 0
-        fifo.putFmt1(@"  REPAIR: Synced %d FAT sectors", syncCount)
+        fifo.putFmt2(@"  %s: %d FAT sectors out of sync with the backup", repairTag(), syncCount)
         v_repairCount += syncCount
     else
         fifo.put(@"  [OK] FAT1 and FAT2 in sync")
@@ -1058,7 +1065,7 @@ PRI fsckPass4() | fatSector, entIdx, clus, fatVal, freeCount, syncCount, mismatc
     sd.readSectorRaw(partitionStart + 1, @buf)
 
     if LONG[@buf + FSINFO_FREE_COUNT_OFFSET] <> freeCount
-        fifo.putFmt2(@"  REPAIR: FSInfo free count %d -> %d", LONG[@buf + FSINFO_FREE_COUNT_OFFSET], freeCount)
+        fifo.putFmt3(@"  %s: FSInfo free count wrong (says %d, actually %d)", repairTag(), LONG[@buf + FSINFO_FREE_COUNT_OFFSET], freeCount)
         LONG[@buf + FSINFO_FREE_COUNT_OFFSET] := freeCount
         doRepairWrite(partitionStart + 1, @buf)
         ' Update backup FSInfo too
@@ -1074,6 +1081,18 @@ PRI fsckPass4() | fatSector, entIdx, clus, fatVal, freeCount, syncCount, mismatc
 ' =========================================================================
 ' FAT cache methods
 ' =========================================================================
+
+PRI repairTag() : pStr
+' Voice for every repair line: "REPAIR" when the fix was applied, "WOULD REPAIR"
+' on a read-only audit. Single choke point — a new repair site gets the correct
+' voice for free by formatting %s with this, exactly as doRepairWrite() is
+' the single choke point that makes MODE_AUDIT's read-only guarantee structural.
+
+    if dryRun
+        pStr := @tagWould
+    else
+        pStr := @tagRepair
+
 
 PRI readFAT(cluster) : value | sector, offset
 ' Read a FAT entry with sector caching.

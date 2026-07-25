@@ -480,7 +480,7 @@ PRI doFormat() : bSuccess | ok, rdStatus
     if ok
         ' Verify MBR read-back
         rdStatus := sd.readSectorRaw(0, @verifyBuf)
-        debug("  MBR readSectorRaw status: ", sdec_(rdStatus))
+        debug("  MBR read status: ", sdec_(rdStatus))
 #ifdef __FLEXSPIN__
         debug("  MBR readback: sig=$", uhex_word_(WORD[@verifyBuf + sd.BOOT_SIG_OFFSET]), " type=$", uhex_byte_(verifyBuf[MBR_PART_TYPE_OFF]), " start=", udec_(LONG[@verifyBuf + MBR_PART_LBA_START]))
         debug("  MBR read[0..7]: $", uhex_byte_(verifyBuf[0]), " $", uhex_byte_(verifyBuf[1]), " $", uhex_byte_(verifyBuf[2]), " $", uhex_byte_(verifyBuf[3]), " $", uhex_byte_(verifyBuf[4]), " $", uhex_byte_(verifyBuf[5]), " $", uhex_byte_(verifyBuf[6]), " $", uhex_byte_(verifyBuf[7]))
@@ -507,7 +507,7 @@ PRI doFormat() : bSuccess | ok, rdStatus
     if ok
         ' Verify VBR read-back
         rdStatus := sd.readSectorRaw(partitionStart, @verifyBuf)
-        debug("  VBR readSectorRaw status: ", sdec_(rdStatus))
+        debug("  VBR read status: ", sdec_(rdStatus))
 #ifdef __FLEXSPIN__
         debug("  VBR readback: jump=$", uhex_byte_(verifyBuf[0]), " OEM=$", uhex_byte_(verifyBuf[BPB_OEM_NAME]), uhex_byte_(verifyBuf[BPB_OEM_NAME + 1]), " bps=", udec_(WORD[@verifyBuf + BPB_BYTES_PER_SEC]), " spc=", udec_(verifyBuf[BPB_SEC_PER_CLUS]), " sig=$", uhex_word_(WORD[@verifyBuf + sd.BOOT_SIG_OFFSET]))
 #else

@@ -184,7 +184,7 @@ PRI identifyCard() : bIdentified | mid, pnm[2]
         debug("       ", uhex_byte_(cid_buf[8]), " ", uhex_byte_(cid_buf[9]), " ", uhex_byte_(cid_buf[10]), " ", uhex_byte_(cid_buf[11]), " ", uhex_byte_(cid_buf[12]), " ", uhex_byte_(cid_buf[13]), " ", uhex_byte_(cid_buf[14]), " ", uhex_byte_(cid_buf[15]))
         bIdentified := true
     else
-        debug("  readCIDRaw FAILED")
+        debug("  Could not read the card ID register")
 
 
 ' MOUNT / UNMOUNT TIMING
@@ -291,7 +291,7 @@ PRI runRawReadTest(count) | iter, start_ct, elapsed_ct, min_us, max_us, total_us
             if timings[iter] > max_us
                 max_us := timings[iter]
         else
-            debug("  ERROR: readSectorsRaw returned ", sdec_(readCt), " (expected ", udec_(count), ")")
+            debug("  ERROR: bulk read failed, status ", sdec_(readCt), " (expected ", udec_(count), ")")
             ok := false
             quit
 
@@ -333,7 +333,7 @@ PRI runRawWriteTest(count) | iter, start_ct, elapsed_ct, min_us, max_us, total_u
             if timings[iter] > max_us
                 max_us := timings[iter]
         else
-            debug("  ERROR: writeSectorsRaw returned ", sdec_(written), " (expected ", udec_(count), ")")
+            debug("  ERROR: bulk write failed, status ", sdec_(written), " (expected ", udec_(count), ")")
             ok := false
             quit
 
