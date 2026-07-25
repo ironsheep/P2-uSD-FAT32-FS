@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Bug Fixes
+
+- **`SD_FAT32_audit` no longer reports repairs it did not make.** A read-only audit lists each problem as `needs repair:` and states plainly that nothing on the card was changed; `SD_FAT32_fsck` reports the same findings as `repaired:`. Previously both printed the same past-tense line, so an audit log read as though the card had been modified.
+- **The format utility's closing line reaches the log.** `SD_format_card` could have its final success or failure line cut off mid-word.
+- **Tool error messages name what failed**, not the internal routine that failed — in the audit, format, and benchmark utilities.
+
 ## [1.6.0] - 2026-07-25
 
 **Write-path corruption fixes; broader card compatibility; write-error reliability.**
