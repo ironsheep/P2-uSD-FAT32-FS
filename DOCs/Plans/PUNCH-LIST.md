@@ -61,6 +61,61 @@ root so the card will mount — so it was renamed to say that.
 
 ---
 
+### Deliver the dual-driver convergence advice doc
+
+**Where:** `DOCs/Agent-Reports/ADVICE-TO-DUAL-DRIVER-AGENT-CONVERGENCE.md` (7 divergences).
+
+The doc was written as a v1.5.4 §8c deliverable and is complete, but neither the
+plan nor its task said **how it reaches the dual-driver agent**. Written, not
+delivered — so it is not yet doing its job. Divergence 7 (utility output voicing)
+was added 2026-07-25 and is the freshest item they do not have.
+
+Decide the channel (paste into that agent's session, drop it in their repo, or a
+shared handoff location) and hand it over. Until then the two drivers keep
+diverging on exactly the points the doc enumerates.
+
+*Noted: 2026-07-25 (v1.6.0 sprint closeout, carryover)*
+
+---
+
+### Delete the runner's dual success-marker workaround for the format vehicle
+
+**Where:** `tools/run_regression.sh` `_reformat_card()` — the ~12-line comment
+block plus `FORMAT COMPLETE || FORMAT SUCCESSFUL` acceptance.
+
+`SD_format_card.spin2` now drains the terminal backlog (`waitms(500)`) before
+`END_SESSION`, so its own `FORMAT SUCCESSFUL!` line should stop being truncated
+out of the log. The runner still accepts either marker, deliberately: the
+workaround stays until a hardware run proves the line lands intact.
+
+**When picked up:** after the next full sweep, grep a `SD_format_card_*.log` for
+an intact `FORMAT SUCCESSFUL`. If present, tighten `_reformat_card()` to that one
+marker and delete the explanatory comment. If absent, the drain is insufficient —
+investigate rather than lengthening the wait.
+
+*Noted: 2026-07-25 (v1.6.0 sprint closeout, carryover)*
+
+---
+
+### Re-run the Card 1 recert sweep for a clean certification record
+
+**Where:** `DOCs/Agent-Reports/sweep_card1_recert_260724.txt`.
+
+Card 1's transcript ends in `CLOSING AUDIT FAILED` with a hand-written annotation
+explaining it is a false negative — caused by the runner grepping for
+`AUDIT COMPLETE` while the consolidated engine emitted `FSCK COMPLETE`, since
+fixed. The suites were 471/0 and the audit log itself is 23/0 clean, so the
+certification holds on the evidence.
+
+Cosmetic but worth ~10 minutes: re-run the sweep on the 4 KB card with the fixed
+tooling so the cert record needs no annotation — particularly for a release whose
+headline is that the audit now tells the truth. Card 2 already has a clean
+end-to-end run with the fixed gate.
+
+*Noted: 2026-07-25 (v1.6.0 sprint closeout, carryover)*
+
+---
+
 ### Counterfeit asdfg-class — characterize LBA-failure-mode boundary
 
 **Cards:** Lerdisk (`Unknown_asdfg_2.2_000001F4_202512`), Cloudisk (`Unknown_asdfg_2.2_00001680_202511`) — same `asdfg` silicon class, both CW_NO_DATA_CRC.

@@ -1,5 +1,12 @@
 # Write-Path Corruption Fix — Sprint Plan
 
+> **CLOSED 2026-07-25.** All commitments shipped; certified on two cluster
+> geometries. Audit and carryovers:
+> `DOCs/Plans/archive/2026-07-25-Write-Path-Corruption-Fix-Sprint-Closeout.md`.
+> Shipped as **v1.6.0**, not the v1.5.4 this document says throughout — the
+> untagged range carried new features, so SemVer called for a minor bump. The
+> version text below was deliberately left as authored.
+
 **Target:** `src/micro_sd_fat32_fs.spin2` (standalone SD FAT32 driver)
 **Ships as:** **v1.5.4** (patch bump; current git tag `v1.5.3`)
 **Source of record:** `DOCs/Agent-Reports/HANDOFF-SD-WRITE-PATH-PORT-TO-STANDALONE.md`
