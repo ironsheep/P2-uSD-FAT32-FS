@@ -7,31 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.5.4] - PENDING
+## [1.6.0] - 2026-07-25
 
-<!-- DRAFT (container, 2026-07-24). Bug-Fixes/Tests entries are final — the driver
-     fix is landed and compile-verified. Still owed before release: fill the
-     release DATE. The "Validated by:" line below is now filled from the hardware
-     CONFIRM run (task «#8»). Do NOT ship this section until the DATE is in and
-     [Unreleased] is empty. -->
+**Write-path corruption fixes; broader card compatibility; write-error reliability.**
 
-**Write-path corruption fixes: cross-boundary overwrite and mid-sector append.**
+This release closes two data-corruption defects in the file write path, extends card compatibility to counterfeit/marginal SDSC cards and macOS-formatted media, and hardens the driver against silently-swallowed write failures. The corruption fixes are the headline: an in-place overwrite that crossed a cluster boundary could orphan the tail of a file, and a mid-sector append could zero-fill the sector's existing leading bytes. Both are fixed and certified on hardware.
 
-<!-- Validated by: SD_RT_fatchain_tests old-FAIL (0/2) → fixed-PASS (2/2), plus
-     full 26-suite regression (471/0, incl. format) on two cluster geometries —
-     4 KB (SharedOEM 7GB) and 8 KB (Gigastone 14GB). No REFUSING metadata-write
-     line, no corruption (audit 39/39) on either card. See
-     DOCs/Agent-Reports/CONFIRM-RUN-2026-07-24.md. -->
+Validated by: `SD_RT_fatchain_tests` old-FAIL (0/2) → fixed-PASS (2/2), plus the full 26-suite regression (471/0, incl. format) on two cluster geometries — 4 KB (SharedOEM 7GB) and 8 KB (Gigastone 14GB) — with a clean closing audit on both (deep four-pass: 23/23 structural checks, 0 errors, 0 repairs). See `DOCs/Agent-Reports/CONFIRM-RUN-2026-07-24.md`.
 
 ### Bug Fixes
 
-- **`writeHandle()`: Overwrites that cross a cluster boundary now follow the existing FAT chain, preserving all data beyond the overwritten region.**
-- **`writeHandle()`: Appending at a mid-sector position preserves the sector's existing leading bytes instead of zero-filling them.**
-- `writeHandle()`: Added a metadata-region write guard so file data can never reach FAT, VBR, or reserved sectors.
+- **`writeHandle()`: Cross-boundary overwrites follow the existing FAT chain**, no longer orphaning the tail of the file.
+- **`writeHandle()`: Mid-sector appends preserve the existing leading bytes** instead of zero-filling the sector.
+- **Failed writes now propagate.** Sites across the write, sync, unmount, and cluster-free paths that discarded a failed write and reported success now surface the real error; `writeSectorRaw()` returns the specific code, not a generic `E_IO_ERROR`.
+- **`cmd()` R1 timeout distinguished from a valid `R1=$00`.** A command the card never acknowledged is reported as `E_TIMEOUT` at the true stage, instead of streaming data to a card that isn't listening.
+- **`writeSectors()`: Multi-block failures routed correctly** — the `$FD` stop token is sent only when the spec requires it, and a rejected block no longer counts as written.
+- **Bulk reads** now apply the same power-of-2 half-period NCO correction the write path already had.
+- **Remount reliability**: SPI pins are fully released before the recovery flush and the flush tolerates cards that re-busy after CS deassert, fixing spurious `E_NO_CARD` on remount from a different binary.
+- `writeHandle()`: Added a data-region guard that refuses any write below the data region — a backstop against metadata corruption.
+
+### Upgrade / recovery note
+
+A card written by an earlier release may carry silent damage from the write-path
+defects above. After upgrading:
+
+- Run **`SD_FAT32_audit`** (or `SD_FAT32_fsck` to also repair) — it now performs
+  the full four-pass scan and will report **lost clusters** left by a
+  cross-boundary overwrite. fsck reclaims the space; it cannot restore the file's
+  lost tail content.
+- A file **appended at a mid-sector position** under the old driver may have had
+  its leading bytes zero-filled. This is pure data-level corruption with no
+  filesystem footprint — **no tool can detect it** — so verify or restore
+  important files from backup.
+
+### Changes
+
+- **`audit` is now the full four-pass filesystem scan (read-only).** It runs the
+  same structural-integrity, chain-validation, lost-cluster, and free-count
+  engine as `fsck`, writing nothing — so it detects damage (e.g. orphaned
+  clusters) the previous single-pass audit missed. The separate check-only tool
+  (`SD_FAT32_check`) is removed; `audit` supersedes it.
+
+### New Features
+
+- **Dummy-data-CRC card support.** Cards that return placeholder data-block CRCs (some counterfeit/marginal SDSC units) are detected at init and flagged via `cardWarnings()` (`CW_NO_DATA_CRC`); they read and write without CRC validation where they previously failed every streamer read, while real-CRC cards keep strict validation. A per-card SCK-ceiling probe picks a safe speed for the flagged cards.
+- **macOS-formatted SDSC support.** SDSC cards are set to a 512-byte block length at init (CMD16), and the audit/fsck utilities accept macOS filesystem conventions (removable media byte, media-derived `FAT[0]`, zero hidden-sectors, archive-bit volume label) — such cards now mount and audit cleanly.
+- **`SD_PINS_EXTERNAL` build flag**: build for an external SD header (base pins 16–21) instead of the P2 Edge onboard slot; `--external` on the test and regression runners selects it.
 
 ### Tests
 
-- `SD_RT_fatchain_tests`: New suite certifying cross-boundary overwrite (chain-follow) and mid-sector append (leading-byte preservation).
+- **New `SD_RT_fatchain_tests` suite** certifying cross-boundary overwrite (chain-follow) and mid-sector append (leading-byte preservation).
+- Regression suites hardened with capacity/geometry preconditions and self-cleaning fixtures; raw-sector and format paths now report API failures distinctly from data mismatches.
 
 ## [1.5.3] - 2026-05-07
 
@@ -62,6 +88,7 @@ Validated by: 4-card frequency-sweep across 200-350 MHz (originally-failing card
 ### Bug Fixes
 
 - **Bulk-write clock alignment improvement.** The explicit `WAITX align_delay` instruction in the bulk-write streamer block (`writeSector` and `writeSectors`) is removed. The earlier SCK reset sequence and smart-pin start latency together produce the correct alignment without an explicit wait — the streamer's first NCO output naturally settles before the first SCK edge in all observed conditions. Mirror change applied to both single-block (CMD24) and multi-block (CMD25) write paths.
+- **Register reads and debug erase-block dispatch correctly in `SD_INCLUDE_ALL` builds.** The debug erase-block command shared an opcode with `readCID`, shadowing one dispatch path when `SD_INCLUDE_DEBUG` and `SD_INCLUDE_REGISTERS` were both enabled; the debug command was reassigned.
 
 ### New Features
 
@@ -429,7 +456,11 @@ The following methods are exposed only when the consumer adds `#pragma exportdef
 
 **Initial testing release** -- driver, utilities, demo shell, and 263+ regression tests.
 
-[Unreleased]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.5.3...v1.6.0
+[1.5.3]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.5.2...v1.5.3
+[1.5.2]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.5.1...v1.5.2
+[1.5.1]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.4.2...v1.5.0
 [1.4.2]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.4.1...v1.4.2
 [1.4.1]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.4.0...v1.4.1

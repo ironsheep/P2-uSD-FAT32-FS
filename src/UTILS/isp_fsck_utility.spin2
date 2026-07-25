@@ -14,14 +14,15 @@
    Reusable library that runs FSCK or Audit in a temporary cog.
    Output is sent via isp_string_fifo for the caller to display.
 
-   Three modes:
-     MODE_AUDIT - Read-only filesystem integrity check (single-pass)
-     MODE_FSCK  - Full 4-pass check and repair (writes to card)
-     MODE_CHECK - Full 4-pass check, no writes (reports "WOULD REPAIR" lines)
+   Two modes, one 4-pass engine (structural integrity, chain validation,
+   lost-cluster detection, free-count):
+     MODE_AUDIT - full scan, read-only: reports every issue (incl. clusters
+                  orphaned by a faulty write path), writes nothing
+     MODE_FSCK  - the same full scan, plus repairs (writes to card)
 
    Usage:
      caller: sd.stop()
-     caller: fsck.startFsck(cs, mosi, miso, sck)   ' or startAudit() / startCheck()
+     caller: fsck.startFsck(cs, mosi, miso, sck)   ' or startAudit() for read-only
      caller: repeat
                if fsck.hasOutput()
                  display(fsck.getOutput())
@@ -37,9 +38,10 @@ CON { suppress debug output }
 
 CON { operation modes }
 
-  MODE_AUDIT = 0
-  MODE_FSCK  = 1
-  MODE_CHECK = 2                    ' Full fsck passes with all writes suppressed (dry-run)
+  ' One 4-pass engine (structural integrity, chain validation, lost-cluster
+  ' detection, free-count) serves both modes. Audit is the read-only run.
+  MODE_AUDIT = 0                    ' read-only: report every issue, write nothing (dry-run)
+  MODE_FSCK  = 1                    ' repair: same full scan, apply fixes
 
 CON { FAT32 structure constants }
 
@@ -144,7 +146,7 @@ VAR
   LONG    dataStart
   LONG    rootCluster
   LONG    mediaType             ' BPB media descriptor byte ($F0 removable / $F8 fixed)
-  LONG    dryRun                ' TRUE in MODE_CHECK -- all repair writes suppressed
+  LONG    dryRun                ' TRUE in MODE_AUDIT -- all repair writes suppressed
 
   ' Statistics / results
   LONG    v_passCount
@@ -205,7 +207,10 @@ PUB startFsck(cs, mosi, miso, sck) : ok
 
 
 PUB startAudit(cs, mosi, miso, sck) : ok
-'' Launch Audit (read-only check) in a new cog
+'' Launch Audit in a new cog: the full 4-pass filesystem scan, read-only.
+'' Runs the same structural integrity, chain-validation, lost-cluster, and
+'' free-count checks fsck does, reporting every issue (including clusters
+'' orphaned by a faulty write path) while writing nothing to the card.
 ''
 '' @param cs - SD card CS pin
 '' @param mosi - SD card MOSI pin
@@ -214,20 +219,6 @@ PUB startAudit(cs, mosi, miso, sck) : ok
 '' @returns ok - TRUE if cog launched successfully
 
     ok := doStart(cs, mosi, miso, sck, MODE_AUDIT)
-
-
-PUB startCheck(cs, mosi, miso, sck) : ok
-'' Launch a check-only run (full 4-pass fsck logic, no writes) in a new cog.
-'' Reports every repair that fsck WOULD perform without modifying the card --
-'' the safe way to verify the fsck path on any filesystem before running it.
-''
-'' @param cs - SD card CS pin
-'' @param mosi - SD card MOSI pin
-'' @param miso - SD card MISO pin
-'' @param sck - SD card SCK pin
-'' @returns ok - TRUE if cog launched successfully
-
-    ok := doStart(cs, mosi, miso, sck, MODE_CHECK)
 
 
 PUB hasOutput() : yes
@@ -293,7 +284,7 @@ PRI doStart(cs, mosi, miso, sck, mode) : ok
 ' Store pin configuration, init FIFO, launch cog
 '
 ' @param cs, mosi, miso, sck - SD pin configuration
-' @param mode - MODE_AUDIT, MODE_FSCK, or MODE_CHECK
+' @param mode - MODE_AUDIT (read-only) or MODE_FSCK (repair)
 ' @returns ok - TRUE if cog launched
 
     ' Store pins for the new cog to read
@@ -302,7 +293,7 @@ PRI doStart(cs, mosi, miso, sck, mode) : ok
     pin_miso := miso
     pin_sck := sck
     op_mode := mode
-    dryRun := (mode == MODE_CHECK)                              '  check mode = full fsck logic with all writes suppressed
+    dryRun := (mode == MODE_AUDIT)                              '  audit = full 4-pass scan with all writes suppressed
     op_done := false
 
     ' Initialize FIFO
@@ -331,68 +322,12 @@ PRI run() | result, cardSectors
     else
         cardSectors := sd.cardSizeSectors()
 
-        if op_mode == MODE_AUDIT
-            runAudit(cardSectors)
-        else
-            runFsck(cardSectors)
+        ' One 4-pass engine for both modes; MODE_AUDIT runs it read-only (dryRun).
+        runFsck(cardSectors)
 
         ' Clean up SD driver before finishing
         sd.stop()
     op_done := true
-
-
-' =========================================================================
-' Audit orchestration
-' =========================================================================
-
-PRI runAudit(cardSectors) | idx, failsToPrint
-' Run all audit checks and display summary with pass/fail counts.
-'
-' @param cardSectors - Total number of sectors on the card
-' @local idx - loop index for failed test names
-' @local failsToPrint - clamped count of fail names to display
-
-    v_passCount := 0
-    v_failCount := 0
-    v_fragmentedFileCount := 0
-    v_totalFragments := 0
-    longfill(@v_failNames, 0, MAX_FAIL_NAMES)
-
-    fifo.put(@"=== FAT32 Filesystem Audit (read-only) ===")
-    fifo.putFmt1(@"Card: %d MB", cardSectors / 2048)
-    fifo.put(@" ")
-
-    ' Read geometry
-    if not readGeometry()
-        fifo.put(@"ERROR: Cannot read filesystem geometry")
-    else
-        ' Run all audit checks
-        auditMBR()
-        auditVBR()
-        auditBackupVBR()
-        auditFSInfo()
-        auditFAT()
-        auditRootDir()
-        auditMountTest()
-
-        ' Summary
-        fifo.put(@" ")
-        fifo.put(@"=== AUDIT COMPLETE ===")
-        fifo.putFmt2(@"Tests: %d  Pass: %d", v_passCount + v_failCount, v_passCount)
-        fifo.putFmt1(@"Fail: %d", v_failCount)
-        if v_fragmentedFileCount > 0
-            fifo.putFmt2(@"Fragmented files: %d (%d fragments total)", v_fragmentedFileCount, v_totalFragments)
-        if v_failCount == 0
-            fifo.put(@"FILESYSTEM INTEGRITY: OK")
-        else
-            fifo.put(@"FILESYSTEM INTEGRITY: ISSUES DETECTED")
-            fifo.put(@" ")
-            fifo.put(@"Failed checks:")
-            failsToPrint := v_failCount <# MAX_FAIL_NAMES
-            repeat idx from 0 to failsToPrint - 1
-                fifo.putFmt1(@"  - %s", v_failNames[idx])
-            if v_failCount > MAX_FAIL_NAMES
-                fifo.putFmt1(@"  ... and %d more", v_failCount - MAX_FAIL_NAMES)
 
 
 ' =========================================================================
@@ -412,13 +347,16 @@ PRI runFsck(cardSectors)
     v_lostCount := 0
     v_fragmentedFileCount := 0
     v_totalFragments := 0
+    v_passCount := 0
+    v_failCount := 0
+    longfill(@v_failNames, 0, MAX_FAIL_NAMES)
     scanDepth := 0
     fatBufSector := -1
     fatBufDirty := false
 
     if dryRun
-        fifo.put(@"=== FAT32 Filesystem Check (DRY-RUN -- no writes) ===")
-        fifo.put(@"*** CHECK MODE: every REPAIR line below is hypothetical ***")
+        fifo.put(@"=== FAT32 Filesystem Audit (read-only -- no writes) ===")
+        fifo.put(@"*** AUDIT MODE: every REPAIR line below is hypothetical ***")
     else
         fifo.put(@"=== FAT32 Filesystem Check & Repair ===")
     fifo.putFmt2(@"Card: %d sectors (%d MB)", cardSectors, cardSectors / 2048)
@@ -430,6 +368,10 @@ PRI runFsck(cardSectors)
     else
         fifo.put(@" ")
 
+        ' Structural validation: read-only itemized MBR + VBR field checks
+        auditMBR()
+        auditVBR()
+
         ' Pass 1: Structural integrity
         fsckPass1()
 
@@ -439,17 +381,30 @@ PRI runFsck(cardSectors)
         ' Pass 4: FAT sync + free count
         fsckPass4()
 
-        ' Summary
+        ' Summary. The completion marker names the operation the caller asked
+        ' for -- audit (read-only) or fsck (repair) -- so a log identifies its
+        ' own vehicle. Log consumers key on these two markers.
         fifo.put(@" ")
-        fifo.put(@"=== FSCK COMPLETE ===")
-        fifo.putFmt2(@"Errors: %d  Repairs: %d", v_errorCount, v_repairCount)
+        if dryRun
+            fifo.put(@"=== AUDIT COMPLETE ===")
+        else
+            fifo.put(@"=== FSCK COMPLETE ===")
+        ' In audit mode nothing was written, so the repair count is the count of
+        ' repairs that WOULD be made -- reported as such rather than as "Repairs".
+        if dryRun
+            fifo.putFmt2(@"Errors: %d  Repairs needed: %d", v_errorCount, v_repairCount)
+        else
+            fifo.putFmt2(@"Errors: %d  Repairs: %d", v_errorCount, v_repairCount)
         fifo.putFmt1(@"Warnings: %d", v_warningCount)
+        fifo.putFmt2(@"Structural checks: %d pass, %d fail", v_passCount, v_failCount)
         fifo.putFmt2(@"Directories: %d  Files: %d", v_dirCount, v_fileCount)
         if v_fragmentedFileCount > 0
             fifo.putFmt2(@"Fragmented files: %d (%d fragments total)", v_fragmentedFileCount, v_totalFragments)
         if v_errorCount == 0
             if v_repairCount == 0
                 fifo.put(@"STATUS: CLEAN")
+            elseif dryRun
+                fifo.put(@"STATUS: REPAIRS NEEDED")             '  read-only run -- nothing was written
             else
                 fifo.put(@"STATUS: REPAIRED")
         else
@@ -519,12 +474,25 @@ PRI readGeometry() : ok | numFats, rdStatus
         fifo.put(@" ")
 
 
+PRI doRepairWrite(sector, pBuf)
+' Perform a repair sector write, or skip the write in MODE_AUDIT (dry-run).
+' Every fsck repair site routes its write through here so audit mode can
+' exercise the same detection logic with zero risk to the card.
+'
+' @param sector - Sector number to write
+' @param pBuf - Pointer to 512-byte buffer to write
+
+    if dryRun
+        return                                                                  '  MODE_AUDIT -- detection only, no writes
+    sd.writeSectorRaw(sector, pBuf)
+
+
 ' =========================================================================
-' Audit methods
+' FSCK Pass 1: Structural integrity
 ' =========================================================================
 
 PRI auditRunTest(pTestName, passed)
-' Record and display a single audit test result
+' Record and display a single read-only structural check result.
 '
 ' @param pTestName - pointer to test name string
 ' @param passed - TRUE if test passed
@@ -540,7 +508,8 @@ PRI auditRunTest(pTestName, passed)
 
 
 PRI auditMBR() | result
-' Audit MBR structure (sector 0)
+' Read-only itemized validation of the MBR (sector 0). Reports each field;
+' the MBR itself is never rewritten (too risky), so these are checks, not repairs.
 
     fifo.put(@"Checking MBR (sector 0)...")
 
@@ -565,7 +534,7 @@ PRI auditMBR() | result
 
 
 PRI auditVBR() | result
-' Audit VBR (primary boot sector at partition start)
+' Read-only itemized validation of the VBR (primary boot sector at partition start).
 
     fifo.put(@"Checking VBR (boot sector)...")
 
@@ -640,166 +609,6 @@ PRI auditVBR() | result
     auditRunTest(@"FS type = FAT32", result)
     fifo.put(@" ")
 
-
-PRI auditBackupVBR() | idx, mismatch
-' Verify backup VBR matches primary
-
-    fifo.put(@"Checking Backup VBR...")
-
-    sd.readSectorRaw(partitionStart, @buf)
-    sd.readSectorRaw(partitionStart + 6, @buf2)
-
-    mismatch := false
-    repeat idx from 0 to sd.SECTOR_SIZE - 1
-        if buf[idx] <> buf2[idx]
-            mismatch := true
-            quit
-
-    auditRunTest(@"Backup VBR matches primary", mismatch == false)
-    fifo.put(@" ")
-
-
-PRI auditFSInfo() | result, idx, mismatch
-' Verify FSInfo sector and backup
-
-    fifo.put(@"Checking FSInfo sector...")
-
-    sd.readSectorRaw(partitionStart + 1, @buf)
-
-    result := LONG[@buf]
-    auditRunTest(@"Lead signature ($41615252)", result == sd.FSINFO_LEAD_SIG)
-
-    result := LONG[@buf + FSINFO_SIG2_OFFSET]
-    auditRunTest(@"Struct signature ($61417272)", result == sd.FSINFO_STRUCT_SIG)
-
-    result := LONG[@buf + $1FC]
-    auditRunTest(@"Trail signature ($AA550000)", result == FSINFO_TRAIL_SIG)
-
-    result := LONG[@buf + FSINFO_FREE_COUNT_OFFSET]
-    auditRunTest(@"Free cluster count set", result <> 0)
-    fifo.putFmt1(@"    Free clusters: %d", result)
-
-    result := LONG[@buf + FSINFO_NEXT_FREE_OFFSET]
-    auditRunTest(@"Next free hint valid", result == $FFFFFFFF OR result >= 2)
-
-    ' Check backup FSInfo
-    sd.readSectorRaw(partitionStart + 1, @buf)
-    sd.readSectorRaw(partitionStart + 7, @buf2)
-
-    mismatch := false
-    repeat idx from 0 to sd.SECTOR_SIZE - 1
-        if buf[idx] <> buf2[idx]
-            mismatch := true
-            quit
-
-    if mismatch
-        fifo.put(@"  [WARN] Backup FSInfo differs from primary (common, repaired by fsck)")
-        v_warningCount++
-    else
-        auditRunTest(@"Backup FSInfo matches primary", TRUE)
-    fifo.put(@" ")
-
-
-PRI auditFAT() | result, idx, mismatch
-' Verify FAT table entries and consistency
-
-    fifo.put(@"Checking FAT table...")
-
-    sd.readSectorRaw(fat1Start, @buf)
-
-    result := LONG[@buf]
-    ' FAT[0]'s low byte mirrors the BPB media byte -- validate against the card's own,
-    ' do not assume $F8 (a $F0-media card has a valid FAT[0] of $0FFFFFF0)
-    auditRunTest(@"FAT[0] media byte matches BPB", (result & sd.FAT32_ENTRY_MASK) == (($0FFFFF00 | mediaType) & sd.FAT32_ENTRY_MASK))
-
-    result := LONG[@buf + 4]
-    auditRunTest(@"FAT[1] = $0FFFFFFF (EOC)", result == $0FFFFFFF)
-
-    result := LONG[@buf + 8]
-    auditRunTest(@"FAT[2] root cluster allocated", result <> 0)
-
-    ' Compare FAT1 and FAT2 first sector
-    sd.readSectorRaw(fat2Start, @buf2)
-
-    mismatch := false
-    repeat idx from 0 to sd.SECTOR_SIZE - 1
-        if buf[idx] <> buf2[idx]
-            mismatch := true
-            quit
-
-    auditRunTest(@"FAT1 first sector == FAT2", mismatch == false)
-    fifo.put(@" ")
-
-
-PRI auditRootDir() | result, idx, p_entry, found_label, attr
-' Verify root directory structure
-' FAT32 spec: volume label entry can be anywhere in root directory, not necessarily first.
-' Some formatters only write the label in the VBR, not the root directory.
-
-    fifo.put(@"Checking Root Directory...")
-
-    sd.readSectorRaw(dataStart, @buf)
-
-    ' Scan all entries in first root dir sector for volume label
-    found_label := false
-    repeat idx from 0 to (sd.SECTOR_SIZE / sd.DIR_ENTRY_SIZE) - 1
-      p_entry := @buf + (idx * sd.DIR_ENTRY_SIZE)
-      if byte[p_entry] == DIR_END_MARKER
-        quit
-      attr := byte[p_entry + sd.DE_ATTR_OFFSET]
-      ' Volume label = VOLUME_ID bit set, not a directory, and not an LFN entry ($0F).
-      ' Real label entries also carry the archive bit (macOS writes $28), so mask the
-      ' VOLUME_ID bit -- never test for an exact $08.
-      if byte[p_entry] <> sd.DIR_ENTRY_DELETED and attr <> $0F and (attr & sd.ATTR_VOLUME_ID) <> 0 and (attr & sd.ATTR_DIRECTORY) == 0
-        found_label := true
-        result := byte[p_entry]
-        quit
-    auditRunTest(@"Volume label entry present", found_label)
-
-    if found_label
-      auditRunTest(@"Valid volume label chars", result >= $20 AND result <= $7E)
-    else
-      auditRunTest(@"Valid volume label chars", true)  ' VBR-only label is acceptable
-
-    result := buf[sd.DIR_ENTRY_SIZE]
-    auditRunTest(@"Second entry valid or end", result == DIR_END_MARKER OR result == sd.DIR_ENTRY_DELETED OR (result >= $20 AND result <= $7E))
-    fifo.put(@" ")
-
-
-PRI auditMountTest() | result
-' Test mount/unmount cycle
-
-    fifo.put(@"Checking mount/unmount cycle...")
-
-    result := sd.mount(pin_cs, pin_mosi, pin_miso, pin_sck)
-    auditRunTest(@"mount() succeeds", result == sd.SUCCESS)
-
-    if result == sd.SUCCESS
-        fifo.put(@"  Calculating free space...")
-        result := sd.freeSpace()
-        auditRunTest(@"Free space > 0", result > 0)
-        fifo.putFmt1(@"    Free: %d sectors", result)
-        sd.unmount()
-
-    fifo.put(@" ")
-
-
-PRI doRepairWrite(sector, pBuf)
-' Perform a repair sector write, or skip the write in MODE_CHECK (dry-run).
-' Every fsck repair site routes its write through here so MODE_CHECK can
-' exercise the same detection logic with zero risk to the card.
-'
-' @param sector - Sector number to write
-' @param pBuf - Pointer to 512-byte buffer to write
-
-    if dryRun
-        return                                                                  '  MODE_CHECK -- detection only, no writes
-    sd.writeSectorRaw(sector, pBuf)
-
-
-' =========================================================================
-' FSCK Pass 1: Structural integrity
-' =========================================================================
 
 PRI fsckPass1() | idx, mismatch, fsinfoDirty, startRepairs
 ' Check and repair structural elements.
@@ -954,7 +763,10 @@ PRI fsckPass2() | startRepairs
 
     fifo.putFmt2(@"  Dirs: %d  Files: %d", v_dirCount, v_fileCount)
     if v_lostCount > 0
-        fifo.putFmt1(@"  REPAIR: Freed %d lost clusters", v_lostCount)
+        if dryRun
+            fifo.putFmt1(@"  REPAIR: Would free %d lost clusters", v_lostCount)   '  read-only -- nothing freed
+        else
+            fifo.putFmt1(@"  REPAIR: Freed %d lost clusters", v_lostCount)
         v_repairCount += v_lostCount
     else
         fifo.put(@"  [OK] No lost clusters")

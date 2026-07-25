@@ -2,6 +2,8 @@
 
 Automated regression test suite for the P2 SD Card Driver. All tests execute on real Propeller 2 hardware with a physical SD card.
 
+> **What belongs here:** automated **pass/fail** suites that assert via `isp_rt_utilities` and run under `tools/run_regression.sh`. Not user tools (those go in [`src/UTILS/`](../UTILS/)) and not ad-hoc developer probes (those go in [`diagnostic-tests/`](../../diagnostic-tests/)). A program that only *displays* results without asserting is a diagnostic, not a regression test.
+
 ## Test Summary
 
 ### Core Test Suites (verified 2026-04-01)
@@ -39,8 +41,9 @@ Automated regression test suite for the P2 SD Card Driver. All tests execute on 
 | **Timestamp Tests** | setDate/getDate round-trip, live clock advance, creation/modification stamps | 6 |
 | **Async I/O Tests** | Non-blocking read/write, isComplete polling, cancelAsync, multi-cog interleave | 6 |
 | **Defrag Tests** | fileFragments, isFileContiguous, compactFile, createFileContiguous, next-fit allocation | 12 |
-| | **Additional Total** | **176** |
-| | **Grand Total (25 suites)** | **465** |
+| **FAT Chain Tests** | Cross-boundary overwrite follows the FAT chain; mid-sector append preserves leading bytes | 2 |
+| | **Additional Total** | **178** |
+| | **Grand Total (26 suites)** | **471** |
 
 ## Prerequisites
 
@@ -59,7 +62,40 @@ cd tools/
 
 The test runner compiles with `pnut-ts`, downloads to P2 hardware, captures debug output in headless mode, and saves logs to `tools/logs/`.
 
-### Running All Core Test Suites
+### Running the Full Suite (the normal path)
+
+Use the regression runner. It runs **every** suite in dependency order in a
+single, unattended, end-to-end pass — compile, card identify, incoming audit,
+baseline format, all suites, closing audit, summary table:
+
+```bash
+cd tools/
+./run_regression.sh --include-format --log ../DOCs/sweep.txt
+```
+
+What it does for you:
+
+- **Preflight** — identifies the card (capacity, geometry, SN, warnings) and runs
+  a read-only FAT32 audit of the card's incoming state, so the transcript records
+  which card produced the results.
+- **Card as scratch** — establishes a clean FAT32 baseline before the first suite
+  and reformats around the destructive suites (`fatchain`, `format`). Authorizing
+  a regression run authorizes formatting the card.
+- **Runs to the end** — a failing suite is recorded and the sweep *continues*, so
+  one pass gives you every suite's result. Use `--stop-on-failure` for forensic
+  runs where the on-card damage is the evidence you want to inspect.
+- **Rides out serial transients** — a failed download is retried once and, if it
+  fails again, reported as `INFRA` (suite never executed), kept distinct from a
+  real test failure.
+- **Closing audit** — proves the sweep leaves the card healthy.
+
+Exit code 0 means every suite ran, every suite passed, and the card ended clean.
+`./run_regression.sh --help` lists all options.
+
+### Running Individual Suites
+
+For iterating on one suite. `run_test.sh` never reformats the card — the runner
+above is the only thing that does.
 
 ```bash
 cd tools/

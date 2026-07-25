@@ -60,6 +60,9 @@ PUB go() | pStr
     else
         debug("FATAL: Could not start FSCK cog")
 
+    ' Drain the headless terminal log backlog before END_SESSION triggers
+    ' shutdown -- without this the last emitted line (STATUS:) is cut off.
+    waitms(500)
     debug(" ")
     debug("END_SESSION")
 

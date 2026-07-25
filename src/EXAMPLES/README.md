@@ -2,6 +2,8 @@
 
 Compilable, self-contained examples demonstrating common SD card driver operations. Each example can be compiled and run directly on P2 hardware.
 
+> **Who this is for:** the user — minimal programs that each demonstrate one driver operation, meant to be read and copied from. Runnable tools belong in [`src/UTILS/`](../UTILS/); the interactive shell is in [`src/DEMO/`](../DEMO/); developer probes are in [`diagnostic-tests/`](../../diagnostic-tests/).
+
 ## Building
 
 From this `EXAMPLES/` directory:

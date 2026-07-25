@@ -2,6 +2,8 @@
 
 An interactive command-line shell for exploring the P2 SD card filesystem driver. Supports both DOS-style (`dir`, `type`, `del`) and Unix-style (`ls`, `cat`, `rm`) commands.
 
+> **Who this is for:** the user — an interactive shell for exploring the driver by hand. Focused copy-paste examples are in [`src/EXAMPLES/`](../EXAMPLES/); standalone tools are in [`src/UTILS/`](../UTILS/); developer probes are in [`diagnostic-tests/`](../../diagnostic-tests/).
+
 ## Files
 
 | File | Description |

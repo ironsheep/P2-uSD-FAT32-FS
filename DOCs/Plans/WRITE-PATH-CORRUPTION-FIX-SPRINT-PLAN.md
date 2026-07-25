@@ -564,6 +564,50 @@ clean-exit-but-failed-format detection, `--no-reformat` (zero formats),
 `--reformat-only`, and the `--reformat-only --compile-only` rejection.
 `git diff tools/run_test.sh` is empty — the guard holds.
 
+### 6.2 Implemented (2026-07-24) — true end-to-end, single invocation
+
+6.1 removed the *card-state* reasons a sweep needed babysitting. The CONFIRM run
+then exposed the remaining ones: Card 2's sweep stopped at suite 26 on a **serial
+download checksum error** — the binary never reached the P2, the suite never
+executed, and 25 green suites were thrown away needing a manual `--from` resume.
+This closes that gap.
+
+**Continue-on-failure is now the default.** A failing suite is recorded and the
+sweep continues to the end; the summary lists every failed suite with its log
+path. `--stop-on-failure` restores the old halt-and-preserve-evidence behavior
+for DETECT-style forensic runs. In continue mode a failing *destructive* suite IS
+reformatted after, so one failure cannot cascade into every later suite.
+
+**Infrastructure failures are separated from test results.** `run_test.sh` exit 2
+(download/serial) means the suite never ran — retried once automatically, and if
+it fails twice reported as `INFRA` in its own summary section, never counted as a
+driver failure. Exit 3 (timeout) is deliberately NOT retried: a hang can be a real
+defect and must not be papered over.
+
+**Preflight + closing audit.** Before anything writes to the card,
+`SD_card_identify` records which card is in the socket (capacity, geometry, SN,
+warnings) directly into the transcript — the cert report no longer needs
+hand-transcription — and a read-only `SD_FAT32_audit` captures the card's incoming
+state. Incoming-audit failure is informational (the baseline reformat is about to
+fix it); identify failure is fatal (no card, no run). After the last suite the
+audit runs again and **must pass** — the run's own proof that the sweep leaves the
+card healthy. `--no-preflight` skips both.
+
+**`--log <file>`** tees the whole transcript, so the sweep can be launched in the
+background and polled instead of chunked. This matters for agent-driven runs: a
+full sweep is ~600 s, at or past a foreground command's ceiling, which is what
+forced the chunk-and-resume pattern in the first place.
+
+**Verified without hardware:** `--compile-only --include-format` → 26/26 plus all
+three vehicles (format, identify, audit); `bash -n` clean; log-parse functions
+replayed against real archived `SD_FAT32_audit_*` and `SD_card_identify_*` logs
+(39/39 parsed, L1/L2/L3 extracted cleanly); and a stubbed-hardware simulation
+covering all-pass end-to-end, mid-run suite failure (continues, exit 1, failures
+listed), persistent INFRA (continues, own section, exit 1), transient flake
+(retried once, run stays green, exit 0), `--stop-on-failure` (halts, preserves,
+skips closing audit), closing-audit failure (hard blocker, exit 1), `--log` tee,
+and `--no-preflight`. `git diff tools/run_test.sh` is still empty.
+
 ---
 
 ## 7. Certification protocol — detect → confirm → full regression (hardware)
@@ -584,6 +628,15 @@ workstream Stephen executes on the P2 host; the container cannot run it.
   PASS** (both groups). Record the A/B (old-FAIL → fixed-PASS) pair — that
   transition on one card is the certification evidence. A fatchain FAIL on the
   fixed driver is a live bug: fix in-session and rerun; do not ship on it.
+
+  > **RETIRED as a separate step (2026-07-24).** Do NOT run fatchain standalone
+  > before the sweep. `run_regression.sh` lists `SD_RT_fatchain_tests` in
+  > `REFORMAT_BEFORE`, so suite 12 already gets a freshly formatted card — the
+  > exact condition a solo run was providing. Running it twice bought nothing but
+  > an extra manual step, and it is what made CONFIRM a two-invocation procedure.
+  > The A/B pair is captured in `DOCs/Agent-Reports/CONFIRM-RUN-2026-07-24.md`;
+  > from here fatchain is certified inline as suite 12 of the single sweep. For an
+  > ad-hoc fast signal use `./run_regression.sh --from fatchain`.
 - **Step 3 — full regression, both geometries.** Run the complete sequential
   suite, per-file reported, on **two cards of different cluster geometry**
   (small-cluster vs large-cluster — Bug A only triggers at certain cluster

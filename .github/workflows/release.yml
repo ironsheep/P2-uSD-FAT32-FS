@@ -108,7 +108,7 @@ jobs:
           cp src/UTILS/isp_string_fifo.spin2 "${DEST}/src/UTILS/"
           cp src/UTILS/SD_card_identify.spin2 "${DEST}/src/UTILS/"
 
-          # src/regression-tests/ - test suites and framework (25 suites)
+          # src/regression-tests/ - test suites and framework (26 suites)
           mkdir -p "${DEST}/src/regression-tests"
           cp src/regression-tests/README.md "${DEST}/src/regression-tests/"
           cp src/regression-tests/THEORY-OF-OPERATIONS.md "${DEST}/src/regression-tests/"
@@ -124,6 +124,7 @@ jobs:
           cp src/regression-tests/SD_RT_recovery_tests.spin2 "${DEST}/src/regression-tests/"
           cp src/regression-tests/SD_RT_file_ops_tests.spin2 "${DEST}/src/regression-tests/"
           cp src/regression-tests/SD_RT_read_write_tests.spin2 "${DEST}/src/regression-tests/"
+          cp src/regression-tests/SD_RT_fatchain_tests.spin2 "${DEST}/src/regression-tests/"
           cp src/regression-tests/SD_RT_multihandle_tests.spin2 "${DEST}/src/regression-tests/"
           cp src/regression-tests/SD_RT_seek_tests.spin2 "${DEST}/src/regression-tests/"
           cp src/regression-tests/SD_RT_volume_tests.spin2 "${DEST}/src/regression-tests/"

@@ -25,10 +25,10 @@ This project provides a robust, high-performance SD card driver for the P2 micro
 - **Non-Blocking Async I/O**: Optional `startReadHandle()`/`startWriteHandle()` for overlapping computation with SD I/O (`SD_INCLUDE_ASYNC`)
 - **Defragmentation**: `compactFile()` relocates fragmented files into contiguous clusters; `createFileContiguous()` pre-allocates contiguous space (`SD_INCLUDE_DEFRAG`)
 - **Built-in Card Formatter**: Format any SD card as FAT32 directly from the P2 — no PC required
-- **Filesystem Repair**: Integrated read-only audit (39 checks) and 4-pass fsck with auto-repair
+- **Filesystem Repair**: Two tools sharing one four-pass engine — `audit` (read-only) and `fsck` (repairs)
 - **Multi-Cog Safe**: Dedicated worker cog with hardware lock serialization
 - **Per-Cog Working Directory**: Each cog maintains its own CWD for safe concurrent navigation
-- **Regression Tested**: 465 automated tests across 25 test suites
+- **Regression Tested**: 471 automated tests across 26 test suites, certified on two cluster geometries
 
 ## Documentation
 
@@ -41,7 +41,7 @@ This project provides a robust, high-performance SD card driver for the P2 micro
 | **[FAT32 API Concepts](DOCs/Reference/FAT32-API-CONCEPTS-REFERENCE.md)** | FAT32 background for embedded developers |
 | **[Utilities Guide](DOCs/SD-CARD-UTILITIES.md)** | Standalone utility programs (format, audit, fsck, benchmark) |
 | **[Utility Internals](DOCs/Utils/)** | Theory of operations for each utility |
-| **[Regression Testing](src/regression-tests/README.md)** | Test infrastructure, 465 tests across 25 suites |
+| **[Regression Testing](src/regression-tests/README.md)** | Test infrastructure, 471 tests across 26 suites |
 | **[Example Programs](src/EXAMPLES/README.md)** | Compilable examples: read/write, data logger, directory walk, multi-cog |
 | **[Demo Shell](src/DEMO/README.md)** | Full-featured terminal shell with card formatting, filesystem repair, file management, and benchmarking |
 
@@ -143,8 +143,8 @@ P2-uSD-FAT32-FS/
 │       ├── isp_mem_strings.spin2       # String formatting utilities
 │       └── isp_stack_check.spin2       # Stack usage diagnostic
 │
-│   ├── regression-tests/          # Regression test suite (465 tests)
-│   │   ├── SD_RT_*_tests.spin2        # 25 test files (mount, file ops, seek, async, defrag, etc.)
+│   ├── regression-tests/          # Regression test suite (471 tests)
+│   │   ├── SD_RT_*_tests.spin2        # 26 test files (mount, file ops, seek, fatchain, async, defrag, etc.)
 │   │   ├── isp_rt_utilities.spin2     # Shared test framework
 │   │   └── TestCard/                  # Test card setup and validation
 │

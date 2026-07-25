@@ -2,6 +2,8 @@
 
 Standalone utility programs for card formatting, characterization, performance testing, and filesystem validation.
 
+> **What belongs here:** standalone tools **the user** runs. A non-user-facing probe belongs in [`diagnostic-tests/`](../../diagnostic-tests/) (those are for us); an automated pass/fail suite belongs in [`src/regression-tests/`](../regression-tests/). The `isp_*` files here are **support libraries** these tools depend on, not standalone utilities.
+
 ## Overview
 
 ### Utility Summary
@@ -12,7 +14,7 @@ Standalone utility programs for card formatting, characterization, performance t
 | **SD_card_identify.spin2** | Two-line card identification | No |
 | **SD_card_characterize.spin2** | Card register reader | No |
 | **SD_performance_benchmark.spin2** | Throughput measurement | Yes* |
-| **SD_FAT32_audit.spin2** | Filesystem validator | No |
+| **SD_FAT32_audit.spin2** | Deep filesystem scan, read-only (same engine as fsck) | No |
 | **SD_FAT32_fsck.spin2** | Filesystem check & repair | Yes |
 
 *Creates temporary test files that are deleted after testing.
@@ -223,6 +225,17 @@ Filesystem Performance:
 ### 4. SD_FAT32_audit.spin2
 
 **Purpose:** Verify FAT32 filesystem integrity without modifying the card.
+
+`audit` and `fsck` are **two front-ends over one four-pass engine** — structural
+integrity, chain validation, lost-cluster detection, and free-count verification.
+The only difference is that `audit` suppresses every write: repair lines are
+reported in the conditional ("REPAIR: Would free N lost clusters") and nothing is
+changed. Run `audit` first; run `fsck` when you want the repairs applied.
+
+> **Since v1.6.0.** `audit` previously ran a shallower single-pass check and could
+> report a damaged card as clean — notably a card carrying lost clusters from the
+> pre-v1.6.0 write-path defect. It now runs the full scan. The separate
+> check-only tool (`SD_FAT32_check`) is gone; `audit` supersedes it.
 
 **Compile and Run:**
 ```bash

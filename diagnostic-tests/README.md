@@ -2,6 +2,8 @@
 
 Internal-only test programs for characterizing SD card behavior and debugging driver issues. Not included in release packages.
 
+> **Who this is for:** us — developers/maintainers, **not** the user. These are instruments for probing card behavior and debugging the driver. Occasionally we hand one to a user to run so they can send us deeper results, but they are **never shipped** (excluded from the release bundle). A tool meant for the user belongs in [`src/UTILS/`](../src/UTILS/); an automated pass/fail suite belongs in [`src/regression-tests/`](../src/regression-tests/).
+
 > **Note:** This directory is a candidate for removal. Most of these utilities served a specific debugging purpose and have limited ongoing value beyond serving as examples of how to probe card behavior.
 
 | File | Purpose |

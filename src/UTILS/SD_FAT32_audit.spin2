@@ -1,11 +1,14 @@
 '' =========================================================================================
 ''
 ''   File....... SD_FAT32_audit.spin2
-''   Purpose.... FAT32 filesystem audit tool (thin wrapper around isp_fsck_utility)
+''   Purpose.... FAT32 filesystem audit -- the full 4-pass scan, read-only.
+''               Same engine as fsck (structural integrity, chain validation,
+''               lost-cluster detection, free-count) but writes nothing.
+''               Thin wrapper around isp_fsck_utility.startAudit().
 ''   Author..... Stephen M Moraco
 ''   E-mail..... stephen@ironsheep.biz
 ''   Started.... JAN 2026
-''   Updated.... 21 FEB 2026
+''   Updated.... 24 JUL 2026
 ''
 '' =========================================================================================
 
@@ -60,6 +63,9 @@ PUB go() | pStr
     else
         debug("FATAL: Could not start Audit cog")
 
+    ' Drain the headless terminal log backlog before END_SESSION triggers
+    ' shutdown -- without this the last emitted line (STATUS:) is cut off.
+    waitms(500)
     debug(" ")
     debug("END_SESSION")
 

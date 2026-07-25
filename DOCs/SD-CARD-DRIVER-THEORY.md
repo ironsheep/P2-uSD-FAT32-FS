@@ -119,6 +119,13 @@ The driver uses `#ifdef` / `#endif` blocks to exclude optional features from min
 | `SD_INCLUDE_DEBUG` | Debug getters, CRC diagnostic methods, display utilities, test hooks |
 | `SD_INCLUDE_ALL` | Enables all of the above (not STACK_CHECK) |
 
+### Pin-Selection Flag
+
+`SD_PINS_EXTERNAL` is a *build* define (`-D SD_PINS_EXTERNAL`), not an
+`exportdef` feature flag. It selects an external SD header (base pins 16–21)
+instead of the P2 Edge onboard slot. `tools/run_test.sh` and
+`tools/run_regression.sh` pass it through with `--external`.
+
 ### Enabling Flags
 
 Flags are exported from the top-level file using `#pragma exportdef` before the `OBJ` declaration:
@@ -414,6 +421,35 @@ CON
 OBJ
   sd : "micro_sd_fat32_fs"
 ```
+
+## Card Compatibility Handling
+
+Some cards deviate from the SD spec in ways that would otherwise make them
+unusable. The driver probes for these at init and records what it found in an
+advisory bitmask readable via `cardWarnings()`. Nothing here is a workaround for
+a driver defect — each is a documented property of the card in the socket.
+
+| Flag | Meaning | Driver response |
+|------|---------|-----------------|
+| `CW_CMD13_UNRELIABLE` ($01) | CMD13 probe failed at init | Runtime status checks disabled for this card |
+| `CW_CMD23_SUPPORTED` ($02) | CMD23 (SET_BLOCK_COUNT) confirmed working in SPI mode | Used for multi-block transfers |
+| `CW_NO_DATA_CRC` ($04) | Card returns a placeholder data-block CRC | Read-side CRC validation disabled **for this card only** |
+
+**Dummy data CRCs.** Some counterfeit and marginal SDSC units return a constant
+placeholder instead of a real data-block CRC. Under strict validation every
+streamer read fails. The driver detects this at init, sets `CW_NO_DATA_CRC`, and
+skips read-side CRC validation for that card — cards with real CRCs keep strict
+validation. Because such cards are also often timing-marginal, a per-card SCK
+ceiling probe (`probeSpiCeiling`, `PROBE_SCK_SAMPLES` clean reads required per
+candidate half-period, derating on the first mismatch) picks a safe clock rate.
+
+**SDSC block length (CMD16).** SDHC/SDXC hardwire a 512-byte block; SDSC does
+not, and a macOS-formatted SDSC card may arrive with a different block length.
+Init step 7.5 issues CMD16 to pin SDSC cards to 512 bytes, distinguishing
+accepted / stale-R1 / no-response / rejected outcomes rather than assuming
+success. The audit and fsck utilities additionally accept macOS filesystem
+conventions (removable-media byte, media-derived `FAT[0]`, zero hidden sectors,
+archive-bit volume label), so such cards mount and audit cleanly.
 
 ## SPI Implementation
 
