@@ -54,7 +54,7 @@ SDSC cards could fail every read and write at some system clocks: `mount()` succ
 
 Found and diagnosed by @macca on a 1GB SanDisk SU01G, including a confirmed fix. Many thanks.
 
-## [1.5.2] - 2026-05-05
+## [1.5.2] - 2026-05-06
 
 **Write-path timing margin; erase-block size getter.**
 
@@ -198,7 +198,7 @@ For tooling that characterizes cards that misbehave. Production applications mus
 - Memory sizing guide updated with current v1.3.x footprint data across all configurations
 - DEBUG_MASK channel plan: 10 selective debug channels mapped for all 402 debug statements
 
-## [1.3.0] - 2026-03-06
+## [1.3.0] - 2026-03-07
 
 **R1 response parsing fix, CMD12 tolerance, CMD23 probing, 427 regression tests across 20 suites.**
 
@@ -231,7 +231,7 @@ For tooling that characterizes cards that misbehave. Production applications mus
 - Audit: Backup FSInfo mismatch downgraded from error to warning (common on FAT32 media)
 - CMD13 compatibility analysis and probe infrastructure for cards with broken SPI-mode status reporting
 
-## [1.2.0] - 2026-03-02
+## [1.2.0] - 2026-03-03
 
 **Consistent error codes across the entire public API, card presence detection, and transport-layer diagnostics.**
 
@@ -260,7 +260,7 @@ For tooling that characterizes cards that misbehave. Production applications mus
 - Theory of Operations expanded: card presence detection, card identification and adaptive timing
 - Architecture Decision 13: Card presence detection via P2 internal pull-up
 
-## [1.1.0] - 2026-02-26
+## [1.1.0] - 2026-02-28
 
 **FSCK scales to any card size, CRC error injection for fault testing, V1 legacy API removed.**
 
