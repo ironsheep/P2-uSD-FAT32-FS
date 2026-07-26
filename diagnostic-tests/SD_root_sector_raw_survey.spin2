@@ -1,0 +1,120 @@
+{{ =================================================================================================
+   File....... SD_root_sector_raw_survey.spin2
+   Purpose.... Read the first few root-directory sectors RAW and report what
+               physically lives in each one.
+
+               Written to disambiguate a FACT 1 "violation" reported by
+               SD_zero_root_sector_probe. That probe counts survivors with the
+               directory ENUMERATION path (openDirectory/readDirectoryHandle),
+               which stops at the first $00 entry -- and $00 is exactly what
+               debugZeroRootSector() writes into entry 0 of sector 0. A scan
+               that terminates on the end-of-directory marker cannot see past
+               it, so it reports 0 survivors whether the later sectors were
+               wiped or merely hidden.
+
+               This survey bypasses enumeration entirely: it raw-reads root
+               sectors 0..N-1 and classifies all 16 entries of each, so the
+               answer reflects the card, not the scan.
+
+               NON-DESTRUCTIVE. Read-only; safe to run on the post-probe card
+               before fsck reclaims anything.
+
+   Author..... Stephen M Moraco
+   Started.... 25 JUL 2026
+================================================================================================= }}
+
+CON
+    _CLKFREQ        = 350_000_000
+    DEBUG_BAUD      = 2_000_000
+
+#ifdef SD_PINS_EXTERNAL
+    SD_CS   = 20
+    SD_MOSI = 19
+    SD_MISO = 18
+    SD_SCK  = 21
+#else
+    SD_CS   = 60
+    SD_MOSI = 59
+    SD_MISO = 58
+    SD_SCK  = 61
+#endif
+
+    ENTRIES_PER_SEC = 16
+    SECTORS_TO_SCAN = 4
+
+#pragma exportdef SD_INCLUDE_ALL
+
+OBJ
+    sd  : "micro_sd_fat32_fs"
+
+DAT
+    rawBuf      BYTE    0[512]
+    nameOut     BYTE    0[12]                                                   ' 11-byte 8.3 name + terminator
+
+PUB go() | sec, rootSec
+
+    debug(" ")
+    debug("=== root-directory raw survey (read-only) ===")
+    debug(" ")
+
+    if sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK) <> 0
+        debug("FATAL: mount failed -- is a card inserted?")
+        finish()
+        return
+
+    debug("mount OK -- the card still mounts after the probe.")
+
+    rootSec := sd.debugGetRootSec()
+    debug("root starts at sector ", udec_(rootSec))
+    debug(" ")
+    debug("per-sector entry census (live = in use, dead = $E5, zero = $00):")
+
+    repeat sec from 0 to SECTORS_TO_SCAN - 1
+        surveySector(rootSec + sec, sec)
+
+    debug(" ")
+    sd.unmount()
+    finish()
+
+
+PRI surveySector(absSec, relIdx) | pBuf, idx, first, live, dead, zero, firstLiveName
+' Classify all 16 entries of one root sector, read raw.
+
+    pBuf := @rawBuf
+    if sd.readSectorRaw(absSec, pBuf) <> 0
+        debug("  sector +", udec_(relIdx), ": RAW READ FAILED")
+        return
+
+    live := dead := zero := 0
+    firstLiveName := 0
+    repeat idx from 0 to ENTRIES_PER_SEC - 1
+        first := BYTE[pBuf + (idx * 32)]
+        case first
+            $00: zero++
+            $E5: dead++
+            other:
+                live++
+                if firstLiveName == 0
+                    firstLiveName := pBuf + (idx * 32)
+
+    if firstLiveName <> 0
+        copyName(firstLiveName)
+        debug("  sector +", udec_(relIdx), ": live ", udec_(live), "  dead ", udec_(dead), "  zero ", udec_(zero), "   first live entry: '", zstr_(@nameOut), "'")
+    else
+        debug("  sector +", udec_(relIdx), ": live ", udec_(live), "  dead ", udec_(dead), "  zero ", udec_(zero))
+
+
+PRI copyName(pEntry) | i
+' Copy the 11-byte 8.3 name out of a directory entry and terminate it. Entry
+' names are space-padded, NOT zero-terminated, so they must be bounded here.
+
+    repeat i from 0 to 10
+        BYTE[@nameOut][i] := BYTE[pEntry][i]
+    BYTE[@nameOut][11] := 0
+
+
+PRI finish()
+' Drain the headless terminal log backlog before END_SESSION triggers shutdown.
+
+    waitms(500)
+    debug("END_SESSION")

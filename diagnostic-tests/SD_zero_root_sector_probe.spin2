@@ -4,7 +4,7 @@
 
                The method used to be called debugClearRootDir() and claimed "This
                DELETES all files and folders!". It does not. It zeroes ONE sector
-               and leaks every chain it erases. This probe proves all three facts
+               and leaks every chain it erases. This probe proves all four facts
                the corrected docstring now states:
 
                  FACT 1  only the FIRST root sector is zeroed -- entries in the
@@ -12,6 +12,18 @@
                  FACT 2  entries in that first sector are gone
                  FACT 3  NO cluster chains are freed -- free space is unchanged,
                          i.e. the erased entries' clusters are leaked
+                 FACT 4  those survivors are UNREACHABLE: zeroing entry 0 writes a
+                         FAT32 end-of-directory marker, so enumeration stops before
+                         it reaches them
+
+               MEASUREMENT NOTE -- this is what the first run of this probe got
+               wrong (2026-07-25). FACT 1 must be measured RAW. Counting survivors
+               with the enumeration path reports 0 regardless of what is on the
+               card, because enumeration halts at the very $00 the call writes. The
+               original probe did exactly that and reported a false FACT 1
+               violation; SD_root_sector_raw_survey.spin2 disproved it. FACT 1 now
+               reads sectors directly and never stops at $00; the enumeration count
+               is kept, but as the FACT 4 reachability measure it actually is.
 
                DESTRUCTIVE. Wipes part of the root directory and deliberately
                leaks free space. Run only on a scratch card, and run
@@ -20,7 +32,7 @@
 
                OPERATOR STEPS (the full certification):
                  1. tools/run_regression.sh --reformat-only        (clean card)
-                 2. run this probe                                 (facts 1-3)
+                 2. run this probe                                 (facts 1-4)
                  3. run SD_FAT32_audit    -> expect LOST CLUSTERS reported
                  4. run SD_FAT32_fsck     -> expect them reclaimed
                  5. run SD_FAT32_audit    -> expect STATUS: CLEAN
@@ -56,6 +68,7 @@ CON
     ' in sector 0 (minus the volume label, if present), the rest follow.
     FILE_COUNT      = 40
     ENTRIES_PER_SEC = 16
+    SECTORS_TO_SCAN = 4                                                         ' root sectors examined raw (0..3)
 
 #pragma exportdef SD_INCLUDE_ALL
 
@@ -69,6 +82,7 @@ DAT
 VAR
     LONG    freeBefore, freeAfter
     LONG    survivorsBefore, survivorsAfter
+    LONG    enumBefore, enumAfter
     LONG    firstSecBefore, firstSecAfter
 
 PUB go() | i, handle, status
@@ -100,14 +114,16 @@ PUB go() | i, handle, status
     sd.syncAllHandles()
 
     freeBefore      := sd.freeSpace()
-    survivorsBefore := countFiles()
+    survivorsBefore := countLaterSectorEntries()
+    enumBefore      := countFiles()
     firstSecBefore  := countFirstSectorEntries()
 
     debug(" ")
     debug("Before the call:")
-    debug("  files found in root...... ", udec_(survivorsBefore))
-    debug("  entries in FIRST sector.. ", udec_(firstSecBefore))
-    debug("  free sectors............. ", udec_(freeBefore))
+    debug("  live entries in LATER sectors (raw).. ", udec_(survivorsBefore))
+    debug("  files reachable by enumeration....... ", udec_(enumBefore))
+    debug("  entries in FIRST sector (raw)........ ", udec_(firstSecBefore))
+    debug("  free sectors......................... ", udec_(freeBefore))
     debug(" ")
 
     ' ---- The call under test ----
@@ -120,23 +136,27 @@ PUB go() | i, handle, status
     sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
 
     freeAfter      := sd.freeSpace()
-    survivorsAfter := countFiles()
+    survivorsAfter := countLaterSectorEntries()
+    enumAfter      := countFiles()
     firstSecAfter  := countFirstSectorEntries()
 
     debug(" ")
     debug("After the call:")
-    debug("  files found in root...... ", udec_(survivorsAfter))
-    debug("  entries in FIRST sector.. ", udec_(firstSecAfter))
-    debug("  free sectors............. ", udec_(freeAfter))
+    debug("  live entries in LATER sectors (raw).. ", udec_(survivorsAfter))
+    debug("  files reachable by enumeration....... ", udec_(enumAfter))
+    debug("  entries in FIRST sector (raw)........ ", udec_(firstSecAfter))
+    debug("  free sectors......................... ", udec_(freeAfter))
     debug(" ")
 
-    ' ---- The three documented facts ----
+    ' ---- The four documented facts ----
     debug("=== CONTRACT ===")
 
-    if survivorsAfter > 0
-        debug("  FACT 1 HOLDS: ", udec_(survivorsAfter), " files in later root sectors survived")
+    if survivorsAfter > 0 AND survivorsAfter == survivorsBefore
+        debug("  FACT 1 HOLDS: ", udec_(survivorsAfter), " entries in later root sectors survived intact")
+    elseif survivorsAfter > 0
+        debug("  FACT 1 VIOLATED: later sectors changed, ", udec_(survivorsBefore), " -> ", udec_(survivorsAfter))
     else
-        debug("  FACT 1 VIOLATED: root is empty -- it deleted more than one sector")
+        debug("  FACT 1 VIOLATED: later sectors are empty -- it cleared more than one sector")
 
     if firstSecAfter == 0 AND firstSecBefore > 0
         debug("  FACT 2 HOLDS: the first root sector was cleared")
@@ -147,6 +167,13 @@ PUB go() | i, handle, status
         debug("  FACT 3 HOLDS: free space unchanged -- erased entries' clusters are LEAKED")
     else
         debug("  FACT 3 VIOLATED: free space moved by ", sdec_(freeAfter - freeBefore), " sectors")
+
+    if enumAfter == 0 AND survivorsAfter > 0
+        debug("  FACT 4 HOLDS: the ", udec_(survivorsAfter), " survivors are UNREACHABLE -- enumeration sees 0")
+    elseif survivorsAfter > 0
+        debug("  FACT 4 VIOLATED: enumeration still reaches ", udec_(enumAfter), " of them")
+    else
+        debug("  FACT 4 NOT TESTED: no survivors to be unreachable")
 
     debug(" ")
     debug("Leaked clusters are now on the card by design.")
@@ -163,8 +190,28 @@ PRI makeName(idx)
     BYTE[@nameBuf][4] := "0" + (idx // 10)
 
 
+PRI countLaterSectorEntries() : count | pBuf, sec, idx, first
+' Count live entries physically present in root sectors 1..SECTORS_TO_SCAN-1,
+' read raw. Deliberately does NOT stop at a $00 entry: $00 is end-of-directory to
+' an enumerator, and the whole point of FACT 1 is what survives BEHIND that
+' marker. Counting these with the enumeration path reports 0 no matter what is on
+' the card, which is what made the original FACT 1 check meaningless.
+
+    count := 0
+    pBuf  := @rawBuf
+    repeat sec from 1 to SECTORS_TO_SCAN - 1
+        if sd.readSectorRaw(sd.debugGetRootSec() + sec, pBuf) <> 0
+            return -1
+        repeat idx from 0 to ENTRIES_PER_SEC - 1
+            first := BYTE[pBuf + (idx * 32)]
+            if first <> $00 AND first <> $E5
+                count++
+
+
 PRI countFiles() : count | dh, nameP
-' Count entries currently enumerable in the root directory.
+' Count entries currently enumerable in the root directory. This is the
+' REACHABILITY measure, not a survival measure -- it stops at the first $00, as
+' any conforming FAT32 scan must. FACT 4 depends on that behaviour.
 
     count := 0
     dh := sd.openDirectory(string("/"))

@@ -2452,14 +2452,21 @@ PUB debugZeroRootSector() : status
 ''
 '' Exactly what it does, and does not do:
 ''   - Zeroes ONLY root_sec, the first root-directory sector (16 entries).
-''     Entries in the second and later root sectors are left untouched and remain
-''     visible after the call.
+''     Entries in the second and later root sectors are left physically intact.
 ''   - Frees NO cluster chains. Every entry it erases leaks its whole chain: that
 ''     space becomes lost clusters and no deleteFile() will ever return it.
+''   - Leaves those intact later entries UNREACHABLE. Zeroing entry 0 writes a
+''     FAT32 end-of-directory marker, so every conforming scan -- dir(),
+''     openDirectory(), SD_FAT32_audit, and any host OS -- stops before it gets to
+''     them. They are still on the card and gone as far as any tool is concerned.
 ''
-'' After using this, run SD_FAT32_fsck to reclaim the lost clusters, or
-'' SD_format_card for a genuinely clean card. To delete everything, format --
-'' there is no delete-all in this driver.
+'' So this is a one-way door for the whole root directory, not just the 16 entries
+'' it overwrites. SD_FAT32_fsck will reclaim the leaked clusters, but "leaked"
+'' includes the unreachable survivors' clusters -- their data goes too, and the
+'' entries themselves stay on the card where they can resurface once the root
+'' refills past 16 entries. Treat a card as scratch after this call: SD_format_card
+'' is the way back to a genuinely clean one. To delete everything, format -- there
+'' is no delete-all in this driver.
 ''
 '' @returns status - 0 on success, -1 on error
 
