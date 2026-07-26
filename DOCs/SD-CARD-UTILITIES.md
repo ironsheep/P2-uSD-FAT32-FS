@@ -98,32 +98,53 @@ END_SESSION
 | **OCR** | 4 bytes | Operating voltage ranges, card capacity status |
 | **VBR/BPB** | 512 bytes | FAT32 filesystem parameters |
 
-**Sample Output:**
+**Sample Output** — banner and section structure verified against
+`src/UTILS/SD_card_characterize.spin2` (v1.6.1). Field **values** below are
+illustrative, not a captured run; every field marker and label is real. Registers
+are tagged `[USED]` where the driver acts on the field and `[INFO]` where it is
+reported only.
+
 ```
-┌──────────────────────────────────────────┐
-│ SD Card Characterization Diagnostic      │
-└──────────────────────────────────────────┘
+##############################################
+#  SD Card Characterization Report V3       #
+#  All register fields - comprehensive      #
+##############################################
 
-========== CID (Card Identification) ==========
-  Manufacturer ID:    $03 (SanDisk)
-  OEM/Application ID: "SD"
-  Product Name:       "SD64G"
-  Product Revision:   8.0
-  Serial Number:      $12345678
-  Manufacturing Date: 2023/06
+Initializing SD card (no-mount mode)...
+Card initialized successfully.
 
-========== CSD (Card Specific Data) ==========
-  CSD Version:        2.0 (SDHC/SDXC)
-  Card Capacity:      59.48 GB
-  Max Transfer Rate:  50 MHz
-  Read Block Length:  512 bytes
-  ...
+--- Reading Card Registers ---
+  CID: OK (16 bytes)
+  CSD: OK (16 bytes)
+  SCR: OK (8 bytes)
+  OCR: OK (4 bytes)
+  SD Status: OK (64 bytes)
 
-========== Filesystem (VBR/BPB) ==========
-  Volume Label:       P2-XFER
-  Sectors per Cluster: 64
-  Total Sectors:      124735488
-  Free Space:         59.45 GB
+======== CID REGISTER (Card Identification) ========
+[USED] = Field used by V3 driver
+[INFO] = Informational only
+
+[USED] MID (Manufacturer ID):     $03 (SanDisk)
+[INFO] OID (OEM/Application ID): $53 $44
+[INFO] PNM (Product Name):        [SD64G]
+[INFO] PRV (Product Revision):    8.0
+[INFO] PSN (Serial Number):       $1234_5678
+[INFO] MDT (Manufacturing Date): 2023-06
+[INFO] CRC7:                      $6A
+
+======== CSD REGISTER (Card Specific Data) ========
+
+[USED] CSD_STRUCTURE:        1 (CSD Version 2.0)
+       Card Type:            SDHC/SDXC (High Capacity)
+
+--- Timing Parameters ---
+[USED] TRAN_SPEED:           $32 (25 MHz max)
+[USED] R2W_FACTOR:           2 (write time = read time x 4)
+       Read Timeout:         1_000 ms (calculated)
+       Write Timeout:        4_000 ms (calculated)
+
+--- Capacity ---
+       ... capacity, block, and feature fields follow ...
 ```
 
 **Use Cases:**
@@ -164,26 +185,50 @@ END_SESSION
 | 128 KB | Small display image |
 | 256 KB | Larger display image |
 
-**Output Format:**
+**Output Format** — structure verified against
+`src/UTILS/SD_performance_benchmark.spin2` (v1.6.1). Timings are **illustrative**:
+throughput varies substantially by card, and quoting one card's numbers here would
+read as a specification. Run it on your own card for figures you can rely on.
+
 ```
-SD Card Performance Benchmark
-=============================
-Card: Gigastone 32GB
+======================================================
+  SD Card Performance Benchmark v2.0
+======================================================
 
-Raw Sector Performance:
-  Read:  512 bytes in 0.42 ms (1.19 MB/s)
-  Write: 512 bytes in 2.31 ms (0.22 MB/s)
+SysClk: 250 MHz
+Iterations per test: 10
 
-Multi-Sector Performance (64 sectors = 32KB):
-  Read:  32768 bytes in 18.2 ms (1.76 MB/s)
-  Write: 32768 bytes in 45.7 ms (0.70 MB/s)
+MOUNT:
+  Mount time: 1_716.4 ms
+  SPI Frequency: 20_833 kHz
+  Volume: P2-BENCH
+  Free: 1_915 MB (3_923_944 sectors)
 
-Filesystem Performance:
-  File Read (32KB):  62.3 ms (513 KB/s)
-  File Write (32KB): 89.1 ms (359 KB/s)
-  File Open:         12.4 ms
-  File Close:        8.7 ms
+------------------------------------------------------
+  CARD IDENTIFICATION
+------------------------------------------------------
+  MID: $03  Product: SD64G
+  CID: $03 $53 $44 $53 $44 $36 $34 $47
+       $08 $12 $34 $56 $78 $01 $76 $00
+
+------------------------------------------------------
+  RAW SINGLE-SECTOR (1x512B per operation)
+------------------------------------------------------
+
+Single-Sector Read (10 iterations):
+  1 sector(s) (512B): Min=731 Avg=753 Max=949 us => 679 KB/s
+
+Single-Sector Write (10 iterations):
+  1 sector(s) (512B): Min=1_131 Avg=1_133 Max=1_146 us => 451 KB/s
+
+------------------------------------------------------
+  RAW MULTI-SECTOR (CMD18/CMD25 bulk transfers)
+------------------------------------------------------
+  ... multi-sector, filesystem, and overhead sections follow ...
 ```
+
+Every measurement reports `Min`/`Avg`/`Max` across its iterations, so a single slow
+outlier is visible rather than averaged away.
 
 **Statistics:**
 - Each measurement repeated 10 times
@@ -205,8 +250,9 @@ Filesystem Performance:
 `audit` and `fsck` are **two front-ends over one four-pass engine** — structural
 integrity, chain validation, lost-cluster detection, and free-count verification.
 The only difference is that `audit` suppresses every write: repair lines are
-reported in the conditional ("REPAIR: Would free N lost clusters") and nothing is
-changed. Run `audit` first; run `fsck` when you want the repairs applied.
+reported in the conditional -- each finding reads `needs repair: N lost clusters`,
+and the run closes `Nothing was repaired -- run SD_FAT32_fsck to fix what is listed
+above.` with `STATUS: REPAIRS NEEDED`. Nothing on the card is changed. Run `audit` first; run `fsck` when you want the repairs applied.
 
 > **Since v1.6.0.** `audit` previously ran a shallower single-pass check and could
 > report a damaged card as clean — notably a card carrying lost clusters from the
@@ -233,38 +279,71 @@ changed. Run `audit` first; run `fsck` when you want the repairs applied.
 | **Root Directory** | Volume label present, structure valid |
 | **Mount Test** | Driver can mount and read filesystem |
 
-**Sample Output:**
+**Sample Output** — captured on Card 1 (SharedOEM SDHC 7 GB), v1.6.1, 2026-07-26.
+Abridged: the MBR and VBR check lines are elided by count.
+
 ```
 ==============================================
-  FAT32 Filesystem Audit Tool
-  (Read-only - does not modify card)
+  FAT32 Audit (via isp_fsck_utility)
 ==============================================
 
-* Initializing card...
-Card initialized successfully
+=== FAT32 Filesystem Audit ===
+Read-only -- nothing on this card is changed.
+Card: 15218688 sectors (7431 MB)
 
-=== MBR Structure ===
-[PASS] Boot signature: $AA55
-[PASS] Partition type: $0C (FAT32 LBA)
-[PASS] Partition start: 8192 (4MB aligned)
+  Geometry:
+    Partition start:  8192
+    Sectors/cluster:  8
+    Sectors/FAT:      14854
+    Total clusters:   1897594
+    Root cluster:     2
+    Data start:       37932
 
-=== VBR Structure ===
-[PASS] Jump instruction: $EB
-[PASS] Bytes per sector: 512
-[PASS] Sectors per cluster: 64
-[PASS] Reserved sectors: 32
-...
+Checking MBR (sector 0)...
+  [PASS] MBR boot signature ($AA55)
+  ... 4 more MBR checks ...
 
-=== FAT Consistency ===
-[PASS] FAT1 media descriptor: $F8
-[PASS] FAT2 matches FAT1
+Checking VBR (boot sector)...
+  [PASS] VBR jump ($EB or $E9)
+  ... 17 more VBR checks ...
 
-=== Summary ===
-Tests: 24, Passed: 24, Failed: 0
-Filesystem integrity: OK
+--- Pass 1: Structural Integrity ---
+  [OK] Backup VBR matches
+  [OK] FSInfo signatures
+  [OK] Backup FSInfo matches
+  [OK] FAT[0] media type
+  [OK] FAT[1] EOC marker
+  [OK] FAT[2] root cluster
+  Pass 1: 0 repairs
+
+--- Pass 2: Directory & Chain Validation ---
+  Dirs: 1  Files: 0
+  [OK] No lost clusters
+  Pass 2/3: 0 repairs
+
+--- Pass 4: FAT Sync & Free Count ---
+  [OK] FAT1 and FAT2 in sync
+  Free clusters: 1897593
+  [OK] FSInfo free count correct
+  Pass 4: 0 repairs
+
+
+=== AUDIT COMPLETE ===
+Errors: 0  Repairs needed: 0
+Warnings: 0
+Structural checks: 23 pass, 0 fail
+Directories: 1  Files: 0
+This filesystem is healthy.
+STATUS: CLEAN
 
 END_SESSION
 ```
+
+An audit reports what it *would* fix — `Repairs needed:`, and `needs repair:` on each
+finding — because it writes nothing. `SD_FAT32_fsck` reports the same findings as
+`repaired:` and closes `=== FSCK COMPLETE ===` / `STATUS: REPAIRED`. Lost-cluster
+recovery has no banner of its own: it runs inside pass 2 per bitmap window, so its
+counts appear as `Pass 2/3`.
 
 **Use Cases:**
 - Verify filesystem after running tests
@@ -311,59 +390,61 @@ END_SESSION
 
 The cluster bitmap uses 256 KB of P2 hub RAM (LONG[65536]), covering up to 2,097,152 clusters per window. For cards exceeding 2 million clusters (approximately 64 GB), the utility uses windowed bitmap scanning -- processing the cluster space in 2M-cluster passes. The directory tree is re-walked for each window, and lost cluster recovery runs after each window. This extends full 4-pass validation to cards of any size.
 
-**Sample Output:**
-```
-==============================================
-  FAT32 Filesystem Check & Repair (FSCK)
-==============================================
+**Sample Output** — captured on Card 1 (SharedOEM SDHC 7 GB), v1.6.1, 2026-07-26.
+Abridged: the MBR and VBR check lines are elided by count.
 
-* Initializing card...
-  Card: 31_207_424 sectors (15_238 MB)
+```
+=== FAT32 Filesystem Check & Repair ===
+Card: 15218688 sectors (7431 MB)
 
   Geometry:
-    Partition start:  8_192
-    Sectors/cluster:  16
-    Sectors/FAT:      15_234
-    Total clusters:   1_948_045
+    Partition start:  8192
+    Sectors/cluster:  8
+    Sectors/FAT:      14854
+    Total clusters:   1897594
+    Root cluster:     2
+    Data start:       37932
+
+Checking MBR (sector 0)...
+  [PASS] MBR boot signature ($AA55)
+  ... 4 more MBR checks ...
+
+Checking VBR (boot sector)...
+  [PASS] VBR jump ($EB or $E9)
+  ... 17 more VBR checks ...
 
 --- Pass 1: Structural Integrity ---
-  [OK] Backup VBR matches primary
-  [OK] FSInfo signatures correct
-  [OK] Backup FSInfo matches primary
-  [OK] FAT[0] media type correct
-  [OK] FAT[1] EOC marker correct
-  [OK] FAT[2] root cluster allocated
+  [OK] FAT[2] root cluster
   Pass 1: 0 repairs
 
 --- Pass 2: Directory & Chain Validation ---
-  Directories scanned: 1
-  Files scanned:       0
-  Pass 2: 0 repairs
-
---- Pass 3: Lost Cluster Recovery ---
-  [OK] No lost clusters found
-  Pass 3: 0 repairs
+  Dirs: 1  Files: 0
+  [OK] No lost clusters
+  Pass 2/3: 0 repairs
 
 --- Pass 4: FAT Sync & Free Count ---
   [OK] FAT1 and FAT2 in sync
-  Free clusters: 1_948_044
+  Free clusters: 1897593
   [OK] FSInfo free count correct
   Pass 4: 0 repairs
 
-==============================================
-  FSCK COMPLETE
-==============================================
-  Errors found:  0
-  Repairs made:  0
-  Warnings:      0
-  Directories:   1
-  Files:         0
 
-  FILESYSTEM STATUS: CLEAN
-==============================================
+=== FSCK COMPLETE ===
+Errors: 0  Repairs: 0
+Warnings: 0
+Structural checks: 23 pass, 0 fail
+Directories: 1  Files: 0
+This filesystem is healthy.
+STATUS: CLEAN
 
 END_SESSION
 ```
+
+Lost-cluster recovery has no pass banner of its own: it runs inside pass 2 per
+bitmap window, so the counts report as `Pass 2/3`. A read-only `SD_FAT32_audit`
+run prints the same passes but closes with `=== AUDIT COMPLETE ===`,
+`Repairs needed:` in place of `Repairs:`, and — when there is anything to fix —
+`STATUS: REPAIRS NEEDED` with a pointer to `SD_FAT32_fsck`.
 
 **Status Messages:**
 - **CLEAN** - No errors or repairs needed

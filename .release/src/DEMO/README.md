@@ -158,34 +158,37 @@ SD:/> version
 
 ### Diagnostics
 
-**Audit** - read-only filesystem integrity check:
-```
-SD:/> audit
-  [PASS] MBR signature valid ($AA55)
-  [PASS] VBR OEM name: P2FMTER
-  [PASS] VBR sector size: 512
-  ...
-  All checks passed
-```
+**Audit** - read-only filesystem integrity check.
+**FSCK** - filesystem check and repair.
 
-**FSCK** - filesystem check and repair (4 passes):
+Both commands delegate to the same four-pass engine the standalone utilities use
+(`isp_fsck_utility`), so their output is identical to it. The canonical,
+capture-stamped transcript lives in
+[`DOCs/SD-CARD-UTILITIES.md`](../../DOCs/SD-CARD-UTILITIES.md) — see the
+`SD_FAT32_audit` and `SD_FAT32_fsck` sections.
+
+`fsck` prompts for confirmation before writing:
+
 ```
 SD:/> fsck
   WARNING: FSCK will modify the SD card to fix errors.
   Continue? (Y/N): y
-  Pass 1: Structural validation... OK
-  Pass 2: Directory scan... OK
-  Pass 3: Unreferenced clusters... OK
-  Pass 4: FAT sync & free count... OK
-  Filesystem check complete
 ```
 
-**Benchmark** - read throughput measurement:
+**Benchmark** - read-only throughput measurement. Timings vary by card; run it on
+yours rather than relying on the figures below.
+
 ```
 SD:/> bench
-  Single sector read:  285 KB/s
-  Multi-sector read:   412 KB/s
-  Sequential (64KB):   398 KB/s
+Initializing card...
+
+=== Read-Only Throughput Benchmark ===
+Card: 7431 MB, SPI: 25000000 Hz
+Test area: sectors 1000+
+
+Single-sector (100 reads)... 123 ms, 415 KB/s
+Multi-sector x8 (100 reads)... 89 ms, 573 KB/s
+Multi-sector x32 (25 reads)... 71 ms, 720 KB/s
 ```
 
 ### Utility Commands

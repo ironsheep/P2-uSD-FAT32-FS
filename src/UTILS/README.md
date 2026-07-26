@@ -121,33 +121,9 @@ pnut-term-ts -r SD_card_characterize.bin
 | **OCR** | 4 bytes | Operating voltage ranges, card capacity status |
 | **VBR/BPB** | 512 bytes | FAT32 filesystem parameters |
 
-**Sample Output:**
-```
-┌──────────────────────────────────────────┐
-│ SD Card Characterization Diagnostic      │
-└──────────────────────────────────────────┘
-
-========== CID (Card Identification) ==========
-  Manufacturer ID:    $03 (SanDisk)
-  OEM/Application ID: "SD"
-  Product Name:       "SD64G"
-  Product Revision:   8.0
-  Serial Number:      $12345678
-  Manufacturing Date: 2023/06
-
-========== CSD (Card Specific Data) ==========
-  CSD Version:        2.0 (SDHC/SDXC)
-  Card Capacity:      59.48 GB
-  Max Transfer Rate:  50 MHz
-  Read Block Length:  512 bytes
-  ...
-
-========== Filesystem (VBR/BPB) ==========
-  Volume Label:       P2-XFER
-  Sectors per Cluster: 64
-  Total Sectors:      124735488
-  Free Space:         59.45 GB
-```
+**Sample Output:** see
+[`DOCs/SD-CARD-UTILITIES.md`](../../DOCs/SD-CARD-UTILITIES.md) — that document holds
+the canonical, capture-stamped transcript for this utility.
 
 **Use Cases:**
 - Identify card manufacturer and model
@@ -229,8 +205,9 @@ Filesystem Performance:
 `audit` and `fsck` are **two front-ends over one four-pass engine** — structural
 integrity, chain validation, lost-cluster detection, and free-count verification.
 The only difference is that `audit` suppresses every write: repair lines are
-reported in the conditional ("REPAIR: Would free N lost clusters") and nothing is
-changed. Run `audit` first; run `fsck` when you want the repairs applied.
+reported in the conditional -- each finding reads `needs repair: N lost clusters`,
+and the run closes `Nothing was repaired -- run SD_FAT32_fsck to fix what is listed
+above.` with `STATUS: REPAIRS NEEDED`. Nothing on the card is changed. Run `audit` first; run `fsck` when you want the repairs applied.
 
 > **Since v1.6.0.** `audit` previously ran a shallower single-pass check and could
 > report a damaged card as clean — notably a card carrying lost clusters from the
@@ -258,38 +235,15 @@ pnut-term-ts -r SD_FAT32_audit.bin
 | **Root Directory** | Volume label present, structure valid |
 | **Mount Test** | Driver can mount and read filesystem |
 
-**Sample Output:**
-```
-==============================================
-  FAT32 Filesystem Audit Tool
-  (Read-only - does not modify card)
-==============================================
+**Sample Output:** see
+[`DOCs/SD-CARD-UTILITIES.md`](../../DOCs/SD-CARD-UTILITIES.md) — that document holds
+the canonical, capture-stamped transcript for this utility.
 
-* Initializing card...
-Card initialized successfully
-
-=== MBR Structure ===
-[PASS] Boot signature: $AA55
-[PASS] Partition type: $0C (FAT32 LBA)
-[PASS] Partition start: 8192 (4MB aligned)
-
-=== VBR Structure ===
-[PASS] Jump instruction: $EB
-[PASS] Bytes per sector: 512
-[PASS] Sectors per cluster: 64
-[PASS] Reserved sectors: 32
-...
-
-=== FAT Consistency ===
-[PASS] FAT1 media descriptor: $F8
-[PASS] FAT2 matches FAT1
-
-=== Summary ===
-Tests: 24, Passed: 24, Failed: 0
-Filesystem integrity: OK
-
-END_SESSION
-```
+> Transcripts are maintained in one place on purpose. They used to be duplicated
+> here, in `.release/src/UTILS/README.md`, and in `DOCs/SD-CARD-UTILITIES.md`; the
+> three copies drifted apart and two of them documented output the tool had stopped
+> printing. `tools/check_doc_claims.sh` now fails the release checklist on a
+> duplicated transcript.
 
 **Use Cases:**
 - Verify filesystem after running tests
@@ -337,59 +291,9 @@ pnut-term-ts -r SD_FAT32_fsck.bin
 
 The cluster bitmap uses 256KB (LONG[65536]) covering 2,097,152 clusters per window. For cards up to approximately 64GB, a single window suffices. Larger cards are processed using multiple bitmap windows — the directory tree is re-walked for each window, and lost cluster recovery runs per window. All four passes execute regardless of card size.
 
-**Sample Output:**
-```
-==============================================
-  FAT32 Filesystem Check & Repair (FSCK)
-==============================================
-
-* Initializing card...
-  Card: 31_207_424 sectors (15_238 MB)
-
-  Geometry:
-    Partition start:  8_192
-    Sectors/cluster:  16
-    Sectors/FAT:      15_234
-    Total clusters:   1_948_045
-
---- Pass 1: Structural Integrity ---
-  [OK] Backup VBR matches primary
-  [OK] FSInfo signatures correct
-  [OK] Backup FSInfo matches primary
-  [OK] FAT[0] media type correct
-  [OK] FAT[1] EOC marker correct
-  [OK] FAT[2] root cluster allocated
-  Pass 1: 0 repairs
-
---- Pass 2: Directory & Chain Validation ---
-  Directories scanned: 1
-  Files scanned:       0
-  Pass 2: 0 repairs
-
---- Pass 3: Lost Cluster Recovery ---
-  [OK] No lost clusters found
-  Pass 3: 0 repairs
-
---- Pass 4: FAT Sync & Free Count ---
-  [OK] FAT1 and FAT2 in sync
-  Free clusters: 1_948_044
-  [OK] FSInfo free count correct
-  Pass 4: 0 repairs
-
-==============================================
-  FSCK COMPLETE
-==============================================
-  Errors found:  0
-  Repairs made:  0
-  Warnings:      0
-  Directories:   1
-  Files:         0
-
-  FILESYSTEM STATUS: CLEAN
-==============================================
-
-END_SESSION
-```
+**Sample Output:** see
+[`DOCs/SD-CARD-UTILITIES.md`](../../DOCs/SD-CARD-UTILITIES.md) — that document holds
+the canonical, capture-stamped transcript for this utility.
 
 **Status Messages:**
 - **CLEAN** - No errors or repairs needed
