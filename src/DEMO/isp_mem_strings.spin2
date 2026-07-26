@@ -290,82 +290,6 @@ PUB sFormat(pUserBuff, maxLen, p_str, p_args) : nPlaced | idx, ch, asc, fld, dig
     byte[pBffr] := 0                                             ' place terminator
     nPlaced := pBffr - pUserBuff
 
-CON { --- Internal Methods --- }
-
-PRI sTx(nChr, pOutBuf, pBffrEnd)
-' Write a single character to the output buffer (bounds-checked)
-'
-' @param nChr - character to write
-' @param pOutBuf - pointer to output buffer position
-' @param pBffrEnd - boundary pointer (one past last writable position)
-
-    if pOutBuf < pBffrEnd
-        byte[pOutBuf] := nChr
-
-PRI sTxn(nChr, nCount, pOutBuf, pBffrEnd) : pBufNext
-' Emit a character n times to the output buffer (bounds-checked)
-'
-' @param nChr - character to emit
-' @param nCount - number of times to emit the character
-' @param pOutBuf - pointer to output buffer position
-' @param pBffrEnd - boundary pointer (one past last writable position)
-' @returns pBufNext - pointer to next position in buffer after emitted characters
-
-    repeat nCount
-        sTx(nChr, pOutBuf++, pBffrEnd)
-
-    pBufNext := pOutBuf
-
-PRI sStr(pStr, pOutBuf, pBffrEnd) : pBufNext
-' Write a string to the output buffer (bounds-checked)
-'
-' @param pStr - pointer to source string
-' @param pOutBuf - pointer to output buffer position
-' @param pBffrEnd - boundary pointer (one past last writable position)
-' @returns pBufNext - pointer to next position in buffer after written string
-
-    repeat (strsize(pStr))
-        sTx(byte[pStr++], pOutBuf++, pBffrEnd)
-
-    pBufNext := pOutBuf
-
-PRI get_nargs(p_str) : p_str1, val1, val2 | ch, sign
-' Parse one or two numbers from string in n, -n, n.n, or -n.n format
-'
-' @param p_str - pointer to string containing number(s)
-' @returns p_str1 - pointer to first char after value(s)
-' @returns val1 - first parsed value (may be negative)
-' @returns val2 - second parsed value (after decimal point, if present)
-' @local ch - current character
-' @local sign - sign flag for first value
-
-  ch := byte[p_str]                                             ' check for negative on first value
-  if (ch == "-")
-    sign := -1
-    ++p_str
-  else
-    sign := 0
-
-  repeat                                                        ' get first value
-    ch := byte[p_str++]
-    if ((ch >= "0") and (ch <= "9"))
-      val1 := (val1 * 10) + (ch - "0")
-    else
-      if (sign)
-        val1 := -val1
-      quit
-
-  if (ch == ".")                                                ' if dpoint
-    repeat                                                      '  get second value
-      ch := byte[p_str++]
-      if ((ch >= "0") and (ch <= "9"))
-        val2 := (val2 * 10) + (ch - "0")
-      else
-        quit
-
-  p_str1 := p_str - 1                                           ' back up to non-digit
-
-
 CON { --- Number-to-String Methods (inlined from jm_nstr by Jon McPhalen) --- }
 
 PUB fmt_number(value, radix, digits, width, pad) : p_str
@@ -502,6 +426,80 @@ PUB padstr(p_str, width, padchar) : p_pad | len
   else
     p_pad := p_str
 
+CON { --- Internal Methods --- }
+
+PRI sTx(nChr, pOutBuf, pBffrEnd)
+' Write a single character to the output buffer (bounds-checked)
+'
+' @param nChr - character to write
+' @param pOutBuf - pointer to output buffer position
+' @param pBffrEnd - boundary pointer (one past last writable position)
+
+    if pOutBuf < pBffrEnd
+        byte[pOutBuf] := nChr
+
+PRI sTxn(nChr, nCount, pOutBuf, pBffrEnd) : pBufNext
+' Emit a character n times to the output buffer (bounds-checked)
+'
+' @param nChr - character to emit
+' @param nCount - number of times to emit the character
+' @param pOutBuf - pointer to output buffer position
+' @param pBffrEnd - boundary pointer (one past last writable position)
+' @returns pBufNext - pointer to next position in buffer after emitted characters
+
+    repeat nCount
+        sTx(nChr, pOutBuf++, pBffrEnd)
+
+    pBufNext := pOutBuf
+
+PRI sStr(pStr, pOutBuf, pBffrEnd) : pBufNext
+' Write a string to the output buffer (bounds-checked)
+'
+' @param pStr - pointer to source string
+' @param pOutBuf - pointer to output buffer position
+' @param pBffrEnd - boundary pointer (one past last writable position)
+' @returns pBufNext - pointer to next position in buffer after written string
+
+    repeat (strsize(pStr))
+        sTx(byte[pStr++], pOutBuf++, pBffrEnd)
+
+    pBufNext := pOutBuf
+
+PRI get_nargs(p_str) : p_str1, val1, val2 | ch, sign
+' Parse one or two numbers from string in n, -n, n.n, or -n.n format
+'
+' @param p_str - pointer to string containing number(s)
+' @returns p_str1 - pointer to first char after value(s)
+' @returns val1 - first parsed value (may be negative)
+' @returns val2 - second parsed value (after decimal point, if present)
+' @local ch - current character
+' @local sign - sign flag for first value
+
+  ch := byte[p_str]                                             ' check for negative on first value
+  if (ch == "-")
+    sign := -1
+    ++p_str
+  else
+    sign := 0
+
+  repeat                                                        ' get first value
+    ch := byte[p_str++]
+    if ((ch >= "0") and (ch <= "9"))
+      val1 := (val1 * 10) + (ch - "0")
+    else
+      if (sign)
+        val1 := -val1
+      quit
+
+  if (ch == ".")                                                ' if dpoint
+    repeat                                                      '  get second value
+      ch := byte[p_str++]
+      if ((ch >= "0") and (ch <= "9"))
+        val2 := (val2 * 10) + (ch - "0")
+      else
+        quit
+
+  p_str1 := p_str - 1                                           ' back up to non-digit
 
 PRI dec(value, digits) : p_str
 ' Convert decimal value to string

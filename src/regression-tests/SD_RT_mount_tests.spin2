@@ -118,7 +118,7 @@ PUB go() | result, pLabel, freeSpace, handle, bytesRead
     ' ----------------------------------
     ' TEST GROUP: Pin offset validation
     ' ----------------------------------
-    utils.startTestGroup(@"Pin offset validation (B-input ±3 limit)")
+    utils.startTestGroup(@"Pin offset validation (B-input +/-3 limit)")
 
     utils.startTest(@"mount() with SCK too far from MOSI (offset=+5)")
     result := sd.mount(SD_CS, 10, SD_MISO, 15)

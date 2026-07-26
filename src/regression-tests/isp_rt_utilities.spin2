@@ -45,21 +45,6 @@ PUB null()
 ''
 '' (Invoke mount() to use the SD filesystem)
 
-PRI initIfNotAlready()
-' Initialize test counters if not already done
-'
-' Checks signature to ensure one-time initialization
-
-    if varSignature <> TEST_SIGNATURE
-        numberTests := 0
-        subTestPer := 1
-        passCount := 0
-        failCount := 0
-        passCountSub := 0
-        failCountSub := 0
-        varSignature := TEST_SIGNATURE
-        debug("* init VAR")
-
 PUB startTestGroup(pDescription)
 '' Start a new test group with heading
 ''
@@ -373,15 +358,6 @@ PUB dbgMemDump(pMessage, pBytes, lenBytes) | rowCount, pCurrByte, lastRowByteCou
         ' emit last line
         dbgMemDumpRow(pCurrByte, lastRowByteCount, offset)
 
-PRI dbgMemDumpRow(pBytes, lenBytes, offset)
-' Emit a single row of memory dump (address followed by bytes)
-'
-' @param pBytes - pointer to bytes to display
-' @param lenBytes - number of bytes in this row
-' @param offset - offset value to display
-
-    debug(" ", uhex_long_(offset), ": ", uhex_byte_array_(pBytes, lenBytes))
-
 
 ' -------
 ' Test data generation utilities
@@ -637,6 +613,32 @@ PUB assertFreeSpace(freeClusters, needClusters) : bOk
 '' @returns bOk - TRUE if freeClusters >= needClusters
 
     bOk := freeClusters >= needClusters
+
+CON ' ---- Private helpers ----
+
+PRI initIfNotAlready()
+' Initialize test counters if not already done
+'
+' Checks signature to ensure one-time initialization
+
+    if varSignature <> TEST_SIGNATURE
+        numberTests := 0
+        subTestPer := 1
+        passCount := 0
+        failCount := 0
+        passCountSub := 0
+        failCountSub := 0
+        varSignature := TEST_SIGNATURE
+        debug("* init VAR")
+
+PRI dbgMemDumpRow(pBytes, lenBytes, offset)
+' Emit a single row of memory dump (address followed by bytes)
+'
+' @param pBytes - pointer to bytes to display
+' @param lenBytes - number of bytes in this row
+' @param offset - offset value to display
+
+    debug(" ", uhex_long_(offset), ": ", uhex_byte_array_(pBytes, lenBytes))
 
 con { license }
 

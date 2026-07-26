@@ -1212,15 +1212,15 @@ PUB sectorsPerCluster() : count
 
   count := sec_per_clus
 
-PUB clusterBytes() : n
+PUB clusterBytes() : bytesPerCluster
 '' Get the number of bytes per cluster of the mounted volume.
 '' Returns 0 if no card is mounted. Direct DAT read (not worker-routed).
 '' Test helper: lets a suite place a write exactly on a cluster boundary
 '' and size fixtures to cluster geometry at run time.
 ''
-'' @returns n - Bytes per cluster (sec_per_clus * 512), or 0 when unmounted
+'' @returns bytesPerCluster - Bytes per cluster (sec_per_clus * 512), or 0 when unmounted
 
-  n := sec_per_clus << SECTOR_SHIFT
+  bytesPerCluster := sec_per_clus << SECTOR_SHIFT
 
 PUB setDate(year, month, day, hour, minute, second) : status
 '' Set the current date and time for file timestamps.
@@ -1975,37 +1975,6 @@ PUB debugOnClockChange() : status
   recompute_clock_state()
   status := 0
 
-PRI recompute_clock_state() | half_period
-' S.3 helper: recompute host-side sysclk-dependent state against the new
-' clkfreq, using the cached current_spi_target_hz to drive the SPI rate
-' calculation. Same formula as applySPISpeed (ceiling division clamped to >=4).
-
-  ' Recompute spi_period (= hp) from new clkfreq against cached SPI target
-  half_period := (clkfreq + (current_spi_target_hz * 2) - 1) / (current_spi_target_hz * 2)
-  if half_period < 4
-    half_period := 4
-  spi_period := half_period
-  spi_freq := clkfreq / (half_period * 2)
-
-  ' Recompute Phase 2 miso_wxpin against the new hp
-  case sample_mode_override
-    0:        miso_wxpin := %0_00111
-    1:        miso_wxpin := %1_00111
-    other:                                                                  '  -1 = auto
-      if half_period <= pre_edge_threshold
-        miso_wxpin := %0_00111
-      else
-        miso_wxpin := %1_00111
-
-  ' Apply new period and sample mode to smart pins (live-update is safe per
-  ' p2kbArchSmartPins live-update behavior for WXPIN with DIR=1)
-  WXPIN(sck, half_period)
-  WXPIN(miso, miso_wxpin)
-
-  ' Recompute worker-cog timing thresholds against new clkfreq
-  idle_flush_clocks := clkfreq / 1000 * IDLE_FLUSH_MS
-  ct_tick_clocks := clkfreq * 2
-
 PUB getWriteDiag() : result_code, r1_resp, data_resp, sector_num
 '' Get diagnostic info from last writeSector call.
 '' Codes: 0=not called, 1=CMD24 fatal, 2=data-response timeout,
@@ -2631,6 +2600,42 @@ PUB displayFAT(cluster) | fat_sector, local_buf[128]
 #endif
 
 CON ' ---- Worker Infrastructure ----
+
+#ifdef SD_INCLUDE_DEBUG
+
+PRI recompute_clock_state() | half_period
+' S.3 helper: recompute host-side sysclk-dependent state against the new
+' clkfreq, using the cached current_spi_target_hz to drive the SPI rate
+' calculation. Same formula as applySPISpeed (ceiling division clamped to >=4).
+' Called only by debugOnClockChange() [SD_INCLUDE_DEBUG].
+
+  ' Recompute spi_period (= hp) from new clkfreq against cached SPI target
+  half_period := (clkfreq + (current_spi_target_hz * 2) - 1) / (current_spi_target_hz * 2)
+  if half_period < 4
+    half_period := 4
+  spi_period := half_period
+  spi_freq := clkfreq / (half_period * 2)
+
+  ' Recompute Phase 2 miso_wxpin against the new hp
+  case sample_mode_override
+    0:        miso_wxpin := %0_00111
+    1:        miso_wxpin := %1_00111
+    other:                                                                  '  -1 = auto
+      if half_period <= pre_edge_threshold
+        miso_wxpin := %0_00111
+      else
+        miso_wxpin := %1_00111
+
+  ' Apply new period and sample mode to smart pins (live-update is safe per
+  ' p2kbArchSmartPins live-update behavior for WXPIN with DIR=1)
+  WXPIN(sck, half_period)
+  WXPIN(miso, miso_wxpin)
+
+  ' Recompute worker-cog timing thresholds against new clkfreq
+  idle_flush_clocks := clkfreq / 1000 * IDLE_FLUSH_MS
+  ct_tick_clocks := clkfreq * 2
+
+#endif                                                  ' SD_INCLUDE_DEBUG
 
 PRI set_error(error_code) : code_out
 ' Set error code for this cog - store error code in per-cog slot and return the code.

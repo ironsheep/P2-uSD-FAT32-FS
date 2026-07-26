@@ -222,16 +222,6 @@ PUB show_prompt()
   ELSE
     serial.fstr0(@"SD:(unmounted)> \r")
 
-PRI prompt_len() : len
-' Calculate prompt string length for cursor positioning.
-'
-' @returns len - Number of characters in the current prompt
-
-  if (mounted)
-    len := 5 + strsize(@cwd)                            ' "SD:" + cwd + "> "
-  ELSE
-    len := 16                                           ' "SD:(unmounted)> "
-
 CON { command handlers }
 
 PUB run_command(eCmd)
@@ -1724,6 +1714,16 @@ PRI vbrOemNameByte(^sd.vbr_t pRec, byteIdx) : value
   value := pRec.oemName[byteIdx]
 
 CON { shared utility methods }
+
+PRI prompt_len() : len
+' Calculate prompt string length for cursor positioning.
+'
+' @returns len - Number of characters in the current prompt
+
+  if (mounted)
+    len := 5 + strsize(@cwd)                            ' "SD:" + cwd + "> "
+  ELSE
+    len := 16                                           ' "SD:(unmounted)> "
 
 PRI confirmYN(p_prompt) : confirmed | ch
 ' Prompt user for y/n confirmation with a 10-second timeout.

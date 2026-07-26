@@ -514,43 +514,6 @@ debug("FMT: [", zstr_(p_str), "]")
 
   debug("FMT: done")
 
-PRI get_nargs(p_str) : p_str1, val1, val2 | chr, sign
-' Parse one or two numbers from string in n, -n, n.n, or -n.n format
-'
-' @param p_str - pointer to string to parse
-' @returns p_str1 - pointer to 1st char after value(s)
-' @returns val1 - first parsed value (may be negative)
-' @returns val2 - second parsed value (after decimal point)
-' @local chr - current character
-' @local sign - sign flag for first value
-
-  chr := byte[p_str]                                              ' check for negative on first value
-  if (chr == "-")
-    sign := -1
-    ++p_str
-  else
-    sign := 0
-
-  repeat                                                        ' get first value
-    chr := byte[p_str++]
-    if ((chr >= "0") and (chr <= "9"))
-      val1 := (val1 * 10) + (chr - "0")
-    else
-      if (sign)
-        val1 := -val1
-      quit
-
-  if (chr == ".")                                                 ' if dpoint
-    repeat                                                      '  get second value
-      chr := byte[p_str++]
-      if ((chr >= "0") and (chr <= "9"))
-        val2 := (val2 * 10) + (chr - "0")
-      else
-        quit
-
-  p_str1 := p_str - 1                                           ' back up to non-digit
-
-
 PUB fmt_number(value, base, digits, width, pad)
 '' Emit value converted to number in padded field
 ''
@@ -770,6 +733,42 @@ PRI memDumpRow(pBytes, lenBytes) | bytIndex
             fstr0(string(" "))
     fstr0(string("\r\n"))
 
+
+PRI get_nargs(p_str) : p_str1, val1, val2 | chr, sign
+' Parse one or two numbers from string in n, -n, n.n, or -n.n format
+'
+' @param p_str - pointer to string to parse
+' @returns p_str1 - pointer to 1st char after value(s)
+' @returns val1 - first parsed value (may be negative)
+' @returns val2 - second parsed value (after decimal point)
+' @local chr - current character
+' @local sign - sign flag for first value
+
+  chr := byte[p_str]                                              ' check for negative on first value
+  if (chr == "-")
+    sign := -1
+    ++p_str
+  else
+    sign := 0
+
+  repeat                                                        ' get first value
+    chr := byte[p_str++]
+    if ((chr >= "0") and (chr <= "9"))
+      val1 := (val1 * 10) + (chr - "0")
+    else
+      if (sign)
+        val1 := -val1
+      quit
+
+  if (chr == ".")                                                 ' if dpoint
+    repeat                                                      '  get second value
+      chr := byte[p_str++]
+      if ((chr >= "0") and (chr <= "9"))
+        val2 := (val2 * 10) + (chr - "0")
+      else
+        quit
+
+  p_str1 := p_str - 1                                           ' back up to non-digit
 
 CON { license }
 
