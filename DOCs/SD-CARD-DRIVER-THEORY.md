@@ -119,6 +119,21 @@ The driver uses `#ifdef` / `#endif` blocks to exclude optional features from min
 | `SD_INCLUDE_DEBUG` | Debug getters, CRC diagnostic methods, display utilities, test hooks |
 | `SD_INCLUDE_ALL` | Enables all of the above (not STACK_CHECK) |
 
+#### Compatibility policy for the `SD_INCLUDE_DEBUG` API
+
+The methods behind `SD_INCLUDE_DEBUG` are diagnostic instruments, documented
+**NOT FOR PRODUCTION USE**, and they sit **outside this project's semantic-versioning
+compatibility promise**. They may be renamed, changed, or removed in a patch
+release when their name or documentation is found to misdescribe what they do —
+correcting a misleading diagnostic is worth more than preserving its spelling.
+
+Every other public method is covered by the usual promise: a rename or signature
+change is a breaking change and forces at least a minor bump.
+
+*Established 2026-07-26 (v1.6.1), when `debugClearRootDir()` was renamed
+`debugZeroRootSector()` because the old name asserted the opposite of the code's
+actual behavior. That rename shipped in a patch release under this policy.*
+
 ### Pin-Selection Flag
 
 `SD_PINS_EXTERNAL` is a *build* define (`-D SD_PINS_EXTERNAL`), not an

@@ -7,9 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.1] - 2026-07-26
+
 ### Breaking Changes
 
-- **`debugClearRootDir()` is renamed `debugZeroRootSector()`** (`SD_INCLUDE_DEBUG` only). The old name and its documentation claimed it deleted all files and folders. It does not: it zeroes only the first sector of the root directory, leaves entries in later root sectors intact, and frees no cluster chains — so everything it erases becomes lost clusters. The name and docs now say that, and point at `SD_FAT32_fsck` to reclaim the space or `SD_format_card` for a genuinely clean card.
+- **`debugClearRootDir()` is renamed `debugZeroRootSector()`** (`SD_INCLUDE_DEBUG` only). The old name and its documentation claimed it deleted all files and folders. It does not: it zeroes only the first sector of the root directory and frees no cluster chains, so everything it erases becomes lost clusters. Entries in later root sectors stay physically intact but become unreachable — the zeroed first entry reads as end-of-directory to any FAT32 scan, including this driver's own. Treat a card as scratch after this call; `SD_format_card` is the way back to a clean one.
 
 ### Bug Fixes
 
@@ -350,6 +352,7 @@ For tooling that characterizes cards that misbehave. Production applications mus
 **Packaging-only tag.** Release workflow and user-facing documentation; no driver code.
 
 [Unreleased]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.6.0...HEAD
+[1.6.1]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.5.3...v1.6.0
 [1.5.3]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.5.2...v1.5.3
 [1.5.2]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.5.1...v1.5.2
