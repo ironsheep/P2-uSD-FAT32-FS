@@ -2,9 +2,21 @@
 
 Items to investigate when time permits.
 
+**Every entry carries a `**Class:**` line.** `user-affecting` means someone using
+the shipped driver or utilities could hit it in normal use — wrong data, a wrong
+result, a silent failure, or docs/output that misdescribe real behaviour. Per the
+release gate in `CLAUDE.md`, every `user-affecting` item must be **fixed or
+explicitly accepted in writing** before a release ships; the acceptance and its
+reason are recorded on the item. Everything else — card-specific investigations,
+features, harness work — is ordinary backlog.
+
+Check before tagging: `grep -n "Class:" DOCs/Plans/PUNCH-LIST.md`
+
 ---
 
 ### ~~`debugClearRootDir()` leaks FAT clusters and clears only one root sector~~ RESOLVED 2026-07-25
+
+**Class:** user-affecting — RESOLVED 2026-07-25 (public method, docs asserted the opposite of the code).
 
 **Where:** `src/micro_sd_fat32_fs.spin2` — public wrapper `:2449`, worker case
 `CMD_DEBUG_CLEAR_ROOT` `:2736-2743`.
@@ -63,6 +75,8 @@ root so the card will mount — so it was renamed to say that.
 
 ### Deliver the dual-driver convergence advice doc
 
+**Class:** coordination — not user-affecting. Stephen owns delivery (agreed 2026-07-25).
+
 **Where:** `DOCs/Agent-Reports/ADVICE-TO-DUAL-DRIVER-AGENT-CONVERGENCE.md` (7 divergences).
 
 The doc was written as a v1.5.4 §8c deliverable and is complete, but neither the
@@ -79,6 +93,8 @@ diverging on exactly the points the doc enumerates.
 ---
 
 ### Delete the runner's dual success-marker workaround for the format vehicle
+
+**Class:** harness — not user-affecting. Blocked on evidence from the next sweep.
 
 **Where:** `tools/run_regression.sh` `_reformat_card()` — the ~12-line comment
 block plus `FORMAT COMPLETE || FORMAT SUCCESSFUL` acceptance.
@@ -99,6 +115,8 @@ investigate rather than lengthening the wait.
 
 ### Re-run the Card 1 recert sweep for a clean certification record
 
+**Class:** record-keeping — not user-affecting. Cosmetic; the certification holds on the evidence.
+
 **Where:** `DOCs/Agent-Reports/sweep_card1_recert_260724.txt`.
 
 Card 1's transcript ends in `CLOSING AUDIT FAILED` with a hand-written annotation
@@ -117,6 +135,8 @@ end-to-end run with the fixed gate.
 ---
 
 ### Counterfeit asdfg-class — characterize LBA-failure-mode boundary
+
+**Class:** investigation — not user-affecting. Characterization of known-counterfeit cards; behaviour already documented in the card catalog.
 
 **Cards:** Lerdisk (`Unknown_asdfg_2.2_000001F4_202512`), Cloudisk (`Unknown_asdfg_2.2_00001680_202511`) — same `asdfg` silicon class, both CW_NO_DATA_CRC.
 
@@ -149,6 +169,8 @@ Requires one power-cycle per scan point. Approach: extend `diagnostic-tests/SD_l
 
 ### ~~Silicon Power SPCC 64GB -- CMD18 multi-block read times out~~ RESOLVED v1.2.9
 
+**Class:** user-affecting — RESOLVED v1.2.9.
+
 **Card:** siliconpower-spcc-64gb
 **Unique ID:** `SharedOEM_SPCC_0.7_00940105_202507`
 **Card File:** [siliconpower-spcc-64gb.md](../cards/siliconpower-spcc-64gb.md)
@@ -164,6 +186,8 @@ Requires one power-cycle per scan point. Approach: extend `diagnostic-tests/SD_l
 ---
 
 ### Samsung 00000 8GB -- FAT32 format writes but doesn't persist — PAUSED (card not located)
+
+**Class:** user-affecting, BLOCKED — the card cannot be located, so the defect cannot be reproduced or fixed. Release-gate disposition: accepted-blocked; card-specific, documented in the card catalog. Revisit if the card resurfaces or another card shows the same symptom.
 
 **Card:** samsung-00000-8gb
 **Unique ID:** `Samsung_00000_1.0_D9FB539C_201408`
@@ -229,6 +253,8 @@ However, immediately re-reading the card shows the **original factory values are
 
 ### ~~Remove card_is_slow manufacturer override (PNY 20 MHz cap)~~ RESOLVED v1.3.2
 
+**Class:** user-affecting — RESOLVED v1.3.2.
+
 **Code:** `identifyCard()` and `setOptimalSpeed()` in `src/micro_sd_fat32_fs.spin2`
 
 The driver flagged PNY/AData cards (manufacturer ID $1D) as `card_is_slow := true`, capping SPI at 20 MHz. Investigation revealed: (1) the flag checked the wrong MID ($1D instead of the PNY card's actual $27), so it never applied; (2) the real issue was an NCO write alignment bug at power-of-2 half-period values, not card speed sensitivity.
@@ -240,6 +266,8 @@ The driver flagged PNY/AData cards (manufacturer ID $1D) as `card_is_slow := tru
 ---
 
 ### Maxwell NCard 4GB -- Format fails with busyTimeout on sector 0
+
+**Class:** user-affecting, card-specific — a user with this card cannot format it. Release-gate disposition: needs Stephen's explicit accept-or-fix at the next tag. Documented in the card catalog.
 
 **Card:** Maxwell microSD HC 4GB (label), Silicon Motion NCard (controller)
 **Unique ID:** `SiliconMotion_NCard_1.0_0000058F_201008`
@@ -273,6 +301,8 @@ ERROR: Failed to write MBR!
 ---
 
 ### Feature: SD 4-bit native mode backend (QSPI adapter support)
+
+**Class:** feature — not a defect.
 
 **Goal:** Support a second SD card adapter that wires out D0-D3/CLK/CMD for 4-bit parallel transfers, selectable via compile define (e.g., `SD_BUS_4BIT`). Same FAT32 filesystem layer on top, different transport underneath. Theoretical 4x throughput gain at the same clock speed.
 

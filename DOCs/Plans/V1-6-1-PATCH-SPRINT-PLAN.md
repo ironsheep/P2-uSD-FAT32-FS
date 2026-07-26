@@ -2,7 +2,7 @@
 
 **Target:** hardware-verify and ship the five commits that landed after the
 `v1.6.0` tag.
-**Ships as:** **v1.6.1** (pending §Open Questions Q1)
+**Ships as:** **v1.6.1** (agreed at sprint start, 2026-07-25)
 **Authored:** 2026-07-25
 **Predecessor:** `DOCs/Plans/archive/2026-07-25-Write-Path-Corruption-Fix-Sprint-Closeout.md`
 
@@ -34,46 +34,45 @@ the evidence for both arrives naturally during this sprint's bench session.
 enumeration change. The one new file, `diagnostic-tests/SD_zero_root_sector_probe.spin2`,
 lives in the never-shipped diagnostics tree — confirm, do not change.
 
-## Entry baseline
+## Entry baseline (sprint-start, 2026-07-26)
 
-*Filled by `sprint-start` — build number agreement, working-tree audit,
-tracking-readiness entry check, baseline-health entry check.*
+- **Build version agreed:** v1.6.1 (see §Open Questions Q1).
+- **Working tree:** clean, 0 unpushed commits, no untracked files in the sprint's
+  blast radius (`src/`, `tools/`, `diagnostic-tests/`, `DOCs/`).
+- **Build:** clean — 26 suites + 3 vehicles compile, **0 warnings**. Per the
+  `baseline-health` project overlay this is a *compile* baseline only; the
+  container cannot run hardware.
+- **Tests (hardware):** not measured at entry. The five commits under test have
+  never run on hardware — establishing that measurement IS §2 of this sprint.
+  Reference point: v1.6.0 exited at 471/0 on this card.
+- **Tracking:** board empty (11 v1.6.0 tasks archived), no `task_#N` context
+  breadcrumbs, auto-memory carries the v1.6.0 sprint state.
+- **Zero-tolerance:** no known failing suite. Two user-affecting punch-list items
+  exist, both card-specific and both dispositioned under the new release gate —
+  Samsung 8GB (accepted-blocked, card not located) and Maxwell NCard 4GB (needs
+  explicit accept-or-fix at the §5 tag).
+
+**Added during sprint-start:** the RELEASE GATE process rule (`CLAUDE.md`), its
+enforcement checkbox (`RELEASE-CHECKLIST.md` §1), and `Class:` classification on
+all 10 punch-list entries.
 
 ---
 
-## § Open Questions
+## § Open Questions — RESOLVED 2026-07-25
 
-Each carries a recommended resolution. **The sprint does not start until all
-three are confirmed or redirected.**
+**Q1 — version number.** **Ship as v1.6.1.** The `SD_INCLUDE_DEBUG` diagnostic
+API is documented "NOT FOR PRODUCTION USE" and is outside the compatibility
+promise, so renaming `debugClearRootDir()` does not force a minor bump. That
+policy is written down as a §4 deliverable so the next debug-API change does not
+reopen it.
 
-**Q1 — Is v1.6.1 the right number, given a breaking rename?**
-`debugClearRootDir()` → `debugZeroRootSector()` is a rename of a *public* method,
-and `[Unreleased]` already carries it under **Breaking Changes**. Strict SemVer
-argues against a patch bump.
-*Recommendation: ship as **v1.6.1**, and state the policy explicitly* — the
-`SD_INCLUDE_DEBUG` diagnostic API is documented "NOT FOR PRODUCTION USE" and is
-outside the compatibility promise. That policy line belongs in
-`DOCs/SD-CARD-DRIVER-THEORY.md` alongside the feature-flag table, so the next
-debug-API change doesn't reopen this. If you'd rather honor the rename strictly,
-the alternative is v1.7.0 and no policy statement.
+**Q2 — sweep coverage.** **One card: the 4 KB SharedOEM SDHC 7 GB.** This patch
+changes no write-path behavior. Using Card 1 also replaces its hand-annotated
+v1.6.0 cert record, discharging carryover #3.
 
-**Q2 — One card or two for the sweep?**
-The v1.6.0 fix was certified on two cluster geometries. This patch changes no
-write-path behavior — a rename plus output strings.
-*Recommendation: **one card, the 4 KB SharedOEM SDHC 7 GB.** Two geometries buy
-nothing here, and using Card 1 specifically also discharges carryover #3: its
-v1.6.0 cert transcript ends in a hand-annotated false-negative closing audit, and
-a clean sweep with the fixed tooling replaces that record. One run, two results.*
-
-**Q3 — Does delivering the dual-driver advice doc belong in this sprint?**
-Carryover #1: `DOCs/Agent-Reports/ADVICE-TO-DUAL-DRIVER-AGENT-CONVERGENCE.md` is
-complete (7 divergences) but was never handed over, because no channel was ever
-specified. It is not blocked by anything technical.
-*Recommendation: **yes, include it** as §5 below. It has now slipped one full
-sprint, it costs one action once you name the channel, and Divergence 7 (utility
-voicing) is exactly what this sprint's changes are about — so the doc and the
-patch are in sync at the moment of delivery. If the dual-driver agent isn't
-reachable right now, drop §5 and it stays on the punch list.*
+**Q3 — advice-doc delivery.** **Out of scope — Stephen is handling delivery
+himself.** §5 is removed from this sprint. The punch-list item stays open and is
+assigned to him, not to a sprint task.
 
 ---
 
@@ -126,7 +125,7 @@ run (preflight, closing) and the format vehicle 3–4 times.
 **Current starting point:** `tools/run_regression.sh` — end-to-end, one
 invocation, continue-on-failure by default.
 
-**Target:** one full sweep on the 4 KB card (pending Q2):
+**Target:** one full sweep on the 4 KB card:
 
 ```
 cd tools
@@ -183,28 +182,13 @@ should make the line survive.
   `DOCs/procedures/changelog-style-guide.md` — name the trigger, no test
   artifacts, no editorial framing, no protocol internals.
 - `DOCs/SD-CARD-DRIVER-THEORY.md` — add the debug-API compatibility policy line
-  (pending Q1) near the feature-flag table.
+ near the feature-flag table.
 - `DOCs/Plans/PUNCH-LIST.md` — strike whichever carryovers §2 and §3 discharge.
 
 **Verification:** `[Unreleased]` empty; every version has a compare link; a
 style-guide read-through of the new section finds no banned construction.
 
-## 5. Deliver the dual-driver advice doc
-
-*Included pending Q3.*
-
-**Why:** carryover #1 — the doc is complete and has never been handed over.
-
-**Target:** with the channel {{USER_NAME}} names, deliver
-`DOCs/Agent-Reports/ADVICE-TO-DUAL-DRIVER-AGENT-CONVERGENCE.md` (7 divergences,
-Divergence 7 being this sprint's utility-voicing rules). Record in the punch-list
-entry what was delivered, how, and when.
-
-**Verification:** the punch-list item is struck with a delivery record naming the
-channel and date. *Error* case — if the agent is unreachable, record that and
-leave the item open rather than silently dropping it.
-
-## 6. Release v1.6.1
+## 5. Release v1.6.1
 
 **Why:** ship gate.
 
@@ -230,4 +214,4 @@ update — v1.6.0 lesson).
 
 - The patch ships only when §1's three facts HOLD and §2's sweep is exit-0.
 - §3 may legitimately end with no code change; that is a finding, not a failure.
-- §5 is discharged by a delivery record, not by the doc existing.
+- Advice-doc delivery is NOT a gate on this sprint; Stephen owns it separately.
