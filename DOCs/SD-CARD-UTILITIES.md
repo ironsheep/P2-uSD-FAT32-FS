@@ -4,7 +4,7 @@ This document describes the standalone utility programs included with the P2 SD 
 
 ## Overview
 
-The utilities are located in `src/UTILS/` and can be run independently using the test runner from the `tools/` directory.
+The utilities are located in `src/UTILS/`. Each is a standalone top-level program you compile and run on its own -- see Running Utilities below.
 
 ### Utility Summary
 
@@ -23,12 +23,27 @@ The utilities are located in `src/UTILS/` and can be run independently using the
 
 ## Running Utilities
 
-All utilities are run from the `tools/` directory using the test runner:
+Each utility is a standalone top-level program. Compile it, then download and run it
+on the P2. From `src/UTILS/`:
 
 ```bash
-cd tools/
-./run_test.sh ../src/UTILS/<utility>.spin2 [-t timeout]
+# Compile (-I .. finds the driver in the parent directory)
+pnut-ts -d -I .. <utility>.spin2
+
+# Download and run, 2 Mbaud debug output
+pnut-term-ts -r <utility>.bin
 ```
+
+Installing `pnut-ts` and `pnut-term-ts`:
+**[macOS](https://github.com/ironsheep/P2-vscode-langserv-extension/blob/main/TASKS-User-macOS.md#installing-pnut-term-ts-on-macos)**
+· **[Windows](https://github.com/ironsheep/P2-vscode-langserv-extension/blob/main/TASKS-User-win.md#installing-pnut-term-ts-on-windows)**
+· **[Linux/RPi](https://github.com/ironsheep/P2-vscode-langserv-extension/blob/main/TASKS-User-RPi.md#installing-pnut-term-ts-on-rpilinux)**
+
+Each utility runs to completion and then halts, printing a completion banner. The
+destructive ones say so before they act — read the warnings in each section below.
+
+The `-t <seconds>` timeouts shown in the sections below matter only for unattended
+capture; running interactively you simply watch the output.
 
 ---
 
@@ -42,7 +57,8 @@ Uses `isp_format_utility.spin2` (library) which provides the formatting logic.
 
 **Usage:**
 ```bash
-./run_test.sh ../src/UTILS/SD_format_card.spin2 -t 120
+pnut-ts -d -I .. SD_format_card.spin2
+pnut-term-ts -r SD_format_card.bin
 ```
 
 **WARNING:** This will **ERASE ALL DATA** on the SD card!
@@ -85,7 +101,8 @@ END_SESSION
 
 **Usage:**
 ```bash
-./run_test.sh ../src/UTILS/SD_card_characterize.spin2 -t 60
+pnut-ts -d -I .. SD_card_characterize.spin2
+pnut-term-ts -r SD_card_characterize.bin
 ```
 
 **Reads and Displays:**
@@ -98,11 +115,10 @@ END_SESSION
 | **OCR** | 4 bytes | Operating voltage ranges, card capacity status |
 | **VBR/BPB** | 512 bytes | FAT32 filesystem parameters |
 
-**Sample Output** — banner and section structure verified against
-`src/UTILS/SD_card_characterize.spin2` (v1.6.1). Field **values** below are
-illustrative, not a captured run; every field marker and label is real. Registers
-are tagged `[USED]` where the driver acts on the field and `[INFO]` where it is
-reported only.
+**Sample Output** — captured on a SharedOEM SDHC (8 GB marketing / 7,431 MiB actual),
+v1.6.1, 2026-07-26. Abridged: the SCR, OCR and SD-Status sections are elided.
+Registers are tagged `[USED]` where the driver acts on the field and `[INFO]` where
+it is reported only.
 
 ```
 ##############################################
@@ -124,27 +140,38 @@ Card initialized successfully.
 [USED] = Field used by V3 driver
 [INFO] = Informational only
 
-[USED] MID (Manufacturer ID):     $03 (SanDisk)
-[INFO] OID (OEM/Application ID): $53 $44
-[INFO] PNM (Product Name):        [SD64G]
-[INFO] PRV (Product Revision):    8.0
-[INFO] PSN (Serial Number):       $1234_5678
-[INFO] MDT (Manufacturing Date): 2023-06
-[INFO] CRC7:                      $6A
+[USED] MID (Manufacturer ID):     $9F (Shared OEM)
+[INFO] OID (OEM/Application ID): $54 $49 (ASCII)
+[INFO] PNM (Product Name):        [00000]
+[INFO] PRV (Product Revision):    0.0
+[INFO] PSN (Serial Number):       $0001_B9D5
+[INFO] MDT (Manufacturing Date): 2_021-09
+[INFO] CRC7:                      $49
 
 ======== CSD REGISTER (Card Specific Data) ========
 
 [USED] CSD_STRUCTURE:        1 (CSD Version 2.0)
-       Card Type:            SDHC/SDXC (High Capacity)
+       Card Type:            SDHC/SDXC (High/Extended Capacity)
 
 --- Timing Parameters ---
 [USED] TRAN_SPEED:           $32 (25 MHz max)
+[USED] TAAC:                 $0E (read access time-1)
+[USED] NSAC:                 0 (read access time-2, CLK cycles)
 [USED] R2W_FACTOR:           2 (write time = read time x 4)
-       Read Timeout:         1_000 ms (calculated)
-       Write Timeout:        4_000 ms (calculated)
+       Read Timeout:         100 ms (calculated)
+       Write Timeout:        250 ms (calculated)
 
 --- Capacity ---
-       ... capacity, block, and feature fields follow ...
+[USED] C_SIZE:               14_861 (7_431 MiB)
+       Marketing Capacity:   8 GB
+       Actual Capacity:      7_431 MiB (7_795 MB decimal)
+       Total Sectors:        15_218_688
+
+  ... SCR, OCR and SD Status sections follow ...
+
+##############################################
+END_CHARACTERIZATION
+##############################################
 ```
 
 **Use Cases:**
@@ -162,7 +189,8 @@ Card initialized successfully.
 
 **Usage:**
 ```bash
-./run_test.sh ../src/UTILS/SD_performance_benchmark.spin2 -t 180
+pnut-ts -d -I .. SD_performance_benchmark.spin2
+pnut-term-ts -r SD_performance_benchmark.bin
 ```
 
 **Measurements:**
@@ -185,46 +213,62 @@ Card initialized successfully.
 | 128 KB | Small display image |
 | 256 KB | Larger display image |
 
-**Output Format** — structure verified against
-`src/UTILS/SD_performance_benchmark.spin2` (v1.6.1). Timings are **illustrative**:
-throughput varies substantially by card, and quoting one card's numbers here would
-read as a specification. Run it on your own card for figures you can rely on.
+**Output Format** — captured on a SharedOEM SDHC (8 GB marketing / 7,431 MiB actual)
+at 350 MHz sysclk and 25 MHz SPI, v1.6.1, 2026-07-26. Abridged. These are one card's
+numbers, not a specification: throughput varies substantially between cards, so run it
+on yours for figures you can rely on.
 
 ```
 ======================================================
   SD Card Performance Benchmark v2.0
 ======================================================
 
-SysClk: 250 MHz
+SysClk: 350 MHz
 Iterations per test: 10
 
 MOUNT:
-  Mount time: 1_716.4 ms
-  SPI Frequency: 20_833 kHz
+  Mount time: 216.7 ms
+  SPI Frequency: 25_000 kHz
   Volume: P2-BENCH
-  Free: 1_915 MB (3_923_944 sectors)
+  Free: 7_426 MB (15_210_472 sectors)
 
 ------------------------------------------------------
   CARD IDENTIFICATION
 ------------------------------------------------------
-  MID: $03  Product: SD64G
-  CID: $03 $53 $44 $53 $44 $36 $34 $47
-       $08 $12 $34 $56 $78 $01 $76 $00
+  MID: $9F  Product: 00000
+  CID: $9F $54 $49 $30 $30 $30 $30 $30
+       $00 $00 $01 $B9 $D5 $01 $59 $93
 
 ------------------------------------------------------
   RAW SINGLE-SECTOR (1x512B per operation)
 ------------------------------------------------------
 
 Single-Sector Read (10 iterations):
-  1 sector(s) (512B): Min=731 Avg=753 Max=949 us => 679 KB/s
-
-Single-Sector Write (10 iterations):
-  1 sector(s) (512B): Min=1_131 Avg=1_133 Max=1_146 us => 451 KB/s
+  1 sector(s) (512B): Min=817 Avg=849 Max=1_131 us => 603 KB/s
 
 ------------------------------------------------------
   RAW MULTI-SECTOR (CMD18/CMD25 bulk transfers)
 ------------------------------------------------------
-  ... multi-sector, filesystem, and overhead sections follow ...
+
+Multi-Sector Read (CMD18):
+  8 sector(s) (4_096B): Min=2_531 Avg=2_563 Max=2_845 us => 1_598 KB/s
+  32 sector(s) (16_384B): Min=8_458 Avg=8_490 Max=8_772 us => 1_929 KB/s
+  64 sector(s) (32_768B): Min=16_334 Avg=16_366 Max=16_648 us => 2_002 KB/s
+
+File Read (open + read + close):
+  4KB: Min=5_760 Avg=5_879 Max=6_951 us => 696 KB/s
+  32KB: Min=50_720 Avg=50_926 Max=52_776 us => 643 KB/s
+  128KB: Min=203_818 Avg=204_023 Max=205_863 us => 642 KB/s
+
+File Open/Close:
+  Open:  Min=149 Avg=270 Max=1_357 us
+  Close: Min=37 Avg=37 Max=37 us
+
+  ... single-sector write, CMD25 write and unmount sections follow ...
+
+======================================================
+  Benchmark Complete
+======================================================
 ```
 
 Every measurement reports `Min`/`Avg`/`Max` across its iterations, so a single slow
@@ -261,7 +305,8 @@ above.` with `STATUS: REPAIRS NEEDED`. Nothing on the card is changed. Run `audi
 
 **Usage:**
 ```bash
-./run_test.sh ../src/UTILS/SD_FAT32_audit.spin2 -t 60
+pnut-ts -d -I .. SD_FAT32_audit.spin2
+pnut-term-ts -r SD_FAT32_audit.bin
 ```
 
 **Read-Only:** This tool does NOT modify any data on the card.
@@ -359,7 +404,8 @@ counts appear as `Pass 2/3`.
 
 **Usage:**
 ```bash
-./run_test.sh ../src/UTILS/SD_FAT32_fsck.spin2 -t 300
+pnut-ts -d -I .. SD_FAT32_fsck.spin2
+pnut-term-ts -r SD_FAT32_fsck.bin
 ```
 
 **WARNING:** This tool **modifies the card** to repair detected problems. Run the audit tool first if you want a read-only check.
@@ -484,39 +530,39 @@ src/UTILS/
 
 1. **Identify** - Quick two-line card summary
    ```bash
-   ./run_test.sh ../src/UTILS/SD_card_identify.spin2
+   pnut-ts -d -I .. SD_card_identify.spin2 && pnut-term-ts -r SD_card_identify.bin
    ```
 
 2. **Characterize** - Read card registers to identify the card
    ```bash
-   ./run_test.sh ../src/UTILS/SD_card_characterize.spin2 -t 60
+   pnut-ts -d -I .. SD_card_characterize.spin2 && pnut-term-ts -r SD_card_characterize.bin
    ```
 
 3. **Format** - Create clean FAT32 filesystem
    ```bash
-   ./run_test.sh ../src/UTILS/SD_format_card.spin2 -t 120
+   pnut-ts -d -I .. SD_format_card.spin2 && pnut-term-ts -r SD_format_card.bin
    ```
 
 4. **Audit** - Verify filesystem structure
    ```bash
-   ./run_test.sh ../src/UTILS/SD_FAT32_audit.spin2 -t 60
+   pnut-ts -d -I .. SD_FAT32_audit.spin2 && pnut-term-ts -r SD_FAT32_audit.bin
    ```
 
 5. **Benchmark** - Measure performance baseline
    ```bash
-   ./run_test.sh ../src/UTILS/SD_performance_benchmark.spin2 -t 180
+   pnut-ts -d -I .. SD_performance_benchmark.spin2 && pnut-term-ts -r SD_performance_benchmark.bin
    ```
 
 ### After Testing
 
 Run the audit tool to verify filesystem integrity:
 ```bash
-./run_test.sh ../src/UTILS/SD_FAT32_audit.spin2 -t 60
+pnut-ts -d -I .. SD_FAT32_audit.spin2 && pnut-term-ts -r SD_FAT32_audit.bin
 ```
 
 If the audit reports failures, run FSCK to auto-repair:
 ```bash
-./run_test.sh ../src/UTILS/SD_FAT32_fsck.spin2 -t 300
+pnut-ts -d -I .. SD_FAT32_fsck.spin2 && pnut-term-ts -r SD_FAT32_fsck.bin
 ```
 
 ---

@@ -329,6 +329,13 @@ PUB main() | result
   debug("END_CHARACTERIZATION")
   debug("##############################################")
 
+  ' Drain the headless terminal log backlog, then emit the marker the capture
+  ' tools watch for. END_CHARACTERIZATION is kept -- it is this utility's own
+  ' completion banner and log consumers may key on it -- but on its own it left
+  ' every headless run to burn its full timeout and exit non-zero.
+  waitms(500)
+  debug("END_SESSION")
+
   repeat  ' halt
 
 PRI readAllRegisters() | result
