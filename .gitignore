@@ -240,3 +240,20 @@ DOCs/procedures/
 
 # Devcontainer local overrides (user-specific mounts)
 .devcontainer/docker-compose.override.yml
+
+# --- Agent process artifacts: never tracked -----------------------------------
+# Users of this repo must not be required to use Claude Code, and must not receive
+# our agent-driven development procedures. The repo ships a P2 FAT32 driver, not our
+# methodology. Certification needs no transcript here: the regression suites ship, so
+# anyone can run them and see the result for themselves.
+DOCs/Agent-Reports/
+DOCs/Plans/PUNCH-LIST.md
+DOCs/Plans/*SPRINT-PLAN.md
+DOCs/Plans/archive/*SPRINT-PLAN.md
+DOCs/Plans/*RETROSPECTIVE*.md
+DOCs/Plans/archive/*RETROSPECTIVE*.md
+DOCs/Plans/*Closeout*.md
+DOCs/Plans/archive/*Closeout*.md
+DOCs/Plans/archive/SPRINT-*.md
+DOCs/Plans/PLAN-AUTHORING-GUIDE-AUDIT.md
+DOCs/Archive/BENCHMARK-RESULTS-AGENT.md
