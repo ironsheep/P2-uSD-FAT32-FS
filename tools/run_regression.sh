@@ -258,15 +258,12 @@ _reformat_card() {
         # pnut-term-ts timestamps can split lines mid-word: strip per-line
         # timestamps, then join so the marker is contiguous again.
         clean=$(sed -E 's/^\[[-0-9T:.]+\] //' "$log" | tr -d '\r\0' | tr -d '\n')
-        # Marker choice matters: the vehicle's own "FORMAT SUCCESSFUL!" is only
-        # two debug lines ahead of END_SESSION, and pnut-term-ts stops logging
-        # the moment it sees END_SESSION — so on a SUCCESSFUL format that line
-        # is routinely truncated mid-word out of the log. isp_format_utility's
-        # "FORMAT COMPLETE" is emitted only under `if ok` and is followed by
-        # four more lines, so it lands intact. Accept either; "FORMAT FAILED"
-        # is decisive regardless.
+        # The vehicle's own success line is the marker. It lands intact because
+        # SD_format_card drains the debug backlog before END_SESSION; without
+        # that drain pnut-term-ts stopped logging mid-word and the line was
+        # routinely truncated out. "FORMAT FAILED" is decisive regardless.
         if [[ "$clean" != *"FORMAT FAILED"* ]]; then
-            if [[ "$clean" == *"FORMAT COMPLETE"* || "$clean" == *"FORMAT SUCCESSFUL"* ]]; then
+            if [[ "$clean" == *"FORMAT SUCCESSFUL"* ]]; then
                 ok=true
             fi
         fi
