@@ -163,6 +163,11 @@ PUB go() | result, spi_hz
         debug("======================================================")
     else
         debug("ERROR: Could not mount SD card!")
+
+    ' Drain the headless terminal log backlog before END_SESSION triggers
+    ' shutdown -- without this the closing banner above is cut off mid-line
+    ' and the captured transcript is truncated.
+    waitms(500)
     debug("END_SESSION")
 
 
