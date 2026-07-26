@@ -590,16 +590,16 @@ PUB writeLargeData(p_data, total_bytes) | handle, offset, chunk_size
 Use `syncHandle()` to flush pending writes without closing the file:
 
 ```spin2
-PUB longRunningWrite() | handle, i
+PUB longRunningWrite() | handle, idx
   handle := sd.createFileNew(string("DATA.LOG"))
   if handle < 0
     return
 
-  repeat i from 0 to 999
+  repeat idx from 0 to 999
     sd.writeHandle(handle, @data_point, DATA_SIZE)
 
     ' Checkpoint every 100 entries
-    if i // 100 == 99
+    if idx // 100 == 99
       sd.syncHandle(handle)
 
   sd.closeFileHandle(handle)
@@ -1137,7 +1137,7 @@ OBJ
 VAR
   byte line_buffer[MAX_LINE]
 
-PUB readConfig() | handle, i, ch
+PUB readConfig() | handle, charIdx, ch
   if not sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
     return false
 
@@ -1148,18 +1148,18 @@ PUB readConfig() | handle, i, ch
 
   ' Read file line by line
   repeat
-    i := 0
+    charIdx := 0
     repeat
       if sd.readHandle(handle, @ch, 1) == 0   ' End of file
         quit
       if ch == 10                             ' Newline
         quit
-      if ch <> 13 and i < MAX_LINE - 1        ' Skip CR, check buffer
-        line_buffer[i++] := ch
+      if ch <> 13 and charIdx < MAX_LINE - 1  ' Skip CR, check buffer
+        line_buffer[charIdx++] := ch
 
-    line_buffer[i] := 0                       ' Null terminate
+    line_buffer[charIdx] := 0                 ' Null terminate
 
-    if i > 0
+    if charIdx > 0
       processConfigLine(@line_buffer)
 
     if sd.eofHandle(handle)

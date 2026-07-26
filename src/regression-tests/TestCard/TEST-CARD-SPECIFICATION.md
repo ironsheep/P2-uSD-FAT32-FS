@@ -174,8 +174,8 @@ Offset 1953: "BLK31---" (8 bytes) + 55 bytes of 0x55
 **Verification**:
 ```spin2
 checksum := 0
-repeat i from 0 to 1023
-  checksum += buf[i]
+repeat idx from 0 to 1023
+  checksum += buf[idx]
 ' Expected: checksum == 130560
 ```
 
@@ -260,13 +260,13 @@ PUB test_tiny_read() : pass | size
 ### Test 4: Exact Sector Boundary
 
 ```spin2
-PUB test_exact_512() : pass | i
+PUB test_exact_512() : pass | idx
   sd.openFile(string("EXACT512.BIN"))
   sd.read(@buffer, 512)
   sd.closeFile()
   pass := true
-  repeat i from 0 to 511
-    if buffer[i] <> $58
+  repeat idx from 0 to 511
+    if buffer[idx] <> $58
       pass := false
       quit
   ' Expected: pass == true (all bytes are 0x58)
@@ -275,14 +275,14 @@ PUB test_exact_512() : pass | i
 ### Test 5: Multi-Sector Read
 
 ```spin2
-PUB test_four_k() : pass | i, expected
+PUB test_four_k() : pass | idx, expected
   sd.openFile(string("FOUR_K.BIN"))
   sd.read(@buffer, 4096)
   sd.closeFile()
   pass := true
-  repeat i from 0 to 4095
-    expected := i & $FF
-    if buffer[i] <> expected
+  repeat idx from 0 to 4095
+    expected := idx & $FF
+    if buffer[idx] <> expected
       pass := false
       quit
   ' Expected: pass == true
@@ -354,13 +354,13 @@ PUB test_directory_nav() : pass | count
 ### Test 10: Checksum Verification
 
 ```spin2
-PUB test_checksum() : pass | i, sum
+PUB test_checksum() : pass | idx, sum
   sd.openFile(string("CHECKSUM.BIN"))
   sd.read(@buffer, 1024)
   sd.closeFile()
   sum := 0
-  repeat i from 0 to 1023
-    sum += buffer[i]
+  repeat idx from 0 to 1023
+    sum += buffer[idx]
   pass := (sum == 130560)
   ' Expected: pass == true
 ```
@@ -372,10 +372,10 @@ PUB test_checksum() : pass | i, sum
 ### Sector Read Timing
 
 ```spin2
-PUB benchmark_sector_read() : microseconds | start, i
+PUB benchmark_sector_read() : microseconds | start, idx
   sd.openFile(string("SIXTYFK.BIN"))
   start := getct()
-  repeat i from 0 to 127
+  repeat idx from 0 to 127
     sd.read(@buffer, 512)
   microseconds := (getct() - start) / (clkfreq / 1_000_000)
   sd.closeFile()
@@ -386,7 +386,7 @@ PUB benchmark_sector_read() : microseconds | start, i
 ### Sequential vs Random Access
 
 ```spin2
-PUB benchmark_sequential() : us_seq, us_random | start, i
+PUB benchmark_sequential() : us_seq, us_random | start, idx
   ' Sequential read
   sd.openFile(string("SIXTYFK.BIN"))
   start := getct()
@@ -398,8 +398,8 @@ PUB benchmark_sequential() : us_seq, us_random | start, i
   ' Random access read
   sd.openFile(string("SIXTYFK.BIN"))
   start := getct()
-  repeat i from 0 to 63
-    sd.seek((i * 17) & $FFFF)  ' Pseudo-random positions
+  repeat idx from 0 to 63
+    sd.seek((idx * 17) & $FFFF)  ' Pseudo-random positions
     sd.read(@buffer, 512)
   us_random := (getct() - start) / (clkfreq / 1_000_000)
   sd.closeFile()

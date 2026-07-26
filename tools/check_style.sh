@@ -142,6 +142,186 @@ for f in "${FILES[@]}"; do
 done
 [[ $found -eq 0 ]] && echo -e "  ${GREEN}Ordering correct.${NC}"
 
+# ================================================================================
+# PASS 2 — Spin2 example code inside user-facing Markdown
+# ================================================================================
+#
+# Project policy (Stephen, 2026-07-26): example code in the documents conforms to
+# the same guide as the shipped source. A reader copies what we print; an example
+# that violates the guide teaches the violation.
+#
+# Scope is the same user-facing Markdown set check_doc_claims.sh audits, discovered
+# from git for the same reason: a hand-listed set goes stale exactly the way the
+# documents do.
+#
+# Only rules that are meaningful for a FRAGMENT are applied. Rule 3.2 (PUB before
+# PRI) is deliberately NOT applied: an excerpt legitimately shows one method, and
+# the ordering of a file cannot be judged from a slice of it.
+
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+
+mapfile -t DOCS < <(
+    git -C "$ROOT" ls-files --full-name '*.md' 2>/dev/null \
+    | grep -vE '^(DOCs/Plans/|DOCs/Agent-Reports/|DOCs/Analysis/|DOCs/procedures/|\.claude/|diagnostic-tests/)' \
+    | sort
+)
+
+# Flatten every fenced spin2 block to "doc:line:code", keeping the line number the
+# reader would see in the document so a finding is directly actionable. A block id
+# is carried too, so rule 2.4 can reason about one fragment at a time.
+: > "$TMP/frag.txt"
+blocks=0
+for d in "${DOCS[@]}"; do
+    [[ -f "$d" ]] || continue
+    n=$(awk -v doc="$d" '
+        /^[[:space:]]*```/ {
+            if (inblk) { inblk = 0; next }
+            tag = $0; sub(/^[[:space:]]*```[[:space:]]*/, "", tag)
+            if (tolower(tag) == "spin2") { inblk = 1; blk++ ; emitted++ }
+            next
+        }
+        inblk { printf "%s:%d:%d:%s\n", doc, FNR, blk, $0 }
+        END { print emitted+0 > "/dev/stderr" }
+    ' "$d" 2>>"$TMP/counts.txt" >> "$TMP/frag.txt")
+done
+blocks=$(awk '{ s += $1 } END { print s+0 }' "$TMP/counts.txt" 2>/dev/null)
+
+echo ""
+echo -e "${CYAN}Spin2 examples in Markdown — ${blocks:-0} fenced block(s) across ${#DOCS[@]} user-facing document(s)${NC}"
+
+if [[ ! -s "$TMP/frag.txt" ]]; then
+    echo -e "  ${GREEN}No fenced spin2 examples to audit.${NC}"
+else
+    # --- Rule 1.1: ASCII only (code and string literals) ------------------------
+    echo ""
+    echo -e "${CYAN}Rule 1.1 — ASCII only${NC}"
+    found=0
+    hits=$(LC_ALL=C awk -F: '
+        { doc = $1; ln = $2; code = $0
+          sub(/^[^:]*:[0-9]+:[0-9]+:/, "", code)
+          if (code ~ /^[[:space:]]*'"'"'/) next            # comment line
+          line = code
+          while (match(line, /"[^"]*"/)) {
+              s = substr(line, RSTART, RLENGTH)
+              if (s ~ /[^\x00-\x7F]/) { print doc":"ln": "s; break }
+              line = substr(line, RSTART + RLENGTH)
+          } }
+    ' "$TMP/frag.txt" 2>/dev/null)
+    if [[ -n "$hits" ]]; then
+        while IFS= read -r h; do fail "${h%%:*}" "non-ASCII in an example string literal: ${h#*:}"; done <<< "$hits"
+        found=1
+    fi
+    [[ $found -eq 0 ]] && echo -e "  ${GREEN}None.${NC}"
+
+    # --- Rule 1.8: @"" is invalid ----------------------------------------------
+    echo ""
+    echo -e "${CYAN}Rule 1.8 — no empty string literal @\"\"${NC}"
+    found=0
+    hits=$(grep -F '@""' "$TMP/frag.txt" 2>/dev/null | awk -F: '{ print $1":"$2 }')
+    if [[ -n "$hits" ]]; then
+        while IFS= read -r h; do fail "${h%%:*}" "@\"\" at :${h##*:}"; done <<< "$hits"
+        found=1
+    fi
+    [[ $found -eq 0 ]] && echo -e "  ${GREEN}None.${NC}"
+
+    # --- Rule 2.1: no single-letter names in a shown signature ------------------
+    echo ""
+    echo -e "${CYAN}Rule 2.1 — no single-letter variable names in signatures${NC}"
+    found=0
+    hits=$(awk -F: '
+        { doc = $1; ln = $2; sig = $0
+          sub(/^[^:]*:[0-9]+:[0-9]+:/, "", sig)
+          if (sig !~ /^(PUB|PRI)[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\(/) next
+          gsub(/^[^(]*\(/, "", sig)
+          n = split(sig, parts, /[(),|:]/)
+          for (i = 1; i <= n; i++) {
+              gsub(/^[[:space:]]+|[[:space:]]+$/, "", parts[i])
+              gsub(/\).*$/, "", parts[i])
+              if (parts[i] ~ /^[A-Za-z]$/) print doc":"ln": "parts[i]
+          } }
+    ' "$TMP/frag.txt" 2>/dev/null)
+    if [[ -n "$hits" ]]; then
+        while IFS= read -r h; do fail "${h%%:*}" "single-letter name in an example signature at :$(echo "$h" | cut -d: -f2) — $(echo "$h" | cut -d: -f3-)"; done <<< "$hits"
+        found=1
+    fi
+    [[ $found -eq 0 ]] && echo -e "  ${GREEN}None.${NC}"
+
+    # --- Rule 2.4: object constants referenced through the object ---------------
+    #
+    # Flagged only when the SAME fragment both declares an object and defines a CON
+    # name that object already defines. That pairing is the actual defect the rule
+    # describes — a second source of truth in the reader's file. A fragment that
+    # merely defines a constant, with no object in view, is not judged: the excerpt
+    # does not show enough to know.
+    echo ""
+    echo -e "${CYAN}Rule 2.4 — no local copy of an object's constant${NC}"
+    found=0
+    hits=$(awk -F: -v root="$ROOT" '
+        function loadconsts(objname,   path, line, nm, cmd) {
+            if (objname in loaded) return
+            loaded[objname] = 1
+            cmd = "git -C \"" root "\" ls-files --full-name \"src/*/" objname ".spin2\" \"src/" objname ".spin2\" 2>/dev/null"
+            path = ""
+            while ((cmd | getline line) > 0) { if (path == "") path = line }
+            close(cmd)
+            if (path == "") return
+            inCon = 0
+            while ((getline line < (root "/" path)) > 0) {
+                if (line ~ /^(CON|con)([[:space:]]|$)/) { inCon = 1; continue }
+                if (line ~ /^(PUB|PRI|DAT|VAR|OBJ|pub|pri|dat|var|obj)([[:space:]]|$)/) { inCon = 0; continue }
+                if (!inCon) continue
+                # A constant the object DOCUMENTS as user-overridable is not a
+                # second source of truth -- redefining it in the consuming CON
+                # block IS the configuration mechanism the object provides, and
+                # showing that in a document is correct. MAX_OPEN_FILES is the
+                # live case.
+                if (tolower(line) ~ /user-overridable/) continue
+                if (match(line, /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=/)) {
+                    nm = substr(line, RSTART, RLENGTH)
+                    gsub(/[[:space:]]|=/, "", nm)
+                    consts[objname, nm] = 1
+                }
+            }
+            close(root "/" path)
+        }
+        { doc = $1; ln = $2; blk = $3; code = $0
+          sub(/^[^:]*:[0-9]+:[0-9]+:/, "", code)
+          sub(/'"'"'.*$/, "", code)
+          key = doc SUBSEP blk
+
+          if (code ~ /^(OBJ|obj)([[:space:]]|$)/) { sect[key] = "OBJ"; next }
+          if (code ~ /^(CON|con)([[:space:]]|$)/) { sect[key] = "CON"; next }
+          if (code ~ /^(PUB|PRI|DAT|VAR|pub|pri|dat|var)([[:space:]]|$)/) { sect[key] = "OTHER"; next }
+
+          if (sect[key] == "OBJ" && match(code, /"[^"]+"/)) {
+              o = substr(code, RSTART + 1, RLENGTH - 2)
+              sub(/\.spin2$/, "", o)
+              objs[key, ++nobj[key]] = o
+              loadconsts(o)
+              next
+          }
+          if (sect[key] == "CON" && match(code, /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=/)) {
+              nm = substr(code, RSTART, RLENGTH); gsub(/[[:space:]]|=/, "", nm)
+              cname[key, ++ncon[key]] = nm; cline[key, ncon[key]] = ln
+          } }
+        END {
+            for (k in nobj)
+                for (i = 1; i <= nobj[k]; i++)
+                    for (j = 1; j <= ncon[k]; j++)
+                        if ((objs[k, i], cname[k, j]) in consts) {
+                            split(k, kk, SUBSEP)
+                            print kk[1] ":" cline[k, j] ": " cname[k, j] " duplicates " objs[k, i] "." cname[k, j]
+                        }
+        }
+    ' "$TMP/frag.txt" 2>/dev/null | sort -u)
+    if [[ -n "$hits" ]]; then
+        while IFS= read -r h; do fail "${h%%:*}" "at :$(echo "$h" | cut -d: -f2) —$(echo "$h" | cut -d: -f3-)"; done <<< "$hits"
+        found=1
+    fi
+    [[ $found -eq 0 ]] && echo -e "  ${GREEN}None.${NC}"
+fi
+
 # --- summary -------------------------------------------------------------------
 
 echo ""
