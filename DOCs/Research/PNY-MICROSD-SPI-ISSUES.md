@@ -188,7 +188,7 @@ This suggests our specific PNY failure may be related to:
 
 ---
 
-## Agent Analysis of Our P2 Driver (2026-01-18)
+## Analysis of Our P2 Driver (2026-01-18)
 
 After reviewing our driver's implementation details, an external analysis identified three main weak spots relative to "picky" cards like PNY:
 
@@ -372,7 +372,7 @@ In order of impact vs. effort:
 - Microchip forum reports on PNY SPI failures
 - SD Physical Layer Simplified Specification
 - Embedded developer community experience reports
-- External agent analysis of P2 driver implementation (2026-01-18)
+- External analysis of the P2 driver implementation (2026-01-18)
 
 ---
 

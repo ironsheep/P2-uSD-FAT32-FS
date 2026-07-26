@@ -778,13 +778,13 @@ Candidate triggers (none verified):
 - **`SD_card_identify` (sysclk 320)**: works after fresh power-cycle, reads `SPI 22 MHz`, `cardWarnings() = $04` (dummy-CRC), counterfeit classifier score 12-16
 - **`SD_performance_benchmark` (sysclk 350)**: works after fresh power-cycle, `SPI Frequency: 21_875 kHz`, 17s clean run
 
-### Smells the diagnostic agent identified (worth fixing, INDEPENDENT of wedge)
+### Smells the diagnostic pass identified (worth fixing, INDEPENDENT of wedge)
 
 These are real correctness issues found while investigating; agreed with user to fix but NOT yet applied because wedge isn't root-caused:
 
 1. **`do_unmount()` always returns SUCCESS** even when `updateFSInfo()` fails (line 3382 unconditionally `status := SUCCESS`). Caller can't distinguish "clean unmount" from "FSInfo write failed." This is also why test #17 "unmount()" reports success after a failed mount.
 2. **Stale `card_warning_flags` / `cmd23_supported` / `hcs` / `ocr_value` across failed inits.** These are only cleared after CMD0/CMD8/ACMD41 succeed (line 5990+). If mount #N fails at CMD0, prior card's flags persist into mount #N+1 calls.
-3. (Agent noted) `cmd()` line 6024 sends only 8 NCS clocks before commands — for CMD0 specifically, spec wants 74+ accumulated. **Not a real issue** — once the recovery flush works (C1 + C2), there are ~5000+ clocks before CMD0.
+3. (Noted in the audit) `cmd()` line 6024 sends only 8 NCS clocks before commands — for CMD0 specifically, spec wants 74+ accumulated. **Not a real issue** — once the recovery flush works (C1 + C2), there are ~5000+ clocks before CMD0.
 
 ### 2026-05-23/24 next-session opening moves
 
@@ -803,7 +803,7 @@ These are real correctness issues found while investigating; agreed with user to
 **Commits added this session (in order):**
 - `da2ed83` — `SD_card_characterize` default sysclk 270 → 350 (consistency with benchmark; lands exact 25 MHz SCK)
 - `6b2a0fa` — Probe-fix bundle (PROBE_SCK_SAMPLES=8, exact-target pre-backoff, NCO read-path bilateral fix, cross-binary recovery: `pinclear` + extended MISO flush) + `CATALOG-PROCEDURE.md`. Previously uncommitted from 2026-05-20.
-- `a7dc362` — Eleven sites across nine PRI methods now propagate `writeSector` / `do_sync_h` / `do_close` / `freeClusterChain` failures that were silently swallowed. Class of bugs: methods declared `: status` that called writeSector and ignored its return, then unconditionally returned SUCCESS. Smells #1 and #2 from the prior session, plus the agent-audit Group A/B/C findings.
+- `a7dc362` — Eleven sites across nine PRI methods now propagate `writeSector` / `do_sync_h` / `do_close` / `freeClusterChain` failures that were silently swallowed. Class of bugs: methods declared `: status` that called writeSector and ignored its return, then unconditionally returned SUCCESS. Smells #1 and #2 from the prior session, plus the audit Group A/B/C findings.
 
 ### ✅ PROVEN — Gigastone certification clean on Edge after all three commits
 

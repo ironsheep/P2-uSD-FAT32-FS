@@ -1,6 +1,6 @@
 # CRC Error Handling — Industry Practice and Host Policy
 
-**Source:** Perplexity research agent, 2026-02-15
+**Source:** Perplexity research, 2026-02-15
 **Context:** SD specs define mechanisms, not policy. This document captures de facto industry conventions.
 
 ---

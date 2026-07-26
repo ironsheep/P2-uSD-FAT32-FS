@@ -167,7 +167,7 @@ Otherwise: return true
 
 ## 4. Industry Practice Research
 
-Source: `DOCs/Research/CRC-INDUSTRY-PRACTICE.md` (Perplexity research agent)
+Source: `DOCs/Research/CRC-INDUSTRY-PRACTICE.md` (Perplexity research)
 
 ### 4.1 Key Insight
 

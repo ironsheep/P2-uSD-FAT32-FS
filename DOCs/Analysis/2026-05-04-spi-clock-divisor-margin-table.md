@@ -1,7 +1,7 @@
 # SPI Clock Divisor & Margin — Analysis and Action Plan
 
 **Date:** 2026-05-04 (last revised after reasoning consolidation)
-**Author:** Stephen + Claude
+**Author:** Stephen M Moraco
 **Status:** Action plan agreed; test driver to be built next
 **Related:** `DOCs/User-Reports/2026-05-04-macca-1GB-card-clock-sensitivity.md`
 

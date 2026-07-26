@@ -2,7 +2,7 @@
 
 **Date created:** 2026-05-04
 **Last revised:** 2026-05-04 (Phase 1.5 added after KB-verified community feedback)
-**Author:** Stephen + Claude
+**Author:** Stephen M Moraco
 **Goal:** Build a test driver implementing steps 1–3 of the four-step plan from `DOCs/Analysis/2026-05-04-spi-clock-divisor-margin-table.md`, ship it to @macca for validation against his failing 1GB SDSC card at sysclk=250 MHz, and run independent verification on our reference Edge module.
 **Status:** Plan draft, revised. No code changes yet.
 
@@ -723,7 +723,7 @@ For sweep purposes, **"pass" means the read returned the expected data with no e
 
 ## Sequencing and time estimates
 
-This is a quality-driven plan, not a deadline-driven one (per CLAUDE.md: "WE ARE NOT TIME CONSTRAINED"). Estimates are for sequencing only.
+This is a quality-driven plan, not a deadline-driven one — this project is not time constrained, and correctness comes before schedule. Estimates are for sequencing only.
 
 | Phase | Approximate effort | Gating dependencies |
 |---|---|---|
@@ -770,7 +770,7 @@ This step is **independent of the driver phase-margin fixes**. It validates the 
 
 **What runs:** `tools/run_test.sh` against every `src/regression-tests/SD_RT_*.spin2` file. Run on Stephen's reference hardware externally (container cannot execute hardware tests).
 
-**Success criterion:** all 464 tests pass. **Zero tolerance** per CLAUDE.md ("Every test suite must pass 100% at all times.")
+**Success criterion:** all 464 tests pass. **Zero tolerance** — every test suite passes 100% at all times; there is no such thing as a known-failing test.
 
 **Failure handling:** if any test regresses, do not proceed to Step 4. Diagnose and fix; the regression points at something in the four phases that broke an established invariant.
 
@@ -870,7 +870,7 @@ These are small items uncovered during the analysis, not part of the four-phase 
 
 ### S.3 — Diagnostic-only `debugOnClockChange()` API for marginal-card triage
 
-**Motivation:** the freq-sweep test (corrected by remote agent) revealed that running three test modes — Mode A (boot at sysclk, fresh mount), Mode B (clkset + unmount + remount), Mode C (clkset without remount) — produces **diagnostically different signals** when investigating marginal cards:
+**Motivation:** the corrected freq-sweep test revealed that running three test modes — Mode A (boot at sysclk, fresh mount), Mode B (clkset + unmount + remount), Mode C (clkset without remount) — produces **diagnostically different signals** when investigating marginal cards:
 
 - All three FAIL → card-side issue (intrinsic timing of that card at that sysclk).
 - Mode A FAIL, Mode B PASS → init sequence at this sysclk corrupts state; re-init from a different sysclk fixes it (host init-side).
@@ -937,7 +937,7 @@ PUB debugOnClockChange() : status
 
 ### S.4 — Update `SD_frequency_characterize.spin2` to use `debugOnClockChange()` in Mode C
 
-**Motivation:** the corrected three-mode freq-sweep test (per remote agent results recorded in user reports) currently has Mode C running with stale driver state. Once `debugOnClockChange()` is in the driver, update the test to call it in Mode C so that Mode C tests *only* host-side runtime timing in isolation.
+**Motivation:** the corrected three-mode freq-sweep test (per the results recorded in the user reports) currently has Mode C running with stale driver state. Once `debugOnClockChange()` is in the driver, update the test to call it in Mode C so that Mode C tests *only* host-side runtime timing in isolation.
 
 **Required changes to `SD_frequency_characterize.spin2`:**
 

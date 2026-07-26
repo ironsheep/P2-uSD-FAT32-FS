@@ -1,7 +1,7 @@
 # Pin-Setup Order Audit — SCK / MOSI / MISO Smart Pins
 
 **Date:** 2026-05-04
-**Author:** Claude (sprint task #2-#4)
+**Author:** Stephen M Moraco (sprint task #2-#4)
 **File audited:** `src/micro_sd_fat32_fs.spin2`
 **Scope:** every site that reconfigures the SCK, MOSI, or MISO smart pins via WRPIN/WXPIN/WYPIN/DIRL/DIRH/DRVL/DRVH/FLTL/FLTH/pinclear/pinfloat, plus DIRH-equivalent calls (`pinh()` on a smart pin). CS toggles (pure GPIO) are excluded — they're not smart-pin reconfigurations.
 

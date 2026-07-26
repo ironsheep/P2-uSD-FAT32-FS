@@ -1,7 +1,7 @@
 ---
 title: SDSC counterfeit (asdfg) wedge — deep cross-source synthesis + investigation roadmap
 date: 2026-05-26
-author: Stephen M Moraco (synthesis by Claude)
+author: Stephen M Moraco
 sources:
   - DOCs/Specs/Part1_chunks/ (SD Physical Layer Simplified Spec v9.10, Part 1)
   - DOCs/Analysis/COUNTERFEIT-ASDFG-SDSC-INVESTIGATION.md (running log, sessions 2026-05-18 … 2026-05-25)
