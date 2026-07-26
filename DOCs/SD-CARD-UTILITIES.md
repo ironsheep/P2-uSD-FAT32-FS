@@ -145,7 +145,7 @@ Card initialized successfully.
 [INFO] PNM (Product Name):        [00000]
 [INFO] PRV (Product Revision):    0.0
 [INFO] PSN (Serial Number):       $0001_B9D5
-[INFO] MDT (Manufacturing Date): 2_021-09
+[INFO] MDT (Manufacturing Date): 2021-09
 [INFO] CRC7:                      $49
 
 ======== CSD REGISTER (Card Specific Data) ========

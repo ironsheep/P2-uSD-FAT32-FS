@@ -265,6 +265,9 @@ DAT
   ' Unique card ID string buffer
   card_id_str   BYTE    0[64]
 
+  ' Manufacturing date display string buffer (e.g., "2021-09")
+  mdt_str       BYTE    0[8]
+
 PUB main() | result
 '' Main entry point - runs comprehensive SD card characterization.
 '' Reads all card registers and displays detailed field information.
@@ -413,7 +416,7 @@ PRI parseCID() | idx
 
   cid_crc := cid_buf[15] >> 1
 
-PRI displayCID() | p_mfr, oid_c1, oid_c2
+PRI displayCID() | p_mfr, oid_c1, oid_c2, p_dst
 ' Display parsed CID register fields with [USED]/[INFO] annotations.
 
   debug(" ")
@@ -436,10 +439,16 @@ PRI displayCID() | p_mfr, oid_c1, oid_c2
   debug("[INFO] PRV (Product Revision):    ", udec_(cid_prv_major), ".", udec_(cid_prv_minor))
   debug("[INFO] PSN (Serial Number):       ", uhex_long_(cid_psn))
 
+  ' Built as a string rather than printed with udec_(): the Spin2 DEBUG decimal
+  ' formatters group thousands with an underscore, which renders a year as
+  ' "2_021". A year is not a magnitude and must not be grouped.
+  p_dst := decWord(@mdt_str, cid_mdt_year)
+  BYTE[p_dst++] := "-"
   if cid_mdt_month < 10
-    debug("[INFO] MDT (Manufacturing Date): ", udec_(cid_mdt_year), "-0", udec_(cid_mdt_month))
-  else
-    debug("[INFO] MDT (Manufacturing Date): ", udec_(cid_mdt_year), "-", udec_(cid_mdt_month))
+    BYTE[p_dst++] := "0"
+  p_dst := decByte(p_dst, cid_mdt_month)
+  BYTE[p_dst] := 0
+  debug("[INFO] MDT (Manufacturing Date): ", zstr_(@mdt_str))
 
   debug("[INFO] CRC7:                      ", uhex_byte_(cid_crc))
 
