@@ -482,18 +482,18 @@ PRI doFormat() : bSuccess | ok, rdStatus
         rdStatus := sd.readSectorRaw(0, @verifyBuf)
         debug("  MBR read status: ", sdec_(rdStatus))
 #ifdef __FLEXSPIN__
-        debug("  MBR readback: sig=$", uhex_word_(WORD[@verifyBuf + sd.BOOT_SIG_OFFSET]), " type=$", uhex_byte_(verifyBuf[MBR_PART_TYPE_OFF]), " start=", udec_(LONG[@verifyBuf + MBR_PART_LBA_START]))
-        debug("  MBR read[0..7]: $", uhex_byte_(verifyBuf[0]), " $", uhex_byte_(verifyBuf[1]), " $", uhex_byte_(verifyBuf[2]), " $", uhex_byte_(verifyBuf[3]), " $", uhex_byte_(verifyBuf[4]), " $", uhex_byte_(verifyBuf[5]), " $", uhex_byte_(verifyBuf[6]), " $", uhex_byte_(verifyBuf[7]))
+        debug("  MBR readback: sig=", uhex_word_(WORD[@verifyBuf + sd.BOOT_SIG_OFFSET]), " type=", uhex_byte_(verifyBuf[MBR_PART_TYPE_OFF]), " start=", udec_(LONG[@verifyBuf + MBR_PART_LBA_START]))
+        debug("  MBR read[0..7]: ", uhex_byte_(verifyBuf[0]), " ", uhex_byte_(verifyBuf[1]), " ", uhex_byte_(verifyBuf[2]), " ", uhex_byte_(verifyBuf[3]), " ", uhex_byte_(verifyBuf[4]), " ", uhex_byte_(verifyBuf[5]), " ", uhex_byte_(verifyBuf[6]), " ", uhex_byte_(verifyBuf[7]))
 #else
-        debug("  MBR readback: sig=$", uhex_word_(WORD[@verifyBuf + sd.BOOT_SIG_OFFSET]), ...
-          " type=$", uhex_byte_(verifyBuf[MBR_PART_TYPE_OFF]), ...
+        debug("  MBR readback: sig=", uhex_word_(WORD[@verifyBuf + sd.BOOT_SIG_OFFSET]), ...
+          " type=", uhex_byte_(verifyBuf[MBR_PART_TYPE_OFF]), ...
           " start=", udec_(LONG[@verifyBuf + MBR_PART_LBA_START]))
-        debug("  MBR read[0..7]: $", uhex_byte_(verifyBuf[0]), " $", uhex_byte_(verifyBuf[1]), ...
-          " $", uhex_byte_(verifyBuf[2]), " $", uhex_byte_(verifyBuf[3]), ...
-          " $", uhex_byte_(verifyBuf[4]), " $", uhex_byte_(verifyBuf[5]), ...
-          " $", uhex_byte_(verifyBuf[6]), " $", uhex_byte_(verifyBuf[7]))
+        debug("  MBR read[0..7]: ", uhex_byte_(verifyBuf[0]), " ", uhex_byte_(verifyBuf[1]), ...
+          " ", uhex_byte_(verifyBuf[2]), " ", uhex_byte_(verifyBuf[3]), ...
+          " ", uhex_byte_(verifyBuf[4]), " ", uhex_byte_(verifyBuf[5]), ...
+          " ", uhex_byte_(verifyBuf[6]), " ", uhex_byte_(verifyBuf[7]))
 #endif
-        debug("  verify buf addr: $", uhex_long_(@verifyBuf))
+        debug("  verify buf addr: ", uhex_long_(@verifyBuf))
         if WORD[@verifyBuf + sd.BOOT_SIG_OFFSET] <> sd.BOOT_SIGNATURE
             debug("  *** MBR READBACK MISMATCH! Written data not on card ***")
 
@@ -509,16 +509,16 @@ PRI doFormat() : bSuccess | ok, rdStatus
         rdStatus := sd.readSectorRaw(partitionStart, @verifyBuf)
         debug("  VBR read status: ", sdec_(rdStatus))
 #ifdef __FLEXSPIN__
-        debug("  VBR readback: jump=$", uhex_byte_(verifyBuf[0]), " OEM=$", uhex_byte_(verifyBuf[BPB_OEM_NAME]), uhex_byte_(verifyBuf[BPB_OEM_NAME + 1]), " bps=", udec_(WORD[@verifyBuf + BPB_BYTES_PER_SEC]), " spc=", udec_(verifyBuf[BPB_SEC_PER_CLUS]), " sig=$", uhex_word_(WORD[@verifyBuf + sd.BOOT_SIG_OFFSET]))
+        debug("  VBR readback: jump=", uhex_byte_(verifyBuf[0]), " OEM=", uhex_byte_(verifyBuf[BPB_OEM_NAME]), uhex_byte_(verifyBuf[BPB_OEM_NAME + 1]), " bps=", udec_(WORD[@verifyBuf + BPB_BYTES_PER_SEC]), " spc=", udec_(verifyBuf[BPB_SEC_PER_CLUS]), " sig=", uhex_word_(WORD[@verifyBuf + sd.BOOT_SIG_OFFSET]))
 #else
-        debug("  VBR readback: jump=$", uhex_byte_(verifyBuf[0]), ...
-          " OEM=$", uhex_byte_(verifyBuf[BPB_OEM_NAME]), uhex_byte_(verifyBuf[BPB_OEM_NAME + 1]), ...
+        debug("  VBR readback: jump=", uhex_byte_(verifyBuf[0]), ...
+          " OEM=", uhex_byte_(verifyBuf[BPB_OEM_NAME]), uhex_byte_(verifyBuf[BPB_OEM_NAME + 1]), ...
           " bps=", udec_(WORD[@verifyBuf + BPB_BYTES_PER_SEC]), ...
           " spc=", udec_(verifyBuf[BPB_SEC_PER_CLUS]), ...
-          " sig=$", uhex_word_(WORD[@verifyBuf + sd.BOOT_SIG_OFFSET]))
+          " sig=", uhex_word_(WORD[@verifyBuf + sd.BOOT_SIG_OFFSET]))
 #endif
         if verifyBuf[0] <> VBR_JUMP_BYTE0
-            debug("  *** VBR READBACK MISMATCH! Expected $EB got $", uhex_byte_(verifyBuf[0]), " ***")
+            debug("  *** VBR READBACK MISMATCH! Expected $EB got ", uhex_byte_(verifyBuf[0]), " ***")
 
         ' Write FSInfo sector
         debug("* Writing FSInfo...")
@@ -642,18 +642,18 @@ PRI writeMBR() : success | partitionSectors
 
     ' Diagnostic: dump write buffer before writing
 #ifdef __FLEXSPIN__
-    debug("  MBR write buf: sig=$", uhex_word_(WORD[@buf + sd.BOOT_SIG_OFFSET]), " type=$", uhex_byte_(buf[MBR_PART_TYPE_OFF]), " start=", udec_(LONG[@buf + MBR_PART_LBA_START]))
-    debug("  MBR buf[0..7]: $", uhex_byte_(buf[0]), " $", uhex_byte_(buf[1]), " $", uhex_byte_(buf[2]), " $", uhex_byte_(buf[3]), " $", uhex_byte_(buf[4]), " $", uhex_byte_(buf[5]), " $", uhex_byte_(buf[6]), " $", uhex_byte_(buf[7]))
+    debug("  MBR write buf: sig=", uhex_word_(WORD[@buf + sd.BOOT_SIG_OFFSET]), " type=", uhex_byte_(buf[MBR_PART_TYPE_OFF]), " start=", udec_(LONG[@buf + MBR_PART_LBA_START]))
+    debug("  MBR buf[0..7]: ", uhex_byte_(buf[0]), " ", uhex_byte_(buf[1]), " ", uhex_byte_(buf[2]), " ", uhex_byte_(buf[3]), " ", uhex_byte_(buf[4]), " ", uhex_byte_(buf[5]), " ", uhex_byte_(buf[6]), " ", uhex_byte_(buf[7]))
 #else
-    debug("  MBR write buf: sig=$", uhex_word_(WORD[@buf + sd.BOOT_SIG_OFFSET]), ...
-      " type=$", uhex_byte_(buf[MBR_PART_TYPE_OFF]), ...
+    debug("  MBR write buf: sig=", uhex_word_(WORD[@buf + sd.BOOT_SIG_OFFSET]), ...
+      " type=", uhex_byte_(buf[MBR_PART_TYPE_OFF]), ...
       " start=", udec_(LONG[@buf + MBR_PART_LBA_START]))
-    debug("  MBR buf[0..7]: $", uhex_byte_(buf[0]), " $", uhex_byte_(buf[1]), ...
-      " $", uhex_byte_(buf[2]), " $", uhex_byte_(buf[3]), ...
-      " $", uhex_byte_(buf[4]), " $", uhex_byte_(buf[5]), ...
-      " $", uhex_byte_(buf[6]), " $", uhex_byte_(buf[7]))
+    debug("  MBR buf[0..7]: ", uhex_byte_(buf[0]), " ", uhex_byte_(buf[1]), ...
+      " ", uhex_byte_(buf[2]), " ", uhex_byte_(buf[3]), ...
+      " ", uhex_byte_(buf[4]), " ", uhex_byte_(buf[5]), ...
+      " ", uhex_byte_(buf[6]), " ", uhex_byte_(buf[7]))
 #endif
-    debug("  MBR buf addr: $", uhex_long_(@buf))
+    debug("  MBR buf addr: ", uhex_long_(@buf))
 
     ' Write MBR to sector 0
     success := (sd.writeSectorRaw(0, @buf) == sd.SUCCESS)
@@ -828,7 +828,7 @@ PRI showWriteDiag() | wResult, wR1, wDresp, wSector
 ' Display write diagnostic info from driver after a write failure.
 
     wResult, wR1, wDresp, wSector := sd.getWriteDiag()
-    debug("  DIAG: result=", udec_(wResult), " R1=$", uhex_byte_(wR1), " dresp=$", uhex_byte_(wDresp), " sector=", udec_(wSector))
+    debug("  DIAG: result=", udec_(wResult), " R1=", uhex_byte_(wR1), " dresp=", uhex_byte_(wDresp), " sector=", udec_(wSector))
     debug("  (1=CMD24fatal 2=drespTimeout 3=CRCreject 4=writeErr 5=unknownReject 6=busyTimeout 7=OK)")
 
 CON { license }

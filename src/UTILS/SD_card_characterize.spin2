@@ -416,25 +416,25 @@ PRI displayCID() | p_mfr, oid_c1, oid_c2
   debug(" ")
 
   p_mfr := lookupManufacturer(cid_mid)
-  debug("[USED] MID (Manufacturer ID):     $", uhex_byte_(cid_mid), " (", zstr_(p_mfr), ")")
+  debug("[USED] MID (Manufacturer ID):     ", uhex_byte_(cid_mid), " (", zstr_(p_mfr), ")")
 
   oid_c1 := cid_oid >> 8
   oid_c2 := cid_oid & $FF
   if oid_c1 >= 32 and oid_c1 < 127 and oid_c2 >= 32 and oid_c2 < 127
-    debug("[INFO] OID (OEM/Application ID): $", uhex_byte_(oid_c1), " $", uhex_byte_(oid_c2), " (ASCII)")
+    debug("[INFO] OID (OEM/Application ID): ", uhex_byte_(oid_c1), " ", uhex_byte_(oid_c2), " (ASCII)")
   else
-    debug("[INFO] OID (OEM/Application ID): $", uhex_byte_(oid_c1), " $", uhex_byte_(oid_c2))
+    debug("[INFO] OID (OEM/Application ID): ", uhex_byte_(oid_c1), " ", uhex_byte_(oid_c2))
 
   debug("[INFO] PNM (Product Name):        [", zstr_(@cid_pnm), "]")
   debug("[INFO] PRV (Product Revision):    ", udec_(cid_prv_major), ".", udec_(cid_prv_minor))
-  debug("[INFO] PSN (Serial Number):       $", uhex_long_(cid_psn))
+  debug("[INFO] PSN (Serial Number):       ", uhex_long_(cid_psn))
 
   if cid_mdt_month < 10
     debug("[INFO] MDT (Manufacturing Date): ", udec_(cid_mdt_year), "-0", udec_(cid_mdt_month))
   else
     debug("[INFO] MDT (Manufacturing Date): ", udec_(cid_mdt_year), "-", udec_(cid_mdt_month))
 
-  debug("[INFO] CRC7:                      $", uhex_byte_(cid_crc))
+  debug("[INFO] CRC7:                      ", uhex_byte_(cid_crc))
 
 PRI lookupManufacturer(mid) : p_name | p_entry, entry_id
 ' Look up manufacturer name from manufacturer ID.
@@ -631,8 +631,8 @@ PRI displayCSD() | mkt_mb, decimal_mb, total_sectors
 
   debug(" ")
   debug("--- Timing Parameters ---")
-  debug("[USED] TRAN_SPEED:           $", uhex_byte_(csd_tran_speed), " (", udec_(csd_max_speed_hz / 1_000_000), " MHz max)")
-  debug("[USED] TAAC:                 $", uhex_byte_(csd_taac), " (read access time-1)")
+  debug("[USED] TRAN_SPEED:           ", uhex_byte_(csd_tran_speed), " (", udec_(csd_max_speed_hz / 1_000_000), " MHz max)")
+  debug("[USED] TAAC:                 ", uhex_byte_(csd_taac), " (read access time-1)")
   debug("[USED] NSAC:                 ", udec_(csd_nsac), " (read access time-2, CLK cycles)")
   debug("[USED] R2W_FACTOR:           ", udec_(csd_r2w_factor), " (write time = read time x ", udec_(1 << csd_r2w_factor), ")")
   debug("       Read Timeout:         ", udec_(csd_read_timeout_ms), " ms (calculated)")
@@ -660,7 +660,7 @@ PRI displayCSD() | mkt_mb, decimal_mb, total_sectors
 
   debug(" ")
   debug("--- Command Classes (CCC) ---")
-  debug("[INFO] CCC:                  $", uhex_(csd_ccc))
+  debug("[INFO] CCC:                  ", uhex_(csd_ccc))
   debug("       Class 0 (basic):      ", zstr_(csd_ccc & $001 ? @"Yes" : @"No"))
   debug("       Class 2 (block read): ", zstr_(csd_ccc & $004 ? @"Yes" : @"No"))
   debug("       Class 4 (block write):", zstr_(csd_ccc & $010 ? @"Yes" : @"No"))
@@ -697,7 +697,7 @@ PRI displayCSD() | mkt_mb, decimal_mb, total_sectors
   debug("[INFO] FILE_FORMAT_GRP:      ", udec_(csd_file_format_grp))
   debug("[INFO] FILE_FORMAT:          ", udec_(csd_file_format))
   debug("[INFO] COPY:                 ", udec_(csd_copy))
-  debug("[INFO] CRC7:                 $", uhex_byte_(csd_crc))
+  debug("[INFO] CRC7:                 ", uhex_byte_(csd_crc))
 
   if csd_structure == 0
     debug(" ")
@@ -736,7 +736,7 @@ PRI displayOCR()
   debug("======== OCR REGISTER (Operating Conditions) ========")
   debug(" ")
 
-  debug("       OCR Value:            $", uhex_long_(ocr_val))
+  debug("       OCR Value:            ", uhex_long_(ocr_val))
   debug(" ")
 
   debug("[INFO] Bit 31 (Power Up):    ", udec_(ocr_busy), " (", zstr_(ocr_busy ? @"Ready" : @"Busy"), ")")
@@ -834,7 +834,7 @@ PRI displaySCR()
 
   debug(" ")
   debug("--- Bus Width Support ---")
-  debug("[INFO] SD_BUS_WIDTHS:        $", uhex_byte_(scr_sd_bus_widths))
+  debug("[INFO] SD_BUS_WIDTHS:        ", uhex_byte_(scr_sd_bus_widths))
   if scr_sd_bus_widths & $01
     debug("       1-bit bus:            Supported (SPI mode uses this)")
   if scr_sd_bus_widths & $04
@@ -855,7 +855,7 @@ PRI displaySCR()
 
   debug(" ")
   debug("--- Command Support ---")
-  debug("[INFO] CMD_SUPPORT:          $", uhex_byte_(scr_cmd_support))
+  debug("[INFO] CMD_SUPPORT:          ", uhex_byte_(scr_cmd_support))
   if scr_cmd_support & $01
     debug("       CMD20 (Speed Class):  Supported")
   if scr_cmd_support & $02
@@ -882,7 +882,7 @@ PRI displayRawRegisters()
   debug("CSD: ", uhex_byte_(csd_buf[0]), " ", uhex_byte_(csd_buf[1]), " ", uhex_byte_(csd_buf[2]), " ", uhex_byte_(csd_buf[3]), " ", uhex_byte_(csd_buf[4]), " ", uhex_byte_(csd_buf[5]), " ", uhex_byte_(csd_buf[6]), " ", uhex_byte_(csd_buf[7]), " ", uhex_byte_(csd_buf[8]), " ", uhex_byte_(csd_buf[9]), " ", uhex_byte_(csd_buf[10]), " ", uhex_byte_(csd_buf[11]), " ", uhex_byte_(csd_buf[12]), " ", uhex_byte_(csd_buf[13]), " ", uhex_byte_(csd_buf[14]), " ", uhex_byte_(csd_buf[15]))
 
   ' OCR (4 bytes)
-  debug("OCR: $", uhex_long_(ocr_val))
+  debug("OCR: ", uhex_long_(ocr_val))
 
   ' SCR (8 bytes)
   debug("SCR: ", uhex_byte_(scr_buf[0]), " ", uhex_byte_(scr_buf[1]), " ", uhex_byte_(scr_buf[2]), " ", uhex_byte_(scr_buf[3]), " ", uhex_byte_(scr_buf[4]), " ", uhex_byte_(scr_buf[5]), " ", uhex_byte_(scr_buf[6]), " ", uhex_byte_(scr_buf[7]))
@@ -904,7 +904,7 @@ PRI findAndReadVBR() | mbr_buf[128], vbr_sector, type_code
   ' Get partition type code from MBR at offset 0x1C2
   type_code := BYTE[@mbr_buf + $1C2]
   mbr_part_type := type_code
-  debug("MBR Partition Type:          $", uhex_byte_(type_code))
+  debug("MBR Partition Type:          ", uhex_byte_(type_code))
 
   if type_code == $0B or type_code == $0C
     debug("                             FAT32 (", zstr_(type_code == $0C ? @"LBA" : @"CHS"), ")")
@@ -972,7 +972,7 @@ PRI displayVBR() | cluster_size, data_region, total_clusters
     debug("--- FAT32 Filesystem ---")
     debug("OEM Name:                    [", zstr_(@vbr_oem_name), "]")
     debug("Volume Label:                [", zstr_(@vbr_volume_label), "]")
-    debug("Volume Serial:               $", uhex_long_(vbr_volume_serial))
+    debug("Volume Serial:               ", uhex_long_(vbr_volume_serial))
     debug("FS Type:                     [", zstr_(@vbr_fs_type), "]")
     debug("Bytes/Sector:                ", udec_(vbr_bytes_per_sec))
 
