@@ -5,21 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## v1.6.1 (2026-07-27)
 
-## [1.6.1] - 2026-07-27
-
-### Breaking Changes
-
-- **`debugClearRootDir()` is renamed `debugZeroRootSector()`** (`SD_INCLUDE_DEBUG` only). The old name and its documentation claimed it deleted all files and folders. It does not: it zeroes only the first sector of the root directory and frees no cluster chains, so everything it erases becomes lost clusters. Entries in later root sectors stay physically intact but become unreachable — the zeroed first entry reads as end-of-directory to any FAT32 scan, including this driver's own. Treat a card as scratch after this call; `SD_format_card` is the way back to a clean one.
+Utility output and build instructions, and one debug method renamed to match what it does.
 
 ### Bug Fixes
 
-- **`SD_format_card`, `SD_FAT32_audit` and `SD_FAT32_fsck` build with the documented command.** Compiling any of the three with `pnut-ts -d -I .. <utility>.spin2` reported `Cannot find isp_mem_strings.spin2`. The shared string-formatting library now sits at `src/` beside the driver, so the one documented include path builds every utility. `SD_card_identify`, `SD_card_characterize` and `SD_performance_benchmark` were unaffected.
-- **The manufacturing date prints ungrouped everywhere it appears.** `SD_card_characterize` showed it as `2_021-09` in its CID report and `2_021/09` on its card-designator line, and `SD_card_identify` showed `2_021/9` on its `L1:` identity line. All three now read as a date: `2021-09`, `2021/09`, `2021/09`. The month is zero-padded everywhere, so the field is fixed-width and sorts positionally — `SD_card_identify` previously printed a single digit for months before October. Anything that parsed the designator or `L1:` line for a date sees a changed field.
-- **`SD_FAT32_audit` no longer reports repairs it did not make.** A read-only audit lists each problem as `needs repair:` and states plainly that nothing on the card was changed; `SD_FAT32_fsck` reports the same findings as `repaired:`. Previously both printed the same past-tense line, so an audit log read as though the card had been modified.
-- **The format utility's closing line reaches the log.** `SD_format_card` could have its final success or failure line cut off mid-word.
-- **Tool error messages name what failed**, not the internal routine that failed — in the audit, format, and benchmark utilities.
+- `SD_format_card`, `SD_FAT32_audit` and `SD_FAT32_fsck` build with `pnut-ts -d -I ..`, the command their documentation gives. The other three utilities were unaffected.
+- `SD_card_identify` and `SD_card_characterize` print the manufacturing date as a date — `2021/09`, `2021-09` — in a fixed-width field that sorts positionally.
+- `SD_FAT32_audit` reports each finding as `needs repair:` and states that the card was not modified. `SD_FAT32_fsck` reports the same findings as `repaired:`.
+- `SD_format_card` prints its closing success or failure line in full.
+- Error messages in the audit, format and benchmark utilities name the operation that failed.
+
+### Breaking Changes
+
+- **BREAKING**: `debugClearRootDir()` is renamed `debugZeroRootSector()` (`SD_INCLUDE_DEBUG`). It zeroes the first root-directory sector and frees no cluster chains, so entries in later sectors become unreachable and their clusters stay allocated. Treat the card as scratch afterwards; `SD_format_card` returns it to a clean state.
+
+### Known Issues
+
+- Maxwell NCard 4GB: `formatCard()` does not produce a mountable filesystem on this card. Other cards in the catalog format normally.
 
 ## [1.6.0] - 2026-07-25
 

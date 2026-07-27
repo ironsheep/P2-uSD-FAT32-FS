@@ -33,10 +33,14 @@ jobs:
         run: |
           TAG="${{ steps.version.outputs.TAG }}"
           VERSION_NUM="${TAG#v}"
+          # Matches both heading forms: the current "## vX.Y.Z (YYYY-MM-DD)" and
+          # the pre-v1.6.1 "## [X.Y.Z] - YYYY-MM-DD" still used by older entries.
+          # Extraction must keep working on both, or the release body silently
+          # comes out empty while the workflow stays green.
           NOTES=$(awk -v ver="$VERSION_NUM" '
-            /^## \[/ {
+            /^## / {
               if (found) exit
-              if (index($0, "[" ver "]")) found=1
+              if (index($0, "[" ver "]") || index($0, "v" ver " (")) found=1
               next
             }
             found { print }
