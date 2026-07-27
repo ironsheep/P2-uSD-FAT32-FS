@@ -64,6 +64,12 @@ echo ""
 # illegal in comments too. A conformant file must not light up the supported editor
 # with errors -- that teaches authors to ignore its diagnostics.
 #
+# The box-drawing exception is NOT negotiable and is NOT an aesthetic preference:
+# those characters ship with the original Propeller Tool on Windows and a large part
+# of the user-created P1/P2 code base uses them. We actively preserve them so our
+# source reads as ordinary Propeller source to the community. Do not "simplify" this
+# check by dropping the two ranges.
+#
 # This check used to emit REVIEW items for comment prose, because the guide's
 # forbidden-character table was scoped to "code, strings, and method signatures" and
 # said nothing about comments. That silence is now resolved in the guide, so there is
