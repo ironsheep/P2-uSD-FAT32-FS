@@ -32,16 +32,12 @@ See [Prerequisites](../../README.md#prerequisites) for toolchain and hardware re
 From this `UTILS/` directory:
 
 ```bash
-# Simple utilities (only need driver path)
 pnut-ts -d -I .. <utility>.spin2
-pnut-term-ts -r <utility>.bin
-
-# Utilities that use format or fsck libraries (also need DEMO/ for isp_mem_strings)
-pnut-ts -d -I .. -I ../DEMO <utility>.spin2
 pnut-term-ts -r <utility>.bin
 ```
 
-The `-I ..` flag tells the compiler to find the SD card driver in the parent directory. The `-I ../DEMO` flag is needed by utilities that use `isp_format_utility` or `isp_fsck_utility` (which depend on `isp_mem_strings` in the DEMO/ directory).
+The `-I ..` flag tells the compiler to find the SD card driver and the shared
+libraries in the parent directory. Every utility builds with this one command.
 
 ---
 
@@ -55,7 +51,7 @@ Uses `isp_format_utility.spin2` (library) which provides the formatting logic.
 
 **Compile and Run:**
 ```bash
-pnut-ts -d -I .. -I ../DEMO SD_format_card.spin2
+pnut-ts -d -I .. SD_format_card.spin2
 pnut-term-ts -r SD_format_card.bin
 ```
 
@@ -221,7 +217,7 @@ Filesystem Performance:
 
 **Compile and Run:**
 ```bash
-pnut-ts -d -I .. -I ../DEMO SD_FAT32_audit.spin2
+pnut-ts -d -I .. SD_FAT32_audit.spin2
 pnut-term-ts -r SD_FAT32_audit.bin
 ```
 
@@ -258,7 +254,7 @@ the canonical, capture-stamped transcript for this utility.
 
 **Compile and Run:**
 ```bash
-pnut-ts -d -I .. -I ../DEMO SD_FAT32_fsck.spin2
+pnut-ts -d -I .. SD_FAT32_fsck.spin2
 pnut-term-ts -r SD_FAT32_fsck.bin
 ```
 
@@ -334,13 +330,13 @@ Format the card, then verify the filesystem is clean. From this `UTILS/` directo
 
 1. **Format** - Create a clean FAT32 filesystem
    ```bash
-   pnut-ts -d -I .. -I ../DEMO SD_format_card.spin2
+   pnut-ts -d -I .. SD_format_card.spin2
    pnut-term-ts -r SD_format_card.bin
    ```
 
 2. **Audit** - Verify the filesystem structure
    ```bash
-   pnut-ts -d -I .. -I ../DEMO SD_FAT32_audit.spin2
+   pnut-ts -d -I .. SD_FAT32_audit.spin2
    pnut-term-ts -r SD_FAT32_audit.bin
    ```
 
@@ -349,13 +345,13 @@ Format the card, then verify the filesystem is clean. From this `UTILS/` directo
 If your embedded system lost power during a write, or the card is behaving unexpectedly, run audit first to see what's wrong, then FSCK to repair:
 
 ```bash
-pnut-ts -d -I .. -I ../DEMO SD_FAT32_audit.spin2
+pnut-ts -d -I .. SD_FAT32_audit.spin2
 pnut-term-ts -r SD_FAT32_audit.bin
 ```
 
 If the audit reports failures, run FSCK to auto-repair:
 ```bash
-pnut-ts -d -I .. -I ../DEMO SD_FAT32_fsck.spin2
+pnut-ts -d -I .. SD_FAT32_fsck.spin2
 pnut-term-ts -r SD_FAT32_fsck.bin
 ```
 

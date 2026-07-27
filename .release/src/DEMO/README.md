@@ -10,13 +10,13 @@ Beyond exercising driver features, the shell is a practical all-in-one card mana
 |------|-------------|
 | `SD_demo_shell.spin2` | Main shell application |
 | `isp_serial_singleton.spin2` | Serial terminal driver (singleton, shared across cogs) |
-| `isp_mem_strings.spin2` | In-memory string formatting utilities |
 
 The shell also uses these files from other directories (included via `-I` flags):
 
 | File | Location | Description |
 |------|----------|-------------|
 | `micro_sd_fat32_fs.spin2` | `src/` | SD card driver |
+| `isp_mem_strings.spin2` | `src/` | In-memory string formatting (shared with the utilities) |
 | `isp_fsck_utility.spin2` | `src/UTILS/` | FSCK/audit library (powers `audit` and `fsck` commands) |
 | `isp_format_utility.spin2` | `src/UTILS/` | Format library (powers `format` command) |
 | `isp_string_fifo.spin2` | `src/UTILS/` | Inter-cog string FIFO (used by fsck and format libraries) |

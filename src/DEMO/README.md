@@ -10,10 +10,11 @@ An interactive command-line shell for exploring the P2 SD card filesystem driver
 |------|-------------|
 | `SD_demo_shell.spin2` | Main shell application |
 | `isp_serial_singleton.spin2` | Serial terminal driver (singleton, shared across cogs) |
-| `isp_mem_strings.spin2` | In-memory string formatting utilities (includes number-to-string) |
 | `isp_stack_check.spin2` | Stack usage monitoring and reporting |
 
-The shell also uses `micro_sd_fat32_fs.spin2` from the parent directory (included via `-I ..`).
+The shell also uses `micro_sd_fat32_fs.spin2` and `isp_mem_strings.spin2` from the parent
+directory (included via `-I ..`). `isp_mem_strings.spin2` is shared with the utilities, so
+it lives at `src/` rather than here.
 
 ## Building and Running
 

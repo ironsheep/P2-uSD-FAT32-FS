@@ -8,6 +8,9 @@ All Spin2 source code for the P2 SD Card Driver, demo application, and utility p
 
 **isp_stack_check.spin2** — Worker cog stack usage monitor (used internally by the driver).
 
+**isp_mem_strings.spin2** — In-memory string formatting (number-to-string). Shared: the
+demo shell and several utilities both use it, so it lives here rather than inside either.
+
 Features:
 - Smart pin SPI with streamer DMA for hardware-accelerated transfers
 - Dedicated worker cog with hardware lock serialization
@@ -81,7 +84,6 @@ Interactive terminal shell for exploring the SD card filesystem. Supports both D
 |------|-------------|
 | `SD_demo_shell.spin2` | Main shell application |
 | `isp_serial_singleton.spin2` | Serial terminal driver (singleton, shared across cogs) |
-| `isp_mem_strings.spin2` | In-memory string formatting utilities |
 
 See [DEMO/README.md](DEMO/README.md) for build instructions, command reference, and usage examples.
 
