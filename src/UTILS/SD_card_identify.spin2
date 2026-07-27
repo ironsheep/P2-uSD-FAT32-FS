@@ -67,7 +67,7 @@ DAT
     ' Parsed field buffers
     oemBuf        BYTE    0[9]         ' OEM name (8 chars + null)
 
-    ' Manufacturing date display string buffer (e.g., "2021/9")
+    ' Manufacturing date display string buffer (e.g., "2021/09")
     mdtBuf        BYTE    0[8]
 
     ' Manufacturer lookup table (MID byte, then name string, null-terminated)
@@ -276,14 +276,17 @@ PRI decodeSpeedClass(classByte) : speedClass
         other : speedClass := 0
 
 PRI formatMDT(year, month) : p_str | p_dst, scale
-' Compose the manufacturing date as "YYYY/M".
+' Compose the manufacturing date as "YYYY/MM".
 '
 ' Built as a string rather than printed with udec_(): the Spin2 DEBUG decimal
 ' formatters group thousands with an underscore, which renders a year as
 ' "2_021". A year is not a magnitude and must not be grouped.
 '
+' Both fields are fixed-width -- the month is zero-padded -- so the date sorts
+' and parses positionally.
+'
 ' @param year - Manufacturing year (four digits)
-' @param month - Manufacturing month (1-12)
+' @param month - Manufacturing month (1-12, printed as two digits)
 ' @returns p_str - Pointer to the composed null-terminated string
 
     p_str := @mdtBuf
@@ -293,8 +296,7 @@ PRI formatMDT(year, month) : p_str | p_dst, scale
         BYTE[p_dst++] := ((year / scale) // 10) + "0"
         scale /= 10
     BYTE[p_dst++] := "/"
-    if month > 9
-        BYTE[p_dst++] := (month / 10) + "0"
+    BYTE[p_dst++] := (month / 10) + "0"
     BYTE[p_dst++] := (month // 10) + "0"
     BYTE[p_dst] := 0
 
