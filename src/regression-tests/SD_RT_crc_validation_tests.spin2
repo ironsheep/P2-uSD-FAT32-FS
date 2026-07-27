@@ -135,7 +135,7 @@ PUB go() | result, handle, bytesRead, bytesWritten, retryBefore, retryAfter, mis
     if dummyCRC
         ' Dummy-CRC card: read-side validation is permanently skipped, so the
         ' injection hook never fires and no retry is triggered. Read returns
-        ' 512 bytes normally — no error path exercised.
+        ' 512 bytes normally - no error path exercised.
         utils.evaluateSubValue(retryAfter, @"retry count unchanged (validation skipped)", retryBefore)
         utils.evaluateSubValue(errCount, @"error count == 0 (hook bypassed)", 0)
     else

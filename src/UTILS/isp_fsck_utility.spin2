@@ -1084,7 +1084,7 @@ PRI fsckPass4() | fatSector, entIdx, clus, fatVal, freeCount, syncCount, mismatc
 
 PRI repairTag() : pStr
 ' Voice for every repair line: "REPAIR" when the fix was applied, "WOULD REPAIR"
-' on a read-only audit. Single choke point — a new repair site gets the correct
+' on a read-only audit. Single choke point - a new repair site gets the correct
 ' voice for free by formatting %s with this, exactly as doRepairWrite() is
 ' the single choke point that makes MODE_AUDIT's read-only guarantee structural.
 

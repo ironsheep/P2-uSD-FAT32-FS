@@ -250,7 +250,7 @@ PRI runTest3_IsCompleteTransition() | handle, status, wasFalse, contentLen
         status := sd.startReadHandle(handle, @asyncBuf, contentLen)
         utils.evaluateSubValue(status, @"startReadHandle returns PENDING", sd.PENDING)
 
-        ' Poll until complete — record if we ever see FALSE
+        ' Poll until complete - record if we ever see FALSE
         wasFalse := false
         if not sd.isComplete()
             wasFalse := true
@@ -260,7 +260,7 @@ PRI runTest3_IsCompleteTransition() | handle, status, wasFalse, contentLen
 
         ' For fast SD cards, isComplete may already be TRUE on first check.
         ' Either we saw FALSE (transition observed) or TRUE immediately (fast card).
-        ' Both are valid — the key invariant is that getResult succeeds.
+        ' Both are valid - the key invariant is that getResult succeeds.
         sd.getResult()
 
         ' isComplete followed by getResult must succeed (no hang)
@@ -296,7 +296,7 @@ PRI runTest4_CancelReleasesLock() | handle, status, bytesRead, contentLen
 
         sd.cancelAsync()
 
-        ' Now do a blocking read — must succeed (proves lock was released)
+        ' Now do a blocking read - must succeed (proves lock was released)
         sd.seekHandle(handle, 0)
         bytefill(@asyncBuf, 0, BUF_SIZE)
         bytesRead := sd.readHandle(handle, @asyncBuf, contentLen)
@@ -321,7 +321,7 @@ PRI runTest5_AsyncInterleave() | hMain, hHelper, status, bytesMain, contentLen
     contentLen := strsize(@asyncContent)
     utils.initGuard(@asyncBuf_guard)
 
-    ' Open two handles — one for main cog async, one for helper cog blocking
+    ' Open two handles - one for main cog async, one for helper cog blocking
     hMain := sd.openFileRead(@asyncTestFile)
     utils.evaluateSubBool(hMain >= 0, @"open handle for main cog", true)
 
@@ -329,7 +329,7 @@ PRI runTest5_AsyncInterleave() | hMain, hHelper, status, bytesMain, contentLen
     utils.evaluateSubBool(hHelper >= 0, @"open handle for helper cog", true)
 
     if hMain >= 0 and hHelper >= 0
-        ' Launch helper cog — it will wait on barrier, then do blocking read
+        ' Launch helper cog - it will wait on barrier, then do blocking read
         helper_status := STATUS_RUNNING
         helper_result := 0
         sync_barrier := 0
@@ -338,10 +338,10 @@ PRI runTest5_AsyncInterleave() | hMain, hHelper, status, bytesMain, contentLen
         ' Start async read on main cog (acquires lock)
         status := sd.startReadHandle(hMain, @asyncBuf, contentLen)
 
-        ' Release helper — it will try blocking read (will spin on locktry)
+        ' Release helper - it will try blocking read (will spin on locktry)
         sync_barrier := 1
 
-        ' Complete our async op (releases lock — helper can proceed)
+        ' Complete our async op (releases lock - helper can proceed)
         bytesMain := sd.getResult()
 
         ' Wait for helper to finish
@@ -380,11 +380,11 @@ PRI runTest6_DoubleStartBusy() | handle, status1, status2, contentLen
     handle := sd.openFileRead(@asyncTestFile)
     utils.evaluateSubBool(handle >= 0, @"open file", true)
     if handle >= 0
-        ' First start — should succeed
+        ' First start - should succeed
         status1 := sd.startReadHandle(handle, @asyncBuf, contentLen)
         utils.evaluateSubValue(status1, @"first start PENDING", sd.PENDING)
 
-        ' Second start without getResult — should fail with E_ASYNC_BUSY
+        ' Second start without getResult - should fail with E_ASYNC_BUSY
         status2 := sd.startReadHandle(handle, @asyncBuf, contentLen)
         utils.evaluateSubValue(status2, @"second start E_ASYNC_BUSY", sd.E_ASYNC_BUSY)
 

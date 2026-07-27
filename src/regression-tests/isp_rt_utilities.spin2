@@ -504,7 +504,7 @@ PUB cacheCardProfile(eraseBlk, capacity, readTimeoutMs, writeTimeoutMs, maxSpiHz
     profileCachedFlag        := 1
 
 PUB safeTestRegionStart() : sector
-'' Return first erase-block-aligned sector in the "safe" test region — past
+'' Return first erase-block-aligned sector in the "safe" test region - past
 '' FAT32 metadata (root dir, FAT tables typically reside in the first 1024
 '' to 40000 sectors). Picks sector 100,000 rounded up to the next erase
 '' block boundary, clamped to never exceed half of card capacity.
@@ -579,7 +579,7 @@ PUB cardAdjustedTimeoutMs(baseMs) : adjustedMs
 
 PUB profileReport()
 '' Format-print the cached card profile to debug output. Useful at the start
-'' of a test for reproducibility — the log shows what card characteristics
+'' of a test for reproducibility - the log shows what card characteristics
 '' the test ran against.
 
     debug("  [profile] eraseBlock=", udec_(profileEraseBlockSectors), " sectors  capacity=", udec_(profileCapacitySectors), " sectors")

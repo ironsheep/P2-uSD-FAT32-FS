@@ -277,7 +277,7 @@ PUB go() | result, hndl1, hndl2, bytesWritten, pLabel, idx, pEntry, wrtDate, wrt
     utils.evaluateSubBool(hndl1 >= 0, @"create file", true)
     if hndl1 >= 0
         bytesWritten := sd.writeHandle(hndl1, @flushContent, strsize(@flushContent))
-        ' Do NOT close — wait for auto-flush (200ms threshold)
+        ' Do NOT close - wait for auto-flush (200ms threshold)
         waitms(300)
         ' Open same file with second handle to read dir entry from disk
         hndl2 := sd.openFileRead(@vlFlushFile)

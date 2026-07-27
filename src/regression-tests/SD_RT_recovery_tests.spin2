@@ -95,7 +95,7 @@ PUB go() | result, handle, handle0, handle1, handle2, bytesRead, bytesRead2, crc
 
     ' Detect dummy-CRC cards. On these cards (CW_NO_DATA_CRC), the driver
     ' permanently skips read-side CRC validation, so read-side error injection
-    ' is a no-op — exhaustive injection cannot force a read failure.
+    ' is a no-op - exhaustive injection cannot force a read failure.
     dummyCRC := (sd.cardWarnings() & sd.CW_NO_DATA_CRC) <> 0
     debug("   Dummy-CRC card: ", udec(dummyCRC))
 

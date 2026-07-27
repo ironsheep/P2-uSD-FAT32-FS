@@ -177,7 +177,7 @@ PUB go() | result, handle, h2, frags, bytesWritten, bytesRead, idx, secPerClus, 
         repeat FILL_WRITES
             sd.writeHandle(h2, @writeBuffer, WRITE_SIZE)
         sd.closeFileHandle(h2)
-    ' Step 3: Append to FILE_A — must skip over SPACER's clusters, creating fragmentation
+    ' Step 3: Append to FILE_A - must skip over SPACER's clusters, creating fragmentation
     if handle >= 0
         handle := sd.openFileWrite(@fileA)
         if handle >= 0
@@ -276,7 +276,7 @@ PUB go() | result, handle, h2, frags, bytesWritten, bytesRead, idx, secPerClus, 
     if handle >= 0
         bytefill(@writeBuffer, PATTERN_BYTE, 64)
         sd.writeHandle(handle, @writeBuffer, 64)
-        ' Do NOT close — attempt compact while open
+        ' Do NOT close - attempt compact while open
         result := sd.compactFile(@fileA)
         utils.evaluateSingleValue(result, @"compactFile result", sd.E_FILE_OPEN_FOR_COMPACT)
         sd.closeFileHandle(handle)
@@ -345,7 +345,7 @@ PUB go() | result, handle, h2, frags, bytesWritten, bytesRead, idx, secPerClus, 
     ' --- Test 12: Sequential creates are contiguous ---
     utils.startTest(@"Sequential file creates are contiguous")
     utils.setCheckCountPerTest(3)
-    ' Create three files in sequence — next-fit should keep them contiguous
+    ' Create three files in sequence - next-fit should keep them contiguous
     handle := sd.createFileNew(@fileSeqA)
     if handle >= 0
         bytefill(@writeBuffer, $AA, WRITE_SIZE)

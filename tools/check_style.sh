@@ -55,31 +55,32 @@ echo ""
 # massively -- this project's sources carry ~4000 box-drawing characters in comment
 # diagrams, all of them legal.
 #
-# The guide (rule 1.1, "The general rule, stated unambiguously") draws the line where
-# the risk is: non-ASCII is PERMITTED anywhere inside a comment and FORBIDDEN
-# everywhere else. So only code and string literals are checked here. Comment prose
-# -- em dashes, box-drawing diagrams, the lot -- is conformant and is not reported.
+# The guide (rule 1.1, "The general rule, stated unambiguously" -- Stephen,
+# 2026-07-27) makes this absolute: the box-drawing (U+2500-U+257F) and block-element
+# (U+2580-U+259F) ranges are the ONLY non-ASCII permitted anywhere in a .spin2 file.
+# Every other codepoint above 127 is a FAIL wherever it appears, COMMENTS INCLUDED.
 #
-# This used to emit 14 REVIEW items, because the guide's forbidden-character table is
-# scoped to "code, strings, and method signatures" and said nothing about comment
-# prose. That silence was resolved in the guide rather than papered over here: a
-# REVIEW the script cannot resolve is a question for the guide, not a permanent
-# annotation.
-echo -e "${CYAN}Rule 1.1 — ASCII only${NC}"
+# The decisive reason is the VSCode Spin2 extension, which flags these characters as
+# illegal in comments too. A conformant file must not light up the supported editor
+# with errors -- that teaches authors to ignore its diagnostics.
+#
+# This check used to emit REVIEW items for comment prose, because the guide's
+# forbidden-character table was scoped to "code, strings, and method signatures" and
+# said nothing about comments. That silence is now resolved in the guide, so there is
+# nothing left for the script to hedge about.
+echo -e "${CYAN}Rule 1.1 — ASCII only (box-drawing excepted)${NC}"
 for f in "${FILES[@]}"; do
-    # Non-ASCII inside a string literal, on a line that is not a comment.
-    hits=$(LC_ALL=C awk '
-        /^[[:space:]]*'"'"'/ { next }                       # skip comment lines
-        { line = $0
-          while (match(line, /"[^"]*"/)) {
-              s = substr(line, RSTART, RLENGTH)
-              if (s ~ /[^\x00-\x7F]/) { print FNR": "s; break }
-              line = substr(line, RSTART + RLENGTH)
-          } }
-    ' "$f" 2>/dev/null | head -3)
-    [[ -n "$hits" ]] && fail "$f" "non-ASCII in a string literal: $(echo "$hits" | tr '\n' ' ')"
+    # Every codepoint above 127 anywhere in the file, except the two diagram ranges.
+    # Reported with the offending character named, so the fix is obvious.
+    hits=$(perl -CSD -ne '
+        while (/([^\x00-\x7F])/g) {
+            my $c = $1; my $o = ord($c);
+            next if ($o >= 0x2500 && $o <= 0x257F) || ($o >= 0x2580 && $o <= 0x259F);
+            printf("%d:U+%04X", $., $o); print " $c\n";
+        }' "$f" 2>/dev/null | head -3)
+    [[ -n "$hits" ]] && fail "$f" "illegal non-ASCII: $(echo "$hits" | tr '\n' ' ')"
 done
-[[ $fails -eq 0 ]] && echo -e "  ${GREEN}No non-ASCII in code or string literals.${NC}"
+[[ $fails -eq 0 ]] && echo -e "  ${GREEN}ASCII throughout, apart from box-drawing diagrams in comments.${NC}"
 
 # --- Rule 1.8: @"" is invalid ---------------------------------------------------
 echo ""
