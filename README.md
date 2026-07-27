@@ -122,6 +122,8 @@ Raw SPI efficiency reaches 80% of theoretical maximum (2,427 / 3,052 KB/s). Mult
 P2-uSD-FAT32-FS/
 ├── src/                        # Driver and application source
 │   ├── micro_sd_fat32_fs.spin2     # The SD card driver
+│   ├── isp_mem_strings.spin2       # String formatting (shared: demo shell + utilities)
+│   ├── isp_stack_check.spin2       # Stack usage diagnostic
 │   ├── UTILS/                      # Standalone utility programs
 │   │   ├── SD_format_card.spin2           # FAT32 card formatter
 │   │   ├── SD_card_identify.spin2         # Two-line card identification
@@ -137,16 +139,13 @@ P2-uSD-FAT32-FS/
 │   │   ├── SD_example_data_logger.spin2   # Append-mode logging with sync
 │   │   ├── SD_example_directory_walk.spin2 # Directory operations
 │   │   └── SD_example_multicog.spin2      # Multi-cog concurrent access
-│   └── DEMO/                       # Interactive demo application
-│       ├── SD_demo_shell.spin2         # Terminal shell (dir, cd, type, etc.)
-│       ├── isp_serial_singleton.spin2  # Serial terminal driver
-│       ├── isp_mem_strings.spin2       # String formatting utilities
-│       └── isp_stack_check.spin2       # Stack usage diagnostic
-│
-│   ├── regression-tests/          # Regression test suite (471 tests as of v1.6.1)
-│   │   ├── SD_RT_*_tests.spin2        # 26 test files (mount, file ops, seek, fatchain, async, defrag, etc.)
-│   │   ├── isp_rt_utilities.spin2     # Shared test framework
-│   │   └── TestCard/                  # Test card setup and validation
+│   ├── DEMO/                       # Interactive demo application
+│   │   ├── SD_demo_shell.spin2        # Terminal shell (dir, cd, type, etc.)
+│   │   └── isp_serial_singleton.spin2 # Serial terminal driver
+│   └── regression-tests/          # Regression test suite (471 tests as of v1.6.1)
+│       ├── SD_RT_*_tests.spin2        # 26 test files (mount, file ops, seek, fatchain, async, defrag, etc.)
+│       ├── isp_rt_utilities.spin2     # Shared test framework
+│       └── TestCard/                  # Test card setup and validation
 │
 ├── diagnostic-tests/           # Characterization & diagnostic tests
 │   ├── SD_card_info_tests.spin2         # Struct-based register access

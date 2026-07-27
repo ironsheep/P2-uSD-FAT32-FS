@@ -19,6 +19,7 @@ sd-card-driver/
 └── src/                                Driver and application source
     ├── micro_sd_fat32_fs.spin2            The SD card driver
     ├── isp_stack_check.spin2              Worker cog stack usage monitor
+    ├── isp_mem_strings.spin2              String formatting (shared: demo shell + utilities)
     ├── EXAMPLES/                          Compilable example programs
     │   ├── README.md                         Build instructions
     │   ├── SD_example_read_write.spin2       Basic file read/write
@@ -28,23 +29,22 @@ sd-card-driver/
     ├── DEMO/                              Interactive terminal shell
     │   ├── README.md                         Build and usage guide
     │   ├── SD_demo_shell.spin2               Shell application
-    │   ├── isp_serial_singleton.spin2        Serial terminal driver
-    │   └── isp_mem_strings.spin2             String formatting utilities
+    │   └── isp_serial_singleton.spin2        Serial terminal driver
     ├── UTILS/                             Standalone utility programs
     │   ├── README.md                         Full utility documentation
     │   ├── SD_format_card.spin2              FAT32 card formatter
     │   ├── isp_format_utility.spin2          FAT32 format library
-    │   ├── SD_card_identify.spin2             Two-line card identification
+    │   ├── SD_card_identify.spin2            Two-line card identification
     │   ├── SD_card_characterize.spin2        Card register reader
     │   ├── SD_performance_benchmark.spin2    Throughput measurement
     │   ├── SD_FAT32_audit.spin2              Filesystem validator (read-only)
     │   ├── SD_FAT32_fsck.spin2               Filesystem check & repair
     │   ├── isp_fsck_utility.spin2            Combined FSCK + Audit library (runs in temp cog)
     │   └── isp_string_fifo.spin2             Lock-free inter-cog string FIFO
-    ├── regression-tests/                 Regression test suite
-        ├── README.md                        Test infrastructure guide
-        ├── SD_RT_*_tests.spin2              26 test suites (471 tests)
-        └── isp_rt_utilities.spin2           Shared test framework
+    └── regression-tests/                  Regression test suite
+        ├── README.md                         Test infrastructure guide
+        ├── SD_RT_*_tests.spin2               26 test suites (471 tests)
+        └── isp_rt_utilities.spin2            Shared test framework
 ```
 
 ## Prerequisites
