@@ -209,6 +209,7 @@ END_SESSION
 
 All test files use the shared `isp_rt_utilities.spin2` framework:
 
+<!-- api-audit: template — someOperation() is a placeholder for the reader's own call -->
 ```spin2
 OBJ
     utils : "isp_rt_utilities"

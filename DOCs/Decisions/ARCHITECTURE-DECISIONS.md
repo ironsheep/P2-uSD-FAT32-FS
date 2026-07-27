@@ -385,7 +385,7 @@ Normal commands: No retries
 ```spin2
 ' Caller retry pattern:
 repeat 3
-  status := sd.read(handle, @buffer, 512)
+  status := sd.readHandle(handle, @buffer, 512)
   if status == sd.SUCCESS
     quit
   waitms(100)

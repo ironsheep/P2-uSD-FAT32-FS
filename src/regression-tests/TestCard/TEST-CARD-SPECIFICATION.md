@@ -1,8 +1,11 @@
 # SD Card Test Specification
 
-**Purpose**: Read-only validation of OB4269 FAT32 driver
+**Purpose**: Read-only validation of the `micro_sd_fat32_fs` FAT32 driver
 **Card Type**: 32GB SDHC (block addressing, FAT32)
 **Date Created**: 2026-01-14
+**Last revised**: 2026-07-27 — validation examples rewritten against the handle-based
+file API. The originals called `openFile()` / `read()` / `seek()` / `closeFile()`,
+which predate that API and have never existed in the shipped driver.
 
 ---
 
@@ -191,7 +194,7 @@ repeat idx from 0 to 1023
 | Size | 54 bytes |
 | Content | `This file is in LEVEL1 subdirectory for path testing.` |
 
-**Test**: `openFile(string("/LEVEL1/INLEVEL1.TXT"))`
+**Test**: `openFileRead(string("/LEVEL1/INLEVEL1.TXT"))`
 
 ---
 
@@ -205,7 +208,7 @@ repeat idx from 0 to 1023
 | Size | 71 bytes |
 | Content | `Deepest level - LEVEL2 directory test file for nested path resolution.` |
 
-**Test**: `openFile(string("/LEVEL1/LEVEL2/DEEP.TXT"))`
+**Test**: `openFileRead(string("/LEVEL1/LEVEL2/DEEP.TXT"))`
 
 ---
 
@@ -221,7 +224,7 @@ repeat idx from 0 to 1023
 | FILE4.TXT | `Multi-file test 4` |
 | FILE5.TXT | `Multi-file test 5` |
 
-**Test**: `changeDirectory(string("MULTI"))` then enumerate with `readDirectory()`, expect 5 files.
+**Test**: `changeDirectory(string("MULTI"))` then enumerate with `openDirectory()` / `readDirectoryHandle()`, expect 5 files.
 
 ---
 
@@ -238,21 +241,24 @@ PUB test_mount() : pass
 ### Test 2: Root Directory Enumeration
 
 ```spin2
-PUB test_root_directory() : count
+PUB test_root_directory() : count | dirHandle
   count := 0
-  repeat until sd.readDirectory(count) == 0
+  dirHandle := sd.openDirectory(string("."))
+  repeat while sd.readDirectoryHandle(dirHandle)
     count++
+  sd.closeDirectoryHandle(dirHandle)
   ' Expected: count >= 7 (TINY.TXT, EXACT512.BIN, etc. + directories)
 ```
 
 ### Test 3: Small File Read
 
 ```spin2
-PUB test_tiny_read() : pass | size
-  pass := sd.openFile(string("TINY.TXT"))
-  size := sd.fileSize()
-  sd.read(@buffer, size)
-  sd.closeFile()
+PUB test_tiny_read() : pass | handle, size
+  handle := sd.openFileRead(string("TINY.TXT"))
+  pass := handle >= 0
+  size := sd.fileSizeHandle(handle)
+  sd.readHandle(handle, @buffer, size)
+  sd.closeFileHandle(handle)
   ' Expected: size == 29
   ' Expected: buffer starts with "TINY TEST"
 ```
@@ -260,10 +266,10 @@ PUB test_tiny_read() : pass | size
 ### Test 4: Exact Sector Boundary
 
 ```spin2
-PUB test_exact_512() : pass | idx
-  sd.openFile(string("EXACT512.BIN"))
-  sd.read(@buffer, 512)
-  sd.closeFile()
+PUB test_exact_512() : pass | handle, idx
+  handle := sd.openFileRead(string("EXACT512.BIN"))
+  sd.readHandle(handle, @buffer, 512)
+  sd.closeFileHandle(handle)
   pass := true
   repeat idx from 0 to 511
     if buffer[idx] <> $58
@@ -275,10 +281,10 @@ PUB test_exact_512() : pass | idx
 ### Test 5: Multi-Sector Read
 
 ```spin2
-PUB test_four_k() : pass | idx, expected
-  sd.openFile(string("FOUR_K.BIN"))
-  sd.read(@buffer, 4096)
-  sd.closeFile()
+PUB test_four_k() : pass | handle, idx, expected
+  handle := sd.openFileRead(string("FOUR_K.BIN"))
+  sd.readHandle(handle, @buffer, 4096)
+  sd.closeFileHandle(handle)
   pass := true
   repeat idx from 0 to 4095
     expected := idx & $FF
@@ -291,62 +297,65 @@ PUB test_four_k() : pass | idx, expected
 ### Test 6: Seek Test
 
 ```spin2
-PUB test_seek() : pass
-  sd.openFile(string("SEEKTEST.BIN"))
+PUB test_seek() : pass | handle
+  handle := sd.openFileRead(string("SEEKTEST.BIN"))
 
   ' Test seek to block 0
-  sd.seek(0)
-  sd.read(@buffer, 8)
+  sd.seekHandle(handle, 0)
+  sd.readHandle(handle, @buffer, 8)
   pass := strcomp(@buffer, string("BLK00---"))
 
   ' Test seek to block 10
-  sd.seek(630)  ' 10 * 63
-  sd.read(@buffer, 8)
+  sd.seekHandle(handle, 630)  ' 10 * 63
+  sd.readHandle(handle, @buffer, 8)
   pass &= strcomp(@buffer, string("BLK10---"))
 
-  sd.closeFile()
+  sd.closeFileHandle(handle)
   ' Expected: pass == true
 ```
 
 ### Test 7: Path Resolution
 
 ```spin2
-PUB test_deep_path() : pass
-  pass := sd.openFile(string("/LEVEL1/LEVEL2/DEEP.TXT"))
+PUB test_deep_path() : pass | handle
+  handle := sd.openFileRead(string("/LEVEL1/LEVEL2/DEEP.TXT"))
+  pass := handle >= 0
   if pass
-    pass := (sd.fileSize() == 71)
-  sd.closeFile()
+    pass := (sd.fileSizeHandle(handle) == 71)
+  sd.closeFileHandle(handle)
   ' Expected: pass == true
 ```
 
 ### Test 8: Multi-Cluster File
 
 ```spin2
-PUB test_large_file() : pass | pos, expected, actual
-  sd.openFile(string("SIXTYFK.BIN"))
-  pass := (sd.fileSize() == 65536)
+PUB test_large_file() : pass | handle, pos, expected, actual
+  handle := sd.openFileRead(string("SIXTYFK.BIN"))
+  pass := (sd.fileSizeHandle(handle) == 65536)
 
   ' Check bytes at various positions
   repeat pos from 0 to 65535 step 1024
-    sd.seek(pos)
-    sd.read(@buffer, 1)
+    sd.seekHandle(handle, pos)
+    sd.readHandle(handle, @buffer, 1)
     expected := ((pos / 512) << 1) ^ (pos & $FF)
     if buffer[0] <> expected
       pass := false
       quit
 
-  sd.closeFile()
+  sd.closeFileHandle(handle)
   ' Expected: pass == true
 ```
 
 ### Test 9: Directory Navigation
 
 ```spin2
-PUB test_directory_nav() : pass | count
-  pass := sd.changeDirectory(string("MULTI"))
+PUB test_directory_nav() : pass | count, dirHandle
+  pass := sd.changeDirectory(string("MULTI")) == sd.SUCCESS
   count := 0
-  repeat until sd.readDirectory(count) == 0
+  dirHandle := sd.openDirectory(string("."))
+  repeat while sd.readDirectoryHandle(dirHandle)
     count++
+  sd.closeDirectoryHandle(dirHandle)
   sd.changeDirectory(string(".."))
   ' Expected: pass == true, count == 5
 ```
@@ -354,10 +363,10 @@ PUB test_directory_nav() : pass | count
 ### Test 10: Checksum Verification
 
 ```spin2
-PUB test_checksum() : pass | idx, sum
-  sd.openFile(string("CHECKSUM.BIN"))
-  sd.read(@buffer, 1024)
-  sd.closeFile()
+PUB test_checksum() : pass | handle, idx, sum
+  handle := sd.openFileRead(string("CHECKSUM.BIN"))
+  sd.readHandle(handle, @buffer, 1024)
+  sd.closeFileHandle(handle)
   sum := 0
   repeat idx from 0 to 1023
     sum += buffer[idx]
@@ -372,13 +381,13 @@ PUB test_checksum() : pass | idx, sum
 ### Sector Read Timing
 
 ```spin2
-PUB benchmark_sector_read() : microseconds | start, idx
-  sd.openFile(string("SIXTYFK.BIN"))
+PUB benchmark_sector_read() : microseconds | handle, start, idx
+  handle := sd.openFileRead(string("SIXTYFK.BIN"))
   start := getct()
   repeat idx from 0 to 127
-    sd.read(@buffer, 512)
+    sd.readHandle(handle, @buffer, 512)
   microseconds := (getct() - start) / (clkfreq / 1_000_000)
-  sd.closeFile()
+  sd.closeFileHandle(handle)
   ' Report: microseconds for 128 sector reads (64 KB)
   ' Calculate: bytes/second = 65536 * 1000000 / microseconds
 ```
@@ -386,23 +395,23 @@ PUB benchmark_sector_read() : microseconds | start, idx
 ### Sequential vs Random Access
 
 ```spin2
-PUB benchmark_sequential() : us_seq, us_random | start, idx
+PUB benchmark_sequential() : us_seq, us_random | handle, start, idx
   ' Sequential read
-  sd.openFile(string("SIXTYFK.BIN"))
+  handle := sd.openFileRead(string("SIXTYFK.BIN"))
   start := getct()
   repeat 64
-    sd.read(@buffer, 1024)
+    sd.readHandle(handle, @buffer, 1024)
   us_seq := (getct() - start) / (clkfreq / 1_000_000)
-  sd.closeFile()
+  sd.closeFileHandle(handle)
 
   ' Random access read
-  sd.openFile(string("SIXTYFK.BIN"))
+  handle := sd.openFileRead(string("SIXTYFK.BIN"))
   start := getct()
   repeat idx from 0 to 63
-    sd.seek((idx * 17) & $FFFF)  ' Pseudo-random positions
-    sd.read(@buffer, 512)
+    sd.seekHandle(handle, (idx * 17) & $FFFF)  ' Pseudo-random positions
+    sd.readHandle(handle, @buffer, 512)
   us_random := (getct() - start) / (clkfreq / 1_000_000)
-  sd.closeFile()
+  sd.closeFileHandle(handle)
 ```
 
 ---

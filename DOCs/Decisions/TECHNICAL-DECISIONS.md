@@ -551,11 +551,11 @@ The driver does NOT automatically retry failed operations. The caller decides:
 ' Caller retry pattern
 retry_count := 3
 repeat
-  status := sd.read(handle, @buffer, 512)
+  status := sd.readHandle(handle, @buffer, 512)
   if status == sd.SUCCESS
     quit
   if --retry_count == 0
-    debug("Read failed after 3 retries: ", sd.string_for_error(sd.error()))
+    debug("Read failed after 3 retries, error: ", sdec(sd.error()))
     quit
   waitms(100)    ' Brief delay before retry
 ```
@@ -590,20 +590,26 @@ repeat
 
 ### 5. Error Reporting to User
 
-**Method 1: Return value**
+**Method 1: Return value** — adopted.
 ```spin2
-PUB read(handle, p_buffer, count) : bytes_read
+PUB readHandle(handle, p_buffer, count) : bytes_read
   '' Returns bytes read (>= 0) on success, negative error code on failure
 ```
 
-**Method 2: Separate error() call**
+**Method 2: Separate error() call** — adopted. `error()` returns the calling cog's
+last error code from the per-cog `last_error[8]` slot.
 ```spin2
-bytes := sd.read(handle, @buf, 512)
+bytes := sd.readHandle(handle, @buf, 512)
 if bytes < 0
-  debug("Error: ", sd.string_for_error(sd.error()))
+  debug("Error: ", sdec(sd.error()))
 ```
 
-**Method 3: Human-readable strings**
+**Method 3: Human-readable strings** — **considered, NOT implemented.** No
+error-to-string method exists in the shipped driver; callers report the numeric code
+from `error()`. The sketch below is retained as design history, not as API. Carrying
+~20 description strings in the driver costs hub space in every application, including
+those that never display an error, so the string table belongs in the application.
+<!-- api-audit: proposed — string_for_error() was never implemented; see the note above -->
 ```spin2
 PUB string_for_error(code) : p_str
   '' Returns pointer to error description string

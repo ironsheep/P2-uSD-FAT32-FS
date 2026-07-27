@@ -55,11 +55,16 @@ echo ""
 # massively -- this project's sources carry ~4000 box-drawing characters in comment
 # diagrams, all of them legal.
 #
-# Split into two findings: non-ASCII reaching code or a string literal is a FAIL
-# (it can corrupt compilation or print garbage to the terminal); a non-box-drawing
-# character in a comment is a REVIEW, because the guide's forbidden-character table
-# is scoped to "code, strings, and method signatures" and does not clearly rule on
-# comment prose.
+# The guide (rule 1.1, "The general rule, stated unambiguously") draws the line where
+# the risk is: non-ASCII is PERMITTED anywhere inside a comment and FORBIDDEN
+# everywhere else. So only code and string literals are checked here. Comment prose
+# -- em dashes, box-drawing diagrams, the lot -- is conformant and is not reported.
+#
+# This used to emit 14 REVIEW items, because the guide's forbidden-character table is
+# scoped to "code, strings, and method signatures" and said nothing about comment
+# prose. That silence was resolved in the guide rather than papered over here: a
+# REVIEW the script cannot resolve is a question for the guide, not a permanent
+# annotation.
 echo -e "${CYAN}Rule 1.1 — ASCII only${NC}"
 for f in "${FILES[@]}"; do
     # Non-ASCII inside a string literal, on a line that is not a comment.
@@ -73,12 +78,6 @@ for f in "${FILES[@]}"; do
           } }
     ' "$f" 2>/dev/null | head -3)
     [[ -n "$hits" ]] && fail "$f" "non-ASCII in a string literal: $(echo "$hits" | tr '\n' ' ')"
-
-    # Non-ASCII in a comment that is not box-drawing or a block element.
-    other=$(LC_ALL=C grep -nP '^[[:space:]]*'"'"'.*[^\x00-\x7F]' "$f" 2>/dev/null \
-        | LC_ALL=C grep -vP '^[0-9]+:[^\x00-\x7F]*$' \
-        | LC_ALL=C perl -ne 'print if /[^\x00-\x7F]/ && do { my $c = $_; $c =~ s/[\x{2500}-\x{257F}\x{2580}-\x{259F}]//g; $c =~ /[^\x00-\x7F]/ }' 2>/dev/null | wc -l | tr -d ' ')
-    [[ "${other:-0}" -gt 0 ]] && review "$f" "$other comment line(s) with non-box-drawing non-ASCII"
 done
 [[ $fails -eq 0 ]] && echo -e "  ${GREEN}No non-ASCII in code or string literals.${NC}"
 

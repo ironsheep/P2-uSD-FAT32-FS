@@ -191,7 +191,7 @@ PUB go() | depth
 
     ' This #ifdefneeds the local #defineto work:
 #ifdef SD_INCLUDE_STACK_CHECK
-    depth := sd.stackDepth()
+    depth := sd.reportStackDepth()
     debug("Stack depth: ", udec(depth))
 #endif
 ```
@@ -568,6 +568,6 @@ OBJ
 PUB go() | result_code, r1, data_resp, sector
     sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
     ' ... perform operations ...
-    result_code, r1, data_resp, sector := sd.getReadDiag()
-    debug("Last read: result=", sdec(result_code), " sector=", udec(sector))
+    result_code, r1, data_resp, sector := sd.getWriteDiag()
+    debug("Last write: result=", sdec(result_code), " sector=", udec(sector))
 ```

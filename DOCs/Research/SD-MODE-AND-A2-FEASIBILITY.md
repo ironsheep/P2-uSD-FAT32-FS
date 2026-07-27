@@ -368,6 +368,7 @@ The P2's `GETCRC` instruction can compute one CRC at a time. For 4-bit mode, we 
 
 The driver could support both SPI and SD modes, selected at `mount()` time based on which pin configuration the user provides. This preserves backward compatibility:
 
+<!-- api-audit: proposed — mountSD() is a design sketch, not a shipped method -->
 ```spin2
 ' SPI mode (4-wire, existing)
 sd.mount(CS, MOSI, MISO, SCK)
