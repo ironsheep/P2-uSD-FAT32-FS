@@ -416,7 +416,7 @@ PRI parseCID() | idx
 
   cid_crc := cid_buf[15] >> 1
 
-PRI displayCID() | p_mfr, oid_c1, oid_c2, p_dst
+PRI displayCID() | p_mfr, oid_c1, oid_c2
 ' Display parsed CID register fields with [USED]/[INFO] annotations.
 
   debug(" ")
@@ -439,16 +439,7 @@ PRI displayCID() | p_mfr, oid_c1, oid_c2, p_dst
   debug("[INFO] PRV (Product Revision):    ", udec_(cid_prv_major), ".", udec_(cid_prv_minor))
   debug("[INFO] PSN (Serial Number):       ", uhex_long_(cid_psn))
 
-  ' Built as a string rather than printed with udec_(): the Spin2 DEBUG decimal
-  ' formatters group thousands with an underscore, which renders a year as
-  ' "2_021". A year is not a magnitude and must not be grouped.
-  p_dst := decWord(@mdt_str, cid_mdt_year)
-  BYTE[p_dst++] := "-"
-  if cid_mdt_month < 10
-    BYTE[p_dst++] := "0"
-  p_dst := decByte(p_dst, cid_mdt_month)
-  BYTE[p_dst] := 0
-  debug("[INFO] MDT (Manufacturing Date): ", zstr_(@mdt_str))
+  debug("[INFO] MDT (Manufacturing Date): ", zstr_(buildMDTStr("-")))
 
   debug("[INFO] CRC7:                      ", uhex_byte_(cid_crc))
 
@@ -1075,6 +1066,25 @@ PRI hexLong(p_dst, val) : p_out | idx, nibble
       BYTE[p_dst++] := nibble - 10 + "A"
   p_out := p_dst
 
+PRI buildMDTStr(sep) : p_str | p_dst
+' Compose the manufacturing date as "YYYY<sep>MM".
+'
+' Built as a string rather than printed with udec_(): the Spin2 DEBUG decimal
+' formatters group thousands with an underscore, which renders a year as
+' "2_021". A year is not a magnitude and must not be grouped. Both the CID
+' report and the card designator print this date, so both compose it here.
+'
+' @param sep - Separator character between year and month
+' @returns p_str - Pointer to the composed null-terminated string
+
+  p_str := @mdt_str
+  p_dst := decWord(p_str, cid_mdt_year)
+  BYTE[p_dst++] := sep
+  if cid_mdt_month < 10
+    BYTE[p_dst++] := "0"
+  p_dst := decByte(p_dst, cid_mdt_month)
+  BYTE[p_dst] := 0
+
 PRI decWord(p_dst, val) : p_out | digits[5], idx, started
 ' Convert a WORD value to decimal string.
 '
@@ -1158,10 +1168,7 @@ PRI displayCardDesignator() | spi_mhz, p_mfr, p_type, p_fs, speedVal
   spi_mhz := csd_max_speed_hz / 1_000_000
 
   ' Line 1
-  if cid_mdt_month < 10
-    debug(zstr_(p_mfr), " ", zstr_(@cid_pnm), " ", zstr_(p_type), " ", zstr_(@cap_str), " [", zstr_(p_fs), "] SD ", zstr_(@sd_spec_str), " rev", udec_(cid_prv_major), ".", udec_(cid_prv_minor), " SN:", uhex_long_(cid_psn), " ", udec_(cid_mdt_year), "/0", udec_(cid_mdt_month))
-  else
-    debug(zstr_(p_mfr), " ", zstr_(@cid_pnm), " ", zstr_(p_type), " ", zstr_(@cap_str), " [", zstr_(p_fs), "] SD ", zstr_(@sd_spec_str), " rev", udec_(cid_prv_major), ".", udec_(cid_prv_minor), " SN:", uhex_long_(cid_psn), " ", udec_(cid_mdt_year), "/", udec_(cid_mdt_month))
+  debug(zstr_(p_mfr), " ", zstr_(@cid_pnm), " ", zstr_(p_type), " ", zstr_(@cap_str), " [", zstr_(p_fs), "] SD ", zstr_(@sd_spec_str), " rev", udec_(cid_prv_major), ".", udec_(cid_prv_minor), " SN:", uhex_long_(cid_psn), " ", zstr_(buildMDTStr("/")))
 
   ' Line 2
   if sdst_valid

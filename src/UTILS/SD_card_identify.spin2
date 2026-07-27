@@ -67,6 +67,9 @@ DAT
     ' Parsed field buffers
     oemBuf        BYTE    0[9]         ' OEM name (8 chars + null)
 
+    ' Manufacturing date display string buffer (e.g., "2021/9")
+    mdtBuf        BYTE    0[8]
+
     ' Manufacturer lookup table (MID byte, then name string, null-terminated)
     midTable      BYTE    $00, "Gigastone", 0
                   BYTE    $01, "Panasonic", 0
@@ -116,7 +119,7 @@ PUB go() | status
 PRI displayCardID() | sd.cid_t cid, sd.scr_t scr, ...
                        ocr, sizeMB, spiHz, psn, mdtYear, mdtMonth, ...
                        pnm[2], p_mfr, p_type, p_spec, p_fs, ...
-                       sdstOk, speedClass, uhsGrade, videoClass
+                       sdstOk, speedClass, uhsGrade, videoClass, p_mdt
 ' Read card registers and display two-line identification summary.
 
     sd.readCIDRaw(@cid)
@@ -153,10 +156,11 @@ PRI displayCardID() | sd.cid_t cid, sd.scr_t scr, ...
         videoClass := 0
 
     ' Line 1: identity
+    p_mdt := formatMDT(mdtYear, mdtMonth)
     if sizeMB < 1024
-        debug("L1: ", zstr_(p_mfr), " ", zstr_(@pnm), " ", zstr_(p_type), " ", udec_(sizeMB), "MB [", zstr_(p_fs), "] ", zstr_(p_spec), " rev", udec_(cid.prv >> 4), ".", udec_(cid.prv & $0F), " SN:", uhex_long_(psn), " ", udec_(mdtYear), "/", udec_(mdtMonth))
+        debug("L1: ", zstr_(p_mfr), " ", zstr_(@pnm), " ", zstr_(p_type), " ", udec_(sizeMB), "MB [", zstr_(p_fs), "] ", zstr_(p_spec), " rev", udec_(cid.prv >> 4), ".", udec_(cid.prv & $0F), " SN:", uhex_long_(psn), " ", zstr_(p_mdt))
     else
-        debug("L1: ", zstr_(p_mfr), " ", zstr_(@pnm), " ", zstr_(p_type), " ", udec_(sizeMB / 1024), "GB [", zstr_(p_fs), "] ", zstr_(p_spec), " rev", udec_(cid.prv >> 4), ".", udec_(cid.prv & $0F), " SN:", uhex_long_(psn), " ", udec_(mdtYear), "/", udec_(mdtMonth))
+        debug("L1: ", zstr_(p_mfr), " ", zstr_(@pnm), " ", zstr_(p_type), " ", udec_(sizeMB / 1024), "GB [", zstr_(p_fs), "] ", zstr_(p_spec), " rev", udec_(cid.prv >> 4), ".", udec_(cid.prv & $0F), " SN:", uhex_long_(psn), " ", zstr_(p_mdt))
 
     ' Line 2: performance + OEM
     if sdstOk == sd.SUCCESS
@@ -270,6 +274,29 @@ PRI decodeSpeedClass(classByte) : speedClass
         $03 : speedClass := 6
         $04 : speedClass := 10
         other : speedClass := 0
+
+PRI formatMDT(year, month) : p_str | p_dst, scale
+' Compose the manufacturing date as "YYYY/M".
+'
+' Built as a string rather than printed with udec_(): the Spin2 DEBUG decimal
+' formatters group thousands with an underscore, which renders a year as
+' "2_021". A year is not a magnitude and must not be grouped.
+'
+' @param year - Manufacturing year (four digits)
+' @param month - Manufacturing month (1-12)
+' @returns p_str - Pointer to the composed null-terminated string
+
+    p_str := @mdtBuf
+    p_dst := p_str
+    scale := 1000
+    repeat while scale > 0
+        BYTE[p_dst++] := ((year / scale) // 10) + "0"
+        scale /= 10
+    BYTE[p_dst++] := "/"
+    if month > 9
+        BYTE[p_dst++] := (month / 10) + "0"
+    BYTE[p_dst++] := (month // 10) + "0"
+    BYTE[p_dst] := 0
 
 con { license }
 
