@@ -436,8 +436,8 @@ pnut-term-ts -r SD_FAT32_fsck.bin
 
 The cluster bitmap uses 256 KB of P2 hub RAM (LONG[65536]), covering up to 2,097,152 clusters per window. For cards exceeding 2 million clusters (approximately 64 GB), the utility uses windowed bitmap scanning -- processing the cluster space in 2M-cluster passes. The directory tree is re-walked for each window, and lost cluster recovery runs after each window. This extends full 4-pass validation to cards of any size.
 
-**Sample Output** — captured on Card 1 (SharedOEM SDHC 7 GB), v1.6.1, 2026-07-26.
-Abridged: the MBR and VBR check lines are elided by count.
+**Sample Output** — captured on Card 1 (SharedOEM SDHC 7 GB), v1.6.1, 2026-07-27.
+Complete: every structural check line is shown as the utility prints it.
 
 ```
 === FAT32 Filesystem Check & Repair ===
@@ -451,15 +451,47 @@ Card: 15218688 sectors (7431 MB)
     Root cluster:     2
     Data start:       37932
 
+
 Checking MBR (sector 0)...
   [PASS] MBR boot signature ($AA55)
-  ... 4 more MBR checks ...
+  [PASS] Partition 1 boot flag ($00/$80)
+  [PASS] Partition type FAT32 ($0B or $0C)
+  [PASS] Partition start > 0
+    Partition start: sector 8192
+  [PASS] Partition size > 0
+    Partition size: 15210496 sectors
 
 Checking VBR (boot sector)...
   [PASS] VBR jump ($EB or $E9)
-  ... 17 more VBR checks ...
+  [PASS] VBR boot signature ($AA55)
+  [PASS] Bytes/sector = 512
+  [PASS] Sectors/cluster power of 2
+    Sectors/cluster: 8
+  [PASS] Reserved sectors = 32
+  [PASS] Number of FATs = 2
+  [PASS] Root entry count = 0 (FAT32)
+  [PASS] Total sectors 16-bit = 0
+  [PASS] Media type valid ($F0/$F8)
+    Media type: $F8
+  [PASS] FAT size 16-bit = 0
+  [PASS] Hidden sectors valid (0 or partition start)
+    Hidden sectors: 8192
+  [PASS] Total sectors 32-bit > 0
+    Total sectors: 15210496
+  [PASS] Sectors per FAT > 0
+    Sectors/FAT: 14854
+  [PASS] Root cluster = 2
+  [PASS] FSInfo at sector 1
+  [PASS] Backup boot at sector 6
+  [PASS] Extended boot sig = $29
+  [PASS] FS type = FAT32
 
 --- Pass 1: Structural Integrity ---
+  [OK] Backup VBR matches
+  [OK] FSInfo signatures
+  [OK] Backup FSInfo matches
+  [OK] FAT[0] media type
+  [OK] FAT[1] EOC marker
   [OK] FAT[2] root cluster
   Pass 1: 0 repairs
 
