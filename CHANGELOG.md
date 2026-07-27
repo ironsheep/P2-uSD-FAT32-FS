@@ -357,7 +357,6 @@ For tooling that characterizes cards that misbehave. Production applications mus
 
 **Packaging-only tag.** Release workflow and user-facing documentation; no driver code.
 
-[Unreleased]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.6.0...HEAD
 [1.6.1]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.5.3...v1.6.0
 [1.5.3]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.5.2...v1.5.3
