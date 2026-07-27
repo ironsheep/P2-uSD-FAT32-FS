@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.6.1] - 2026-07-26
+## [1.6.1] - 2026-07-27
 
 ### Breaking Changes
 
@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Bug Fixes
 
+- **`SD_format_card`, `SD_FAT32_audit` and `SD_FAT32_fsck` build with the documented command.** Compiling any of the three with `pnut-ts -d -I .. <utility>.spin2` reported `Cannot find isp_mem_strings.spin2`. The shared string-formatting library now sits at `src/` beside the driver, so the one documented include path builds every utility. `SD_card_identify`, `SD_card_characterize` and `SD_performance_benchmark` were unaffected.
+- **`SD_card_characterize` prints the manufacturing date as `2021-09`**, not `2_021-09`.
 - **`SD_FAT32_audit` no longer reports repairs it did not make.** A read-only audit lists each problem as `needs repair:` and states plainly that nothing on the card was changed; `SD_FAT32_fsck` reports the same findings as `repaired:`. Previously both printed the same past-tense line, so an audit log read as though the card had been modified.
 - **The format utility's closing line reaches the log.** `SD_format_card` could have its final success or failure line cut off mid-word.
 - **Tool error messages name what failed**, not the internal routine that failed — in the audit, format, and benchmark utilities.
