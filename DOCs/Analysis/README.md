@@ -8,6 +8,7 @@ Technical deep-dives into driver design decisions, predecessor driver analysis, 
 |----------|-------------|
 | [CMD12-SPCE-ANALYSIS.md](CMD12-SPCE-ANALYSIS.md) | CMD12 framing anomaly on SP Elite card — read-ahead pipeline vs STOP_TRANSMISSION |
 | [CMD13-ROOT-CAUSE-ANALYSIS.md](CMD13-ROOT-CAUSE-ANALYSIS.md) | R1 response parsing fix — the actual root cause of CMD13 failures across all cards |
+| [ERROR-REPORTING-AUDIT-2026-07-31.md](ERROR-REPORTING-AUDIT-2026-07-31.md) | Public API error flow audit — 19 findings on dropped, misreported, and unreachable errors |
 | [AUDIT-SEVERITY-ANALYSIS.md](AUDIT-SEVERITY-ANALYSIS.md) | Audit test severity classification and downgrade rationale |
 | [REGRESSION-TEST-COVERAGE-ANALYSIS.md](REGRESSION-TEST-COVERAGE-ANALYSIS.md) | Gap analysis of regression test coverage with tiered strengthening plan |
 | [DESIGN-EXPLORATION-FILE-HANDLES.md](DESIGN-EXPLORATION-FILE-HANDLES.md) | Design exploration for multi-file handle support |
