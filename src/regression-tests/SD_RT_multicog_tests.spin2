@@ -273,6 +273,36 @@ PUB go() | result, idx, firstCogId, allSame, totalErrors
     debug("  Main cog error(): ", sdec_(result))
     utils.recordPass()
 
+    ' Two cogs must not observe each other's error slots. This matters more under
+    ' write-on-exit than it did before: every operation now WRITES the slot on
+    ' success as well as failure, so a shared slot would let one cog's success
+    ' erase another cog's error (or vice versa) on every single call.
+    utils.startTest(@"One cog's failure does not disturb another cog's slot")
+    utils.setCheckCountPerTest(3)
+
+    ' Main cog: land a known-good operation so its own slot holds SUCCESS
+    sd.deleteFile(@testfile3)
+    result := sd.newDirectory(@testfile3)
+    if result == sd.SUCCESS
+        sd.deleteFile(@testfile3)
+    utils.evaluateSubValue(sd.error(), @"main cog starts at SUCCESS", sd.SUCCESS)
+
+    ' Worker cog: deliberately fail, and report what ITS slot holds.
+    ' Only worker 0 runs here, so park the rest -- waitForWorkers() polls them all.
+    repeat idx from 0 to NUM_WORKER_COGS - 1
+        worker_status[idx] := STATUS_IDLE
+    worker_result[0] := 0
+    worker_status[0] := STATUS_RUNNING
+    sync_barrier := 0
+    launched_cogs[0] := cogspin(NEWCOG, worker_error_slot_test(0), @worker_stacks[0])
+    sync_barrier := 1
+    waitForWorkers()
+
+    utils.evaluateSubValue(worker_result[0], @"worker cog sees its own error", sd.E_INVALID_HANDLE)
+    utils.evaluateSubValue(sd.error(), @"main cog slot still SUCCESS", sd.SUCCESS)
+    utils.showSubTestResults()
+    stopWorkerCogs()
+
     ' ----------------------------------
     ' TEST GROUP: Cleanup
     ' ----------------------------------
@@ -351,6 +381,20 @@ PRI worker_read_test(worker_id) | handle, bytesRead
         worker_status[worker_id] := STATUS_PASS
     else
         worker_status[worker_id] := STATUS_FAIL
+
+PRI worker_error_slot_test(worker_id)
+    ' Worker cog: fail one operation and report what THIS cog's error slot holds.
+    ' The main cog checks its own slot is untouched, proving per-cog isolation
+    ' under write-on-exit semantics.
+    '
+    ' @param worker_id - Worker cog identifier
+
+    ' Wait for barrier
+    repeat until sync_barrier <> 0
+
+    sd.readHandle(99, @worker_buffers[worker_id * 64], 10)   ' invalid handle
+    worker_result[worker_id] := sd.error()
+    worker_status[worker_id] := STATUS_PASS
 
 PRI worker_stress_test(worker_id) | iter, handle, bytesRead, expectedLen
     ' Worker cog: Rapid open/read/close cycles

@@ -29,6 +29,14 @@
 '   #pragma exportdef SD_INCLUDE_DEBUG      ' Debug/diagnostic methods & CRC getters
 '   #pragma exportdef SD_INCLUDE_STACK_CHECK ' Worker cog stack depth measurement
 '
+'   Test features:
+'   #pragma exportdef SD_INCLUDE_TEST_HOOKS ' Fault injection: make sector I/O fail on purpose
+'
+'   SD_INCLUDE_TEST_HOOKS is deliberately NOT implied by SD_INCLUDE_DEBUG. A debug
+'   build is a legitimate production-diagnostic build that a user may ship enabled;
+'   the injection hooks include methods that corrupt a write on purpose and have no
+'   place in a shipped product. Only SD_INCLUDE_ALL turns them on.
+'
 '   OBJ
 '       sd : "micro_sd_fat32_fs"
 '
@@ -53,6 +61,9 @@
 #endif
 #ifndef SD_INCLUDE_DEBUG
 #define SD_INCLUDE_DEBUG
+#endif
+#ifndef SD_INCLUDE_TEST_HOOKS
+#define SD_INCLUDE_TEST_HOOKS
 #endif
 #endif
 
@@ -216,6 +227,18 @@ CON ' card warning/capability flags
   CW_CMD13_UNRELIABLE  = $01                                                  ' CMD13 probe failed at init; status checks disabled for this card
   CW_CMD23_SUPPORTED   = $02                                                  ' CMD23 (SET_BLOCK_COUNT) confirmed working in SPI mode
   CW_NO_DATA_CRC       = $04                                                  ' Card returns a dummy data-block CRC; read-CRC validation disabled for this card
+
+#ifdef SD_INCLUDE_TEST_HOOKS
+CON ' targeted fault-injection modes [SD_INCLUDE_TEST_HOOKS]
+  {Spin2_Doc_CON}
+  ' Passed as the mode argument to setTestFailSector(). Combine the direction
+  ' with TF_STICKY to keep failing; without it the armed failure is one-shot.
+  TF_OFF               = %000                                                 ' Disarm
+  TF_READ              = %001                                                 ' Fail readSector() at the named LBA
+  TF_WRITE             = %010                                                 ' Fail writeSector() at the named LBA
+  TF_BOTH              = %011                                                 ' Fail both directions at the named LBA
+  TF_STICKY            = %100                                                 ' Modifier: keep failing until cleared (default is one-shot)
+#endif
 
 CON ' Multi-file handle configuration
   {Spin2_Doc_CON}
@@ -717,12 +740,21 @@ DAT  ' ---- Singleton Control ----
         diag_cmd_r1_polls                       LONG    0                        ' Bytes polled in last cmd() before R1 arrived (or timeout)
         diag_cmd_last_op                        LONG    0                        ' Op code of last cmd() call (for context)
 
-        ' TEST HOOKS: Error injection for CRC validation testing
-        ' Used by SD_RT_crc_validation_tests and SD_RT_recovery_tests
-        test_force_read_crc_error               BYTE    0                        ' Counter: force N read CRC mismatches
-        test_force_write_crc_error              BYTE    0                        ' Flag: corrupt next write CRC (one-shot)
+#ifdef SD_INCLUDE_TEST_HOOKS
+        ' TEST HOOKS: Error injection. Absent unless SD_INCLUDE_TEST_HOOKS is defined.
+        ' Used by SD_RT_error_injection_tests, SD_RT_crc_validation_tests,
+        ' SD_RT_recovery_tests, SD_RT_volume_tests and SD_RT_defrag_tests.
+        test_force_read_crc_error               BYTE    0                        ' Counter: force N read CRC mismatches (any sector)
+        test_force_write_crc_error              BYTE    0                        ' Flag: corrupt next write CRC (one-shot, any sector)
         test_error_count                        LONG    0                        ' Count of injected errors triggered
         test_max_clusters                       LONG    0                        ' Limit: max allocatable cluster number (0 = no limit)
+
+        ' TARGETED FAULT INJECTION: name one LBA, or one write within a sequence
+        test_fail_sector                        LONG    -1                       ' LBA to fail (-1 = disarmed)
+        test_fail_mode                          LONG    0                        ' TF_READ / TF_WRITE / TF_BOTH, optionally | TF_STICKY
+        test_fail_write_after                   LONG    0                        ' Fail the nth subsequent writeSector() (0 = disarmed)
+        test_write_call_count                   LONG    0                        ' writeSector() calls counted since arming
+#endif
 
         ' BUFFERS (must be in DAT for worker cog access)
         ' DIAGNOSTIC: Separate buffers for each sector type to isolate conflicts
@@ -804,6 +836,7 @@ PUB start(_cs, _mosi, _miso, _sck) : workerCogId
   if cog_id <> -1
     DEBUG[CH_API]("  [start] Already started (cog ", udec_(cog_id), ")")
     workerCogId := cog_id
+    set_error(SUCCESS)                                  ' write-on-exit: start() never reaches send_command()
   else
     ' Store pin configuration
     longmove(@cs, @_cs, 4)
@@ -843,6 +876,7 @@ PUB start(_cs, _mosi, _miso, _sck) : workerCogId
       else
         DEBUG[CH_API]("  [start] Worker cog ", udec_(cog_id), " started, lock ", udec_(api_lock))
         workerCogId := cog_id
+        set_error(SUCCESS)                              ' write-on-exit: start() never reaches send_command()
 
 PUB stop()
 '' Stop worker cog - cleanly shut down the worker cog and release resources.
@@ -1245,7 +1279,7 @@ PUB setDate(year, month, day, hour, minute, second) : status
     FIELD[fld_sec][0] := second >> 1
     ct_active := true
     ct_last_tick := GETCT()
-    status := SUCCESS
+    status := set_error(SUCCESS)                        ' write-on-exit: never reaches send_command()
 
 PUB getDate() : year, month, day, hour, minute, second
 '' Get the current date and time as the driver knows it.
@@ -1363,6 +1397,8 @@ PUB startReadHandle(handle, p_buffer, count) : status
     async_active := true
     async_caller := COGID()
     status := PENDING
+    set_error(SUCCESS)                                  ' the START succeeded; the read's own
+                                                        ' outcome is recorded by getResult()
 
 PUB startWriteHandle(handle, p_buffer, count) : status
 '' Begin an asynchronous write. Returns immediately with PENDING.
@@ -1389,6 +1425,8 @@ PUB startWriteHandle(handle, p_buffer, count) : status
     async_active := true
     async_caller := COGID()
     status := PENDING
+    set_error(SUCCESS)                                  ' the START succeeded; the write's own
+                                                        ' outcome is recorded by getResult()
 
 PUB isComplete() : done
 '' Check if the current async operation has completed.
@@ -1415,6 +1453,7 @@ PUB getResult() : byteCount
       set_error(pb_status)
     else
       byteCount := pb_data0
+      set_error(SUCCESS)                                ' write-on-exit: async never reaches send_command()
 
     async_active := false
     if POLLATN()                                        ' Drain stale COGATN from worker completion
@@ -1435,7 +1474,7 @@ PUB cancelAsync() : status
     async_active := false
     if POLLATN()                                        ' Drain stale COGATN from worker completion
     LOCKREL(api_lock)
-    status := SUCCESS
+    status := set_error(SUCCESS)                        ' write-on-exit: async never reaches send_command()
 
 #endif                                                  ' SD_INCLUDE_ASYNC
 
@@ -1503,10 +1542,27 @@ PUB syncDirCache()
 CON ' ---- Error / Diagnostic ----
 
 PUB ERROR() : status
-'' Get last error for this cog - returns the error code from the most recent operation.
+'' Get the outcome of the most recent operation issued by this cog.
+'' Returns SUCCESS (0) if that operation succeeded, or its negative error code.
 '' Thread-safe: each cog has its own error slot.
 ''
-'' @returns status - Error code from the most recent operation on this cog
+'' Every method that ISSUES A COMMAND stores its result here on every exit path --
+'' success as well as failure -- and the value stays put until this cog completes
+'' another command. So checking ERROR() after a call describes THAT call, and a
+'' previous error stays readable for as long as possible.
+''
+'' Pure accessors deliberately do NOT touch the slot: fileName(), fileSize(),
+'' attributes(), volumeLabel(), sectorsPerCluster(), clusterBytes(), getDate(),
+'' isComplete() and ERROR() itself. Without that carve-out a diagnostic call would
+'' erase the error being diagnosed -- debug(sd.fileName()) between a failed
+'' openFileRead() and the ERROR() check would store SUCCESS over it.
+''
+'' Reading does not clear the slot -- only the next operation on this cog overwrites
+'' it. That is the rule across this driver's error accessors: reading never changes
+'' state, operations do.
+''
+'' @returns status - SUCCESS (0), or the negative error code from this cog's most
+''                   recent operation
 
   status := LONG[@last_error][COGID()]
 
@@ -2337,10 +2393,19 @@ PUB debugGetEffectiveAlignDelay() : delay
 
 #endif                                                  ' SD_INCLUDE_DEBUG (Phase 2/3 diagnostic tuning APIs)
 
+CON ' ---- Fault injection [SD_INCLUDE_TEST_HOOKS] ----
+
+#ifdef SD_INCLUDE_TEST_HOOKS
+
 PUB setTestForceReadError(count)
 '' Set CRC error injection counter for reads. Each sector read will see a
 '' forced CRC mismatch until the counter reaches zero.
 '' Set to 1: one retry then success. Set to MAX_READ_CRC_RETRIES (3): all retries fail.
+''
+'' This hook is untargeted - it fires on the next N reads of ANY sector. Use
+'' setTestFailSector() when the failing sector must be named. It also has no
+'' effect on a card whose read-CRC validation is disabled (CW_NO_DATA_CRC);
+'' setTestFailSector() does fire on such cards.
 ''
 '' @param count - Number of read CRC mismatches to force
 
@@ -2349,6 +2414,12 @@ PUB setTestForceReadError(count)
 PUB setTestForceWriteError(enabled)
 '' Arm one-shot CRC error injection for the next write. The next writeSector()
 '' will send a corrupted CRC, causing the card to reject the data.
+''
+'' This hook is untargeted - it corrupts the next write of ANY sector - and it
+'' depends on the card choosing to reject a bad CRC, so it does nothing on a
+'' CW_NO_DATA_CRC card (which is sent idle filler in the CRC slot). Use
+'' setTestFailSector() or setTestFailWriteAfter() for a failure that is both
+'' named and card-independent.
 ''
 '' @param enabled - Non-zero arms, zero disarms
 
@@ -2370,15 +2441,82 @@ PUB setTestMaxClusters(maxClusters)
 
   test_max_clusters := maxClusters
 
+PUB setTestFailSector(sector, mode)
+'' Arm a targeted sector-I/O failure at one LBA. Unlike the untargeted CRC
+'' hooks above, this names the sector that must fail, so a specific write
+'' inside a multi-step operation - the FAT2 mirror update, a directory-entry
+'' rewrite - can be made to fail on its own.
+''
+'' The mode selects the direction and the lifetime:
+''   TF_READ                readSector() fails at this LBA
+''   TF_WRITE               writeSector() fails at this LBA
+''   TF_BOTH                both directions fail
+''   ... | TF_STICKY        keep failing until cleared; without it, one-shot
+''   TF_OFF                 disarm (same as setTestFailSector(-1, TF_OFF))
+''
+'' An injected failure is indistinguishable to the caller from a genuine one.
+'' A read failure runs the real CRC retry loop, bumps the same CRC diagnostic
+'' counters, invalidates the same cache entry and returns E_CRC_ERROR. A write
+'' failure returns E_WRITE_REJECTED with the same cache invalidation and the
+'' same write-diagnostic code (3) as a card that rejected the data block.
+''
+'' Two properties are worth knowing before writing a test against this:
+''  - A read failure fires only on a cache MISS. That is faithful: a genuine
+''    read failure cannot happen for a sector the driver never reads.
+''  - Only the single-block paths are injected. Raw multi-block transfers
+''    (readSectorsRaw/writeSectorsRaw, CMD18/CMD25) are not affected.
+''
+'' @param sector - LBA to fail (-1 disarms)
+'' @param mode - TF_READ, TF_WRITE or TF_BOTH, optionally OR'd with TF_STICKY
+
+  if sector < 0 OR (mode & TF_BOTH) == TF_OFF
+    test_fail_sector := -1
+    test_fail_mode := TF_OFF
+  else
+    test_fail_sector := sector
+    test_fail_mode := mode
+
+PUB setTestFailWriteAfter(writeIndex)
+'' Arm a failure on the nth subsequent writeSector() call, counting from the
+'' next one. Use this when the sector that must fail is not known in advance
+'' but its position in a write sequence is - the second of the two FAT copies,
+'' the directory write that follows a data write.
+''
+'' The failure is one-shot and identical to the write failure described in
+'' setTestFailSector(): E_WRITE_REJECTED, same cache invalidation, same
+'' write-diagnostic code. Counting covers single-block writes only.
+''
+'' @param writeIndex - Which subsequent writeSector() call fails (1 = the very next; 0 disarms)
+
+  test_fail_write_after := (writeIndex > 0) ? writeIndex : 0
+  test_write_call_count := 0
+
+PUB getTestWriteCallCount() : count
+'' Get the number of writeSector() calls made since the counter was last reset -
+'' by setTestFailWriteAfter() or clearTestErrors(). Counting runs whether or not
+'' anything is armed, so a test can measure how many writes an operation actually
+'' makes and then arm the one it wants to fail.
+''
+'' @returns count - writeSector() calls seen since the last reset
+
+  count := test_write_call_count
+
 PUB clearTestErrors()
-'' Reset all test error injection state. Disarms read/write hooks,
+'' Reset all test error injection state. Disarms every read/write hook,
 '' zeroes the triggered error counter, and clears diagnostic overrides.
+'' Leaves no residue for the next test.
 
   test_force_read_crc_error := 0
   test_force_write_crc_error := 0
   test_error_count := 0
   test_force_cmd13 := FALSE
   test_max_clusters := 0
+  test_fail_sector := -1
+  test_fail_mode := TF_OFF
+  test_fail_write_after := 0
+  test_write_call_count := 0
+
+#endif                                                  ' SD_INCLUDE_TEST_HOOKS (fault injection)
 
 PUB debugGetRootSec() : sector
 '' DEBUG: Return root_sec for diagnostic.
@@ -2990,6 +3128,11 @@ PRI send_command(op_cmd, p0, p1, p2, p3) : status
 ' @param p2 - Parameter 2
 ' @param p3 - Parameter 3
 ' @returns status - Status code from worker
+'
+' WRITE-ON-EXIT: this is the choke point for ERROR() semantics. Every command that
+' reaches the worker records its outcome in the calling cog's error slot on the way
+' out -- SUCCESS as well as failure -- so ERROR() describes the most recent operation
+' rather than the last failure since boot. See the note on ERROR() itself.
 
 ' Verify worker cog is running
 
@@ -3023,6 +3166,9 @@ PRI send_command(op_cmd, p0, p1, p2, p3) : status
 
     ' Release lock
     LOCKREL(api_lock)
+
+  ' Both exits land here -- record the outcome for ERROR() (write-on-exit)
+  set_error(status)
 
 CON ' ---- Handle Management ----
 
@@ -5041,8 +5187,10 @@ PRI allocateCluster(cluster) : result | fat_idx, buf_idx, high_bits, start_fat_i
   fat_limit := sec_per_fat << SECTOR_SHIFT                                       ' End of FAT in bytes
   if fat_idx >= fat_limit                                                        ' Guard: if start is past end, wrap to cluster 2
     fat_idx := 8
+#ifdef SD_INCLUDE_TEST_HOOKS
   if test_max_clusters > 0 AND (fat_idx >> 2) >= test_max_clusters               ' Guard: if start is past test limit, wrap
     fat_idx := 8
+#endif
   start_fat_idx := fat_idx                                                       ' Remember where we started (for wrap detection)
   wrapped := false
 
@@ -5067,6 +5215,7 @@ PRI allocateCluster(cluster) : result | fat_idx, buf_idx, high_bits, start_fat_i
           result := E_IO_ERROR
           quit
       buf_idx := fat_idx & SECTOR_OFFSET_MASK
+#ifdef SD_INCLUDE_TEST_HOOKS
       if test_max_clusters > 0 AND (fat_idx >> 2) >= test_max_clusters           '  test hook: artificial cluster limit
         if wrapped                                                               '   already wrapped - all visible clusters scanned
           result := E_DISK_FULL
@@ -5077,6 +5226,7 @@ PRI allocateCluster(cluster) : result | fat_idx, buf_idx, high_bits, start_fat_i
         if fat_idx >= start_fat_idx                                              '   started at cluster 2? nowhere left to scan
           result := E_DISK_FULL
           quit
+#endif
       result := LONG[@fat_buf + buf_idx]                                         '  read a cluster cell
       if (result & FAT32_ENTRY_MASK) == $0000_0000                               '  if cluster cell is empty (check only low 28 bits)
         high_bits := result & FAT32_RESERVED_MASK                                '  preserve high 4 bits
@@ -5512,8 +5662,10 @@ PRI findContiguousRun(cluster_count) : first_cluster | fat_idx, entry, run_start
         first_cluster := E_IO_ERROR
         quit
     if first_cluster <> E_IO_ERROR
+#ifdef SD_INCLUDE_TEST_HOOKS
       if test_max_clusters > 0 AND (fat_idx >> 2) >= test_max_clusters          '  test hook: artificial cluster limit
         quit
+#endif
       entry := LONG[@fat_buf + (fat_idx & SECTOR_OFFSET_MASK)]
       if (entry & FAT32_ENTRY_MASK) == 0                                        '  free cluster?
         if run_length == 0
@@ -6329,7 +6481,24 @@ PRI cmd(op,parm) : response | timeout, timed_out, r1_start_ms
     if op <> CMD17 AND op <> CMD24 AND op <> CMD18 AND op <> CMD25 AND op <> CMD55  '  keep cs asserted for sector read/write and application commands
       pinh(cs)                                                                      '  CS HIGH = deselected (standard active-LOW)
 
-PRI readSector(sector, buf_type) : status | _sck, _miso, data, loop_ctr, timeout, stream_mode, clk_count, xfrq, init_phase, p_buf, align_delay, p_cache, attempt
+#ifdef SD_INCLUDE_TEST_HOOKS
+PRI testFailArmedFor(sector, direction) : armed
+' Report whether a targeted failure is armed for this sector in this direction,
+' consuming a one-shot arming if so. Called from readSector()/writeSector().
+'
+' @param sector - LBA about to be transferred
+' @param direction - TF_READ or TF_WRITE
+' @returns armed - TRUE if this transfer must fail
+
+  armed := test_fail_sector == sector AND (test_fail_mode & direction) <> 0
+  if armed
+    test_error_count++
+    if (test_fail_mode & TF_STICKY) == 0                                        '  one-shot: disarm on consumption
+      test_fail_sector := -1
+      test_fail_mode := TF_OFF
+#endif
+
+PRI readSector(sector, buf_type) : status | _sck, _miso, data, loop_ctr, timeout, stream_mode, clk_count, xfrq, init_phase, p_buf, align_delay, p_cache, attempt, inject_fail
 ' Read a sector into buffer using P2 streamer - hardware DMA for bulk 512-byte transfer.
 ' Reference: flash_loader.spin2 pattern for SPI reads
 '
@@ -6356,6 +6525,7 @@ PRI readSector(sector, buf_type) : status | _sck, _miso, data, loop_ctr, timeout
 ' @local align_delay - Alignment delay before streamer
 ' @local p_cache - Pointer to cache variable
 ' @local attempt - CRC retry loop counter
+' @local inject_fail - Targeted fault injection armed for this sector (test hooks only)
 
 ' Select buffer and cache based on type
 
@@ -6495,17 +6665,30 @@ PRI readSector(sector, buf_type) : status | _sck, _miso, data, loop_ctr, timeout
       diag_recv_crc := sp_transfer_8($FF) << 8
       diag_recv_crc |= sp_transfer_8($FF)
 
+      inject_fail := FALSE
+#ifdef SD_INCLUDE_TEST_HOOKS
+      ' TEST HOOK: targeted per-sector failure. Consumed once per read attempt,
+      ' so a one-shot arming fails attempt 1 and the retry succeeds, while a
+      ' sticky arming fails every attempt and the read returns E_CRC_ERROR.
+      inject_fail := testFailArmedFor(sector, TF_READ)
+#endif
       ' CRC-16 validation: skipped when globally disabled, or when this card
       ' returns a dummy data CRC (CW_NO_DATA_CRC, set by probeDataCrc at init).
-      if (NOT diag_crc_enabled) OR (card_warning_flags & CW_NO_DATA_CRC)
+      ' A targeted injection overrides the skip - an instrument that silently
+      ' does nothing on one class of card is worse than no instrument.
+      if ((NOT diag_crc_enabled) OR (card_warning_flags & CW_NO_DATA_CRC)) AND NOT inject_fail
         pinh(cs)                                                                ' Deselect card - skip CRC check
         quit                                                                    ' Exit retry loop (assume success)
       diag_calc_crc := calcDataCRC(p_buf, SECTOR_SIZE)
       ' TEST HOOK: Force CRC mismatch for error injection testing
+#ifdef SD_INCLUDE_TEST_HOOKS
       if test_force_read_crc_error > 0
         diag_calc_crc ^= $FFFF
         test_force_read_crc_error--
         test_error_count++
+      if inject_fail
+        diag_calc_crc := diag_recv_crc ^ $FFFF                                   '  guaranteed mismatch on any card
+#endif
       if diag_calc_crc == diag_recv_crc
         diag_crc_matches++
         pinh(cs)                                                                ' Deselect card - CRC OK
@@ -6685,7 +6868,7 @@ PRI readSectors(start_sector, count, p_buffer) : sectors_read | _sck, _miso, p_b
             DEBUG[CH_SECTOR]("  [readSectors] CMD13 status check FAILED")
             sectors_read := 0                                                   ' Card reports error - data can't be trusted
 
-PRI writeSector(sector, buf_type) : status | _sck, _mosi, p_buf, stream_mode, clk_count, xfrq, resp, p_cache
+PRI writeSector(sector, buf_type) : status | _sck, _mosi, p_buf, stream_mode, clk_count, xfrq, resp, p_cache, inject_fail
 ' Write buffer into a sector using P2 streamer - hardware DMA for bulk 512-byte transfer.
 ' Reference: flash_loader.spin2 pattern for SPI writes
 '
@@ -6709,6 +6892,7 @@ PRI writeSector(sector, buf_type) : status | _sck, _mosi, p_buf, stream_mode, cl
 ' @local xfrq - Streamer NCO frequency
 ' @local resp - Response byte
 ' @local p_cache - Pointer to cache variable
+' @local inject_fail - Targeted fault injection armed for this write (test hooks only)
 
 ' Select buffer and cache based on type
 
@@ -6742,6 +6926,27 @@ PRI writeSector(sector, buf_type) : status | _sck, _mosi, p_buf, stream_mode, cl
   ' Capture sector for diagnostics
   diag_write_sector := sector
   diag_write_result := 0                                                        ' Reset: not yet determined
+
+#ifdef SD_INCLUDE_TEST_HOOKS
+  ' TEST HOOK: targeted write failure. Reported here, after cache invalidation
+  ' and before CMD24, so the driver-visible outcome matches a card that rejected
+  ' the data block: nothing committed, every cache holding this sector already
+  ' invalidated above, E_WRITE_REJECTED returned with write-diagnostic code 3.
+  ' Short-circuiting rather than corrupting the CRC makes the failure independent
+  ' of whether a given card enforces write CRC - a CW_NO_DATA_CRC card is sent
+  ' idle filler in the CRC slot and would never reject.
+  test_write_call_count++                                                       '  count every write, armed or not
+  inject_fail := test_fail_write_after > 0 AND test_write_call_count == test_fail_write_after
+  if inject_fail
+    test_fail_write_after := 0                                                  '  one-shot
+    test_error_count++
+  elseif testFailArmedFor(sector, TF_WRITE)
+    inject_fail := TRUE
+  if inject_fail
+    diag_write_dresp := DATA_CRC_ERROR
+    diag_write_result := 3                                                      '  3 = CRC reject, same as a genuine rejection
+    return E_WRITE_REJECTED
+#endif
 
   resp := cmd(CMD24, sector << hcs)
   diag_write_r1 := resp                                                         ' Capture CMD24 R1 response
@@ -6821,10 +7026,12 @@ PRI writeSector(sector, buf_type) : status | _sck, _mosi, p_buf, stream_mode, cl
       ' SD protocol: CRC high byte first, then low byte
       diag_sent_crc := calcDataCRC(p_buf, SECTOR_SIZE)
       ' TEST HOOK: Corrupt write CRC for error injection testing (one-shot)
+#ifdef SD_INCLUDE_TEST_HOOKS
       if test_force_write_crc_error
         diag_sent_crc ^= $FFFF
         test_force_write_crc_error := 0
         test_error_count++
+#endif
       sp_transfer_8(diag_sent_crc >> 8)                                         ' CRC high byte
       sp_transfer_8(diag_sent_crc & $FF)                                        ' CRC low byte
 

@@ -40,18 +40,23 @@ CON
      ' builds of the 128 KB result before releasing the fragmented original.
      PEAK_BYTES      = 5 * FILL_WRITES * WRITE_SIZE
 
-' Enable defrag and debug features
+' Enable defrag, debug, and the test hooks the fragmentation setup arms
+' (setTestMaxClusters)
 #ifdef __SPINTOOLS__
 #define SD_INCLUDE_DEFRAG
 #define SD_INCLUDE_DEBUG
+#define SD_INCLUDE_TEST_HOOKS
 #elseifdef __FLEXSPIN__
 #define SD_INCLUDE_DEFRAG
 #pragma exportdef SD_INCLUDE_DEFRAG
 #define SD_INCLUDE_DEBUG
 #pragma exportdef SD_INCLUDE_DEBUG
+#define SD_INCLUDE_TEST_HOOKS
+#pragma exportdef SD_INCLUDE_TEST_HOOKS
 #else
 #pragma exportdef SD_INCLUDE_DEFRAG
 #pragma exportdef SD_INCLUDE_DEBUG
+#pragma exportdef SD_INCLUDE_TEST_HOOKS
 #endif
 
 OBJ

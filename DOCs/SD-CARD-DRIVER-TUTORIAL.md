@@ -1525,15 +1525,36 @@ For driver development, debugging, and regression testing. Includes CRC diagnost
 | `debugZeroRootSector()` | Zero the FIRST root sector only; entries in later root sectors survive and the erased entries' clusters are leaked. Run `SD_FAT32_fsck` after, or `SD_format_card` for a clean card. |
 | `debugReadSectorSlow(sector, buffer)` | Byte-by-byte read without streamer |
 | `getWriteDiag()` | Last writeSector diagnostic (returns 4 values: result_code, r1_resp, data_resp, sector_num) |
-| `setTestForceReadError(count)` | Inject N forced CRC mismatches on reads (test hook) |
-| `setTestForceWriteError(enabled)` | Inject one-shot write CRC corruption (test hook) |
-| `getTestErrorCount()` | Count of injected test errors triggered |
-| `clearTestErrors()` | Reset all test error injection state |
 | `debugGetReadSectorDiag(...)` | Last readSector diagnostic data (8 params) |
 | `debugGetReadSectorDiagExt(...)` | Extended diagnostic data (5 params) |
 | `displaySector()` | Hex dump of sector buffer |
 | `displayEntry()` | Hex dump of directory entry buffer |
 | `displayFAT(cluster)` | Hex dump of FAT sector for cluster |
+
+### SD_INCLUDE_TEST_HOOKS - Fault Injection
+
+These make sector I/O fail on purpose, so that error-handling code can be tested
+against failures a healthy card will never produce. They are for the regression
+suites. `SD_INCLUDE_ALL` enables them; `SD_INCLUDE_DEBUG` deliberately does not,
+so turning on field diagnostics never turns on a method that corrupts your writes.
+
+An injected failure is indistinguishable from a real one: same error code, same
+cache invalidation, same diagnostic counters.
+
+| Method | Description |
+|--------|-------------|
+| `setTestFailSector(sector, mode)` | Fail one named LBA. `TF_READ`, `TF_WRITE` or `TF_BOTH`, optionally OR'd with `TF_STICKY` (default is one-shot) |
+| `setTestFailWriteAfter(writeIndex)` | Fail the nth subsequent `writeSector()` call -- names a write by its position in a sequence rather than by LBA |
+| `getTestWriteCallCount()` | How many `writeSector()` calls have happened since arming |
+| `setTestForceReadError(count)` | Inject N forced CRC mismatches on reads of any sector |
+| `setTestForceWriteError(enabled)` | Inject one-shot write CRC corruption on any sector |
+| `setTestMaxClusters(max)` | Artificial cluster limit, for disk-full testing |
+| `getTestErrorCount()` | Count of injected test errors triggered |
+| `clearTestErrors()` | Reset all injection state, leaving no residue for the next test |
+
+A read failure fires only when the driver actually reads the sector -- a cache hit
+is not a card access, so there is nothing to fail. Only the single-block paths are
+injected; raw multi-block transfers (CMD18/CMD25) are not.
 
 ---
 

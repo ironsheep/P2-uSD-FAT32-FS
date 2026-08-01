@@ -124,6 +124,7 @@ jobs:
           cp src/regression-tests/SD_RT_speed_tests.spin2 "${DEST}/src/regression-tests/"
           cp src/regression-tests/SD_RT_crc_diag_tests.spin2 "${DEST}/src/regression-tests/"
           cp src/regression-tests/SD_RT_error_handling_tests.spin2 "${DEST}/src/regression-tests/"
+          cp src/regression-tests/SD_RT_error_injection_tests.spin2 "${DEST}/src/regression-tests/"
           cp src/regression-tests/SD_RT_crc_validation_tests.spin2 "${DEST}/src/regression-tests/"
           cp src/regression-tests/SD_RT_recovery_tests.spin2 "${DEST}/src/regression-tests/"
           cp src/regression-tests/SD_RT_file_ops_tests.spin2 "${DEST}/src/regression-tests/"

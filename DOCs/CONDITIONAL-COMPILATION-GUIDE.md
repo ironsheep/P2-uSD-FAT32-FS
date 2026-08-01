@@ -24,10 +24,13 @@ Feature flags are declared in your **top-level application file** (the file that
 | `SD_INCLUDE_SPEED` | High-speed mode switch via CMD6 (up to 50 MHz SPI) | Utility | ~2 KB |
 | `SD_INCLUDE_REGISTERS` | Card register access: CID, CSD, SCR, SD Status | Utility | ~3 KB |
 | `SD_INCLUDE_DEBUG` | Debug/diagnostic methods and CRC error getters | Diagnostic | ~8 KB |
+| `SD_INCLUDE_TEST_HOOKS` | Fault injection: make a named sector's read or write fail on purpose | Test | <1 KB |
 | `SD_INCLUDE_STACK_CHECK` | Worker cog stack depth measurement | Diagnostic | ~1 KB |
 | `SD_INCLUDE_ALL` | Convenience: enables all of the above except STACK_CHECK | All | ~16 KB |
 
-**Application** flags add user-facing capabilities to your program. **Utility** flags support standalone tools (format, benchmark, card characterization). **Diagnostic** flags are for development and debugging.
+**Application** flags add user-facing capabilities to your program. **Utility** flags support standalone tools (format, benchmark, card characterization). **Diagnostic** flags are for development and debugging. The **Test** flag is for the regression suites and belongs in no shipped program.
+
+`SD_INCLUDE_TEST_HOOKS` is enabled by `SD_INCLUDE_ALL` but deliberately **not** by `SD_INCLUDE_DEBUG`. A debug build is a legitimate thing to ship -- diagnostic getters are how you get field data back from a card that misbehaves in the wild. The test hooks are not: they include methods whose whole purpose is to corrupt the next write, and a shipped product has no business being able to do that on request. Keeping them on their own flag means turning on field diagnostics never turns on fault injection.
 
 ### Flag Dependencies
 
@@ -470,7 +473,7 @@ These are two different mechanisms that are easily confused:
 | `SD_INCLUDE_DEBUG` | Whether debug **API methods** are compiled into the driver | Feature flag (compile-time) |
 | `DEBUG_MASK` | Which `debug[CH_xxx]()` **print statements** compile | Driver-internal constant |
 
-You can (and typically do) enable `SD_INCLUDE_DEBUG` while leaving `DEBUG_MASK = 0` in the driver. This gives you access to the debug API (diagnostic getters, CRC error injection hooks) without enabling the driver's hundreds of internal debug print statements.
+You can (and typically do) enable `SD_INCLUDE_DEBUG` while leaving `DEBUG_MASK = 0` in the driver. This gives you access to the debug API (diagnostic getters, CRC diagnostic counters) without enabling the driver's hundreds of internal debug print statements. The fault-injection hooks are not part of that API -- they live behind `SD_INCLUDE_TEST_HOOKS`.
 
 ### Selective Debug Output with DEBUG_MASK (v1.3.2+)
 

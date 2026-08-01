@@ -361,6 +361,66 @@ PUB go() | result, handle, h1, h2, h3, h4, h5, hDir, bytesRead, bytesWritten
     utils.evaluateSingleValue(result, @"rename to existing", sd.E_FILE_EXISTS)
 
     ' ----------------------------------
+    ' TEST GROUP: ERROR() Write-On-Exit Semantics
+    ' ----------------------------------
+    ' ERROR() used to be sticky since boot: nothing ever stored SUCCESS, so it
+    ' returned the last error this cog had EVER hit while its docstring claimed
+    ' "the most recent operation". Every command now records its outcome on every
+    ' exit path -- success included -- so these tests pin the new contract.
+    utils.startTestGroup(@"ERROR() Write-On-Exit Semantics")
+
+    ' Test: a failing operation is readable through ERROR() immediately
+    utils.startTest(@"ERROR() reports the failing operation")
+    sd.readHandle(99, @readBuffer, 10)
+    utils.evaluateSingleValue(sd.ERROR(), @"ERROR() after bad handle", sd.E_INVALID_HANDLE)
+
+    ' Test: reading ERROR() does not clear it -- only the next operation overwrites
+    utils.startTest(@"ERROR() does not clear on read")
+    utils.evaluateSingleValue(sd.ERROR(), @"ERROR() re-read", sd.E_INVALID_HANDLE)
+
+    ' Test: THE regression this change exists to prevent. Under the old sticky
+    ' semantics a success left the previous failure in place, so a caller checking
+    ' ERROR() after a successful call saw a stale error and acted on it.
+    utils.startTest(@"A successful operation clears ERROR() to SUCCESS")
+    sd.deleteFile(@testfile3)
+    handle := sd.createFileNew(@testfile3)
+    utils.evaluateSingleValue(sd.ERROR(), @"ERROR() after successful create", sd.SUCCESS)
+    if handle >= 0
+        sd.closeFileHandle(handle)
+
+    ' Test: the pure-accessor carve-out. Without it a diagnostic call between the
+    ' failure and the check would store SUCCESS over the error being diagnosed.
+    utils.startTest(@"Pure accessors do not disturb ERROR()")
+    utils.setCheckCountPerTest(6)
+    sd.readHandle(99, @readBuffer, 10)                  ' arm a known error
+    sd.fileName()
+    utils.evaluateSubValue(sd.ERROR(), @"after fileName()", sd.E_INVALID_HANDLE)
+    sd.fileSize()
+    utils.evaluateSubValue(sd.ERROR(), @"after fileSize()", sd.E_INVALID_HANDLE)
+    sd.attributes()
+    utils.evaluateSubValue(sd.ERROR(), @"after attributes()", sd.E_INVALID_HANDLE)
+    sd.volumeLabel()
+    utils.evaluateSubValue(sd.ERROR(), @"after volumeLabel()", sd.E_INVALID_HANDLE)
+    sd.sectorsPerCluster()
+    utils.evaluateSubValue(sd.ERROR(), @"after sectorsPerCluster()", sd.E_INVALID_HANDLE)
+    sd.clusterBytes()
+    utils.evaluateSubValue(sd.ERROR(), @"after clusterBytes()", sd.E_INVALID_HANDLE)
+    utils.showSubTestResults()
+
+    ' Test: each error tier is readable through ERROR() right after its call
+    utils.startTest(@"Every error tier reaches ERROR()")
+    utils.setCheckCountPerTest(3)
+    sd.readHandle(99, @readBuffer, 10)                  ' handle tier
+    utils.evaluateSubValue(sd.ERROR(), @"handle tier", sd.E_INVALID_HANDLE)
+    sd.openFileRead(@testdir2)                          ' file tier: NONEXIST
+    utils.evaluateSubValue(sd.ERROR(), @"file tier", sd.E_FILE_NOT_FOUND)
+    sd.newDirectory(@testdir1)                          ' filesystem tier: already exists
+    sd.newDirectory(@testdir1)
+    utils.evaluateSubValue(sd.ERROR(), @"already-exists tier", sd.E_FILE_EXISTS)
+    utils.showSubTestResults()
+    sd.deleteFile(@testdir1)
+
+    ' ----------------------------------
     ' Cleanup: Delete test files and directories
     ' ----------------------------------
     debug(" ")

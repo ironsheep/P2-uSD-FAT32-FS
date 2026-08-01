@@ -461,6 +461,7 @@ SUITES+=(
 # Layer 4: Error handling and recovery
 SUITES+=(
     "SD_RT_error_handling_tests.spin2:120"
+    "SD_RT_error_injection_tests.spin2:120"
     "SD_RT_crc_validation_tests.spin2:120"
     "SD_RT_recovery_tests.spin2:120"
 )

@@ -33,6 +33,7 @@ Automated regression test suite for the P2 SD Card Driver. All tests execute on 
 | **Speed Tests** | SPI frequency, CMD6, high-speed mode, speed boundaries | 15 |
 | **CRC Diagnostic Tests** | CRC counters, validation toggle, CMD13 diagnostics | 14 |
 | **Error Handling Tests** | Error conditions, invalid handles, dir handle type mismatch, rename edge cases | 14 |
+| **Error Injection Tests** | Targeted fault injection: named-LBA read/write failure, nth-write failure, one-shot vs sticky, clean disarm | 12 |
 | **CRC Validation Tests** | CRC error injection hooks, forced read/write CRC errors, hook state management | 6 |
 | **Recovery Tests** | Recovery after read/write errors, CRC counter verification, remount recovery, handle isolation | 7 |
 | **FIFO Tests** | String FIFO (isp_string_fifo) inter-cog communication | 21 |
@@ -42,8 +43,8 @@ Automated regression test suite for the P2 SD Card Driver. All tests execute on 
 | **Async I/O Tests** | Non-blocking read/write, isComplete polling, cancelAsync, multi-cog interleave | 6 |
 | **Defrag Tests** | fileFragments, isFileContiguous, compactFile, createFileContiguous, next-fit allocation | 12 |
 | **FAT Chain Tests** | Cross-boundary overwrite follows the FAT chain; mid-sector append preserves leading bytes | 2 |
-| | **Additional Total** | **178** |
-| | **Grand Total (26 suites)** | **471** |
+| | **Additional Total** | **190** |
+| | **Grand Total (27 suites)** | **483** |
 
 ## Prerequisites
 

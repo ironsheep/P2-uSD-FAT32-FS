@@ -38,11 +38,13 @@ CON
      SD_SCK  = 61
 #endif
 
-' Enable register access, raw sector access, and debug for disk-full hooks
+' Enable register access, raw sector access, debug, and the test hooks the
+' disk-full checks arm (setTestMaxClusters)
 #ifdef __SPINTOOLS__
 #define SD_INCLUDE_REGISTERS
 #define SD_INCLUDE_RAW
 #define SD_INCLUDE_DEBUG
+#define SD_INCLUDE_TEST_HOOKS
 #elseifdef __FLEXSPIN__
 #define SD_INCLUDE_REGISTERS
 #pragma exportdef SD_INCLUDE_REGISTERS
@@ -50,10 +52,13 @@ CON
 #pragma exportdef SD_INCLUDE_RAW
 #define SD_INCLUDE_DEBUG
 #pragma exportdef SD_INCLUDE_DEBUG
+#define SD_INCLUDE_TEST_HOOKS
+#pragma exportdef SD_INCLUDE_TEST_HOOKS
 #else
 #pragma exportdef SD_INCLUDE_REGISTERS
 #pragma exportdef SD_INCLUDE_RAW
 #pragma exportdef SD_INCLUDE_DEBUG
+#pragma exportdef SD_INCLUDE_TEST_HOOKS
 #endif
 
 OBJ

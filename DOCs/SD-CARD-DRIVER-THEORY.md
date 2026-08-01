@@ -13,7 +13,7 @@ Key architectural features:
 - **Single-writer policy** preventing concurrent write corruption
 - **Hardware-accelerated CRC-16** using the P2's `GETCRC` instruction
 - **Exported STRUCT types** for named access to SD card registers and FAT32 on-disk structures
-- **Conditional compilation** with 7 feature flags for minimal or full builds
+- **Conditional compilation** with 8 feature flags for minimal or full builds
 - **Next-fit cluster allocation** with wrap-around for efficient free-space reuse
 - **Auto-flush on idle** -- worker cog flushes dirty handles after 200ms without commands
 - **Defragmentation** -- query fragmentation, compact existing files, create contiguous files
@@ -116,7 +116,8 @@ The driver uses `#ifdef` / `#endif` blocks to exclude optional features from min
 | `SD_INCLUDE_RAW` | Raw sector read/write, `initCardOnly()`, multi-block (CMD18/CMD25) |
 | `SD_INCLUDE_REGISTERS` | CID, CSD, SCR, SD Status register access, OCR, VBR read |
 | `SD_INCLUDE_SPEED` | CMD6 high-speed mode query and switch (50 MHz) |
-| `SD_INCLUDE_DEBUG` | Debug getters, CRC diagnostic methods, display utilities, test hooks |
+| `SD_INCLUDE_DEBUG` | Debug getters, CRC diagnostic methods, display utilities |
+| `SD_INCLUDE_TEST_HOOKS` | Fault injection: `setTestFailSector()`, `setTestFailWriteAfter()`, the CRC error-injection hooks, `clearTestErrors()` |
 | `SD_INCLUDE_ALL` | Enables all of the above (not STACK_CHECK) |
 
 #### Compatibility policy for the `SD_INCLUDE_DEBUG` API
@@ -933,10 +934,6 @@ All structs are packed (Spin2 default) with offsets matching their respective ha
 | `getCRCRetryCount() : count` | CRC retry count |
 | `setCRCValidation(enabled)` | Enable/disable CRC checking |
 | `getWriteDiag() : result_code, r1_resp, data_resp, sector_num` | Last write diagnostic data |
-| `setTestForceReadError(count)` | Inject N forced CRC mismatches on reads (test hook) |
-| `setTestForceWriteError(enabled)` | Inject one-shot write CRC corruption (test hook) |
-| `getTestErrorCount() : count` | Count of injected test errors triggered |
-| `clearTestErrors()` | Reset all test error injection state |
 | `debugGetRootSec() : sector` | Root directory sector |
 | `debugGetDirSec() : sector` | Calling cog's directory sector |
 | `debugGetVbrSec() : sector` | VBR sector |
@@ -951,7 +948,24 @@ All structs are packed (Spin2 default) with offsets matching their respective ha
 | `displaySector()` | Hex dump of sector buffer |
 | `displayEntry()` | Hex dump of directory entry |
 | `displayFAT(cluster)` | Hex dump of FAT sector |
+
+### SD_INCLUDE_TEST_HOOKS
+
+Fault injection, for the regression suites. Enabled by `SD_INCLUDE_ALL` and by
+nothing else -- in particular not by `SD_INCLUDE_DEBUG`, which is a build you may
+reasonably ship. An injected failure is indistinguishable to the caller from a
+genuine one: same error code, same cache invalidation, same diagnostic counters.
+
+| Method | Description |
+|--------|-------------|
+| `setTestFailSector(sector, mode)` | Fail one named LBA. `TF_READ`, `TF_WRITE` or `TF_BOTH`, optionally OR'd with `TF_STICKY` |
+| `setTestFailWriteAfter(writeIndex)` | Fail the nth subsequent `writeSector()` call (one-shot) |
+| `getTestWriteCallCount() : count` | `writeSector()` calls counted since arming |
+| `setTestForceReadError(count)` | Inject N forced CRC mismatches on reads of any sector |
+| `setTestForceWriteError(enabled)` | Inject one-shot write CRC corruption on any sector |
 | `setTestMaxClusters(max)` | Set artificial cluster limit (disk-full testing) |
+| `getTestErrorCount() : count` | Count of injected test errors triggered |
+| `clearTestErrors()` | Reset all injection state, leaving no residue |
 
 ### SD_INCLUDE_DEFRAG
 

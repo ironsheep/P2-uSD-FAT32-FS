@@ -1,0 +1,365 @@
+'' =================================================================================================
+''
+''   File....... SD_RT_error_injection_tests.spin2
+''   Purpose.... This object tests the targeted fault-injection facility itself
+''   Author..... Stephen M Moraco
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... JUL 2026
+''   Updated.... 31 JUL 2026
+''
+'' =================================================================================================
+''
+'' Every failure-path fix in this driver is proven by making a specific sector I/O
+'' operation fail on demand. That makes the injection facility an instrument, and an
+'' instrument has to be calibrated before anything measured with it can be believed.
+'' This suite is that calibration:
+''
+''   - setTestFailSector(sector, mode) - fail one named LBA, read and/or write,
+''     one-shot or sticky
+''   - setTestFailWriteAfter(n) - fail the nth subsequent writeSector() call
+''   - getTestWriteCallCount() - how many writes an operation actually made
+''   - clearTestErrors() - disarm everything, leaving no residue
+''
+'' Test groups:
+''   - Disarmed Behavior (the facility is invisible until armed)
+''   - Targeted Read Failure (sticky fails, one-shot recovers via retry)
+''   - Targeted Write Failure (named LBA, and nth-write-in-a-sequence)
+''   - Arming Precision (direction discrimination, untouched LBAs, clean disarm)
+''
+'' SAFETY: every raw write in this suite writes a sector's own contents back to it,
+'' read moments earlier. If an injection fails to fire - the very defect these tests
+'' would be catching - the card is rewritten with the bytes it already held.
+''
+'' =================================================================================================
+
+CON
+
+     _CLKFREQ        = 350_000_000
+
+     ' SD card pin assignments
+     ' Default: P2 Edge module SD slot. Build with -D SD_PINS_EXTERNAL
+     ' to use the external SD header (base pin 16).
+#ifdef SD_PINS_EXTERNAL
+     SD_CS   = 20
+     SD_MOSI = 19
+     SD_MISO = 18
+     SD_SCK  = 21
+#else
+     SD_CS   = 60
+     SD_MOSI = 59
+     SD_MISO = 58
+     SD_SCK  = 61
+#endif
+     BUFFER_SIZE = 512
+
+     MAX_READ_CRC_RETRIES = 3            ' Must match driver constant
+
+     ' An LBA the driver can never reach on any card we test with. Arming here
+     ' proves an armed-but-untouched injection stays out of the way.
+     UNREACHABLE_LBA = $7FFF_FFFF
+
+     WRITE_DIAG_CRC_REJECT = 3           ' getWriteDiag() result code for a rejected data block
+
+' Enable all features (fault injection lives behind SD_INCLUDE_TEST_HOOKS)
+#ifdef __SPINTOOLS__
+#define SD_INCLUDE_ALL
+#elseifdef __FLEXSPIN__
+#define SD_INCLUDE_ALL
+#pragma exportdef SD_INCLUDE_ALL
+#else
+#pragma exportdef SD_INCLUDE_ALL
+#endif
+
+OBJ
+    sd    : "micro_sd_fat32_fs"
+    utils : "isp_rt_utilities"
+
+DAT
+
+' Test filenames
+injFile         BYTE    "INJECT1.BIN", 0
+
+' Buffers
+writeBuffer     BYTE    0[BUFFER_SIZE]
+readBuffer      BYTE    0[BUFFER_SIZE]
+readBuffer_guard BYTE   0[16]
+sectorBuffer    BYTE    0[BUFFER_SIZE]
+sectorBuffer_guard BYTE 0[16]
+compareBuffer   BYTE    0[BUFFER_SIZE]
+
+PUB go() | result, handle, bytesRead, bytesWritten, errCount, testSector, mismatchBefore, mismatchAfter, retryBefore, retryAfter, diagResult, diagR1, diagResp, diagSector, writeCalls
+'' Main entry point for fault-injection facility regression tests
+
+    debug(" ")
+    debug("==============================================")
+    debug("  SD Card Driver - Error Injection Tests")
+    debug("==============================================")
+
+    ' Mount the card first
+    result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    if result < 0
+        debug("ERROR: Could not mount SD card!")
+        debug("END_SESSION")
+        return
+
+    ' A sector at mid-card: well past FAT32 metadata, and every write below
+    ' writes back the content just read from it.
+    testSector := sd.cardSizeSectors() / 2
+    debug("   Test sector (mid-card): ", udec(testSector))
+    debug("   Dummy-CRC card: ", udec((sd.cardWarnings() & sd.CW_NO_DATA_CRC) <> 0))
+
+    ' Start from a known-disarmed state
+    sd.clearTestErrors()
+
+    ' ======================================================================
+    ' TEST GROUP: Disarmed Behavior
+    ' ======================================================================
+    utils.startTestGroup(@"Disarmed Behavior")
+
+    ' Test 1: With nothing armed, a full file cycle behaves exactly as it does
+    ' in a build that has no injection code at all.
+    utils.startTest(@"Disarmed facility leaves a full file cycle untouched")
+    utils.setCheckCountPerTest(4)
+    sd.deleteFile(@injFile)
+    utils.fillBufferWithPattern(@writeBuffer, BUFFER_SIZE, $10)
+    handle := sd.createFileNew(@injFile)
+    bytesWritten := 0
+    bytesRead := 0
+    if handle >= 0
+        bytesWritten := sd.writeHandle(handle, @writeBuffer, BUFFER_SIZE)
+        sd.closeFileHandle(handle)
+    handle := sd.openFileRead(@injFile)
+    if handle >= 0
+        bytefill(@readBuffer, 0, BUFFER_SIZE)
+        utils.initGuard(@readBuffer_guard)
+        bytesRead := sd.readHandle(handle, @readBuffer, BUFFER_SIZE)
+        utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+        sd.closeFileHandle(handle)
+    errCount := sd.getTestErrorCount()
+    utils.evaluateSubValue(bytesWritten, @"write returns 512 bytes", BUFFER_SIZE)
+    utils.evaluateSubValue(bytesRead, @"read returns 512 bytes", BUFFER_SIZE)
+    utils.evaluateSubBool(utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $10), @"data reads back intact", true)
+    utils.evaluateSubValue(errCount, @"no errors injected", 0)
+    utils.showSubTestResults()
+
+    ' Test 2: A disarmed raw read of the test sector succeeds. This also captures
+    ' the sector's true contents, which every later write in this suite writes back.
+    utils.startTest(@"Disarmed raw read succeeds and captures baseline content")
+    utils.setCheckCountPerTest(2)
+    utils.initGuard(@sectorBuffer_guard)
+    result := sd.readSectorRaw(testSector, @sectorBuffer)
+    utils.checkGuard(@sectorBuffer_guard, @"sectorBuffer guard")
+    utils.evaluateSubValue(result, @"raw read returns SUCCESS", 0)
+    utils.evaluateSubValue(sd.getTestErrorCount(), @"no errors injected", 0)
+    utils.showSubTestResults()
+
+    ' ======================================================================
+    ' TEST GROUP: Targeted Read Failure
+    ' ======================================================================
+    utils.startTestGroup(@"Targeted Read Failure")
+
+    ' Test 3: A sticky read failure at a named LBA fails every retry and surfaces
+    ' as E_CRC_ERROR - the identical outcome of a genuine CRC failure, reached by
+    ' the identical code path (the driver's own retry loop and mismatch counters).
+    utils.startTest(@"Sticky read injection returns E_CRC_ERROR via the real retry path")
+    utils.setCheckCountPerTest(4)
+    sd.clearTestErrors()
+    mismatchBefore := sd.getCRCMismatchCount()
+    retryBefore := sd.getCRCRetryCount()
+    sd.setTestFailSector(testSector, sd.TF_READ | sd.TF_STICKY)
+    result := sd.readSectorRaw(testSector, @readBuffer)
+    mismatchAfter := sd.getCRCMismatchCount()
+    retryAfter := sd.getCRCRetryCount()
+    errCount := sd.getTestErrorCount()
+    debug("  result=", sdec_(result), " mismatches ", udec_(mismatchBefore), "->", udec_(mismatchAfter), " retries ", udec_(retryBefore), "->", udec_(retryAfter))
+    utils.evaluateSubValue(result, @"raw read returns E_CRC_ERROR", sd.E_CRC_ERROR)
+    utils.evaluateSubBool(mismatchAfter > mismatchBefore, @"CRC mismatch counter increased", true)
+    utils.evaluateSubBool(retryAfter > retryBefore, @"CRC retry counter increased", true)
+    utils.evaluateSubValue(errCount, @"one injection per attempt", MAX_READ_CRC_RETRIES)
+    utils.showSubTestResults()
+
+    ' Test 4: Clearing the injection restores the sector. The data must match the
+    ' baseline captured in test 2 - a failed read must not have disturbed content.
+    utils.startTest(@"Clearing a sticky read injection restores the sector")
+    utils.setCheckCountPerTest(2)
+    sd.clearTestErrors()
+    bytefill(@compareBuffer, 0, BUFFER_SIZE)
+    result := sd.readSectorRaw(testSector, @compareBuffer)
+    utils.evaluateSubValue(result, @"raw read returns SUCCESS", 0)
+    utils.evaluateSubValue(sd.getTestErrorCount(), @"no errors injected after clear", 0)
+    utils.showSubTestResults()
+
+    ' A failed read must not have disturbed what is on the card. Compare against
+    ' the baseline captured in test 2.
+    utils.startTest(@"Injected read failure left the sector content untouched")
+    utils.evaluateBufferMatch(@compareBuffer, @sectorBuffer, BUFFER_SIZE, @"content matches pre-injection baseline")
+
+    ' Test 5: A one-shot read failure is consumed by the first attempt, so the
+    ' driver's retry recovers and the caller sees a successful read. This is the
+    ' transient-error case, and it is what distinguishes one-shot from sticky.
+    utils.startTest(@"One-shot read injection is recovered by the driver retry")
+    utils.setCheckCountPerTest(3)
+    sd.clearTestErrors()
+    retryBefore := sd.getCRCRetryCount()
+    sd.setTestFailSector(testSector, sd.TF_READ)
+    result := sd.readSectorRaw(testSector, @readBuffer)
+    retryAfter := sd.getCRCRetryCount()
+    errCount := sd.getTestErrorCount()
+    debug("  result=", sdec_(result), " retries ", udec_(retryBefore), "->", udec_(retryAfter), " errCount=", udec_(errCount))
+    utils.evaluateSubValue(result, @"raw read returns SUCCESS after retry", 0)
+    utils.evaluateSubBool(retryAfter > retryBefore, @"a retry was actually taken", true)
+    utils.evaluateSubValue(errCount, @"injection consumed exactly once", 1)
+    utils.showSubTestResults()
+
+    ' ======================================================================
+    ' TEST GROUP: Targeted Write Failure
+    ' ======================================================================
+    utils.startTestGroup(@"Targeted Write Failure")
+
+    ' Test 6: A write failure at a named LBA reports E_WRITE_REJECTED and records
+    ' the same write-diagnostic code (3) a card sets when it rejects a data block.
+    ' The buffer written is the sector's own content, so nothing is at risk.
+    utils.startTest(@"Write injection returns E_WRITE_REJECTED with a reject diagnostic")
+    utils.setCheckCountPerTest(4)
+    sd.clearTestErrors()
+    sd.setTestFailSector(testSector, sd.TF_WRITE)
+    result := sd.writeSectorRaw(testSector, @sectorBuffer)
+    diagResult, diagR1, diagResp, diagSector := sd.getWriteDiag()
+    errCount := sd.getTestErrorCount()
+    debug("  result=", sdec_(result), " diagResult=", udec_(diagResult), " diagSector=", udec_(diagSector))
+    utils.evaluateSubValue(result, @"raw write returns E_WRITE_REJECTED", sd.E_WRITE_REJECTED)
+    utils.evaluateSubValue(diagResult, @"write diagnostic reports a reject", WRITE_DIAG_CRC_REJECT)
+    utils.evaluateSubValue(diagSector, @"diagnostic names the injected sector", testSector)
+    utils.evaluateSubValue(errCount, @"injection consumed exactly once", 1)
+    utils.showSubTestResults()
+
+    ' Test 7: The one-shot write injection is spent, so the same write now lands.
+    utils.startTest(@"Write succeeds once the one-shot injection is spent")
+    utils.setCheckCountPerTest(2)
+    result := sd.writeSectorRaw(testSector, @sectorBuffer)
+    utils.evaluateSubValue(result, @"raw write returns SUCCESS", 0)
+    utils.evaluateSubValue(sd.getTestErrorCount(), @"no further injection", 1)
+    utils.showSubTestResults()
+
+    ' Test 8: setTestFailWriteAfter names a write by its position in a sequence
+    ' rather than by LBA - how a specific write inside a multi-write operation
+    ' (a FAT2 mirror update, a directory rewrite) is made to fail on its own.
+    utils.startTest(@"setTestFailWriteAfter fails the nth write, not the first")
+    utils.setCheckCountPerTest(4)
+    sd.clearTestErrors()
+    ' Flush first: the worker auto-flushes dirty handles and FSInfo after an idle
+    ' period, and such a write would be counted against the arming below.
+    sd.sync()
+    sd.setTestFailWriteAfter(2)
+    result := sd.writeSectorRaw(testSector, @sectorBuffer)
+    utils.evaluateSubValue(result, @"first write succeeds", 0)
+    result := sd.writeSectorRaw(testSector, @sectorBuffer)
+    writeCalls := sd.getTestWriteCallCount()
+    utils.evaluateSubValue(result, @"second write returns E_WRITE_REJECTED", sd.E_WRITE_REJECTED)
+    utils.evaluateSubValue(writeCalls, @"two write calls counted", 2)
+    result := sd.writeSectorRaw(testSector, @sectorBuffer)
+    utils.evaluateSubValue(result, @"third write succeeds (one-shot spent)", 0)
+    utils.showSubTestResults()
+
+    ' ======================================================================
+    ' TEST GROUP: Arming Precision
+    ' ======================================================================
+    utils.startTestGroup(@"Arming Precision")
+
+    ' Test 9: An injection armed on a sector nothing touches has no effect on
+    ' anything else. Armed for both directions and sticky - the loudest setting.
+    utils.startTest(@"Injection armed on an untouched LBA affects nothing")
+    utils.setCheckCountPerTest(4)
+    sd.clearTestErrors()
+    sd.setTestFailSector(UNREACHABLE_LBA, sd.TF_BOTH | sd.TF_STICKY)
+    sd.deleteFile(@injFile)
+    utils.fillBufferWithPattern(@writeBuffer, BUFFER_SIZE, $20)
+    handle := sd.createFileNew(@injFile)
+    bytesWritten := 0
+    bytesRead := 0
+    if handle >= 0
+        bytesWritten := sd.writeHandle(handle, @writeBuffer, BUFFER_SIZE)
+        sd.closeFileHandle(handle)
+    handle := sd.openFileRead(@injFile)
+    if handle >= 0
+        bytefill(@readBuffer, 0, BUFFER_SIZE)
+        bytesRead := sd.readHandle(handle, @readBuffer, BUFFER_SIZE)
+        sd.closeFileHandle(handle)
+    errCount := sd.getTestErrorCount()
+    utils.evaluateSubValue(bytesWritten, @"write returns 512 bytes", BUFFER_SIZE)
+    utils.evaluateSubValue(bytesRead, @"read returns 512 bytes", BUFFER_SIZE)
+    utils.evaluateSubBool(utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $20), @"data reads back intact", true)
+    utils.evaluateSubValue(errCount, @"nothing injected", 0)
+    utils.showSubTestResults()
+
+    ' Test 10: Direction is honored - a read-armed LBA does not fail writes to it.
+    utils.startTest(@"TF_READ arming does not fail a write to the same LBA")
+    utils.setCheckCountPerTest(2)
+    sd.clearTestErrors()
+    sd.setTestFailSector(testSector, sd.TF_READ | sd.TF_STICKY)
+    result := sd.writeSectorRaw(testSector, @sectorBuffer)
+    utils.evaluateSubValue(result, @"write to a read-armed LBA succeeds", 0)
+    utils.evaluateSubValue(sd.getTestErrorCount(), @"write consumed no injection", 0)
+    utils.showSubTestResults()
+
+    ' Test 11: clearTestErrors leaves no residue at all - no armed sector, no
+    ' pending write countdown, no stale counters for the next suite to trip over.
+    utils.startTest(@"clearTestErrors leaves no residue")
+    utils.setCheckCountPerTest(5)
+    sd.setTestFailSector(testSector, sd.TF_BOTH | sd.TF_STICKY)
+    sd.setTestFailWriteAfter(1)
+    sd.setTestForceReadError(5)
+    sd.setTestForceWriteError(1)
+    sd.setTestMaxClusters(3)
+    sd.clearTestErrors()
+    utils.evaluateSubValue(sd.getTestErrorCount(), @"error count zeroed", 0)
+    utils.evaluateSubValue(sd.getTestWriteCallCount(), @"write call count zeroed", 0)
+    result := sd.readSectorRaw(testSector, @compareBuffer)
+    utils.evaluateSubValue(result, @"read succeeds after clear", 0)
+    result := sd.writeSectorRaw(testSector, @sectorBuffer)
+    utils.evaluateSubValue(result, @"write succeeds after clear", 0)
+    utils.evaluateSubValue(sd.getTestErrorCount(), @"still nothing injected", 0)
+    utils.showSubTestResults()
+
+    ' ======================================================================
+    ' Cleanup and Summary
+    ' ======================================================================
+    sd.clearTestErrors()
+    sd.deleteFile(@injFile)
+
+    sd.unmount()
+
+    utils.ShowTestEndCounts()
+
+    debug(" ")
+    debug("END_SESSION")
+
+con { license }
+
+{{
+  =================================================================================================
+
+  Terms of Use: MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this
+  software and associated documentation files (the "Software"), to deal in the Software
+  without restriction, including without limitation the rights to use, copy, modify,
+  merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies
+  or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+  INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+  HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+  CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+  OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+  =================================================================================================
+}}
