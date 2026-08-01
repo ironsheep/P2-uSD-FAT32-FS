@@ -4,7 +4,20 @@
 **Subject:** `src/micro_sd_fat32_fs.spin2` (v1.6.1, 8205 lines)
 **Question asked:** Are we ignoring errors instead of returning them? Can a user find out
 what error occurred? Do we stop appropriately when an error occurs?
-**Answer:** In several places, no. 19 findings below, 11 of them user-affecting.
+**Answer:** In several places, no. 24 findings below, 21 of them user-affecting. (19/11 as
+first written; Class F was added the same day at Stephen's prompt, and A9/A10 on 2026-08-01
+when `check_error_handling.sh` found two the read-through had missed. The user-affecting
+count was also wrong from the Class F addition onward and was corrected 2026-08-01 — see the
+note under §7, which is the live count.)
+
+> **Line numbers in this document are as of commit `73e13b0`** (the tree this audit was
+> read against). They are *not* maintained as the driver changes, and they are already
+> stale: the `SD_INCLUDE_TEST_HOOKS` fault-injection facility landed immediately after
+> this audit and shifted `micro_sd_fat32_fs.spin2` by roughly 110 lines from `do_newfile`
+> onward. Re-anchoring 21 findings by hand would go stale again at the first fix, so the
+> citations stay as captured and this stamp says what they mean. Locate a finding by the
+> method name and the quoted code, not by the number. `tools/check_error_handling.sh`
+> reports the live line for every finding it covers.
 
 ---
 
@@ -206,6 +219,44 @@ but nothing in the API indicates they need to.
 the card, and `do_unmount()` computes a perfectly good status (3446–3476) describing
 whether the sync, close, and FSInfo update succeeded. It is discarded, then the worker cog
 is stopped, making the failure permanently unrecoverable and unobservable.
+
+### A9. `do_rename()` ignores the directory-entry write
+**User-affecting. Severity: high.**
+*Found 2026-08-01 by `tools/check_error_handling.sh` on its first run — not by this audit.*
+
+```
+4681        writeSector(bookmark >> SECTOR_SHIFT, BUF_DIR)
+4682        cog_dir_sec[pb_caller] := temp_sec
+4684        status := SUCCESS
+```
+
+The rewritten 8.3 entry is the *entire* product of a rename. Its write is unchecked and
+`status := SUCCESS` follows unconditionally, so a rename that never reached the card
+reports success and the file keeps its old name. Identical in shape to A3, and it fixes
+the same way.
+
+### A10. `do_movefile()` ignores the source-entry delete write
+**User-affecting. Severity: high. Corruption path.**
+*Found 2026-08-01 by `tools/check_error_handling.sh` on its first run — not by this audit.*
+
+```
+4783          writeSector(bookmark >> SECTOR_SHIFT, BUF_DIR)
+4785          do_close()
+4786          status := SUCCESS
+```
+
+The move has already written the entry into the destination directory by this point; this
+write is what marks the *source* entry deleted. Unchecked, and `status := SUCCESS`
+follows. On failure the on-disk state is one file with two live directory entries in two
+directories, sharing one cluster chain — and deleting either one frees clusters the other
+still points at. This is A3's failure mode reached from the other direction.
+
+**Not a defect — `do_attempt_high_speed()` (4992).** The script flags this bare
+`writeSector()` too, and it is the one benign case: the method reads a sector, writes the
+*same bytes* back, poisons the buffer and re-reads to prove the 50 MHz path works. A failed
+write leaves the card holding the original data, so the read-back comparison is still
+valid and still proves what it set out to prove. It takes an explicit
+`' status intentionally ignored:` comment, not a fix.
 
 ---
 
@@ -536,6 +587,8 @@ preserves both senses. See plan §14 for the resulting approach.
 | B1 | `searchDirectory()` I/O error → "not found"; create fails open | misreported | yes | high |
 | A1 | `sync()` can never fail; `do_sync()` drops the entry | dropped | yes | high |
 | A3 | `do_delete()` frees clusters after unchecked entry write | dropped | yes | high |
+| A9 | `do_rename()` ignores the entry write, returns SUCCESS | dropped | yes | high |
+| A10 | `do_movefile()` ignores the source-entry delete write | dropped | yes | high |
 | A4 | `do_newdir()` ignores all writes, returns SUCCESS | dropped | yes | high |
 | A5 | `clearCluster()` called with unchecked negative cluster | dropped | yes | high |
 | A6 | Idle auto-flush discards all errors | dropped | yes | high |
@@ -549,12 +602,19 @@ preserves both senses. See plan §14 for the resulting approach.
 | D3 | Async ignores `async_caller`; wrong cog can `LOCKREL` | semantics | yes | medium |
 | F3 | 13 fallible ops flattened to boolean (`updateFSInfo`, `writeAdvanceCluster`, …) | discarded | yes | medium |
 | F4 | 3 capability queries conflate "no" with "couldn't ask" | misreported | yes | medium |
+| F5 | `eofHandle()` / `isFileContiguous()` return TRUE/FALSE *or* an error code, and `TRUE` = `E_TIMEOUT` = -1 | misreported | yes | medium |
 | B3 | `start()` reports `E_NO_LOCK` for cog-start failure | misreported | no | low |
 | C5 | `send_command()` no `set_error()` when not running | unreachable | no | low |
 | D2 | `E_FILE_NOT_OPEN` defined, never produced | semantics | no | info |
 
-**13 findings are user-affecting** under the release-gate definition (21 total after the
-Class F addition). Under that gate each
+**21 findings are user-affecting** under the release-gate definition, out of 24 total.
+
+*Count corrected 2026-08-01 while building the punch-list entries.* This line read "13 of
+21" from the day Class F was added and was never reconciled with the table above it — the
+table said 18 of 21 even then. Two things were wrong: the prose count was stale, and **F5
+was never given a table row** despite its own section marking it user-affecting. Both are
+fixed here. The per-finding `**User-affecting**` line in each section is the authority; the
+table now agrees with it, finding for finding. Under the release gate each
 must be fixed before or as part of the next release, or explicitly accepted by Stephen in
 writing with the reason recorded.
 
@@ -573,6 +633,10 @@ with an existing correct pattern elsewhere in the file to copy.
 4. **A4** — check both writes in `do_newdir()`; make the read-back verifications
    authoritative instead of decorative.
 5. **B2** — give `readFat()` a failure signal rather than a pointer to stale data.
+6. **A9** — check the entry write in `do_rename()` before returning `SUCCESS`; same fix
+   as A3.
+7. **A10** — check the source-entry delete write in `do_movefile()`; on failure the file
+   exists twice over one cluster chain, so do not report success.
 
 ### Tier 2 — errors the user cannot see (fix next)
 6. **C1 / C2** — make short reads and partial writes distinguishable from clean ones.
