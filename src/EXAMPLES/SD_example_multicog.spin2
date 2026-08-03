@@ -128,12 +128,15 @@ PRI readerTask() | handle, buf[128], total_bytes, bytes_read
         total_bytes := 0
         repeat
             bytes_read := sd.readHandle(handle, @buf, sd.SECTOR_SIZE)
-            if bytes_read == 0
+            if bytes_read <= 0                          ' 0 is end of file, negative is a failure
                 quit
             total_bytes += bytes_read
 
         sd.closeFileHandle(handle)
-        debug("[Reader] Read complete: ", udec(total_bytes), " bytes total")
+        if bytes_read < 0
+            debug("[Reader] Read FAILED after ", udec(total_bytes), " bytes: ", sdec(bytes_read))
+        else
+            debug("[Reader] Read complete: ", udec(total_bytes), " bytes total")
     else
         debug("[Reader] Open FAILED, error: ", sdec(handle))
 

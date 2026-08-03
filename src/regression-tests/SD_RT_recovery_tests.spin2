@@ -180,7 +180,7 @@ PUB go() | result, handle, handle0, handle1, handle2, bytesRead, bytesRead2, crc
             utils.evaluateSubValue(bytesRead, @"read returns 512 (validation skipped)", BUFFER_SIZE)
             utils.evaluateSubValue(sd.getCRCMismatchCount(), @"mismatch count unchanged (validation skipped)", crcBaseline)
         else
-            utils.evaluateSubValue(bytesRead, @"read fails with 0", 0)
+            utils.evaluateSubValue(bytesRead, @"read fails with E_IO_ERROR, never a zero", sd.E_IO_ERROR)
             utils.evaluateSubBool(sd.getCRCMismatchCount() > crcBaseline, @"CRC mismatches counted", true)
 
         ' Clear errors and seek back to start

@@ -200,11 +200,14 @@ CON ' error codes
   E_INIT_FAILED            = -21                                              ' Card initialization failed
   E_NOT_FAT32              = -22                                              ' Card not formatted as FAT32
   E_BAD_SECTOR_SIZE        = -23                                              ' Sector size not 512 bytes
+  E_BAD_FSINFO             = -24                                              ' FSInfo sector signatures invalid (free-space hint cannot be updated)
+  E_BAD_CHAIN              = -25                                              ' Cluster chain disagrees with the directory entry (chain walk went wrong)
+  E_STACK_OVERFLOW         = -26                                              ' Worker cog wrote past its stack -- nothing it reports can be trusted
   E_FILE_NOT_FOUND         = -40                                              ' File doesn't exist
   E_FILE_EXISTS            = -41                                              ' File already exists
   E_NOT_A_FILE             = -42                                              ' Expected file, found directory
   E_NOT_A_DIR              = -43                                              ' Expected directory, found file
-  E_FILE_NOT_OPEN          = -45                                              ' File not open
+  E_FILE_NOT_OPEN          = -45                                              ' RESERVED -- never produced; the driver reports E_INVALID_HANDLE for a closed handle
   E_END_OF_FILE            = -46                                              ' Read past end of file
   E_DISK_FULL              = -60                                              ' No free clusters
 #ifdef SD_INCLUDE_DEFRAG
@@ -213,6 +216,7 @@ CON ' error codes
   E_VERIFY_FAILED          = -63                                              ' Read-back verification failed after compact
 #endif
   E_NO_LOCK                = -64                                              ' Couldn't allocate hardware lock
+  E_NO_COG                 = -65                                              ' No free cog to run the worker (all eight in use)
 
   ' Multi-File Handle Error Codes
   E_TOO_MANY_FILES         = -90                                              ' All file handles are in use
@@ -244,7 +248,7 @@ CON ' Multi-file handle configuration
   {Spin2_Doc_CON}
   ' FILE HANDLE SYSTEM - supports multiple simultaneously open files
   ' User can override MAX_OPEN_FILES in their top-level CON section before OBJ
-  ' Memory cost: 544 bytes per handle (32 bytes state + 512 bytes buffer)
+  ' Memory cost: 548 bytes per handle (36 bytes state + 512 bytes buffer)
   ' Default 6 covers 2-3 cogs with mixed file/directory operations
   MAX_OPEN_FILES  = 6                                                         ' Default number of handles (user-overridable)
 
@@ -556,6 +560,13 @@ DAT  ' ---- Singleton Control ----
         api_lock                                LONG    -1                       ' Hardware lock ID (-1 = not allocated)
         driver_mode                             LONG    0                        ' Current mode: MODE_NONE, MODE_RAW, or MODE_FILESYSTEM
         last_init_error                         LONG    0                        ' Specific error from last initCard() failure
+        fat_io_status                           LONG    0                        ' Companion to readFat(): SUCCESS, or E_IO_ERROR when the returned pointer is stale
+        fsinfo_error                            LONG    0                        ' Companion to updateFSInfo(): why FALSE was returned (0 = nothing to update, not a failure)
+        freespace_error                         LONG    0                        ' Companion to do_freespace(): set when the FAT scan did not complete
+        hs_supported                            LONG    0                        ' Companion to probeHighSpeed(): the ANSWER, once the status says it was obtained
+        hs_query_error                          LONG    0                        ' Companion to the high-speed capability queries: set when the card could not be ASKED
+        advance_cluster_error                   LONG    0                        ' Companion to writeAdvanceCluster(): E_IO_ERROR vs E_DISK_FULL when it returns FALSE
+        search_io_status                        LONG    0                        ' Companion to searchDirectory(): SUCCESS, or E_IO_ERROR when FALSE means "could not look" not "not there"
 
         ' CMD13 STATUS STAGING - Preserved for diagnostic inspection
         last_cmd13_r1                           BYTE    0                        ' Last R1 byte from CMD13
@@ -597,6 +608,14 @@ DAT  ' ---- Singleton Control ----
         idle_timer                              LONG    0                        ' getct() at last command completion
         idle_flush_clocks                       LONG    0                        ' Threshold in clock ticks (set at mount time)
         flush_done                              BYTE    false                    ' TRUE after idle flush completes (reset on next command)
+
+        ' The idle flush is started by the worker itself, so there is no caller to return a
+        ' status to and no cog error slot that would be the right place to put one. Without
+        ' this field a background flush failure reaches NOBODY: the data never lands and
+        ' every later API call still reports success. Sticky on the FIRST failure -- a
+        ' later clean flush must not erase it before anyone has looked -- and cleared only
+        ' by clearFlushError(), never by reading. Read via lastFlushError().
+        flush_error                             LONG    0                        ' First failure seen by an automatic idle flush (0 = none since last clear)
         ct_active                               BYTE    0                        ' TRUE when live clock is enabled (set by setDate)
         ct_last_tick                            LONG    0                        ' getct() at last clock tick
         ct_tick_clocks                          LONG    0                        ' Clock ticks per 2-second interval (set at mount)
@@ -767,7 +786,7 @@ DAT  ' ---- Singleton Control ----
                                                 LONG    0                        ' fileSize
         vol_label                               BYTE    0[12]                    ' Volume label (11 chars + null)
 
-        ' FILE HANDLE TABLE - 28 bytes per handle
+        ' FILE HANDLE TABLE - 32 bytes per handle
         ' Each handle tracks an independently open file with its own state
         h_flags                                 BYTE    0[MAX_OPEN_FILES]        ' Handle state: HF_FREE, HF_READ, HF_WRITE (| HF_DIRTY)
         h_attr                                  BYTE    0[MAX_OPEN_FILES]        ' FAT directory entry attributes byte
@@ -778,6 +797,14 @@ DAT  ' ---- Singleton Control ----
         h_size                                  LONG    0[MAX_OPEN_FILES]        ' File size in bytes
         h_dir_sector                            LONG    0[MAX_OPEN_FILES]        ' Sector containing directory entry
         h_cluster                               LONG    0[MAX_OPEN_FILES]        ' Current cluster in FAT chain
+
+        ' PER-HANDLE ERROR SLOT - why the last read/write on this handle came up short.
+        ' readHandle()/writeHandle() return a byte COUNT, and a partial count is positive,
+        ' so a card failure part-way through a transfer cannot be told from EOF by the
+        ' return value alone. do_read_h/do_write_h write this slot on EVERY exit -- SUCCESS
+        ' as well as failure -- so handleError() after a call describes THAT call, matching
+        ' ERROR()'s write-on-exit rule. Read via the handleError() pure accessor.
+        h_error                                 LONG    0[MAX_OPEN_FILES]        ' Outcome of last readHandle/writeHandle on this handle
 
         ' PER-HANDLE DATA BUFFERS - 512 bytes per handle
         ' Each handle has its own buffer to eliminate thrashing when switching files
@@ -872,20 +899,37 @@ PUB start(_cs, _mosi, _miso, _sck) : workerCogId
         LOCKRET(api_lock)
         api_lock := -1
         DEBUG[CH_API]("  [start] FAIL: Could not start worker cog")
-        workerCogId := set_error(E_NO_LOCK)
+        workerCogId := set_error(E_NO_COG)              ' The lock was fine -- there was no cog free. Different condition, different remedy.
       else
         DEBUG[CH_API]("  [start] Worker cog ", udec_(cog_id), " started, lock ", udec_(api_lock))
         workerCogId := cog_id
         set_error(SUCCESS)                              ' write-on-exit: start() never reaches send_command()
 
-PUB stop()
+PUB stop() : status
 '' Stop worker cog - cleanly shut down the worker cog and release resources.
 '' Safe to call even if not started.
+''
+'' THIS IS THE LAST CHANCE buffered data has to reach the card. If the driver is still
+'' mounted, stop() unmounts first, and that unmount can fail -- and the very next thing
+'' stop() does is halt the worker cog, after which no retry is possible and nothing can
+'' report what happened. The unmount's status is therefore returned here.
+''
+'' The shutdown itself always completes: a failed unmount does not leave the cog running
+'' or the lock held, because there would be no way to recover either. What the caller
+'' gets is the truth about whether the data landed.
+''
+'' Safe to ignore the return value if the caller does not care -- Spin2 allows calling a
+'' value-returning method as a bare statement.
+''
+'' @returns status - SUCCESS (0), or the negative error code from the final unmount
 
+  status := SUCCESS
   if cog_id <> -1
     ' Send unmount command if mounted
     if flags & F_MOUNTED
-      send_command(CMD_UNMOUNT, 0, 0, 0, 0)
+      status := send_command(CMD_UNMOUNT, 0, 0, 0, 0)
+      if status <> SUCCESS
+        DEBUG[CH_API]("  [stop] Final unmount FAILED: ", sdec_(status))
 
     ' Stop the worker cog
     COGSTOP(cog_id)
@@ -901,6 +945,9 @@ PUB stop()
   driver_mode := MODE_NONE                              ' Reset mode so next init/mount starts fresh
   flags := 0
   sec_in_buf := -1
+
+  ' Write-on-exit: covers the not-mounted case too, where no command ran to record one
+  set_error(status)
 
 PUB mount(_cs, _mosi, _miso, _sck) : status
 '' Mount SD card (multi-cog safe) - starts worker cog and mounts filesystem.
@@ -936,7 +983,6 @@ PUB mount(_cs, _mosi, _miso, _sck) : status
         DEBUG[CH_API]("  [mount] Mount successful, mode=FILESYSTEM")
       else
         DEBUG[CH_API]("  [mount] Mount failed with error ", sdec_(status))
-        set_error(status)
 
 PUB unmount() : status
 '' Unmount SD card (multi-cog safe) - cleanly unmounts, flushing data and updating FSInfo.
@@ -945,8 +991,6 @@ PUB unmount() : status
 
   status := send_command(CMD_UNMOUNT, 0, 0, 0, 0)
   DEBUG[CH_API]("  [unmount] Card unmounted")
-  if status <> SUCCESS
-    set_error(status)
 
 CON ' ---- File I/O ----
 
@@ -964,7 +1008,6 @@ PUB openFileRead(p_path) : handle
     DEBUG[CH_API]("  [openFileRead] Opened handle ", udec_(handle))
   else
     DEBUG[CH_API]("  [openFileRead] Failed: ", sdec_(handle))
-    set_error(handle)
 
 PUB openFileWrite(p_path) : handle
 '' Open file for writing/append - opens for appending.
@@ -980,7 +1023,6 @@ PUB openFileWrite(p_path) : handle
     DEBUG[CH_API]("  [openFileWrite] Opened handle ", udec_(handle))
   else
     DEBUG[CH_API]("  [openFileWrite] Failed: ", sdec_(handle))
-    set_error(handle)
 
 PUB createFileNew(p_path) : handle
 '' Create new file for writing - creates and opens for writing.
@@ -996,7 +1038,6 @@ PUB createFileNew(p_path) : handle
     DEBUG[CH_API]("  [createFileNew] Created handle ", udec_(handle))
   else
     DEBUG[CH_API]("  [createFileNew] Failed: ", sdec_(handle))
-    set_error(handle)
 
 PUB closeFileHandle(handle) : status
 '' Close file handle - closes handle, flushing pending writes.
@@ -1011,39 +1052,52 @@ PUB closeFileHandle(handle) : status
     DEBUG[CH_API]("  [closeFileHandle] Closed handle ", udec_(handle))
   else
     DEBUG[CH_API]("  [closeFileHandle] Failed: ", sdec_(status))
-    set_error(status)
 
 PUB readHandle(handle, p_buffer, count) : bytes_read
 '' Read from file handle - reads up to count bytes into buffer.
-'' Returns actual bytes read (may be less at EOF). Returns 0 at EOF.
+'' Returns actual bytes read. Returns 0 ONLY at a genuine end of file.
 '' Position advances by the number of bytes read.
+''
+'' A NEGATIVE RETURN MEANS NOTHING WAS TRANSFERRED. A read that fails before moving a
+'' single byte returns its error code rather than 0, so that `repeat while n > 0` and
+'' `repeat until n == 0` both stop for the right reason -- a zero here would make a dying
+'' card indistinguishable from a finished file.
+''
+'' A POSITIVE COUNT SHORTER THAN REQUESTED MEANS EITHER END OF FILE OR A CARD FAILURE,
+'' and the two look identical here. Call handleError(handle) after any short count to
+'' tell them apart; it reports SUCCESS for a clean end of file.
 ''
 '' @param handle - Valid read handle
 '' @param p_buffer - Pointer to destination buffer
 '' @param count - Number of bytes to read
-'' @returns bytes_read - Number of bytes actually read (0 at EOF), negative on error
+'' @returns bytes_read - Bytes actually read; 0 ONLY at a genuine end of file; negative
+''                       on error (see handleError() when a positive count is short)
 
   send_command(CMD_READ_H, handle, p_buffer, count, 0)
   bytes_read := pb_data0
   if bytes_read < 0
     DEBUG[CH_API]("  [readHandle] Failed: ", sdec_(bytes_read))
-    set_error(bytes_read)
 
 PUB writeHandle(handle, p_buffer, count) : bytes_written
 '' Write to file handle - writes count bytes from buffer.
 '' File grows as needed with automatic cluster allocation.
 '' Position advances by the number of bytes written.
 ''
+'' A NEGATIVE RETURN MEANS NOTHING WAS ACCEPTED. Once any byte has been accepted a
+'' failure returns the PARTIAL COUNT instead, so the caller still knows how much of the
+'' file is valid -- call handleError(handle) after any count short of count to learn
+'' whether the shortfall was a card failure, a full disk, or a bad cluster chain.
+''
 '' @param handle - Valid write handle
 '' @param p_buffer - Pointer to source data buffer
 '' @param count - Number of bytes to write
 '' @returns bytes_written - Number of bytes written, negative on error
+''                          (see handleError() when the count is short but not negative)
 
   send_command(CMD_WRITE_H, handle, p_buffer, count, 0)
   bytes_written := pb_data0
   if bytes_written < 0
     DEBUG[CH_API]("  [writeHandle] Failed: ", sdec_(bytes_written))
-    set_error(bytes_written)
 
 PUB seekHandle(handle, position) : status
 '' Seek to position in file - seeks to absolute byte position.
@@ -1056,7 +1110,6 @@ PUB seekHandle(handle, position) : status
   status := send_command(CMD_SEEK_H, handle, position, 0, 0)
   if status <> SUCCESS
     DEBUG[CH_API]("  [seekHandle] Failed: ", sdec_(status))
-    set_error(status)
 
 PUB tellHandle(handle) : position
 '' Get current position - returns current byte position in file.
@@ -1069,20 +1122,27 @@ PUB tellHandle(handle) : position
     position := pb_data0
   else
     position := pb_status
-    set_error(position)
 
 PUB eofHandle(handle) : is_eof
 '' Check if at end of file - returns TRUE if at or past EOF.
 ''
+'' RETURNS A BOOLEAN ONLY. It used to return TRUE, FALSE, *or* a negative error code, and
+'' those cannot coexist in Spin2: TRUE is -1 and E_TIMEOUT is -1, so "at end of file" and
+'' "the card timed out" were the same value. Worse, every other negative code is non-zero
+'' and therefore already read as TRUE in the `if sd.eofHandle(h)` form every caller uses.
+''
+'' A failed query now reports TRUE, which is what the old code effectively did anyway, and
+'' is the safe direction: a loop reading until EOF stops rather than spinning on a card
+'' that is not answering. ERROR() says whether it was a real end of file.
+''
 '' @param handle - Valid file handle
-'' @returns is_eof - TRUE if at EOF, FALSE if not, negative on error
+'' @returns is_eof - TRUE if at EOF or the query failed (see ERROR()), FALSE if not at EOF
 
   send_command(CMD_EOF_H, handle, 0, 0, 0)
-  if pb_status == SUCCESS
-    is_eof := pb_data0 <> 0
+  if pb_status <> SUCCESS
+    is_eof := true                                      ' Could not ask -- stop the loop, and let ERROR() say why
   else
-    is_eof := pb_status
-    set_error(is_eof)
+    is_eof := pb_data0 <> 0
 
 PUB fileSizeHandle(handle) : size
 '' Get file size - returns total size in bytes.
@@ -1096,7 +1156,6 @@ PUB fileSizeHandle(handle) : size
     size := pb_data0
   else
     size := pb_status
-    set_error(size)
 
 PUB syncHandle(handle) : status
 '' Flush handle to disk - flushes pending writes and updates directory.
@@ -1108,7 +1167,6 @@ PUB syncHandle(handle) : status
   status := send_command(CMD_SYNC_H, handle, 0, 0, 0)
   if status <> SUCCESS
     DEBUG[CH_API]("  [syncHandle] Failed: ", sdec_(status))
-    set_error(status)
 
 PUB syncAllHandles() : status
 '' Flush all handles to disk - flushes all open write handles.
@@ -1119,18 +1177,20 @@ PUB syncAllHandles() : status
   status := send_command(CMD_SYNC_ALL, 0, 0, 0, 0)
   if status <> SUCCESS
     DEBUG[CH_API]("  [syncAllHandles] Failed: ", sdec_(status))
-    set_error(status)
 
 PUB sync() : status
 '' Flush buffers (multi-cog safe) - flushes pending writes without closing file.
 '' Use to checkpoint data during long operations.
 ''
+'' A failure here means a pending directory entry did NOT reach the card. The entry stays
+'' pending in the driver, so a later sync() or the close still has it to write -- but a
+'' caller that treats sync() as a checkpoint must check the return, or it will believe
+'' data is safe that is not.
+''
 '' @returns status - SUCCESS (0) on success, negative error code on failure
 
   status := send_command(CMD_SYNC, 0, 0, 0, 0)
-  DEBUG[CH_API]("  [sync] Buffers flushed")
-  if status <> SUCCESS
-    set_error(status)
+  DEBUG[CH_API]("  [sync] status=", sdec_(status))
 
 CON ' ---- Directory ----
 
@@ -1151,25 +1211,39 @@ PUB readDirectoryHandle(handle) : p_entry
 '' Skips deleted, LFN, and hidden/system entries automatically.
 '' After each call, use fileName() and attributes() to inspect the returned entry.
 ''
+'' A ZERO RETURN MEANS EITHER END OF DIRECTORY OR A FAILED READ, and the enumeration
+'' loop `repeat while sd.readDirectoryHandle(h)` ends the same way for both -- so a
+'' directory truncated by an unreadable sector looks like a directory that simply ended.
+'' ERROR() separates them: E_FILE_NOT_FOUND is the clean end, E_IO_ERROR is not. Check it
+'' after the loop, the same way a short read is checked with handleError().
+''
 '' @param handle - Directory handle from openDirectory()
-'' @returns p_entry - Pointer to entry_buffer on success, 0 at end of directory
+'' @returns p_entry - Pointer to entry_buffer on success, 0 at end of directory OR on error
+''                    (see ERROR() to tell those apart)
 
   p_entry := 0
   if send_command(CMD_READ_DIR_H, handle, 0, 0, 0) == SUCCESS
     p_entry := @entry_buffer
 
-PUB closeDirectoryHandle(handle)
+PUB closeDirectoryHandle(handle) : status
 '' Close directory handle (multi-cog safe) - releases handle back to pool.
 ''
+'' Safe to call as a bare statement if the caller does not care about the outcome --
+'' Spin2 allows a value-returning method to be called that way.
+''
 '' @param handle - Directory handle from openDirectory()
+'' @returns status - SUCCESS (0) on success, negative error code on failure
 
-  send_command(CMD_CLOSE_DIR_H, handle, 0, 0, 0)
+  status := send_command(CMD_CLOSE_DIR_H, handle, 0, 0, 0)
 
 PUB readDirectory(entry) : pEntry
 '' Read directory entry (multi-cog safe) - iterates through directory entries.
 ''
+'' As with readDirectoryHandle(), a 0 return covers both "no such entry" and a failed
+'' read; ERROR() carries which.
+''
 '' @param entry - Entry index to read (0-based)
-'' @returns pEntry - Pointer to entry_buffer on success, 0 if entry doesn't exist
+'' @returns pEntry - Pointer to entry_buffer on success, 0 if entry doesn't exist or on error
 
   pEntry := 0
   if send_command(CMD_READDIR, entry, 0, 0, 0) == SUCCESS
@@ -1182,8 +1256,6 @@ PUB newDirectory(name_ptr) : status
 '' @returns status - SUCCESS (0) on success, negative error code on failure
 
   status := send_command(CMD_NEWDIR, name_ptr, 0, 0, 0)
-  if status <> SUCCESS
-    set_error(status)
 
 PUB changeDirectory(name_ptr) : status
 '' Change directory (multi-cog safe) - changes current directory.
@@ -1192,8 +1264,6 @@ PUB changeDirectory(name_ptr) : status
 '' @returns status - SUCCESS (0) on success, negative error code on failure
 
   status := send_command(CMD_CHDIR, name_ptr, 0, 0, 0)
-  if status <> SUCCESS
-    set_error(status)
 
 CON ' ---- Metadata ----
 
@@ -1204,8 +1274,6 @@ PUB deleteFile(name_ptr) : status
 '' @returns status - SUCCESS (0) on success, negative error code on failure
 
   status := send_command(CMD_DELETE, name_ptr, 0, 0, 0)
-  if status <> SUCCESS
-    set_error(status)
 
 PUB rename(old_name, new_name) : status
 '' Rename file or directory (multi-cog safe).
@@ -1215,8 +1283,6 @@ PUB rename(old_name, new_name) : status
 '' @returns status - SUCCESS (0) on success, negative error code on failure
 
   status := send_command(CMD_RENAME, old_name, new_name, 0, 0)
-  if status <> SUCCESS
-    set_error(status)
 
 PUB moveFile(name_ptr, dest_folder) : status
 '' Move file to another directory (multi-cog safe).
@@ -1226,14 +1292,18 @@ PUB moveFile(name_ptr, dest_folder) : status
 '' @returns status - SUCCESS (0) on success, negative error code on failure
 
   status := send_command(CMD_MOVEFILE, name_ptr, dest_folder, 0, 0)
-  if status <> SUCCESS
-    set_error(status)
 
 PUB freeSpace() : sectorCount
 '' Get free space in sectors (multi-cog safe).
 '' This may take a while on large cards.
 ''
-'' @returns sectorCount - Number of free sectors on the card
+'' Returns 0 if the FAT scan could not be completed, with the reason in ERROR(). A count
+'' is only meaningful when the whole FAT was read: a scan that stopped part-way would
+'' report a number that is simply too low, and an application sizing a write against it
+'' would be told there is no room -- or, reasoning the other way, would trust space that
+'' was never verified. Zero-with-an-error cannot be mistaken for either.
+''
+'' @returns sectorCount - Number of free sectors on the card, or 0 if the scan failed
 
   if send_command(CMD_FREESPACE, 0, 0, 0, 0) == SUCCESS
     sectorCount := pb_data0
@@ -1313,7 +1383,6 @@ PUB fileFragments(p_path) : fragment_count
 
   fragment_count := send_command(CMD_FILE_FRAGMENTS, p_path, 0, 0, 0)
   if pb_status < 0
-    set_error(pb_status)
     fragment_count := pb_status
   else
     fragment_count := pb_data0
@@ -1322,12 +1391,17 @@ PUB isFileContiguous(p_path) : bContiguous
 '' Check if a file's clusters are stored contiguously on disk.
 '' Convenience wrapper around fileFragments() (Decision #6).
 ''
+'' RETURNS A BOOLEAN ONLY -- see eofHandle() for why a method cannot return both. Here the
+'' old mixed return was actively misleading: every negative error code is non-zero, so a
+'' failed fragment count read as "yes, contiguous" and a caller could skip the compaction
+'' the file actually needed. A failed query now reports FALSE, and ERROR() says why. FALSE
+'' therefore means "not contiguous, or not known to be" -- the safe reading.
+''
 '' @param p_path - Pointer to null-terminated filename string
-'' @returns bContiguous - TRUE if contiguous (fragment_count == 1), FALSE otherwise, or negative error code
+'' @returns bContiguous - TRUE only if the count was obtained AND equals 1; FALSE otherwise
+''                        (see ERROR() to tell a fragmented file from a failed query)
 
-  bContiguous := fileFragments(p_path)
-  if bContiguous >= 0
-    bContiguous := (bContiguous == 1)
+  bContiguous := (fileFragments(p_path) == 1)
 
 PUB createFileContiguous(p_path, file_size) : handle
 '' Create a new file with a pre-allocated contiguous cluster chain.
@@ -1340,7 +1414,6 @@ PUB createFileContiguous(p_path, file_size) : handle
 
   handle := send_command(CMD_CREATE_CONTIGUOUS, p_path, file_size, 0, 0)
   if pb_status < 0
-    set_error(pb_status)
     handle := pb_status
   else
     handle := pb_data0
@@ -1355,11 +1428,6 @@ PUB compactFile(p_path) : status
 '' @returns status - SUCCESS, E_FILE_NOT_FOUND, E_FILE_OPEN_FOR_COMPACT, E_NO_CONTIGUOUS_SPACE, E_VERIFY_FAILED, E_IO_ERROR
 
   status := send_command(CMD_COMPACT_FILE, p_path, 0, 0, 0)
-  if pb_status < 0
-    set_error(pb_status)
-    status := pb_status
-  else
-    status := pb_status
 
 #endif                                                  ' SD_INCLUDE_DEFRAG
 
@@ -1375,6 +1443,11 @@ PUB startReadHandle(handle, p_buffer, count) : status
 '' Begin an asynchronous read. Returns immediately with PENDING.
 '' Caller must call isComplete()/getResult() to get the data.
 '' The api_lock is held until getResult() or cancelAsync() is called.
+''
+'' ONE ASYNC OPERATION AT A TIME, ACROSS THE WHOLE DRIVER. There is a single in-flight
+'' slot, not one per cog, so a second cog starting one while another is pending gets
+'' E_ASYNC_BUSY. The operation belongs to the cog that started it: only that cog may
+'' collect it with getResult() or drop it with cancelAsync().
 ''
 '' @param handle - Valid read handle
 '' @param p_buffer - Pointer to destination buffer
@@ -1403,6 +1476,10 @@ PUB startReadHandle(handle, p_buffer, count) : status
 PUB startWriteHandle(handle, p_buffer, count) : status
 '' Begin an asynchronous write. Returns immediately with PENDING.
 '' Caller must call isComplete()/getResult() to get the result.
+'' The api_lock is held until getResult() or cancelAsync() is called.
+''
+'' ONE ASYNC OPERATION AT A TIME, ACROSS THE WHOLE DRIVER -- see startReadHandle(). The
+'' operation belongs to the cog that started it; only that cog may collect or cancel it.
 ''
 '' @param handle - Valid write handle
 '' @param p_buffer - Pointer to source data
@@ -1429,20 +1506,32 @@ PUB startWriteHandle(handle, p_buffer, count) : status
                                                         ' outcome is recorded by getResult()
 
 PUB isComplete() : done
-'' Check if the current async operation has completed.
+'' Check if THIS COG's async operation has completed.
 '' Does NOT release the lock or consume the result.
 ''
-'' @returns done - TRUE if complete, FALSE if still in progress
+'' Returns FALSE in a cog that does not own the in-flight operation -- that cog has no
+'' async operation, so it has none that is complete. This is a pure accessor and does
+'' not touch the error slot.
+''
+'' @returns done - TRUE if complete, FALSE if still in progress or not this cog's
 
-  done := async_active AND (pb_cmd == CMD_NONE)
+  done := async_active AND (COGID() == async_caller) AND (pb_cmd == CMD_NONE)
 
 PUB getResult() : byteCount
-'' Get the result of a completed async operation and release the lock.
+'' Get the result of THIS COG's completed async operation and release the lock.
 '' After this call, new commands can be issued.
 ''
-'' @returns byteCount - Bytes read/written, or negative error code
+'' ONLY THE COG THAT STARTED THE OPERATION MAY COLLECT IT. Another cog calling this gets
+'' E_NO_ASYNC_OP and changes nothing. Without that check it would take the owner's result
+'' as its own, record that result in ITS error slot, and -- worst of the three -- call
+'' LOCKREL() on a lock it does not hold, releasing the API lock out from under the cog
+'' that does. Note this rejects only a call that is already incorrect today, so no correct
+'' consumer is affected.
+''
+'' @returns byteCount - Bytes read/written, negative error code, or E_NO_ASYNC_OP if this
+''                      cog has no async operation in flight
 
-  if NOT async_active
+  if NOT async_active OR COGID() <> async_caller
     byteCount := set_error(E_NO_ASYNC_OP)
   else
     ' Wait for completion if not already done
@@ -1460,13 +1549,17 @@ PUB getResult() : byteCount
     LOCKREL(api_lock)
 
 PUB cancelAsync() : status
-'' Cancel a pending async operation and release the lock.
+'' Cancel THIS COG's pending async operation and release the lock.
 '' Waits for the worker to finish (cannot interrupt SPI mid-transfer),
 '' then discards the result.
 ''
-'' @returns status - SUCCESS
+'' Same ownership rule as getResult(): only the cog that started the operation may cancel
+'' it, for the same reason -- the LOCKREL() at the end would otherwise release a lock this
+'' cog never held.
+''
+'' @returns status - SUCCESS, or E_NO_ASYNC_OP if this cog has no async operation in flight
 
-  if NOT async_active
+  if NOT async_active OR COGID() <> async_caller
     status := set_error(E_NO_ASYNC_OP)
   else
     repeat until pb_cmd == CMD_NONE
@@ -1528,8 +1621,6 @@ PUB setVolumeLabel(p_label) : status
 '' @returns status - SUCCESS (0) on success, negative error code on failure
 
   status := send_command(CMD_SET_VOL_LABEL, p_label, 0, 0, 0)
-  if status <> SUCCESS
-    set_error(status)
 
 PUB syncDirCache()
 '' Force directory cache invalidation - invalidates the directory sector cache.
@@ -1553,9 +1644,9 @@ PUB ERROR() : status
 ''
 '' Pure accessors deliberately do NOT touch the slot: fileName(), fileSize(),
 '' attributes(), volumeLabel(), sectorsPerCluster(), clusterBytes(), getDate(),
-'' isComplete() and ERROR() itself. Without that carve-out a diagnostic call would
-'' erase the error being diagnosed -- debug(sd.fileName()) between a failed
-'' openFileRead() and the ERROR() check would store SUCCESS over it.
+'' isComplete(), handleError(), lastFlushError() and ERROR() itself. Without that carve-out
+'' a diagnostic call would erase the error being diagnosed -- debug(sd.fileName()) between
+'' a failed openFileRead() and the ERROR() check would store SUCCESS over it.
 ''
 '' Reading does not clear the slot -- only the next operation on this cog overwrites
 '' it. That is the rule across this driver's error accessors: reading never changes
@@ -1565,6 +1656,84 @@ PUB ERROR() : status
 ''                   recent operation
 
   status := LONG[@last_error][COGID()]
+
+PUB handleError(handle) : status
+'' Get why the last read or write on this handle came up short.
+'' Returns SUCCESS (0) if that operation transferred everything it was asked for --
+'' or stopped at a genuine end of file -- and the negative error code if it did not.
+''
+'' readHandle() and writeHandle() return a byte COUNT. A partial count is POSITIVE, so
+'' the return value alone cannot tell a card failure part-way through a transfer from a
+'' clean end of file: the documented read loop
+''
+''   repeat while (n := sd.readHandle(h, @buf, 512)) > 0
+''
+'' ends the same way in both cases, and a file truncated part-way through would otherwise
+'' be processed as a complete one. Call this after any short count to find out which
+'' happened. A negative return from readHandle()/writeHandle() already carries its own
+'' reason and needs no second call.
+''
+'' The slot follows the same rule as ERROR(): every readHandle()/writeHandle() on this
+'' handle writes it on EVERY exit -- success as well as failure -- so it always describes
+'' the MOST RECENT one, and reading does not clear it. Reading never changes state in this
+'' driver; operations do.
+''
+'' Attributed to the handle, so it is unambiguous when several files are open at once, and
+'' unlike ERROR() it is not disturbed by another cog's work. A CLOSED handle reports
+'' E_INVALID_HANDLE rather than SUCCESS -- its slot is back in the pool and has no outcome
+'' to report -- so read this BEFORE closeFileHandle().
+''
+'' This is a pure accessor -- it reads a DAT variable directly and issues no command, so it
+'' does not disturb ERROR().
+''
+'' @param handle - Handle previously read from or written to
+'' @returns status - SUCCESS (0), or the negative error code from the last read/write on
+''                   this handle; E_INVALID_HANDLE if the handle is out of range or closed
+
+  if NOT validateHandle(handle)
+    status := E_INVALID_HANDLE                          ' Better than the SUCCESS a freed slot holds -- a closed handle has no outcome to report
+  else
+    status := h_error[handle]
+
+PUB lastFlushError() : status
+'' Get the first failure seen by an AUTOMATIC background flush since the last clear.
+'' Returns SUCCESS (0) if every automatic flush has landed cleanly.
+''
+'' Buffered writes reach the card either when you sync or close, or -- if you do neither --
+'' when the driver notices the card has been idle and flushes on its own. That automatic
+'' flush is started by the worker cog itself. There is no call to return a status to, so a
+'' failure there reaches nobody: the data does not land, and every API call you make
+'' afterward still reports success. POLLING THIS IS THE ONLY WAY TO LEARN IT HAPPENED, and
+'' a program that writes for a long time between syncs should do so periodically.
+''
+'' The value is sticky and keeps the FIRST failure. Automatic flushes run on a timer, so a
+'' later clean one could otherwise erase the report before you ever looked. Reading does
+'' not clear it -- call clearFlushError() when you have handled it.
+''
+'' A failed flush leaves the handle DIRTY, so the data is still in the driver's buffer: a
+'' later syncHandle() or closeFileHandle() can still get it to the card once whatever
+'' caused the failure is resolved.
+''
+'' A flush cut short because a command arrived is NOT a failure and is not reported here --
+'' the handles stay dirty and the next idle window retries.
+''
+'' This is a pure accessor -- it reads a DAT variable directly and issues no command, so it
+'' does not disturb ERROR().
+''
+'' @returns status - SUCCESS (0), or the negative error code of the first automatic flush
+''                   failure since the last clearFlushError()
+
+  status := flush_error
+
+PUB clearFlushError()
+'' Clear the automatic-flush error reported by lastFlushError().
+'' Call this once you have handled the failure; nothing else clears it, so a report left
+'' unhandled stays readable for as long as it takes you to poll for it.
+''
+'' Clearing does not retry anything. The affected handle is still dirty -- use
+'' syncHandle() or closeFileHandle() to get its data to the card.
+
+  flush_error := SUCCESS
 
 PUB cardWarnings() : warning_flags
 '' Get card capability and advisory flags discovered during mount.
@@ -1646,7 +1815,6 @@ PUB initCardOnly(_cs, _mosi, _miso, _sck) : status
         DEBUG[CH_INIT]("  [initCardOnly] Card initialized successfully via worker")
       else
         DEBUG[CH_INIT]("  [initCardOnly] Card initialization failed, error=", sdec_(status))
-        set_error(status)
 
 PUB cardSizeSectors() : sectorCount
 '' Get total sectors on card via worker cog.
@@ -1732,8 +1900,6 @@ PUB readSectorRaw(sector, p_buffer) : status
     status := E_NOT_MOUNTED
   else
     status := send_command(CMD_READ_SECTOR_RAW, sector, p_buffer, 0, 0)
-    if status <> SUCCESS
-      set_error(status)
     DEBUG[CH_SECTOR]("  [readSectorRaw] Read sector ", udec(sector))
 
 PUB writeSectorRaw(sector, p_buffer) : status
@@ -1755,7 +1921,6 @@ PUB writeSectorRaw(sector, p_buffer) : status
       DEBUG[CH_SECTOR]("  [writeSectorRaw] Wrote sector ", udec(sector))
     else
       DEBUG[CH_SECTOR]("  [writeSectorRaw] FAILED to write sector ", udec(sector))
-      set_error(status)
 
 PUB readSectorsRaw(start_sector, count, p_buffer) : sectorCount
 '' Read multiple consecutive sectors - multi-block read using CMD18.
@@ -1763,8 +1928,12 @@ PUB readSectorsRaw(start_sector, count, p_buffer) : sectorCount
 ''
 '' @param start_sector - First sector to read (absolute LBA)
 '' @param count - Number of sectors to read
+'' A count short of what was asked for -- including 0 -- means the transfer failed;
+'' ERROR() carries the reason. Compare the return against count rather than testing it
+'' for zero, or a partial multi-block read reads as a complete one.
+''
 '' @param p_buffer - Pointer to buffer (must be count * 512 bytes)
-'' @returns sectorCount - Number of sectors successfully read
+'' @returns sectorCount - Number of sectors successfully read (0 on failure, see ERROR())
 
   if send_command(CMD_READ_SECTORS, start_sector, count, p_buffer, 0) == SUCCESS
     sectorCount := pb_data0
@@ -1777,8 +1946,12 @@ PUB writeSectorsRaw(start_sector, count, p_buffer) : sectorCount
 ''
 '' @param start_sector - First sector to write (absolute LBA)
 '' @param count - Number of sectors to write
+'' A count short of what was asked for -- including 0 -- means the transfer failed;
+'' ERROR() carries the reason. Compare the return against count rather than testing it
+'' for zero, or a partial multi-block write reads as a complete one.
+''
 '' @param p_buffer - Pointer to buffer with data (must be count * 512 bytes)
-'' @returns sectorCount - Number of sectors successfully written
+'' @returns sectorCount - Number of sectors successfully written (0 on failure, see ERROR())
 
   if send_command(CMD_WRITE_SECTORS, start_sector, count, p_buffer, 0) == SUCCESS
     sectorCount := pb_data0
@@ -1798,8 +1971,6 @@ PUB readVBRRaw(p_buf) : status
     status := E_NOT_MOUNTED
   else
     status := send_command(CMD_READ_SECTOR_RAW, vbr_sec, p_buf, 0, 0)
-    if status <> SUCCESS
-      set_error(status)
 
 #endif
 
@@ -1820,7 +1991,6 @@ PUB readCIDRaw(p_buf) : status
     DEBUG[CH_IDENT]("  [readCIDRaw] CID read successfully")
   else
     DEBUG[CH_IDENT]("  [readCIDRaw] CID read FAILED")
-    set_error(status)
 
 PUB readCSDRaw(p_buf) : status
 '' Read CSD register (16 bytes) into buffer.
@@ -1835,7 +2005,6 @@ PUB readCSDRaw(p_buf) : status
     DEBUG[CH_IDENT]("  [readCSDRaw] CSD read successfully")
   else
     DEBUG[CH_IDENT]("  [readCSDRaw] CSD read FAILED")
-    set_error(status)
 
 PUB readSCRRaw(p_buf) : status
 '' Read SCR register (8 bytes) into buffer.
@@ -1850,7 +2019,6 @@ PUB readSCRRaw(p_buf) : status
     DEBUG[CH_IDENT]("  [readSCRRaw] SCR read successfully")
   else
     DEBUG[CH_IDENT]("  [readSCRRaw] SCR read FAILED")
-    set_error(status)
 
 PUB readSDStatusRaw(p_buf) : status
 '' Read SD Status register (ACMD13) - returns 64 bytes of card status.
@@ -1864,7 +2032,6 @@ PUB readSDStatusRaw(p_buf) : status
     DEBUG[CH_IDENT]("  [readSDStatusRaw] SD Status read successfully")
   else
     DEBUG[CH_IDENT]("  [readSDStatusRaw] SD Status read FAILED")
-    set_error(status)
 
 PUB getOCR() : ocr
 '' Get cached OCR register value - Operating Conditions Register from card init.
@@ -1887,9 +2054,19 @@ PUB attemptHighSpeed() : hs_ok
 '' Queries capability, switches mode, verifies with sector read/write.
 '' Safe to call - will not break operation on failure.
 ''
-'' @returns hs_ok - TRUE if 50 MHz active, FALSE if fell back to 25 MHz
+'' RETURNS AN HONEST BOOLEAN -- TRUE means 50 MHz is active, FALSE means it is not, and
+'' that is all. "The card does not offer high speed" and "the card could not be asked" are
+'' both FALSE here, but they call for completely different responses, so which one it was
+'' is in ERROR(): SUCCESS when the card simply said no, an error code when the query or
+'' the verification failed. Without that split, a card with SPI trouble reports "high speed
+'' not supported" and sends you diagnosing the wrong thing.
+''
+'' @returns hs_ok - TRUE if 50 MHz active, FALSE if not (see ERROR() for whether the card
+''                  declined or could not be asked)
 
-  if cog_id <> -1
+  if cog_id == -1
+    set_error(E_NOT_MOUNTED)                            ' Could not ask at all -- do not report it as "no"
+  else
     send_command(CMD_ATTEMPT_HIGH_SPEED, 0, 0, 0, 0)
     hs_ok := pb_data0
 
@@ -1897,7 +2074,11 @@ PUB checkCMD6Support() : supported | scr[2], sd_spec
 '' Check if card supports CMD6 command - reads SCR for SD spec version.
 '' CMD6 supported by SD 2.0 and later cards (SD_SPEC >= 2).
 ''
-'' @returns supported - TRUE if CMD6 is available
+'' RETURNS AN HONEST BOOLEAN. FALSE means the card is SD 1.x, or that the SCR could not be
+'' read at all; ERROR() says which. See attemptHighSpeed() for why the two must not be the
+'' same answer.
+''
+'' @returns supported - TRUE if CMD6 is available, FALSE if not or unknown (see ERROR())
 ' @local scr - SCR register data (2 longs = 8 bytes)
 ' @local sd_spec - SD spec version from SCR
 
@@ -1914,9 +2095,15 @@ PUB checkHighSpeedCapability() : capable
 '' Uses CMD6 mode 0 (check without switch).
 '' Requires CMD6 support - call checkCMD6Support() first.
 ''
-'' @returns capable - TRUE if high-speed function is supported
+'' RETURNS AN HONEST BOOLEAN. FALSE means the card reported no high-speed function, or the
+'' question could not be put to it; ERROR() says which. See attemptHighSpeed().
+''
+'' @returns capable - TRUE if high-speed function is supported, FALSE if not or unknown
+''                    (see ERROR())
 
-  if cog_id <> -1
+  if cog_id == -1
+    set_error(E_NOT_MOUNTED)                            ' Could not ask at all -- do not report it as "no"
+  else
     send_command(CMD_CHECK_HS_CAPABILITY, 0, 0, 0, 0)
     capable := pb_data0
 
@@ -2872,11 +3059,10 @@ PRI fs_worker() | cur_cmd
 
       CMD_FREESPACE:
         pb_data0 := do_freespace()
-        pb_status := SUCCESS
+        pb_status := freespace_error                    ' An incomplete scan is not a free-space answer
 
       CMD_SYNC:
-        do_sync()
-        pb_status := SUCCESS
+        pb_status := do_sync()
 
       CMD_RENAME:
         pb_status := do_rename(pb_param0, pb_param1)
@@ -2943,11 +3129,11 @@ PRI fs_worker() | cur_cmd
 #ifdef SD_INCLUDE_SPEED
       CMD_ATTEMPT_HIGH_SPEED:
         pb_data0 := do_attempt_high_speed()
-        pb_status := SUCCESS
+        pb_status := hs_query_error                     ' "card says no" is SUCCESS; "could not ask" is not
 
       CMD_CHECK_HS_CAPABILITY:
         pb_data0 := do_check_hs_capability()
-        pb_status := SUCCESS
+        pb_status := hs_query_error
 
       CMD_SET_SPI_SPEED:
         applySPISpeed(pb_param0)
@@ -3157,12 +3343,20 @@ PRI send_command(op_cmd, p0, p1, p2, p3) : status
     ' Wait for completion using WAITATN (efficient sleep)
     WAITATN()
 
-    ' Check worker cog stack guard after every command
-    if NOT checkStackGuard()
-      DEBUG[CH_API]("  [send_command] STACK OVERFLOW after cmd ", udec_(op_cmd))
-
     ' Get result
     status := pb_status
+
+    ' Check worker cog stack guard after every command. A violation means the worker
+    ' cog has written past its stack into whatever follows, so nothing it just reported
+    ' can be trusted -- INCLUDING a SUCCESS. It therefore overrides the command's own
+    ' status rather than being noted alongside it, and it must land BEFORE the
+    ' write-on-exit below or ERROR() would report the operation instead of the
+    ' corruption. Until this was escalated it reached DEBUG only, and the driver ships
+    ' with DEBUG_MASK = 0 -- worker memory corruption was detected after every single
+    ' command and told to nobody.
+    if NOT checkStackGuard()
+      DEBUG[CH_API]("  [send_command] STACK OVERFLOW after cmd ", udec_(op_cmd))
+      status := E_STACK_OVERFLOW
 
     ' Release lock
     LOCKREL(api_lock)
@@ -3201,6 +3395,7 @@ PRI freeHandle(handle)
   h_dir_sector[handle] := 0
   h_cluster[handle] := 0
   h_buf_sector[handle] := -1                            ' Mark buffer as invalid
+  h_error[handle] := SUCCESS                            ' Slot is reusable -- never hand a new file a stale error
 
 PRI validateHandle(handle) : bValid
 ' Check if handle is valid and in use - fast guard function for handle operations.
@@ -3598,6 +3793,8 @@ PRI do_unmount() : status | sync_status, close_status
 '
 ' @returns status - SUCCESS on clean unmount; first non-SUCCESS encountered
 '                   among (do_sync_all, do_close, updateFSInfo) otherwise.
+'                   An FSInfo failure reports its own reason (E_IO_ERROR or
+'                   E_BAD_FSINFO); a card with no FSInfo is not a failure.
 
 ' Sync all open handles before unmount
 
@@ -3611,11 +3808,12 @@ PRI do_unmount() : status | sync_status, close_status
   if close_status < 0 AND status == SUCCESS
     status := close_status
 
-  ' updateFSInfo returns FALSE for both "nothing to update" (no FSInfo sector
-  ' / no cached free count) and "write failed" -- gate on those preconditions
-  ' so a card without FSInfo does not get a spurious E_IO_ERROR on unmount.
-  if fsinfo_sec <> 0 AND fsi_free_count <> $FFFF_FFFF AND NOT updateFSInfo() AND status == SUCCESS
-    status := E_IO_ERROR
+  ' updateFSInfo() returns FALSE for "nothing to update" as well as for a real
+  ' failure; fsinfo_error is what tells them apart, so no precondition gate is
+  ' needed here. A card without FSInfo leaves fsinfo_error at SUCCESS.
+  updateFSInfo()
+  if fsinfo_error < 0 AND status == SUCCESS
+    status := fsinfo_error
 
   flags := flags & !F_MOUNTED
   driver_mode := MODE_NONE
@@ -3633,6 +3831,8 @@ PRI do_open(name_ptr) : status | search_result
   search_result := searchDirectory(name_ptr)
   if search_result AND (attributes() & (ATTR_HIDDEN | ATTR_SYSTEM | ATTR_VOLUME_ID | ATTR_DIRECTORY) == 0)
     status := SUCCESS
+  elseif search_io_status < 0
+    status := search_io_status                          ' The directory could not be read -- not "no such file"
   else
     status := E_FILE_NOT_FOUND
 
@@ -3676,7 +3876,7 @@ PRI do_open_read(p_path) : handle | start_cluster
     ' Search for the file
     DEBUG[CH_FILE]("  [do_open_read] File not found: ", zstr_(p_path))
     freeHandle(handle)
-    handle := E_FILE_NOT_FOUND
+    handle := (search_io_status < 0) ? search_io_status : E_FILE_NOT_FOUND
   elseif attributes() & ATTR_DIRECTORY                  ' Directory bit
     ' Verify it's a file, not a directory
     DEBUG[CH_FILE]("  [do_open_read] Path is a directory, not a file")
@@ -3719,7 +3919,7 @@ PRI do_open_write(p_path) : handle | start_cluster, current_cluster, fat_addr, f
     ' Search for the file
     DEBUG[CH_FILE]("  [do_open_write] File not found: ", zstr_(p_path))
     freeHandle(handle)
-    handle := E_FILE_NOT_FOUND
+    handle := (search_io_status < 0) ? search_io_status : E_FILE_NOT_FOUND
   elseif attributes() & ATTR_DIRECTORY                  ' Directory bit
     ' Verify it's a file, not a directory
     DEBUG[CH_FILE]("  [do_open_write] Path is a directory, not a file")
@@ -3749,6 +3949,10 @@ PRI do_open_write(p_path) : handle | start_cluster, current_cluster, fat_addr, f
       current_cluster := start_cluster
       repeat cluster_count
         fat_addr := readFat(current_cluster)
+        if fat_io_status < 0                            ' Stale link -- appending at a position derived from
+          DEBUG[CH_FILE]("  [do_open_write] FAT read FAILED at cluster ", udec_(current_cluster))
+          freeHandle(handle)                            '  a garbage chain would write into another file
+          return E_IO_ERROR
         current_cluster := LONG[fat_addr]
         if current_cluster +>= FAT32_EOC_MIN            ' End of chain - shouldn't happen
           quit
@@ -3782,6 +3986,13 @@ PRI do_create(p_path) : handle | temp, first_cluster
     DEBUG[CH_FILE]("  [do_create] File already exists: ", zstr_(p_path))
     freeHandle(handle)
     handle := E_FILE_EXISTS
+  elseif search_io_status < 0
+    ' FAIL CLOSED. The existence check could not be completed, so "not found" is not
+    ' an answer -- creating here would add a second entry and a second cluster chain
+    ' for a name that may already exist.
+    DEBUG[CH_FILE]("  [do_create] Existence check FAILED, refusing to create: ", zstr_(p_path))
+    freeHandle(handle)
+    handle := search_io_status
   elseif entry_address == 0
     ' Guard: entry_address 0 means searchDirectory never found a valid directory
     DEBUG[CH_FILE]("  [do_create] entry_address=0 -- path not valid, aborting")
@@ -3798,8 +4009,10 @@ PRI do_create(p_path) : handle | temp, first_cluster
           DEBUG[CH_FILE]("  [do_create] Failed to allocate dir cluster")
           freeHandle(handle)
           handle := E_DISK_FULL
-        else
-          clearCluster(temp)
+        elseif clearCluster(temp) < 0
+          DEBUG[CH_FILE]("  [do_create] Failed to clear new dir cluster")
+          freeHandle(handle)
+          handle := E_IO_ERROR
 
     ' Allocate first cluster for the new file (if no error yet)
     if handle >= 0
@@ -3891,10 +4104,21 @@ PRI do_read_h(handle, p_buffer, count) : bytes_read | p_hbuf, available, offset,
 ' Handle-based read - reads data from file handle into user buffer.
 ' Uses per-handle buffer to avoid cache thrashing. Independent position per handle.
 '
+' A SHORT COUNT IS NOT SELF-EXPLANATORY. Every path below that stops early after some
+' bytes moved returns the bytes transferred so far -- a positive number, indistinguishable
+' from a genuine EOF by the return value alone. h_error[handle] carries which it was:
+' SUCCESS on entry, and the specific code at each stopping point. Public readers get it
+' from handleError().
+'
+' ZERO IS DIFFERENT, AND IS RESERVED FOR END OF FILE. When a stopping point is reached
+' before any byte moved, the exit guard at the tail of this method returns h_error rather
+' than a zero, because zero is the value every read loop is written to stop on.
+'
 ' @param handle - Valid read handle
 ' @param p_buffer - Pointer to destination buffer
 ' @param count - Number of bytes to read
-' @returns bytes_read - Number of bytes actually read (0 at EOF), negative on error
+' @returns bytes_read - Bytes actually read; 0 ONLY at a genuine end of file; negative on
+'                       error (see handleError() for why a positive count came up short)
 ' @local p_hbuf - Pointer to handle's buffer
 ' @local available - Bytes available to read
 ' @local offset - Offset within current sector
@@ -3910,11 +4134,14 @@ PRI do_read_h(handle, p_buffer, count) : bytes_read | p_hbuf, available, offset,
     bytes_read := E_INVALID_HANDLE
   elseif h_flags[handle] & HF_DIR
     bytes_read := E_NOT_A_DIR_HANDLE
+    h_error[handle] := E_NOT_A_DIR_HANDLE
   elseif h_size[handle] - h_position[handle] <= 0
     ' Calculate how many bytes we can actually read
     DEBUG[CH_FILE]("  [do_read_h] EOF reached")
     bytes_read := 0                                     ' EOF
+    h_error[handle] := SUCCESS                          ' A genuine EOF is a clean stop, and must read as one
   else
+    h_error[handle] := SUCCESS                          ' Write-on-exit: overwritten below if we stop early
     available := h_size[handle] - h_position[handle]
     count := count <# available                         ' Cap at available bytes
     DEBUG[CH_FILE]("  [do_read_h] handle=", udec_(handle), " pos=", udec_(h_position[handle]), " count=", udec_(count))
@@ -3932,12 +4159,14 @@ PRI do_read_h(handle, p_buffer, count) : bytes_read | p_hbuf, available, offset,
         cluster := h_cluster[handle]
         if readSector(cluster >> 7 + fat_sec, BUF_FAT) < 0
           DEBUG[CH_FILE]("  [do_read_h] FAT chain follow FAILED at boundary advance")
+          h_error[handle] := E_IO_ERROR                 ' Zero bytes read, and it is NOT end of file
           count := 0                                    ' Skip main loop
         else
           fat_addr := @fat_buf + ((cluster << 2) & SECTOR_OFFSET_MASK)
           next_cluster := LONG[fat_addr]
           if next_cluster +>= FAT32_EOC_MIN
             DEBUG[CH_FILE]("  [do_read_h] End of chain at boundary advance")
+            h_error[handle] := E_BAD_CHAIN              ' Bytes remain per h_size, but the chain ended -- entry and chain disagree
             count := 0                                  ' Skip main loop
           else
             h_cluster[handle] := next_cluster
@@ -3950,6 +4179,7 @@ PRI do_read_h(handle, p_buffer, count) : bytes_read | p_hbuf, available, offset,
         ' Load sector into shared buffer, then copy to handle's buffer
         if readSector(h_sector[handle], BUF_DATA) < 0
           DEBUG[CH_FILE]("  [do_read_h] Sector read FAILED for sector ", udec_(h_sector[handle]))
+          h_error[handle] := E_IO_ERROR                 ' Short count follows -- say why, or it reads as EOF
           quit                                          ' Return partial read count
         bytemove(p_hbuf, @buf, SECTOR_SIZE)
         h_buf_sector[handle] := h_sector[handle]
@@ -3976,15 +4206,26 @@ PRI do_read_h(handle, p_buffer, count) : bytes_read | p_hbuf, available, offset,
           cluster := h_cluster[handle]
           if readSector(cluster >> 7 + fat_sec, BUF_FAT) < 0
             DEBUG[CH_FILE]("  [do_read_h] FAT read FAILED for cluster ", udec_(cluster))
+            h_error[handle] := E_IO_ERROR               ' Short count follows -- say why, or it reads as EOF
             quit                                        ' Return partial read count
           fat_addr := @fat_buf + ((cluster << 2) & SECTOR_OFFSET_MASK)
           next_cluster := LONG[fat_addr]
           if next_cluster +>= FAT32_EOC_MIN
             ' End of chain - shouldn't happen if h_size is correct
             DEBUG[CH_FILE]("  [do_read_h] Unexpected end of FAT chain")
+            h_error[handle] := E_BAD_CHAIN              ' Chain ran out before h_size did -- entry and chain disagree
             quit
           h_cluster[handle] := next_cluster
           h_sector[handle] := clus2sec(next_cluster)
+
+    ' ZERO MEANS END OF FILE AND NOTHING ELSE. Every stopping point above records its
+    ' reason in h_error; when one of them stopped us before a single byte moved, the
+    ' count alone is indistinguishable from a clean EOF -- and a caller looping until
+    ' the count reaches zero would treat a dying card as a finished file. Surface the
+    ' reason instead. A genuine EOF left h_error at SUCCESS and is untouched here.
+    if bytes_read == 0 AND h_error[handle] < 0
+      DEBUG[CH_FILE]("  [do_read_h] Nothing transferred -- returning ", sdec_(h_error[handle]), " rather than a zero that reads as EOF")
+      bytes_read := h_error[handle]
 
     DEBUG[CH_FILE]("  [do_read_h] Read ", udec_(bytes_read), " bytes, pos now ", udec_(h_position[handle]))
 
@@ -3997,16 +4238,23 @@ PRI writeAdvanceCluster(handle) : ok | cluster, fat_addr, next_cluster, new_clus
 ' used to live at the boundary-advance sites re-linked a live FAT entry on a
 ' cross-boundary overwrite, orphaning the tail of the chain (Bug A).
 '
+' A FALSE return has two very different causes -- the card is failing, or the
+' card is full -- and a caller that cannot tell them apart reports one as the
+' other. The companion field advance_cluster_error carries which it was.
+'
 ' @param handle - Valid write handle, positioned at a cluster boundary
 ' @returns ok - TRUE on success (h_cluster/h_sector advanced), FALSE on I/O or alloc failure
+'               (see advance_cluster_error for E_IO_ERROR vs E_DISK_FULL)
 ' @local cluster - Current cluster whose FAT entry we read
 ' @local fat_addr - Address of the current cluster's FAT entry in fat_buf
 ' @local next_cluster - The FAT link out of the current cluster
 ' @local new_cluster - Freshly allocated cluster when growing the chain
 
+  advance_cluster_error := SUCCESS
   cluster := h_cluster[handle]
   if readSector(cluster >> 7 + fat_sec, BUF_FAT) < 0
     DEBUG[CH_FILE]("  [writeAdvanceCluster] FAT read FAILED for cluster ", udec_(cluster))
+    advance_cluster_error := E_IO_ERROR
     return false
   fat_addr := @fat_buf + ((cluster << 2) & SECTOR_OFFSET_MASK)
   next_cluster := LONG[fat_addr]
@@ -4014,7 +4262,8 @@ PRI writeAdvanceCluster(handle) : ok | cluster, fat_addr, next_cluster, new_clus
     ' Truly end-of-chain -- grow the file by allocating a new cluster
     new_cluster := allocateCluster(cluster)
     if new_cluster < 0
-      DEBUG[CH_FILE]("  [writeAdvanceCluster] Failed to allocate cluster at EOC")
+      DEBUG[CH_FILE]("  [writeAdvanceCluster] Failed to allocate cluster: ", sdec_(new_cluster))
+      advance_cluster_error := new_cluster               '  E_DISK_FULL or E_IO_ERROR, as allocateCluster reported it
       return false
     DEBUG[CH_FILE]("  [writeAdvanceCluster] Grew chain: allocated cluster ", udec_(new_cluster))
     h_cluster[handle] := new_cluster
@@ -4030,10 +4279,18 @@ PRI do_write_h(handle, p_buffer, count) : bytes_written | p_hbuf, offset, to_wri
 ' Uses per-handle buffer with dirty tracking. File grows as needed.
 ' Clusters allocated when extending past current allocation.
 '
+' A SHORT COUNT IS NOT SELF-EXPLANATORY. An error is returned whenever NOTHING was
+' accepted -- every zero-byte failure exit below returns its code, without exception.
+' Once any byte has been counted the failure paths return the partial count instead,
+' because the caller must be able to tell how much of the file is valid. That leaves the
+' reason to h_error[handle]: SUCCESS on entry, the specific code at each stopping point.
+' Public writers get it from handleError().
+'
 ' @param handle - Valid write handle (must have HF_WRITE set)
 ' @param p_buffer - Pointer to source data buffer
 ' @param count - Number of bytes to write
 ' @returns bytes_written - Number of bytes written, negative on error
+'                          (see handleError() for why a short count came up short)
 ' @local p_hbuf - Pointer to handle's buffer
 ' @local offset - Offset within current sector
 ' @local to_write - Bytes to write to current sector
@@ -4046,13 +4303,17 @@ PRI do_write_h(handle, p_buffer, count) : bytes_written | p_hbuf, offset, to_wri
     bytes_written := E_INVALID_HANDLE
   elseif h_flags[handle] & HF_DIR
     bytes_written := E_NOT_A_DIR_HANDLE
+    h_error[handle] := E_NOT_A_DIR_HANDLE
   elseif NOT (h_flags[handle] & HF_WRITE)
     ' Verify handle is open for writing
     DEBUG[CH_FILE]("  [do_write_h] Handle not open for write")
     bytes_written := E_INVALID_HANDLE
+    h_error[handle] := E_INVALID_HANDLE
   elseif count <= 0
     bytes_written := 0
+    h_error[handle] := SUCCESS                          ' Nothing asked for, nothing wrong
   else
+    h_error[handle] := SUCCESS                          ' Write-on-exit: overwritten below if we stop early
     DEBUG[CH_FILE]("  [do_write_h] handle=", udec_(handle), " pos=", udec_(h_position[handle]), " count=", udec_(count))
 
     ' Get pointer to handle's buffer
@@ -4067,6 +4328,7 @@ PRI do_write_h(handle, p_buffer, count) : bytes_written | p_hbuf, offset, to_wri
         if writeSector(h_buf_sector[handle], BUF_DATA) < 0
           DEBUG[CH_FILE]("  [do_write_h] Stale sector flush FAILED for sector ", udec_(h_buf_sector[handle]))
           bytes_written := E_IO_ERROR                  ' Surface I/O failure (sector still dirty -- next sync retries)
+          h_error[handle] := E_IO_ERROR
           return
         h_flags[handle] &= !HF_DIRTY
       h_buf_sector[handle] := -1
@@ -4076,8 +4338,13 @@ PRI do_write_h(handle, p_buffer, count) : bytes_written | p_hbuf, offset, to_wri
         if h_prealloc_end[handle] > 0
           new_cluster := h_cluster[handle] + 1
           if new_cluster > h_prealloc_end[handle]
+            ' Nothing has been accepted yet, so surface the reason rather than a zero
+            ' that reads as "wrote nothing, all well" -- the else-arm below already
+            ' returns its status, and these two must not disagree.
             DEBUG[CH_FILE]("  [do_write_h] Pre-allocated space exhausted")
-            count := 0
+            h_error[handle] := E_NO_CONTIGUOUS_SPACE     ' The contiguous reservation ran out -- not a card fault
+            bytes_written := E_NO_CONTIGUOUS_SPACE
+            return
           else
             h_cluster[handle] := new_cluster
             h_sector[handle] := clus2sec(new_cluster)
@@ -4085,7 +4352,12 @@ PRI do_write_h(handle, p_buffer, count) : bytes_written | p_hbuf, offset, to_wri
 #endif
           ' Follow the FAT chain on overwrite; allocate only at genuine EOC (Bug A fix)
           if not writeAdvanceCluster(handle)
-            count := 0                                  ' Skip main loop (I/O or alloc failure)
+            ' Nothing has been accepted yet, so surface the real reason rather than
+            ' a silent zero -- same rule as the stale-sector flush failure above.
+            DEBUG[CH_FILE]("  [do_write_h] Cluster advance FAILED: ", sdec_(advance_cluster_error))
+            bytes_written := advance_cluster_error
+            h_error[handle] := advance_cluster_error
+            return
 
     bytes_written := 0
     repeat while count > 0
@@ -4095,7 +4367,10 @@ PRI do_write_h(handle, p_buffer, count) : bytes_written | p_hbuf, offset, to_wri
       ' in a passing run.
       if h_sector[handle] < root_sec
         DEBUG[CH_FILE]("  [do_write_h] REFUSING metadata-region write at sector ", udec_(h_sector[handle]))
-        quit                                            ' Return bytes_written so far (partial), never metadata corruption
+        h_error[handle] := E_BAD_CHAIN                  ' Distinct from an I/O failure: the card is fine, the chain walk is not
+        if bytes_written == 0
+          bytes_written := E_BAD_CHAIN                  ' Nothing accepted -- a zero here would read as "wrote nothing, all well"
+        quit                                            ' Otherwise return bytes_written so far (partial), never metadata corruption
       ' Ensure current sector is in handle's buffer
       if h_buf_sector[handle] <> h_sector[handle]
         ' Flush dirty buffer first if needed
@@ -4104,6 +4379,7 @@ PRI do_write_h(handle, p_buffer, count) : bytes_written | p_hbuf, offset, to_wri
           bytemove(@buf, p_hbuf, SECTOR_SIZE)
           if writeSector(h_buf_sector[handle], BUF_DATA) < 0
             DEBUG[CH_FILE]("  [do_write_h] Dirty sector flush FAILED for sector ", udec_(h_buf_sector[handle]))
+            h_error[handle] := E_IO_ERROR
             if bytes_written == 0
               bytes_written := E_IO_ERROR              ' No data accepted yet -- surface failure
             quit                                       ' Otherwise return partial write count to caller
@@ -4118,7 +4394,10 @@ PRI do_write_h(handle, p_buffer, count) : bytes_written | p_hbuf, offset, to_wri
           ' Within existing file - load sector
           if readSector(h_sector[handle], BUF_DATA) < 0
             DEBUG[CH_FILE]("  [do_write_h] Sector read FAILED for sector ", udec_(h_sector[handle]))
-            quit                                        ' Return partial write count
+            h_error[handle] := E_IO_ERROR               ' Read-modify-write could not read -- the bytes never merged
+            if bytes_written == 0
+              bytes_written := E_IO_ERROR              ' Nothing accepted -- surface the failure, not a zero
+            quit                                        ' Otherwise return partial write count
           bytemove(p_hbuf, @buf, SECTOR_SIZE)
         else
           ' Past end of file - zero-fill buffer
@@ -4150,6 +4429,7 @@ PRI do_write_h(handle, p_buffer, count) : bytes_written | p_hbuf, offset, to_wri
         bytemove(@buf, p_hbuf, SECTOR_SIZE)
         if writeSector(h_sector[handle], BUF_DATA) < 0
           DEBUG[CH_FILE]("  [do_write_h] Full-sector flush FAILED for sector ", udec_(h_sector[handle]))
+          h_error[handle] := E_IO_ERROR                ' The counted bytes did NOT reach the card -- the count alone would lie
           quit                                         ' Return partial write count -- this sector's bytes were already counted but did not reach disk
         h_flags[handle] &= !HF_DIRTY
         h_buf_sector[handle] := -1
@@ -4163,6 +4443,7 @@ PRI do_write_h(handle, p_buffer, count) : bytes_written | p_hbuf, offset, to_wri
             new_cluster := h_cluster[handle] + 1
             if new_cluster > h_prealloc_end[handle]
               DEBUG[CH_FILE]("  [do_write_h] Pre-allocated space exhausted")
+              h_error[handle] := E_NO_CONTIGUOUS_SPACE   ' The contiguous reservation ran out -- not a card fault
               quit                                      '  Return what we've written so far
             h_cluster[handle] := new_cluster
             h_sector[handle] := clus2sec(new_cluster)
@@ -4170,7 +4451,11 @@ PRI do_write_h(handle, p_buffer, count) : bytes_written | p_hbuf, offset, to_wri
 #endif
             ' Follow the FAT chain on overwrite; allocate only at genuine EOC (Bug A fix)
             if not writeAdvanceCluster(handle)
-              quit                                      ' Return what we've written so far (I/O or alloc failure)
+              ' Bytes were already accepted, so the count must be returned rather than
+              ' an error; advance_cluster_error holds why the file could not grow further.
+              DEBUG[CH_FILE]("  [do_write_h] Cluster advance FAILED mid-write: ", sdec_(advance_cluster_error))
+              h_error[handle] := advance_cluster_error  ' E_IO_ERROR or E_DISK_FULL -- the caller cannot tell from a short count
+              quit                                      ' Return what we've written so far (partial)
 
     DEBUG[CH_FILE]("  [do_write_h] Wrote ", udec_(bytes_written), " bytes, size now ", udec_(h_size[handle]))
 
@@ -4292,10 +4577,24 @@ PRI do_sync_h(handle) : status | p_buf
 
     DEBUG[CH_FILE]("  [do_sync_h] Sync complete, status=", sdec_(status))
 
-PRI do_idle_flush() | idx, bAborted
+PRI do_idle_flush() | idx, bAborted, status
 ' Auto-flush dirty handles after idle period. Scans all handles for HF_DIRTY,
 ' syncs each, then updates FSInfo if needed. Checks pb_cmd between each handle
 ' sync to abort immediately if a command arrives.
+'
+' THIS IS THE PATH A CALLER'S DATA TAKES when they write without explicit syncs, and
+' it is the only one the worker starts on its own -- there is no cog waiting on it, so
+' a failure here has nowhere to be returned. Both statuses below are therefore recorded
+' in flush_error, which lastFlushError() exposes; without that a failed background
+' flush is invisible and every later API call still reports success.
+'
+' An ABORT IS NOT A FAILURE. A command arriving mid-flush cancels the remaining work
+' by design, the handles stay dirty, and the next idle window retries -- nothing is
+' recorded for it.
+'
+' @local idx - Handle index being scanned
+' @local bAborted - TRUE when an arriving command cut the flush short
+' @local status - Per-handle do_sync_h result
 
   bAborted := false
   repeat idx from 0 TO MAX_OPEN_FILES - 1
@@ -4303,10 +4602,32 @@ PRI do_idle_flush() | idx, bAborted
       bAborted := true                                  ' Command arrived, abort flush
       quit
     if h_flags[idx] & HF_DIRTY
-      do_sync_h(idx)
+      status := do_sync_h(idx)
+      if status <> SUCCESS
+        DEBUG[CH_FILE]("  [do_idle_flush] Background sync FAILED on handle ", udec_(idx), ": ", sdec_(status))
+        recordFlushError(status)                        ' The handle stays dirty, so a later flush or sync can still retry
   if NOT bAborted
     updateFSInfo()
+    ' updateFSInfo()'s FALSE also means "nothing to update", so the companion field is
+    ' what says whether an attempted update actually failed.
+    if fsinfo_error <> SUCCESS
+      DEBUG[CH_MOUNT]("  [do_idle_flush] Background FSInfo update FAILED: ", sdec_(fsinfo_error))
+      recordFlushError(fsinfo_error)
     flush_done := true
+
+PRI recordFlushError(status)
+' Record the FIRST failure seen by an automatic flush, and keep it.
+'
+' Sticky rather than last-writer-wins: a background flush runs on a timer, so a second
+' one can easily come and go before anyone polls lastFlushError(). Overwriting on each
+' failure would be harmless, but overwriting on SUCCESS would erase the very report this
+' field exists to deliver, so the field is never cleared here at all -- only
+' clearFlushError() clears it.
+'
+' @param status - Non-SUCCESS code to record
+
+  if flush_error == SUCCESS
+    flush_error := status
 
 PRI do_sync_all() : status | idx, sync_status
 ' Sync all open write handles - flushes all write handles to disk.
@@ -4359,7 +4680,7 @@ PRI do_open_dir(p_path) : handle | start_cluster
       if NOT searchDirectory(p_path)
         DEBUG[CH_DIR]("  [do_open_dir] Directory not found: ", zstr_(p_path))
         freeHandle(handle)
-        handle := E_FILE_NOT_FOUND
+        handle := (search_io_status < 0) ? search_io_status : E_FILE_NOT_FOUND
       elseif NOT (attributes() & ATTR_DIRECTORY)
         ' Verify it's a directory
         DEBUG[CH_DIR]("  [do_open_dir] Not a directory: ", zstr_(p_path))
@@ -4485,8 +4806,14 @@ PRI do_newfile(name_ptr) : status | temp
 ' @local temp - Temporary calculation variable
 
   do_close()
+  status := SUCCESS
   if searchDirectory(name_ptr)
     status := E_FILE_EXISTS
+  elseif search_io_status < 0
+    ' FAIL CLOSED -- see do_create. An incomplete existence check must not be read
+    ' as "the name is available".
+    DEBUG[CH_DIR]("  [do_newfile] Existence check FAILED, refusing to create")
+    status := search_io_status
   elseif entry_address == 0
     ' Guard: entry_address 0 means searchDirectory never found a valid directory
     ' (e.g., path component doesn't exist). Writing at address 0 would corrupt the MBR.
@@ -4497,26 +4824,43 @@ PRI do_newfile(name_ptr) : status | temp
     if temp == (sec_per_clus << SECTOR_SHIFT - DIR_ENTRY_SIZE)
       if dir_buf[LAST_DIR_ENTRY_OFFSET] == $00          ' Check dir buffer after searchDirectory
         temp := allocateCluster(byte2clus(entry_address))
-        clearCluster(temp)
+        if temp < 0                                       '  E_DISK_FULL/E_IO_ERROR into clus2sec() would
+          DEBUG[CH_DIR]("  [do_newfile] Failed to allocate dir cluster: ", sdec_(temp))
+          status := temp                                  '   write sectors at a wild negative-derived address
+        elseif clearCluster(temp) < 0
+          DEBUG[CH_DIR]("  [do_newfile] Failed to clear new dir cluster")
+          status := E_IO_ERROR
 
-    dirEntSetAttr(@entry_buffer, ATTR_ARCHIVE)
-    dirEntSetCreateStamp(@entry_buffer, date_stamp)
-    dirEntSetStartClus(@entry_buffer, 0)
-    dirEntSetModifyStamp(@entry_buffer, date_stamp)
-    dirEntSetFileSize(@entry_buffer, 0)
-    flags |= F_NEWDIR
-    status := SUCCESS
+    if status == SUCCESS
+      dirEntSetAttr(@entry_buffer, ATTR_ARCHIVE)
+      dirEntSetCreateStamp(@entry_buffer, date_stamp)
+      dirEntSetStartClus(@entry_buffer, 0)
+      dirEntSetModifyStamp(@entry_buffer, date_stamp)
+      dirEntSetFileSize(@entry_buffer, 0)
+      flags |= F_NEWDIR
 
-PRI do_newdir(name_ptr) : status | temp
+PRI do_newdir(name_ptr) : status | temp, dir_clus, parent_clus
 ' Internal new directory operation - creates a new directory in current directory.
 '
+' The ./.. entries are written into the new cluster BEFORE the parent directory
+' gains an entry pointing at it, so a failure part-way through can never leave the
+' parent referring to an uninitialized directory cluster. Both writes are checked
+' and both are verified by read-back.
+'
 ' @param name_ptr - Pointer to null-terminated directory name string
-' @returns status - SUCCESS on success, E_FILE_EXISTS if directory exists
+' @returns status - SUCCESS on success, E_FILE_EXISTS if directory exists,
+'                   E_DISK_FULL or E_IO_ERROR if a cluster or write failed
 ' @local temp - Temporary calculation variable for cluster allocation
+' @local dir_clus - Cluster allocated for the new directory itself
+' @local parent_clus - Cluster the new directory's ".." entry points at (0 for root)
 
   do_close()
   if searchDirectory(name_ptr)
     status := E_FILE_EXISTS
+  elseif search_io_status < 0
+    ' FAIL CLOSED -- see do_create.
+    DEBUG[CH_DIR]("  [do_newdir] Existence check FAILED, refusing to create")
+    status := search_io_status
   elseif entry_address == 0
     ' Guard: entry_address 0 means searchDirectory never found a valid directory
     ' (e.g., path component doesn't exist). Writing at address 0 would corrupt the MBR.
@@ -4527,16 +4871,68 @@ PRI do_newdir(name_ptr) : status | temp
     if temp == sec_per_clus << SECTOR_SHIFT - DIR_ENTRY_SIZE
       if dir_buf[LAST_DIR_ENTRY_OFFSET] == $00          ' Check dir buffer after searchDirectory
         temp := allocateCluster(byte2clus(entry_address))
-        clearCluster(temp)
+        if temp < 0                                     '  E_DISK_FULL/E_IO_ERROR into clus2sec() would write
+          DEBUG[CH_DIR]("  [do_newdir] Failed to allocate extended dir cluster: ", sdec_(temp))
+          return temp                                   '   sectors at a wild negative-derived address
+        if clearCluster(temp) < 0                       '  return before the entry is built: a directory whose
+          DEBUG[CH_DIR]("  [do_newdir] Failed to clear extended dir cluster")
+          return E_IO_ERROR                             '   cluster still holds old data reads back as garbage entries
 
-    temp := allocateCluster(0)
-    clearCluster(temp)                                  '  zero all sectors in new directory cluster
+    dir_clus := allocateCluster(0)                      ' The new directory's own cluster
+    if dir_clus < 0
+      DEBUG[CH_DIR]("  [do_newdir] Failed to allocate directory cluster: ", sdec_(dir_clus))
+      return dir_clus
+    if clearCluster(dir_clus) < 0                       '  zero all sectors in new directory cluster
+      DEBUG[CH_DIR]("  [do_newdir] Failed to clear new directory cluster")
+      return E_IO_ERROR
     dirEntSetAttr(@entry_buffer, ATTR_DIRECTORY)        ' Directory attribute
     dirEntSetCreateStamp(@entry_buffer, date_stamp)
-    dirEntSetStartClus(@entry_buffer, temp)
+    dirEntSetStartClus(@entry_buffer, dir_clus)
     dirEntSetModifyStamp(@entry_buffer, date_stamp)
     dirEntSetFileSize(@entry_buffer, 0)
 
+    ' Step 1: write the ./.. entries into the new cluster FIRST. Ordering is what
+    ' guarantees the parent never gains an entry pointing at an uninitialized
+    ' directory cluster -- if this write fails, nothing in the parent refers to it
+    ' and the only cost is the leaked cluster allocateCluster already documents.
+    bytefill(@dir_buf, 0, SECTOR_SIZE)
+    bytemove(@dir_buf[0], string(".          "), SFN_TOTAL_LEN)
+    BYTE[@dir_buf + DE_ATTR_OFFSET] := ATTR_DIRECTORY
+    LONG[@dir_buf + DE_CRT_TIME_OFFSET] := date_stamp
+    WORD[@dir_buf + DE_CLUS_HI_OFFSET] := dir_clus >> 16
+    LONG[@dir_buf + DE_WRT_TIME_OFFSET] := date_stamp
+    WORD[@dir_buf + DE_CLUS_LO_OFFSET] := dir_clus & $FFFF
+
+    parent_clus := byte2clus(entry_address)
+    if parent_clus == ROOT_CLUSTER
+      parent_clus := 0                                  ' ".." points at 0 for the root directory
+    bytemove(@dir_buf[DIR_ENTRY_SIZE], string("..         "), SFN_TOTAL_LEN)
+    BYTE[@dir_buf + DIR_ENTRY_SIZE + DE_ATTR_OFFSET] := ATTR_DIRECTORY
+    LONG[@dir_buf + DIR_ENTRY_SIZE + DE_CRT_TIME_OFFSET] := date_stamp
+    WORD[@dir_buf + DIR_ENTRY_SIZE + DE_CLUS_HI_OFFSET] := parent_clus >> 16
+    LONG[@dir_buf + DIR_ENTRY_SIZE + DE_WRT_TIME_OFFSET] := date_stamp
+    WORD[@dir_buf + DIR_ENTRY_SIZE + DE_CLUS_LO_OFFSET] := parent_clus & $FFFF
+
+    n_sec := clus2sec(dir_clus)
+    DEBUG[CH_DIR]("  [do_newdir] Writing ./.. to sector ", udec_(n_sec), ": dir_buf[0]=[", lstr_(@dir_buf, 11), "] dir_buf[32]=[", lstr_(@dir_buf + 32, 11), "]")
+    if writeSector(n_sec, BUF_DIR) < 0
+      DEBUG[CH_DIR]("  [do_newdir] ./.. write FAILED for sector ", udec_(n_sec))
+      return E_IO_ERROR
+    dir_sec_in_buf := n_sec
+
+    ' Read the ./.. entries back and check them. This verification already existed
+    ' but only ever reached DEBUG; it now fails the operation, which is the whole
+    ' point of doing the extra read.
+    dir_sec_in_buf := -1                                ' Force re-read
+    if readSector(n_sec, BUF_DIR) < 0
+      DEBUG[CH_DIR]("  [do_newdir] Verify ./.. read FAILED for sector ", udec_(n_sec))
+      return E_IO_ERROR
+    if BYTE[@dir_buf] <> "." OR WORD[@dir_buf + DE_CLUS_LO_OFFSET] <> (dir_clus & $FFFF)
+      DEBUG[CH_DIR]("  [do_newdir] Verify ./.. MISMATCH at sector ", udec_(n_sec))
+      return E_IO_ERROR
+    DEBUG[CH_DIR]("  [do_newdir] After ./.. verify: dir_buf[0]=[", lstr_(@dir_buf, 11), "] dir_buf[32]=[", lstr_(@dir_buf + 32, 11), "]")
+
+    ' Step 2: only now link the initialized cluster from the parent directory.
     if readSector(entry_address >> SECTOR_SHIFT, BUF_DIR) < 0
       DEBUG[CH_DIR]("  [do_newdir] Directory read FAILED for sector ", udec_(entry_address >> SECTOR_SHIFT))
       status := E_IO_ERROR
@@ -4545,61 +4941,67 @@ PRI do_newdir(name_ptr) : status | temp
       bytemove(@dir_buf + (entry_address & SECTOR_OFFSET_MASK), @entry_buffer, DIR_ENTRY_SIZE)
       DEBUG[CH_DIR]("  [do_newdir] After copy: dir_buf[", udec_(entry_address & SECTOR_OFFSET_MASK), "]=[", lstr_(@dir_buf + (entry_address & SECTOR_OFFSET_MASK), 11), "]")
       DEBUG[CH_DIR]("  [do_newdir] entry_buffer=[", lstr_(@entry_buffer, 11), "]")
-      writeSector(entry_address >> SECTOR_SHIFT, BUF_DIR)
-      ' Verify write by reading back
-      dir_sec_in_buf := -1                              ' Force re-read
-      if readSector(entry_address >> SECTOR_SHIFT, BUF_DIR) < 0
+      if writeSector(entry_address >> SECTOR_SHIFT, BUF_DIR) < 0
+        DEBUG[CH_DIR]("  [do_newdir] Parent entry write FAILED for sector ", udec_(entry_address >> SECTOR_SHIFT))
+        status := E_IO_ERROR
+      ' Verify the parent entry by reading it back and comparing against the bytes
+      ' we wrote -- entry_buffer still holds them. This read-back already existed
+      ' but only ever reached DEBUG; it now fails the operation.
+      elseif readSector(entry_address >> SECTOR_SHIFT, BUF_DIR) < 0
         DEBUG[CH_DIR]("  [do_newdir] Verify read FAILED for sector ", udec_(entry_address >> SECTOR_SHIFT))
+        status := E_IO_ERROR
+      elseif NOT entryMatches(@dir_buf + (entry_address & SECTOR_OFFSET_MASK), @entry_buffer)
+        DEBUG[CH_DIR]("  [do_newdir] Verify MISMATCH at sector ", udec_(entry_address >> SECTOR_SHIFT))
+        status := E_IO_ERROR
       else
         DEBUG[CH_DIR]("  [do_newdir] After verify read: dir_buf[", udec_(entry_address & SECTOR_OFFSET_MASK), "]=[", lstr_(@dir_buf + (entry_address & SECTOR_OFFSET_MASK), 11), "]")
+        n_sec := clus2sec(dir_clus)                     ' Leave n_sec on the new directory, as before
+        status := SUCCESS
 
-      bytefill(@dir_buf, 0, SECTOR_SIZE)
-      bytemove(@dir_buf[0], string(".          "), SFN_TOTAL_LEN)
-      BYTE[@dir_buf + DE_ATTR_OFFSET] := ATTR_DIRECTORY
-      LONG[@dir_buf + DE_CRT_TIME_OFFSET] := date_stamp
-      WORD[@dir_buf + DE_CLUS_HI_OFFSET] := temp >> 16
-      LONG[@dir_buf + DE_WRT_TIME_OFFSET] := date_stamp
-      WORD[@dir_buf + DE_CLUS_LO_OFFSET] := temp & $FFFF
+PRI entryMatches(p_actual, p_expected) : bMatch | idx
+' Compare a 32-byte directory entry read back from the card against the bytes we
+' meant to write. Used to turn a write's read-back from a DEBUG decoration into a
+' real assertion: a write that never landed leaves the OLD entry there, and a torn
+' write leaves a partial one -- both differ from what we handed to writeSector().
+'
+' @param p_actual - Pointer to the entry as read back from the card
+' @param p_expected - Pointer to the entry we wrote
+' @returns bMatch - TRUE when all DIR_ENTRY_SIZE bytes are identical
+' @local idx - Byte index
 
-      temp := byte2clus(entry_address)
-      if temp == ROOT_CLUSTER
-        temp := 0
-      bytemove(@dir_buf[DIR_ENTRY_SIZE], string("..         "), SFN_TOTAL_LEN)
-      BYTE[@dir_buf + DIR_ENTRY_SIZE + DE_ATTR_OFFSET] := ATTR_DIRECTORY
-      LONG[@dir_buf + DIR_ENTRY_SIZE + DE_CRT_TIME_OFFSET] := date_stamp
-      WORD[@dir_buf + DIR_ENTRY_SIZE + DE_CLUS_HI_OFFSET] := temp >> 16
-      LONG[@dir_buf + DIR_ENTRY_SIZE + DE_WRT_TIME_OFFSET] := date_stamp
-      WORD[@dir_buf + DIR_ENTRY_SIZE + DE_CLUS_LO_OFFSET] := temp & $FFFF
-
-      n_sec := clus2sec(firstCluster())
-      DEBUG[CH_DIR]("  [do_newdir] Writing ./.. to sector ", udec_(n_sec), ": dir_buf[0]=[", lstr_(@dir_buf, 11), "] dir_buf[32]=[", lstr_(@dir_buf + 32, 11), "]")
-      writeSector(n_sec, BUF_DIR)
-      dir_sec_in_buf := n_sec
-      ' Verify the ./.. write
-      dir_sec_in_buf := -1
-      if readSector(n_sec, BUF_DIR) < 0
-        DEBUG[CH_DIR]("  [do_newdir] Verify ./.. read FAILED for sector ", udec_(n_sec))
-      else
-        DEBUG[CH_DIR]("  [do_newdir] After ./.. verify: dir_buf[0]=[", lstr_(@dir_buf, 11), "] dir_buf[32]=[", lstr_(@dir_buf + 32, 11), "]")
-      status := SUCCESS
+  bMatch := true
+  repeat idx from 0 to DIR_ENTRY_SIZE - 1
+    if BYTE[p_actual + idx] <> BYTE[p_expected + idx]
+      bMatch := false
+      quit
 
 PRI do_delete(name_ptr) : status
 ' Internal delete operation - deletes a file and frees its clusters.
 '
+' ORDER MATTERS. The entry must be marked deleted on the card BEFORE the chain is
+' freed, and the chain must not be freed at all if that write did not land. The
+' failure this prevents: entry still live, clusters free -- the file still appears
+' in the directory, its clusters get handed to the next allocation, and reading it
+' returns another file's data. Leaving an undeleted file behind is recoverable;
+' freeing a chain out from under a live entry is not.
+'
 ' @param name_ptr - Pointer to null-terminated filename string
-' @returns status - SUCCESS on success, E_FILE_NOT_FOUND if not found
+' @returns status - SUCCESS on success, E_FILE_NOT_FOUND if not found,
+'                   E_IO_ERROR if the entry could not be marked deleted
 
   do_close()
   if searchDirectory(name_ptr) == 0
-    status := E_FILE_NOT_FOUND
+    status := (search_io_status < 0) ? search_io_status : E_FILE_NOT_FOUND
   elseif attributes() & ATTR_LFN                                                ' Check read-only, hidden, system, volume label
     status := E_FILE_NOT_FOUND                                                  ' Protected file (but allow directories)
   else
     dir_buf[entry_address & SECTOR_OFFSET_MASK] := DIR_ENTRY_DELETED            ' Mark entry as deleted in dir buffer
-    writeSector(entry_address >> SECTOR_SHIFT, BUF_DIR)
-
-    ' Only deallocate clusters if file has data (cluster >= 2)
-    status := freeClusterChain(firstCluster())
+    if writeSector(entry_address >> SECTOR_SHIFT, BUF_DIR) < 0
+      DEBUG[CH_FILE]("  [do_delete] Entry-deleted write FAILED for sector ", udec_(entry_address >> SECTOR_SHIFT))
+      status := E_IO_ERROR                                                      ' Leave the chain intact -- see above
+    else
+      ' Only deallocate clusters if file has data (cluster >= 2)
+      status := freeClusterChain(firstCluster())
 
 PRI do_chdir(name_ptr) : status
 ' Internal change directory operation - changes current directory.
@@ -4619,6 +5021,9 @@ PRI do_chdir(name_ptr) : status
     else
       DEBUG[CH_DIR]("  [do_chdir] NOT a directory: attr=", uhex_byte_(attributes()))
       status := E_NOT_A_DIR
+  elseif search_io_status < 0
+    DEBUG[CH_DIR]("  [do_chdir] Directory read FAILED for: ", zstr(name_ptr))
+    status := search_io_status                          ' Could not read the directory -- not "not a directory"
   else
     DEBUG[CH_DIR]("  [do_chdir] searchDirectory FAILED for: ", zstr(name_ptr), " dir_sec=", udec_(cog_dir_sec[pb_caller]))
     status := E_NOT_A_DIR
@@ -4626,32 +5031,57 @@ PRI do_chdir(name_ptr) : status
 PRI do_freespace() : sectorCount | cluster
 ' Internal free space calculation - returns free sectors on card.
 '
-' @returns sectorCount - Number of free sectors
+' AN INCOMPLETE SCAN MUST NOT BE REPORTED AS A COUNT. Stopping early leaves every
+' unscanned cluster uncounted, so the number comes out LOW -- the volume looks fuller
+' than it is, or emptier, depending on which way the caller reasons -- and an
+' application deciding whether a write will fit gets a wrong answer delivered as fact.
+' The companion field freespace_error says whether the scan completed; do_freespace
+' still returns the partial count so a diagnostic caller can see how far it got.
+'
+' @returns sectorCount - Number of free sectors (partial if freespace_error is set)
 ' @local cluster - Loop variable for FAT scan
 
+  freespace_error := SUCCESS
   if NOT (flags & F_MOUNTED)
     sectorCount := 0
+    freespace_error := E_NOT_MOUNTED
   else
     n_sec := fat_sec
     repeat sec_per_fat
       if readSector(n_sec++, BUF_FAT) < 0
-        DEBUG[CH_MOUNT]("  [do_freespace] FAT read FAILED, returning partial count")
+        DEBUG[CH_MOUNT]("  [do_freespace] FAT read FAILED, scan is incomplete")
+        freespace_error := E_IO_ERROR
         quit
       repeat cluster from 0 TO FAT_ENTRIES_PER_SECTOR - 1
         if LONG[@fat_buf + cluster << 2] == 0
           sectorCount++
     sectorCount := sectorCount * sec_per_clus
 
-PRI do_sync()
+PRI do_sync() : status
 ' Internal sync operation - flushes pending directory writes without closing file.
+'
+' F_NEWDIR IS CLEARED ONLY ON SUCCESS. It is the flag that says "entry_buffer holds a
+' directory entry that has not reached the card yet". Clearing it after a failed write
+' discards that pending entry from memory while the card still lacks it, so the file is
+' lost with nothing left to retry from. Retaining it means a later sync -- or the close
+' -- writes it again, the same rule do_write_h follows for a dirty sector buffer.
+'
+' @returns status - SUCCESS (0), or E_IO_ERROR if the entry could not be written
 
+  status := SUCCESS
   if flags & F_NEWDIR
     if readSector(entry_address >> SECTOR_SHIFT, BUF_DIR) < 0
       DEBUG[CH_MOUNT]("  [do_sync] Directory read FAILED for sector ", udec_(entry_address >> SECTOR_SHIFT))
+      status := E_IO_ERROR
     else
       bytemove(@dir_buf + (entry_address & SECTOR_OFFSET_MASK), @entry_buffer, DIR_ENTRY_SIZE)
-      writeSector(entry_address >> SECTOR_SHIFT, BUF_DIR)
-    flags := flags & !F_NEWDIR
+      if writeSector(entry_address >> SECTOR_SHIFT, BUF_DIR) < 0
+        DEBUG[CH_MOUNT]("  [do_sync] Directory write FAILED for sector ", udec_(entry_address >> SECTOR_SHIFT))
+        status := E_IO_ERROR
+    if status == SUCCESS
+      flags := flags & !F_NEWDIR                        ' Entry is on the card; nothing left pending
+    else
+      DEBUG[CH_MOUNT]("  [do_sync] Entry still pending -- F_NEWDIR retained so a later sync retries")
 
 PRI do_rename(old_name, new_name) : status | bookmark, temp_sec, idx, saved_entry[8], p_buf
 ' Internal rename operation - renames file/directory by updating directory entry.
@@ -4669,7 +5099,7 @@ PRI do_rename(old_name, new_name) : status | bookmark, temp_sec, idx, saved_entr
   DEBUG[CH_DIR]("  [do_rename] old=", zstr_(old_name), " new=", zstr_(new_name), " dir_sec=", udec_(cog_dir_sec[pb_caller]))
   if NOT searchDirectory(old_name)
     DEBUG[CH_DIR]("  [do_rename] Old file NOT FOUND")
-    status := E_FILE_NOT_FOUND
+    status := (search_io_status < 0) ? search_io_status : E_FILE_NOT_FOUND
   else
     DEBUG[CH_DIR]("  [do_rename] Found old file, entry_address=", uhex_(entry_address))
     bookmark := entry_address
@@ -4686,6 +5116,11 @@ PRI do_rename(old_name, new_name) : status | bookmark, temp_sec, idx, saved_entr
     if searchDirectory(new_name) <> 0                                           ' Verify new name doesn't exist
       DEBUG[CH_DIR]("  [do_rename] New name already exists!")
       status := E_FILE_EXISTS
+    elseif search_io_status < 0
+      ' FAIL CLOSED -- renaming onto a name we could not verify as free would leave
+      ' two directory entries carrying the same name.
+      DEBUG[CH_DIR]("  [do_rename] New-name check FAILED, refusing to rename")
+      status := search_io_status
     else
       DEBUG[CH_DIR]("  [do_rename] New name doesn't exist, proceeding")
       bytemove(@entry_buffer, @saved_entry, DIR_ENTRY_SIZE)                     ' Restore complete entry
@@ -4710,10 +5145,28 @@ PRI do_rename(old_name, new_name) : status | bookmark, temp_sec, idx, saved_entr
             bytemove(p_buf + SFN_NAME_LEN, p_buf + idx + 1, SFN_EXT_LEN)
             bytefill(p_buf + idx, " ", SFN_NAME_LEN - idx)
             quit
-        writeSector(bookmark >> SECTOR_SHIFT, BUF_DIR)
-        cog_dir_sec[pb_caller] := temp_sec
-        DEBUG[CH_DIR]("  [do_rename] SUCCESS")
-        status := SUCCESS
+        ' The rewritten entry IS the entire product of a rename. If this write does
+        ' not land the file simply keeps its old name, so reporting success would be
+        ' telling the caller the rename happened when nothing changed on the card.
+        bytemove(@entry_buffer, p_buf, DIR_ENTRY_SIZE)                          ' Capture what we are about to write
+        if writeSector(bookmark >> SECTOR_SHIFT, BUF_DIR) < 0
+          DEBUG[CH_DIR]("  [do_rename] Entry write FAILED for sector ", udec_(bookmark >> SECTOR_SHIFT))
+          status := E_IO_ERROR
+        else
+          dir_sec_in_buf := -1                                                  ' Force re-read for verification
+          if readSector(bookmark >> SECTOR_SHIFT, BUF_DIR) < 0
+            DEBUG[CH_DIR]("  [do_rename] Verify read FAILED for sector ", udec_(bookmark >> SECTOR_SHIFT))
+            status := E_IO_ERROR
+          elseif NOT entryMatches(@dir_buf + (bookmark & SECTOR_OFFSET_MASK), @entry_buffer)
+            DEBUG[CH_DIR]("  [do_rename] Verify MISMATCH at sector ", udec_(bookmark >> SECTOR_SHIFT))
+            status := E_IO_ERROR
+          else
+            DEBUG[CH_DIR]("  [do_rename] SUCCESS")
+            status := SUCCESS
+    ' Restore the caller's working directory on EVERY path. It is redirected above
+    ' so the new-name search runs in the file's own directory, and leaving it
+    ' redirected on an error path silently moves the caller's CWD.
+    cog_dir_sec[pb_caller] := temp_sec
 
 PRI do_set_vol_label(p_label) : status | idx, ch, p_entry, label_83[3], pVBR
 ' Internal set volume label - updates BPB and root directory volume label entry.
@@ -4772,14 +5225,18 @@ PRI do_set_vol_label(p_label) : status | idx, ch, p_entry, label_83[3], pVBR
           quit
         idx += DIR_ENTRY_SIZE
         if idx & SECTOR_OFFSET_MASK == 0
-          readNextSector(BUF_DIR)
+          if readNextSector(BUF_DIR) < 0                                                '  cannot scan further -- do not read stale entries
+            DEBUG[CH_MOUNT]("  [do_set_vol_label] FAIL: advance to next dir sector")
+            status := E_IO_ERROR
+            quit
 
-      ' Step 3: Update in-memory copy
-      bytemove(@vol_label, @label_83, SFN_TOTAL_LEN)
-      vol_label[11] := 0
-
-      DEBUG[CH_MOUNT]("  [do_set_vol_label] SUCCESS")
-      status := SUCCESS
+      ' Step 3: Update in-memory copy -- only when the on-disk entry actually
+      ' landed. This gate also protects the entry-write failure above, which
+      ' set E_IO_ERROR only to have an unconditional SUCCESS overwrite it.
+      if status == SUCCESS
+        bytemove(@vol_label, @label_83, SFN_TOTAL_LEN)
+        vol_label[11] := 0
+        DEBUG[CH_MOUNT]("  [do_set_vol_label] SUCCESS")
 
 PRI do_movefile(name_ptr, dest_folder) : status | bookmark, p_temp, temp_sec
 ' Internal move file operation - moves file from current directory to destination.
@@ -4812,10 +5269,26 @@ PRI do_movefile(name_ptr, dest_folder) : status | bookmark, p_temp, temp_sec
           DEBUG[CH_DIR]("  [do_movefile] Copied entry: [", lstr_(@entry_buffer, 11), "]")
           BYTE[@dir_buf + (bookmark & SECTOR_OFFSET_MASK)] := DIR_ENTRY_DELETED
           DEBUG[CH_DIR]("  [do_movefile] After $E5: dir_buf[128]=[", lstr_(@dir_buf + 128, 11), "]")
-          writeSector(bookmark >> SECTOR_SHIFT, BUF_DIR)
-          DEBUG[CH_DIR]("  [do_movefile] Calling do_close, flags=", uhex_(flags))
-          do_close()
-          status := SUCCESS
+          if writeSector(bookmark >> SECTOR_SHIFT, BUF_DIR) < 0
+            ' Source still live and the destination not yet written -- abandon the
+            ' move rather than let do_close() add the second entry. F_NEWDIR must be
+            ' cleared explicitly or the NEXT do_close() from any operation would
+            ' write that destination entry and produce the duplicate anyway.
+            DEBUG[CH_DIR]("  [do_movefile] Source-entry delete write FAILED for sector ", udec_(bookmark >> SECTOR_SHIFT))
+            bytefill(@entry_buffer, 0, DIR_ENTRY_SIZE)
+            flags := flags & !F_NEWDIR
+            status := E_IO_ERROR
+          else
+            DEBUG[CH_DIR]("  [do_movefile] Calling do_close, flags=", uhex_(flags))
+            ' do_close() writes the destination entry. If THAT fails the source is
+            ' already gone, so the file is unreachable with its clusters still
+            ' allocated -- a lost chain fsck can recover. Two writes cannot be made
+            ' atomic; this order is chosen so the unavoidable failure leaks a chain
+            ' rather than leaving one file live in two directories, where deleting
+            ' either would free clusters the other still points at.
+            status := do_close()
+            if status < 0
+              DEBUG[CH_DIR]("  [do_movefile] Destination entry write FAILED -- file is now unreferenced")
       else
         DEBUG[CH_DIR]("  [do_movefile] do_newfile FAILED")
     else
@@ -4851,8 +5324,11 @@ PRI do_readdir(entry_num) : status | idx, char, attrib
             bytemove(@entry_buffer, @dir_buf + (idx & SECTOR_OFFSET_MASK), 32)
             status := SUCCESS
       idx += DIR_ENTRY_SIZE
-      if idx & SECTOR_OFFSET_MASK == 0
-        readNextSector(BUF_DIR)
+      if entry_num <> -1 AND idx & SECTOR_OFFSET_MASK == 0  '  entry_num == -1 means the entry was found; do not advance
+        if readNextSector(BUF_DIR) < 0                      '  cannot advance -- report the I/O error rather than
+          DEBUG[CH_DIR]("  [do_readdir] Advance to next dir sector FAILED")
+          status := E_IO_ERROR                              '   letting stale buffer content look like directory entries
+          quit
 
 #ifdef SD_INCLUDE_RAW
 
@@ -4890,7 +5366,7 @@ PRI do_get_card_size() : sectorCount | csd[4], c_size, read_bl_len, c_size_mult
 
 ' Read CSD using CMD9
 
-  if NOT readCSD(@csd)
+  if fetchCSD(@csd) <> SUCCESS
     DEBUG[CH_IDENT]("  [do_get_card_size] Failed to read CSD")
     sectorCount := 0
   else
@@ -4938,12 +5414,11 @@ PRI do_read_scr(p_buf) : status
 ' @param p_buf - Pointer to 8-byte buffer to receive SCR data
 ' @returns status - SUCCESS on success, E_IO_ERROR on failure
 
-  if readSCR(p_buf)
+  status := fetchSCR(p_buf)
+  if status == SUCCESS
     DEBUG[CH_IDENT]("  [do_read_scr] SCR read successfully")
-    status := SUCCESS
   else
-    DEBUG[CH_IDENT]("  [do_read_scr] SCR read failed")
-    status := E_IO_ERROR
+    DEBUG[CH_IDENT]("  [do_read_scr] SCR read failed: ", sdec_(status))
 
 PRI do_read_cid(p_buf) : status
 ' Internal read CID operation - reads the 16-byte CID register into buffer.
@@ -4952,12 +5427,11 @@ PRI do_read_cid(p_buf) : status
 ' @param p_buf - Pointer to 16-byte buffer to receive CID data
 ' @returns status - SUCCESS on success, E_IO_ERROR on failure
 
-  if readCID(p_buf)
+  status := fetchCID(p_buf)
+  if status == SUCCESS
     DEBUG[CH_IDENT]("  [do_read_cid] CID read successfully")
-    status := SUCCESS
   else
-    DEBUG[CH_IDENT]("  [do_read_cid] CID read failed")
-    status := E_IO_ERROR
+    DEBUG[CH_IDENT]("  [do_read_cid] CID read failed: ", sdec_(status))
 
 PRI do_read_csd(p_buf) : status
 ' Internal read CSD operation - reads the 16-byte CSD register into buffer.
@@ -4966,12 +5440,11 @@ PRI do_read_csd(p_buf) : status
 ' @param p_buf - Pointer to 16-byte buffer to receive CSD data
 ' @returns status - SUCCESS on success, E_IO_ERROR on failure
 
-  if readCSD(p_buf)
+  status := fetchCSD(p_buf)
+  if status == SUCCESS
     DEBUG[CH_IDENT]("  [do_read_csd] CSD read successfully")
-    status := SUCCESS
   else
-    DEBUG[CH_IDENT]("  [do_read_csd] CSD read failed")
-    status := E_IO_ERROR
+    DEBUG[CH_IDENT]("  [do_read_csd] CSD read failed: ", sdec_(status))
 
 PRI do_read_sd_status(p_buf) : status
 ' Read SD Status register (ACMD13) - 64 bytes.
@@ -4979,12 +5452,11 @@ PRI do_read_sd_status(p_buf) : status
 ' @param p_buf - Pointer to 64-byte buffer to receive SD Status data
 ' @returns status - SUCCESS on success, E_IO_ERROR on failure
 
-  if readSDStatus(p_buf)
+  status := fetchSDStatus(p_buf)
+  if status == SUCCESS
     DEBUG[CH_IDENT]("  [do_read_sd_status] SD Status read successfully")
-    status := SUCCESS
   else
-    DEBUG[CH_IDENT]("  [do_read_sd_status] SD Status read failed")
-    status := E_IO_ERROR
+    DEBUG[CH_IDENT]("  [do_read_sd_status] SD Status read failed: ", sdec_(status))
 
 #endif
 
@@ -5001,13 +5473,20 @@ PRI do_attempt_high_speed() : hs_ok | idx, mismatch
 ' @local mismatch - Count of mismatched longs
 
   DEBUG[CH_HSPEED]("  [do_attempt_high_speed] Attempting high-speed mode...")
+  hs_query_error := SUCCESS
 
-  if NOT queryHighSpeedSupport()
-    ' Check if card supports high-speed
+  if probeHighSpeed() <> SUCCESS
+    ' The card could not be asked -- distinct from a card that answered "no". Only THIS
+    ' branch is an error: a card that genuinely lacks the feature is a normal outcome.
+    DEBUG[CH_HSPEED]("  [do_attempt_high_speed] Could not determine high-speed support")
+    hs_query_error := E_IO_ERROR
+  elseif NOT hs_supported
+    ' Asked and answered: this card does not offer high speed
     DEBUG[CH_HSPEED]("  [do_attempt_high_speed] Card does not support high-speed")
-  elseif NOT switchToHighSpeed()
+  elseif applyHighSpeed() <> SUCCESS
     ' Switch to high-speed mode
     DEBUG[CH_HSPEED]("  [do_attempt_high_speed] Failed to switch to high-speed")
+    hs_query_error := E_IO_ERROR
   else
     ' Set 50 MHz SPI clock
     applySPISpeed(50_000_000)
@@ -5018,14 +5497,16 @@ PRI do_attempt_high_speed() : hs_ok | idx, mismatch
     ' Use @buf (BUF_DATA) for read/write and @dir_buf as saved copy
     if readSector(root_sec, BUF_DATA) < 0
       DEBUG[CH_HSPEED]("  [do_attempt_high_speed] Read FAILED at 50 MHz")
+      hs_query_error := E_IO_ERROR
     else
       bytemove(@dir_buf, @buf, SECTOR_SIZE)             ' Save original to dir_buf
 
-      writeSector(root_sec, BUF_DATA)                   ' Write same data back
+      writeSector(root_sec, BUF_DATA)                   ' status intentionally ignored: read-back verification rewrites identical data
       bytefill(@buf, $AA, SECTOR_SIZE)                  ' Poison buf
 
       if readSector(root_sec, BUF_DATA) < 0             ' Read again
         DEBUG[CH_HSPEED]("  [do_attempt_high_speed] Verify read FAILED at 50 MHz")
+        hs_query_error := E_IO_ERROR
       else
         ' Compare dir_buf (original) vs buf (re-read) long-by-long
         mismatch := 0
@@ -5048,10 +5529,16 @@ PRI do_check_hs_capability() : capable | status[16]
 ' Internal check high-speed capability - queries CMD6 function group 1.
 ' Runs on worker cog where smart pins are configured.
 '
-' @returns capable - TRUE if high-speed function is supported
+' Returns an HONEST BOOLEAN: FALSE means the card said no. Whether the card could be
+' asked at all is a separate question, and it travels in hs_query_error -- otherwise a
+' card with SPI trouble reports "high speed not supported" and sends whoever is
+' diagnosing it after the wrong thing entirely.
+'
+' @returns capable - TRUE if high-speed function is supported (see hs_query_error)
 ' @local status - CMD6 status structure (16 longs = 64 bytes)
 
-  if NOT sendCMD6($00FFFFF1, @status)
+  hs_query_error := issueCMD6($00FFFFF1, @status)
+  if hs_query_error <> SUCCESS
     capable := false
   else
     capable := (status.BYTE[13] & $02) <> 0
@@ -5063,14 +5550,36 @@ CON ' ---- SD Directory / FAT Operations ----
 PRI searchDirectory(name_ptr) : bFound | p_temp, p_entry, idx, search_sec, jdx
 ' Search directory for a file/directory by name.
 '
+' FALSE HAS TWO MEANINGS AND THE COMPANION FIELD IS WHAT SEPARATES THEM: "the name is
+' not there" and "the directory could not be read". Every caller must consult
+' search_io_status before acting on FALSE. The dangerous reading is the existence
+' check -- do_create/do_newfile/do_newdir/do_create_contiguous and do_rename's
+' new-name check all treat FALSE as "the name is available", so an unchecked read
+' failure makes the driver write a SECOND directory entry and allocate a SECOND
+' cluster chain for a file that already exists: two entries, two chains, one name.
+' Those paths must fail closed.
+'
+' The signal is a companion field rather than a status return because SUCCESS is 0
+' and 0 is FALSE in Spin2, so converting this to a status return would silently
+' invert the sense of all fourteen call sites (do_delete's
+' `searchDirectory(name) == 0` means NOT FOUND today and would mean FOUND after).
+' tools/check_error_handling.sh rule 3 flags any call site that ignores the field.
+'
+' DO NOT factor the repeated `(search_io_status < 0) ? search_io_status :
+' E_FILE_NOT_FOUND` in the callers into a helper. Rule 3 detects consultation by
+' looking for the identifier `search_io_status` inside each calling method; hiding
+' it behind a helper removes the identifier and every one of those call sites
+' silently starts failing the check that this pattern depends on.
+'
 ' @param name_ptr - Pointer to null-terminated filename string
-' @returns bFound - TRUE if found, FALSE otherwise
+' @returns bFound - TRUE if found, FALSE if absent OR unreadable (see search_io_status)
 ' @local p_temp - Pointer to temporary filename buffer
 ' @local p_entry - Pointer to current directory entry
 ' @local idx - Loop counter
 ' @local search_sec - Local directory sector for path resolution
 ' @local jdx - Loop counter for case-insensitive name comparison
 
+  search_io_status := SUCCESS
   p_temp := @"FILENAMETXT"
   search_sec := cog_dir_sec[pb_caller]
   if BYTE[name_ptr] == "/"
@@ -5106,6 +5615,7 @@ PRI searchDirectory(name_ptr) : bFound | p_temp, p_entry, idx, search_sec, jdx
     DEBUG[CH_DIR]("  [searchDir] Starting search at n_sec=", udec_(n_sec), " for [", lstr_(@entry_buffer, 11), "]")
     if readSector(n_sec, BUF_DIR) < 0                                                             '  read 1st sector of directory
       DEBUG[CH_DIR]("  [searchDir] Directory read FAILED for sector ", udec_(n_sec))
+      search_io_status := E_IO_ERROR                                                              '   FALSE here means "could not look", not "not there"
       bFound := false
       quit
     DEBUG[CH_DIR]("  [searchDir] After read: dir_buf[0]=[", lstr_(@dir_buf, 11), "] dir_buf[32]=[", lstr_(@dir_buf + 32, 11), "]")
@@ -5137,7 +5647,11 @@ PRI searchDirectory(name_ptr) : bFound | p_temp, p_entry, idx, search_sec, jdx
         quit
       idx += DIR_ENTRY_SIZE                                                                       '  increment to next entry
       if idx & SECTOR_OFFSET_MASK == 0                                                            '  read new directory sector/cluster if needed
-        readNextSector(BUF_DIR)
+        if readNextSector(BUF_DIR) < 0                                                            '   cannot advance -- stop rather than scan a stale buffer
+          DEBUG[CH_DIR]("  [searchDir] Advance to next dir sector FAILED")
+          search_io_status := E_IO_ERROR                                                          '   the search was cut short, so FALSE is not an answer
+          bFound := false
+          quit
     if NOT bFound                                                                                 '  if entry not found in directory
       quit                                                                                        '   stop searching remaining path components
 
@@ -5151,11 +5665,19 @@ PRI firstCluster() : cluster
 PRI readFat(cluster) : pFatEntry
 ' Read a FAT location and return a pointer to the location of that entry.
 '
+' The return is a pointer, so it cannot carry a failure code: on a read failure
+' this still hands back a dereferenceable address into fat_buf, but the contents
+' are whatever the previous read left there. EVERY CALLER MUST CHECK
+' fat_io_status BEFORE DEREFERENCING -- a chain walk that trusts a stale link
+' follows it into another file's clusters.
+'
 ' @param cluster - Cluster number to look up
-' @returns pFatEntry - Pointer to FAT entry in fat_buf
+' @returns pFatEntry - Pointer to FAT entry in fat_buf (contents valid only when fat_io_status == SUCCESS)
 
+  fat_io_status := SUCCESS
   if readSector((cluster >> 7 + fat_sec), BUF_FAT) < 0  '  128 entries in each FAT sector
     DEBUG[CH_SECTOR]("  [readFat] FAT read FAILED for cluster ", udec_(cluster))
+    fat_io_status := E_IO_ERROR
     pFatEntry := @fat_buf                               '  Valid pointer but caller gets stale data
   else
     pFatEntry := @fat_buf + ((cluster << 2) & SECTOR_OFFSET_MASK)
@@ -5165,6 +5687,17 @@ PRI allocateCluster(cluster) : result | fat_idx, buf_idx, high_bits, start_fat_i
 ' If cluster parameter is non-zero, links the new cluster to that chain.
 ' Uses next-fit scanning: starts after previous cluster (or fsi_nxt_free hint)
 ' and wraps around to cluster 2 if end-of-FAT is reached without finding free space.
+'
+' HALF-WRITTEN STATE. Allocation is four writes (new cluster FAT1 + FAT2 mirror,
+' then chain-link FAT1 + FAT2 mirror) and any of them can fail with the earlier
+' ones already on the card. The rule is the same at every one of those points:
+' return E_IO_ERROR and never report the cluster as allocated. The consequence is
+' deliberate -- a cluster whose FAT1 entry landed becomes a LEAKED cluster, marked
+' in use and owned by no file, recoverable by fsck. The alternative, handing the
+' number back after a partial write, is a cross-link: the same cluster given to a
+' second file later, both reported as successful writes, and unrecoverable. A leak
+' costs space; a cross-link costs data. Free-count and next-free bookkeeping are
+' therefore applied only when all required writes landed.
 '
 ' @param cluster - Previous cluster to link (0 for new chain)
 ' @returns result - Cluster number on success, negative error code on failure
@@ -5232,8 +5765,14 @@ PRI allocateCluster(cluster) : result | fat_idx, buf_idx, high_bits, start_fat_i
         high_bits := result & FAT32_RESERVED_MASK                                '  preserve high 4 bits
         LONG[@fat_buf + buf_idx] := high_bits | FAT32_EOC_MARK                   '  mark as end-of-chain, preserve high bits
         result := fat_idx >> 2                                                   '  store cluster number in result
-        writeSector(fat_sec + result >> 7, BUF_FAT)                              '  write FAT1 sector
-        writeSector(fat2_sec + result >> 7, BUF_FAT)                             '  write FAT2 sector (MIRROR)
+        if writeSector(fat_sec + result >> 7, BUF_FAT) < 0                       '  write FAT1 sector
+          DEBUG[CH_SECTOR]("  [allocateCluster] FAT1 write FAILED for cluster ", udec_(result))
+          result := E_IO_ERROR                                                   '   nothing landed: the card still shows this
+          quit                                                                   '   cluster free, so it must NOT be handed out
+        if writeSector(fat2_sec + result >> 7, BUF_FAT) < 0                      '  write FAT2 sector (MIRROR)
+          DEBUG[CH_SECTOR]("  [allocateCluster] FAT2 mirror write FAILED for cluster ", udec_(result))
+          result := E_IO_ERROR                                                   '   see HALF-WRITTEN STATE above: cluster leaks
+          quit
         if cluster <> 0                                                          '  if allocateCluster was called with a non-zero cluster parameter
           if readSector(fat_sec + cluster >> 7, BUF_FAT) < 0                     '   read FAT sector containing cluster cell
             DEBUG[CH_SECTOR]("  [allocateCluster] FAT chain-link read FAILED - cluster orphaned")
@@ -5242,11 +5781,16 @@ PRI allocateCluster(cluster) : result | fat_idx, buf_idx, high_bits, start_fat_i
             buf_idx := (cluster << 2) & SECTOR_OFFSET_MASK
             high_bits := LONG[@fat_buf + buf_idx] & FAT32_RESERVED_MASK          '  preserve high 4 bits
             LONG[@fat_buf + buf_idx] := high_bits | (result & FAT32_ENTRY_MASK)  '  link to new cluster, preserve high bits
-            writeSector(fat_sec + cluster >> 7, BUF_FAT)                         '  write FAT1 sector
-            writeSector(fat2_sec + cluster >> 7, BUF_FAT)                        '  write FAT2 sector (MIRROR)
-        if result >= 0 AND fsi_free_count <> $FFFF_FFFF                          '  track free count incrementally
-          fsi_free_count--                                                       '   (avoids slow FAT scan on unmount)
-        fsi_nxt_free := result + 1                                               '  update next-free hint (Decision #3)
+            if writeSector(fat_sec + cluster >> 7, BUF_FAT) < 0                  '  write FAT1 sector
+              DEBUG[CH_SECTOR]("  [allocateCluster] chain-link FAT1 write FAILED - cluster orphaned")
+              result := E_IO_ERROR                                               '   new cluster is allocated but unreachable
+            elseif writeSector(fat2_sec + cluster >> 7, BUF_FAT) < 0             '  write FAT2 sector (MIRROR)
+              DEBUG[CH_SECTOR]("  [allocateCluster] chain-link FAT2 mirror write FAILED")
+              result := E_IO_ERROR
+        if result >= 0                                                           '  bookkeeping only when the allocation truly landed
+          if fsi_free_count <> $FFFF_FFFF                                        '   track free count incrementally
+            fsi_free_count--                                                     '   (avoids slow FAT scan on unmount)
+          fsi_nxt_free := result + 1                                             '   update next-free hint (Decision #3)
         quit
       fat_idx += 4                                                               '  advance index to next cluster cell
       if fat_idx >= fat_limit AND NOT wrapped                                    '  past end of FAT? wrap around
@@ -5260,30 +5804,49 @@ PRI allocateCluster(cluster) : result | fat_idx, buf_idx, high_bits, start_fat_i
         result := E_DISK_FULL
         quit
 
-PRI clearCluster(cluster)
+PRI clearCluster(cluster) : status
 ' Initialize entire contents of cluster to 0 - used for new directories.
 '
+' Every sector must land. A caller that ignores the status can report a new
+' directory as created while its cluster still holds whatever was there before,
+' which then reads back as a directory full of garbage entries.
+'
 ' @param cluster - Cluster number to clear
+' @returns status - SUCCESS when every sector was written, E_IO_ERROR otherwise
 
+  status := SUCCESS
   n_sec := clus2sec(cluster)                            '  set n_sec to 1st sector of specified cluster
   bytefill(@dir_buf, 0, SECTOR_SIZE)                    '  clear directory buffer
   repeat sec_per_clus                                   '  repeat for all sectors in the cluster
-    writeSector(n_sec++, BUF_DIR)                       '   overwrite sector
-  dir_sec_in_buf := n_sec - 1
+    if writeSector(n_sec++, BUF_DIR) < 0                '   overwrite sector
+      DEBUG[CH_SECTOR]("  [clearCluster] Write FAILED for sector ", udec_(n_sec - 1))
+      status := E_IO_ERROR
+      quit
+  if status == SUCCESS
+    dir_sec_in_buf := n_sec - 1                         '  dir_buf holds this sector's (zeroed) contents
+  else
+    dir_sec_in_buf := -1                                '  the write did not land, so the buffer describes nothing on disk
 
-PRI readNextSector(buf_type) | cluster, address, contents
+PRI readNextSector(buf_type) : status | cluster, address, contents
 ' Load the next sector into buffer - follows FAT chain at cluster boundaries.
 '
+' A caller that ignores the status interprets whatever the buffer happens to
+' hold -- stale content from the previous sector, or the zeros written on the
+' end-of-chain path -- as real directory entries.
+'
 ' @param buf_type - Buffer type: BUF_DIR, BUF_FAT, or BUF_DATA
+' @returns status - SUCCESS on success, E_IO_ERROR if a FAT or data read failed
 ' @local cluster - Current cluster number
 ' @local address - FAT entry address
 ' @local contents - FAT entry contents
 
+  status := SUCCESS
   n_sec++
   if ((n_sec - cluster_offset) & (sec_per_clus - 1)) == 0                       '  if next sector is in a different cluster
     cluster := sec2clus(n_sec-1)                                                '   find current cluster number
     if readSector(cluster >> 7 + fat_sec, BUF_FAT) < 0                          '   read sector of FAT containing cluster number (128 cluster entries in each FAT sector)
       DEBUG[CH_SECTOR]("  [readNextSector] FAT read FAILED for cluster ", udec_(cluster))
+      status := E_IO_ERROR
     else
       address := @fat_buf + ((cluster << 2) & SECTOR_OFFSET_MASK)               '   find long within FAT buffer for current cluster
       contents := LONG[address]                                                 '   read contents to determine next cluster number
@@ -5300,28 +5863,38 @@ PRI readNextSector(buf_type) | cluster, address, contents
         n_sec := clus2sec(contents)                                             '   convert next cluster number into sector number
         if readSector(n_sec, buf_type) < 0
           DEBUG[CH_SECTOR]("  [readNextSector] Sector read FAILED for sector ", udec_(n_sec))
+          status := E_IO_ERROR
   else
     if readSector(n_sec, buf_type) < 0
       DEBUG[CH_SECTOR]("  [readNextSector] Sector read FAILED for sector ", udec_(n_sec))
+      status := E_IO_ERROR
 
 PRI updateFSInfo() : bSuccess | pFSI
 ' Update FSInfo sector with current free cluster count.
 ' Uses cached fsi_free_count (tracked incrementally during alloc/delete).
 ' Called by unmount() to ensure other OSes see correct free space.
 '
-' @returns bSuccess - TRUE on success, FALSE if no valid FSInfo
+' A FALSE return alone does not mean failure -- "there was nothing to update" and
+' "the update failed" are different outcomes. The companion field fsinfo_error
+' separates them: it stays SUCCESS when there was simply nothing to do, and
+' carries the error code when an update was attempted and did not land.
+'
+' @returns bSuccess - TRUE when the FSInfo sectors were updated, FALSE otherwise
 ' @local pFSI - Pointer overlaid on buf for fsinfo_t struct access
 
+  fsinfo_error := SUCCESS
   if fsinfo_sec == 0 OR fsi_free_count == $FFFF_FFFF
-    DEBUG[CH_MOUNT]("  [updateFSInfo] No valid FSInfo to update")
+    DEBUG[CH_MOUNT]("  [updateFSInfo] No valid FSInfo to update")  '  not a failure -- fsinfo_error stays SUCCESS
   elseif readSector(vbr_sec + fsinfo_sec, BUF_DATA) < 0
     DEBUG[CH_MOUNT]("  [updateFSInfo] FSInfo read FAILED")
+    fsinfo_error := E_IO_ERROR
   else
     pFSI := @buf                                        '  overlay FSInfo
 
     ' Verify signatures before writing
     if fsiLeadSig(pFSI) <> FSINFO_LEAD_SIG OR fsiStructSig(pFSI) <> FSINFO_STRUCT_SIG
       DEBUG[CH_MOUNT]("  [updateFSInfo] Invalid FSInfo signatures")
+      fsinfo_error := E_BAD_FSINFO
     else
       ' Update free count and next-free hint
       fsiSetFreeClusters(pFSI, fsi_free_count)          '  FSI_Free_Count (cached value)
@@ -5333,8 +5906,10 @@ PRI updateFSInfo() : bSuccess | pFSI
       ' other OSes can recover from a torn primary.
       if writeSector(vbr_sec + fsinfo_sec, BUF_DATA) < 0
         DEBUG[CH_MOUNT]("  [updateFSInfo] Primary FSInfo write FAILED")
+        fsinfo_error := E_IO_ERROR
       elseif writeSector(vbr_sec + 7, BUF_DATA) < 0      '  backup FSInfo at sector 7
         DEBUG[CH_MOUNT]("  [updateFSInfo] Backup FSInfo write FAILED")
+        fsinfo_error := E_IO_ERROR
       else
         DEBUG[CH_MOUNT]("  [updateFSInfo] Updated primary+backup: free_count=", udec(fsi_free_count))
         bSuccess := true
@@ -5377,6 +5952,10 @@ PRI freeClusterChain(first_cluster) : status | clus, next_clus, last_clus, fat_s
   if clus >= ROOT_CLUSTER
     repeat
       next_clus := LONG[readFat(clus)]
+      if fat_io_status < 0                                                      '  stale link -- abort BEFORE zeroing anything.
+        DEBUG[CH_FILE]("  [freeClusterChain] FAT read FAILED at cluster ", udec_(clus))
+        status := E_IO_ERROR                                                    '   Following a garbage link would free clusters
+        quit                                                                    '   belonging to other files.
       LONG[@fat_buf + ((clus << 2) & SECTOR_OFFSET_MASK)] := 0                  '  zero the FAT entry
       if fsi_free_count <> $FFFF_FFFF                                           '  track free count incrementally
         fsi_free_count++
@@ -5443,6 +6022,11 @@ PRI do_create_contiguous(p_path, file_size) : handle | cluster_count, new_first,
           DEBUG[CH_FILE]("  [do_create_contiguous] File already exists: ", zstr_(p_path))
           freeHandle(handle)
           handle := E_FILE_EXISTS
+        elseif search_io_status < 0
+          ' FAIL CLOSED -- see do_create.
+          DEBUG[CH_FILE]("  [do_create_contiguous] Existence check FAILED, refusing to create")
+          freeHandle(handle)
+          handle := search_io_status
         elseif entry_address == 0
           DEBUG[CH_FILE]("  [do_create_contiguous] entry_address=0 -- path not valid")
           freeHandle(handle)
@@ -5457,8 +6041,10 @@ PRI do_create_contiguous(p_path, file_size) : handle | cluster_count, new_first,
                 DEBUG[CH_FILE]("  [do_create_contiguous] Failed to allocate dir cluster")
                 freeHandle(handle)
                 handle := E_DISK_FULL
-              else
-                clearCluster(temp)
+              elseif clearCluster(temp) < 0
+                DEBUG[CH_FILE]("  [do_create_contiguous] Failed to clear new dir cluster")
+                freeHandle(handle)
+                handle := E_IO_ERROR
 
           if handle >= 0
             ' Set up directory entry
@@ -5508,7 +6094,7 @@ PRI do_compact_file(p_path) : status | dir_sec, dir_off, start_cluster, file_siz
 ' Step 1: Find the file
 
   if searchDirectory(p_path) == 0
-    status := E_FILE_NOT_FOUND
+    status := (search_io_status < 0) ? search_io_status : E_FILE_NOT_FOUND
   elseif isFileOpenAny(entry_address >> SECTOR_SHIFT, entry_address & SECTOR_OFFSET_MASK)
     ' Step 2: Check file is not open
     status := E_FILE_OPEN_FOR_COMPACT
@@ -5523,7 +6109,9 @@ PRI do_compact_file(p_path) : status | dir_sec, dir_off, start_cluster, file_siz
 
     ' Step 4: Count clusters and check fragmentation
     frag_count := countFileFragments(start_cluster)
-    if frag_count == 1
+    if frag_count < 0
+      status := frag_count                              '  E_IO_ERROR walking the chain
+    elseif frag_count == 1
       status := SUCCESS                                 '  already contiguous
     else
       ' Count clusters by walking the chain
@@ -5532,7 +6120,10 @@ PRI do_compact_file(p_path) : status | dir_sec, dir_off, start_cluster, file_siz
       repeat
         cluster_count++
         next_clus := LONG[readFat(clus)] & FAT32_ENTRY_MASK
-        if next_clus >= FAT32_EOC_MIN
+        if fat_io_status < 0                            '  stale link -- a wrong cluster_count would size
+          DEBUG[CH_FILE]("  [do_compact_file] count-phase FAT read FAILED at cluster ", udec_(clus))
+          return E_IO_ERROR                             '   the destination run wrongly. Nothing has been
+        if next_clus >= FAT32_EOC_MIN                   '   modified yet, so returning here is clean.
           quit
         if next_clus < ROOT_CLUSTER
           quit
@@ -5553,6 +6144,10 @@ PRI do_compact_file(p_path) : status | dir_sec, dir_off, start_cluster, file_siz
             quit                                        '  E_IO_ERROR
           idx++
           next_clus := LONG[readFat(clus)] & FAT32_ENTRY_MASK
+          if fat_io_status < 0                          '  stale link -- stop before copying a cluster
+            DEBUG[CH_FILE]("  [do_compact_file] copy-phase FAT read FAILED at cluster ", udec_(clus))
+            status := E_IO_ERROR                        '   that is not part of this file
+            quit
           if next_clus >= FAT32_EOC_MIN
             quit
           if next_clus < ROOT_CLUSTER
@@ -5569,6 +6164,10 @@ PRI do_compact_file(p_path) : status | dir_sec, dir_off, start_cluster, file_siz
               quit                                      '  E_VERIFY_FAILED
             idx++
             next_clus := LONG[readFat(clus)] & FAT32_ENTRY_MASK
+            if fat_io_status < 0                        '  stale link -- an unverified copy must not be
+              DEBUG[CH_FILE]("  [do_compact_file] verify-phase FAT read FAILED at cluster ", udec_(clus))
+              status := E_IO_ERROR                      '   promoted by pointing the entry at it
+              quit
             if next_clus >= FAT32_EOC_MIN
               quit
             if next_clus < ROOT_CLUSTER
@@ -5609,7 +6208,7 @@ PRI do_file_fragments(p_path) : count | start_cluster
 ' @returns count - Fragment count (1 = contiguous), 0 if empty, or negative error code
 
   if searchDirectory(p_path) == 0
-    count := E_FILE_NOT_FOUND
+    count := (search_io_status < 0) ? search_io_status : E_FILE_NOT_FOUND
   else
     start_cluster := firstCluster()
     if start_cluster < ROOT_CLUSTER
@@ -5622,7 +6221,7 @@ PRI countFileFragments(first_cluster) : count | clus, next_clus, loop_count
 ' A contiguous file has fragment count 1; each gap increments the count.
 '
 ' @param first_cluster - First cluster of the file's chain
-' @returns count - Fragment count (1 = contiguous), 0 if empty chain
+' @returns count - Fragment count (1 = contiguous), 0 if empty chain, E_IO_ERROR on FAT read failure
 
   if first_cluster < ROOT_CLUSTER
     count := 0                                          '  empty or invalid chain
@@ -5632,6 +6231,9 @@ PRI countFileFragments(first_cluster) : count | clus, next_clus, loop_count
     loop_count := 0
     repeat
       next_clus := LONG[readFat(clus)] & FAT32_ENTRY_MASK
+      if fat_io_status < 0                              '  stale link -- a fragment count off a garbage
+        DEBUG[CH_FILE]("  [countFileFragments] FAT read FAILED at cluster ", udec_(clus))
+        return E_IO_ERROR                               '   chain is meaningless, do not report one
       if next_clus >= FAT32_EOC_MIN
         quit                                            '  end of chain
       if next_clus < ROOT_CLUSTER                       '  bad reference
@@ -7521,7 +8123,7 @@ PRI probeCmd23() | scr[2], cmd_support, resp
   cmd23_supported := FALSE
 
   ' Step 1: Check SCR CMD_SUPPORT field (pre-filter)
-  if readSCR(@scr)
+  if fetchSCR(@scr) == SUCCESS
     cmd_support := scr.BYTE[3] & $03
     if cmd_support & $02
       DEBUG[CH_STATUS]("    [probeCmd23] SCR advertises CMD23 (CMD_SUPPORT=$", uhex_byte_(cmd_support), ") - verifying...")
@@ -7820,18 +8422,29 @@ PRI transfer(data,bits) : rxData | _cs, _mosi, _miso, _sck, delay
   if bits < 32                                          '  mask to requested bit count
     rxData &= (1 << bits) - 1                           '  (skip for 32 bits - mask would wrap)
 
-PRI readDataRegister(cmd_num, arg, crc_byte, p_buf, byte_count) : bSuccess | timeout, idx, resp
+PRI fetchDataRegister(cmd_num, arg, crc_byte, p_buf, byte_count) : status | timeout, idx, resp
 ' Consolidated register read transaction - sends command, waits for R1 and $FE data token,
 ' reads byte_count bytes into p_buf, consumes 2-byte CRC, deselects card.
-' Used by: readCSD (CMD9, 16 bytes), readCID (CMD10, 16 bytes), sendCMD6 (CMD6, 64 bytes),
-' readSCR (ACMD51, 8 bytes), readSDStatus (ACMD13, 64 bytes).
+' Used by: fetchCSD (CMD9, 16 bytes), fetchCID (CMD10, 16 bytes), issueCMD6 (CMD6, 64 bytes),
+' fetchSCR (ACMD51, 8 bytes), fetchSDStatus (ACMD13, 64 bytes).
+'
+' RENAMED from readDataRegister when it stopped returning a boolean. That rename was the
+' point: SUCCESS is 0 and 0 is FALSE in Spin2, so changing the return type in place would
+' have inverted every `if NOT readCSD(...)` in the driver silently -- compiling clean and
+' running backwards. Renaming makes the old name vanish, so the compiler has to be shown
+' every call site. The same applies to any future conversion of this kind.
+'
+' A single FALSE used to cover three different failures. They need different responses --
+' a card that never answered is not a card that answered with an error -- so each now
+' reports its own code.
 '
 ' @param cmd_num - SD command number (e.g., CMD9, CMD10, CMD6)
 ' @param arg - 32-bit command argument (0 for most register reads)
 ' @param crc_byte - Pre-computed CRC-7 byte for this command
 ' @param p_buf - Pointer to buffer to receive data
 ' @param byte_count - Number of data bytes to read (8, 16, or 64)
-' @returns bSuccess - TRUE on success, FALSE on failure/timeout
+' @returns status - SUCCESS (0); E_TIMEOUT if no R1 or no data token arrived;
+'                   E_BAD_RESPONSE if the card answered R1 with an error
 ' @local timeout - Timeout deadline
 ' @local idx - Loop counter
 ' @local resp - SPI response byte
@@ -7853,8 +8466,13 @@ PRI readDataRegister(cmd_num, arg, crc_byte, p_buf, byte_count) : bSuccess | tim
     if GETMS() - timeout > 0
       quit
 
-  if resp == $00
+  if resp <> $00
+    ' Either no R1 ever arrived (still $FF from the idle line) or the card reported an
+    ' error in it. Those are different conditions with different remedies.
+    status := (resp & $80) ? E_TIMEOUT : E_BAD_RESPONSE
+  else
     ' Wait for data token ($FE)
+    status := E_TIMEOUT                                 ' Until the token arrives, that is what happened
     timeout := GETMS() + 1000                           '  1s timeout
     repeat
       resp := sp_transfer_8($FF)
@@ -7872,26 +8490,28 @@ PRI readDataRegister(cmd_num, arg, crc_byte, p_buf, byte_count) : bSuccess | tim
       sp_transfer_8($FF)
       sp_transfer_8($FF)
 
-      bSuccess := TRUE
+      status := SUCCESS
 
   pinh(cs)                                              '  CS HIGH = deselected
 
-PRI readCSD(p_csd) : bSuccess
+PRI fetchCSD(p_csd) : status
 ' Read CSD register using CMD9 - reads 16-byte CSD register into buffer.
+' Renamed from readCSD on conversion to a status return -- see fetchDataRegister.
 '
 ' @param p_csd - Pointer to 16-byte buffer to receive CSD data
-' @returns bSuccess - TRUE on success, FALSE on failure
+' @returns status - SUCCESS (0), or the negative code from fetchDataRegister
 
-  bSuccess := readDataRegister(CMD9, 0, CRC_CMD9, p_csd, 16)
+  status := fetchDataRegister(CMD9, 0, CRC_CMD9, p_csd, 16)
 
-PRI readCID(p_cid) : bSuccess
+PRI fetchCID(p_cid) : status
 ' Read CID register using CMD10 - reads 16-byte Card Identification register.
 ' CID layout: MID[1] OID[2] PNM[5] PRV[1] PSN[4] MDT[2] CRC[1] (big-endian from card).
+' Renamed from readCID on conversion to a status return -- see fetchDataRegister.
 '
 ' @param p_cid - Pointer to 16-byte buffer to receive CID data
-' @returns bSuccess - TRUE on success, FALSE on failure
+' @returns status - SUCCESS (0), or the negative code from fetchDataRegister
 
-  bSuccess := readDataRegister(CMD10, 0, CRC_CMD10, p_cid, 16)
+  status := fetchDataRegister(CMD10, 0, CRC_CMD10, p_cid, 16)
 
 PRI parseTransSpeed(p_csd) : speed_hz | tran_speed, time_val, mult_val
 ' Parse TRAN_SPEED from CSD register - returns max transfer speed in Hz.
@@ -8039,7 +8659,7 @@ PRI identifyCard() | cid[4], csd[4]
   DEBUG[CH_IDENT]("  [identifyCard] Reading card registers...")
 
   ' Read CID to identify manufacturer
-  if readCID(@cid)
+  if fetchCID(@cid) == SUCCESS
     card_mfr_id := parseMfrId(@cid)
     DEBUG[CH_IDENT]("  [identifyCard] Manufacturer ID: $", uhex_byte_(card_mfr_id))
   else
@@ -8047,7 +8667,7 @@ PRI identifyCard() | cid[4], csd[4]
     card_mfr_id := 0
 
   ' Read CSD to get maximum speed and timeouts
-  if readCSD(@csd)
+  if fetchCSD(@csd) == SUCCESS
     card_max_speed_hz := parseTransSpeed(@csd)
     parseTimeouts(@csd)
   else
@@ -8069,70 +8689,88 @@ PRI setOptimalSpeed()
 
 #ifdef SD_INCLUDE_SPEED
 
-PRI sendCMD6(arg, p_status) : bSuccess
+PRI issueCMD6(arg, p_status) : status
 ' Send CMD6 (SWITCH_FUNC) and receive 64-byte status structure.
 ' arg format: [31]=mode (0=check, 1=switch), [3:0]=function group 1 selection.
+' Renamed from sendCMD6 on conversion to a status return -- see fetchDataRegister.
 '
 ' @param arg - CMD6 argument word
 ' @param p_status - Pointer to 64-byte buffer to receive status
-' @returns bSuccess - TRUE on success, FALSE on failure/timeout
+' @returns status - SUCCESS (0), or the negative code from fetchDataRegister
 
-  bSuccess := readDataRegister(CMD6, arg, CRC_NONE, p_status, 64)
+  status := fetchDataRegister(CMD6, arg, CRC_NONE, p_status, 64)
 
-PRI queryHighSpeedSupport() : bSupported | scr[2], status[16], sd_spec
-' Check if card supports high-speed mode - queries SCR and function group 1.
+PRI probeHighSpeed() : status | scr[2], cmd6_status[16], sd_spec
+' Ask the card whether it supports high-speed mode - queries SCR and function group 1.
+' Renamed from queryHighSpeedSupport on conversion to a status return.
 '
-' @returns bSupported - TRUE if high-speed (50 MHz) is supported
+' "THE CARD DOES NOT SUPPORT IT" AND "WE COULD NOT FIND OUT" ARE DIFFERENT ANSWERS, and
+' the old boolean gave both as FALSE -- so a card whose SCR read timed out was recorded as
+' a card that simply lacks the feature. The status return says whether the QUESTION was
+' answered; the answer itself lands in the companion field hs_supported. That split keeps
+' the governing rule intact: a method returns either a boolean or a status, never both.
+'
+' @returns status - SUCCESS (0) if the card was successfully asked; negative if it was not
 ' @local scr - SCR register data (2 longs = 8 bytes)
-' @local status - CMD6 status structure (16 longs = 64 bytes)
+' @local cmd6_status - CMD6 status structure (16 longs = 64 bytes)
 ' @local sd_spec - SD spec version from SCR
 
-  DEBUG[CH_HSPEED]("  [queryHighSpeedSupport] Checking card capabilities...")
+  DEBUG[CH_HSPEED]("  [probeHighSpeed] Checking card capabilities...")
+  hs_supported := false
 
   ' First check SCR for CMD6 support (SD 2.0+ cards support CMD6)
-  if NOT readSCR(@scr)
-    DEBUG[CH_HSPEED]("  [queryHighSpeedSupport] Failed to read SCR")
+  status := fetchSCR(@scr)
+  if status <> SUCCESS
+    DEBUG[CH_HSPEED]("  [probeHighSpeed] Failed to read SCR: ", sdec_(status))
   else
     sd_spec := scr.BYTE[0] & $0F                        '  SD_SPEC in bits [3:0]
-    DEBUG[CH_HSPEED]("  [queryHighSpeedSupport] SD_SPEC=", udec_(sd_spec))
+    DEBUG[CH_HSPEED]("  [probeHighSpeed] SD_SPEC=", udec_(sd_spec))
     if sd_spec < 2
-      DEBUG[CH_HSPEED]("  [queryHighSpeedSupport] Card is SD 1.x - CMD6 not supported")
+      ' A definite, correctly-obtained answer of "no" -- the query succeeded.
+      DEBUG[CH_HSPEED]("  [probeHighSpeed] Card is SD 1.x - CMD6 not supported")
     else
-      DEBUG[CH_HSPEED]("  [queryHighSpeedSupport] Card is SD 2.0+ - CMD6 supported")
+      DEBUG[CH_HSPEED]("  [probeHighSpeed] Card is SD 2.0+ - CMD6 supported")
 
       ' Query function group 1 using CMD6 mode 0 (check)
       ' Argument: 0x00FFFFF1 = check mode, access function group 1, query high-speed
-      if NOT sendCMD6($00FFFFF1, @status)
-        DEBUG[CH_HSPEED]("  [queryHighSpeedSupport] CMD6 query failed")
+      status := issueCMD6($00FFFFF1, @cmd6_status)
+      if status <> SUCCESS
+        DEBUG[CH_HSPEED]("  [probeHighSpeed] CMD6 query failed: ", sdec_(status))
       else
         ' Status bytes 12-13 contain function group 1 support bits
         ' Bit 1 of byte 13 indicates high-speed support
-        if (status.BYTE[13] & $02) == 0
-          DEBUG[CH_HSPEED]("  [queryHighSpeedSupport] High-speed function not supported")
+        if (cmd6_status.BYTE[13] & $02) == 0
+          DEBUG[CH_HSPEED]("  [probeHighSpeed] High-speed function not supported")
         else
-          DEBUG[CH_HSPEED]("  [queryHighSpeedSupport] High-speed (50 MHz) IS SUPPORTED")
-          bSupported := true
+          DEBUG[CH_HSPEED]("  [probeHighSpeed] High-speed (50 MHz) IS SUPPORTED")
+          hs_supported := true
 
-PRI switchToHighSpeed() : bSwitched | status[16]
+PRI applyHighSpeed() : status | cmd6_status[16]
 ' Switch card to high-speed mode - sends CMD6 to switch function group 1.
+' Renamed from switchToHighSpeed on conversion to a status return.
 '
-' @returns bSwitched - TRUE if switch succeeded
-' @local status - CMD6 status structure (16 longs = 64 bytes)
+' A card that REFUSED the switch is not a card that failed to answer, and the old boolean
+' reported both as FALSE.
+'
+' @returns status - SUCCESS (0) if the card switched; E_BAD_RESPONSE if it answered but
+'                   declined; otherwise the negative code from issueCMD6
+' @local cmd6_status - CMD6 status structure (16 longs = 64 bytes)
 
-  DEBUG[CH_HSPEED]("  [switchToHighSpeed] Sending CMD6 switch command...")
+  DEBUG[CH_HSPEED]("  [applyHighSpeed] Sending CMD6 switch command...")
 
   ' Switch to high-speed using CMD6 mode 1 (switch)
   ' Argument: 0x80FFFFF1 = switch mode, access function group 1, select high-speed
-  if NOT sendCMD6($80FFFFF1, @status)
-    DEBUG[CH_HSPEED]("  [switchToHighSpeed] CMD6 switch failed")
+  status := issueCMD6($80FFFFF1, @cmd6_status)
+  if status <> SUCCESS
+    DEBUG[CH_HSPEED]("  [applyHighSpeed] CMD6 switch failed: ", sdec_(status))
   else
     ' Verify switch succeeded - check function group 1 selection in status
     ' Byte 16, bits 3:0 should be 1 (high-speed selected)
-    if (status.BYTE[16] & $0F) <> 1
-      DEBUG[CH_HSPEED]("  [switchToHighSpeed] Switch not accepted, status=$", uhex_byte_(status.BYTE[16]))
+    if (cmd6_status.BYTE[16] & $0F) <> 1
+      DEBUG[CH_HSPEED]("  [applyHighSpeed] Switch not accepted, status=$", uhex_byte_(cmd6_status.BYTE[16]))
+      status := E_BAD_RESPONSE
     else
-      DEBUG[CH_HSPEED]("  [switchToHighSpeed] Successfully switched to high-speed mode")
-      bSwitched := true
+      DEBUG[CH_HSPEED]("  [applyHighSpeed] Successfully switched to high-speed mode")
 
 #endif
 
@@ -8145,37 +8783,50 @@ PRI sendAppCmdPrefix() : resp
   resp := cmd(CMD55, 0)
   pinh(cs)                                              '  deselect between CMD55 and ACMD
 
-PRI readSCR(p_scr) : bSuccess | resp
+PRI fetchSCR(p_scr) : status | resp
 ' Read SCR register using ACMD51 - reads 8-byte SD Configuration Register.
 ' Requires CMD55 prefix before ACMD51.
+' Renamed from readSCR on conversion to a status return -- see fetchDataRegister.
+'
+' The CMD55 prefix has its own two failure modes, and they were previously flattened
+' into the same FALSE as an ACMD51 failure.
 '
 ' @param p_scr - Pointer to 8-byte buffer to receive SCR data
-' @returns bSuccess - TRUE on success, FALSE on failure
+' @returns status - SUCCESS (0); E_TIMEOUT if the CMD55 R1 never arrived;
+'                   E_BAD_RESPONSE if CMD55 answered with an error; otherwise whatever
+'                   fetchDataRegister reported
 ' @local resp - CMD55 R1 response
 
   resp := sendAppCmdPrefix()
   if diag_cmd_r1_ms < 0                                 ' cmd() returns 0 on R1 timeout, byte-identical to a valid R1=$00 clean
-    DEBUG[CH_STATUS]("  [readSCR] CMD55 R1 NEVER ARRIVED (cmd() timed out)")
+    DEBUG[CH_STATUS]("  [fetchSCR] CMD55 R1 NEVER ARRIVED (cmd() timed out)")
+    status := E_TIMEOUT
   elseif resp > $01                                     '  accept $00 or $01 (idle)
-    DEBUG[CH_STATUS]("  [readSCR] CMD55 error response: $", uhex_byte_(resp))
+    DEBUG[CH_STATUS]("  [fetchSCR] CMD55 error response: $", uhex_byte_(resp))
+    status := E_BAD_RESPONSE
   else
-    bSuccess := readDataRegister(ACMD51, 0, CRC_ACMD51, p_scr, 8)
+    status := fetchDataRegister(ACMD51, 0, CRC_ACMD51, p_scr, 8)
 
-PRI readSDStatus(p_buf) : bSuccess | resp
+PRI fetchSDStatus(p_buf) : status | resp
 ' Read SD Status register using ACMD13 - reads 64-byte SD Status.
 ' Requires CMD55 prefix before ACMD13.
+' Renamed from readSDStatus on conversion to a status return -- see fetchDataRegister.
 '
 ' @param p_buf - Pointer to 64-byte buffer to receive SD Status data
-' @returns bSuccess - TRUE on success, FALSE on failure
+' @returns status - SUCCESS (0); E_TIMEOUT if the CMD55 R1 never arrived;
+'                   E_BAD_RESPONSE if CMD55 answered with an error; otherwise whatever
+'                   fetchDataRegister reported
 ' @local resp - CMD55 R1 response
 
   resp := sendAppCmdPrefix()
   if diag_cmd_r1_ms < 0                                 ' cmd() returns 0 on R1 timeout, byte-identical to a valid R1=$00 clean
-    DEBUG[CH_STATUS]("  [readSDStatus] CMD55 R1 NEVER ARRIVED (cmd() timed out)")
+    DEBUG[CH_STATUS]("  [fetchSDStatus] CMD55 R1 NEVER ARRIVED (cmd() timed out)")
+    status := E_TIMEOUT
   elseif resp > $01                                     '  accept $00 or $01 (idle)
-    DEBUG[CH_STATUS]("  [readSDStatus] CMD55 error response: $", uhex_byte_(resp))
+    DEBUG[CH_STATUS]("  [fetchSDStatus] CMD55 error response: $", uhex_byte_(resp))
+    status := E_BAD_RESPONSE
   else
-    bSuccess := readDataRegister(CMD13, 0, CRC_NONE, p_buf, 64)
+    status := fetchDataRegister(CMD13, 0, CRC_NONE, p_buf, 64)
 
 #ifdef SD_INCLUDE_DEBUG
 

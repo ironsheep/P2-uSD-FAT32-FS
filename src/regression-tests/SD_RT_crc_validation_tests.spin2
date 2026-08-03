@@ -165,7 +165,7 @@ PUB go() | result, handle, bytesRead, bytesWritten, retryBefore, retryAfter, mis
         utils.evaluateSubValue(bytesRead, @"read returns 512 (validation skipped)", BUFFER_SIZE)
         utils.evaluateSubValue(mismatchAfter, @"mismatch count unchanged (validation skipped)", mismatchBefore)
     else
-        utils.evaluateSubValue(bytesRead, @"read returns 0 (failure)", 0)
+        utils.evaluateSubValue(bytesRead, @"read returns E_IO_ERROR (nothing transferred, so never a zero)", sd.E_IO_ERROR)
         utils.evaluateSubBool(mismatchAfter > mismatchBefore, @"mismatch count increased", true)
     utils.showSubTestResults()
 

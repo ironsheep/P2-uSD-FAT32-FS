@@ -6,7 +6,7 @@
 ''               -- see below for terms of use
 ''   E-mail..... stephen@ironsheep.biz
 ''   Started.... JUL 2026
-''   Updated.... 31 JUL 2026
+''   Updated.... 03 AUG 2026
 ''
 '' =================================================================================================
 ''
@@ -26,6 +26,21 @@
 ''   - Targeted Read Failure (sticky fails, one-shot recovers via retry)
 ''   - Targeted Write Failure (named LBA, and nth-write-in-a-sequence)
 ''   - Arming Precision (direction discrimination, untouched LBAs, clean disarm)
+''   - Primitive Failure Reporting (the instrument turned on the driver: a failed
+''     FAT read must reach the caller as an error instead of a stale chain walk)
+''   - Tier-1 Silent Corruption Paths (one failed metadata write per test; the
+''     assertion is that the on-disk state afterward is the recoverable one)
+''   - Search Failure Is Not Not-Found (an unreadable directory must not read as
+''     "the name is available", which would create a duplicate entry)
+''   - Short Count Is Not End Of File (a read or write that stops part-way returns a
+''     POSITIVE partial count; handleError() is what tells it from a clean stop)
+''   - A Background Flush Failure Reaches Somebody (the idle auto-flush has no caller
+''     to fail on, so lastFlushError() is the only way its failure is ever seen)
+''   - Operations That Could Not Fail, Now Can (sync(), freeSpace() and stop() each
+''     computed a status and then discarded it; all three now report)
+''
+'' SLOW-RUNNING: the last group waits out the driver's 200ms idle window several times.
+'' Those waits are the condition under test and cannot be shortened.
 ''
 '' SAFETY: every raw write in this suite writes a sector's own contents back to it,
 '' read moments earlier. If an injection fails to fire - the very defect these tests
@@ -61,6 +76,11 @@ CON
 
      WRITE_DIAG_CRC_REJECT = 3           ' getWriteDiag() result code for a rejected data block
 
+     ' Comfortably past the driver's IDLE_FLUSH_MS (200), so the worker's idle window
+     ' opens and the automatic flush actually runs. No command may be issued during
+     ' this wait -- any command resets the idle timer and the flush never fires.
+     IDLE_FLUSH_WAIT_MS = 400
+
 ' Enable all features (fault injection lives behind SD_INCLUDE_TEST_HOOKS)
 #ifdef __SPINTOOLS__
 #define SD_INCLUDE_ALL
@@ -79,6 +99,16 @@ DAT
 
 ' Test filenames
 injFile         BYTE    "INJECT1.BIN", 0
+crossA          BYTE    "CROSSA.BIN", 0
+crossB          BYTE    "CROSSB.BIN", 0
+renFile         BYTE    "RENSRC.BIN", 0
+renNewName      BYTE    "RENDST.BIN", 0
+mvSrcFile       BYTE    "MOVESRC.BIN", 0
+dirGood         BYTE    "TIER1GD", 0
+dirBad          BYTE    "TIER1BD", 0
+dirFull         BYTE    "TIER1FL", 0
+dirMoveDest     BYTE    "TIER1MV", 0
+rootPath        BYTE    "/", 0
 
 ' Buffers
 writeBuffer     BYTE    0[BUFFER_SIZE]
@@ -88,7 +118,17 @@ sectorBuffer    BYTE    0[BUFFER_SIZE]
 sectorBuffer_guard BYTE 0[16]
 compareBuffer   BYTE    0[BUFFER_SIZE]
 
-PUB go() | result, handle, bytesRead, bytesWritten, errCount, testSector, mismatchBefore, mismatchAfter, retryBefore, retryAfter, diagResult, diagR1, diagResp, diagSector, writeCalls
+' A request spanning two sectors, so one sector can succeed and the next fail
+' inside a SINGLE readHandle()/writeHandle() call - which is what produces a
+' partial count rather than a clean zero.
+spanBuffer      BYTE    0[BUFFER_SIZE * 2]
+spanBuffer_guard BYTE   0[16]
+
+' Throwaway receivers for debugGetReadSectorDiag(); only the sector is wanted.
+diagLastSector  LONG    0
+diagScratch     LONG    0[7]
+
+PUB go() | result, handle, bytesRead, bytesWritten, errCount, testSector, mismatchBefore, mismatchAfter, retryBefore, retryAfter, diagResult, diagR1, diagResp, diagSector, writeCalls, freeBefore, freeAfter, nameMatches, handleB, dataSector
 '' Main entry point for fault-injection facility regression tests
 
     debug(" ")
@@ -190,12 +230,12 @@ PUB go() | result, handle, bytesRead, bytesWritten, errCount, testSector, mismat
     utils.evaluateSubValue(sd.getTestErrorCount(), @"no errors injected after clear", 0)
     utils.showSubTestResults()
 
-    ' A failed read must not have disturbed what is on the card. Compare against
-    ' the baseline captured in test 2.
+    ' Test 5: A failed read must not have disturbed what is on the card. Compare
+    ' against the baseline captured in test 2.
     utils.startTest(@"Injected read failure left the sector content untouched")
     utils.evaluateBufferMatch(@compareBuffer, @sectorBuffer, BUFFER_SIZE, @"content matches pre-injection baseline")
 
-    ' Test 5: A one-shot read failure is consumed by the first attempt, so the
+    ' Test 6: A one-shot read failure is consumed by the first attempt, so the
     ' driver's retry recovers and the caller sees a successful read. This is the
     ' transient-error case, and it is what distinguishes one-shot from sticky.
     utils.startTest(@"One-shot read injection is recovered by the driver retry")
@@ -217,7 +257,7 @@ PUB go() | result, handle, bytesRead, bytesWritten, errCount, testSector, mismat
     ' ======================================================================
     utils.startTestGroup(@"Targeted Write Failure")
 
-    ' Test 6: A write failure at a named LBA reports E_WRITE_REJECTED and records
+    ' Test 7: A write failure at a named LBA reports E_WRITE_REJECTED and records
     ' the same write-diagnostic code (3) a card sets when it rejects a data block.
     ' The buffer written is the sector's own content, so nothing is at risk.
     utils.startTest(@"Write injection returns E_WRITE_REJECTED with a reject diagnostic")
@@ -234,7 +274,7 @@ PUB go() | result, handle, bytesRead, bytesWritten, errCount, testSector, mismat
     utils.evaluateSubValue(errCount, @"injection consumed exactly once", 1)
     utils.showSubTestResults()
 
-    ' Test 7: The one-shot write injection is spent, so the same write now lands.
+    ' Test 8: The one-shot write injection is spent, so the same write now lands.
     utils.startTest(@"Write succeeds once the one-shot injection is spent")
     utils.setCheckCountPerTest(2)
     result := sd.writeSectorRaw(testSector, @sectorBuffer)
@@ -242,7 +282,7 @@ PUB go() | result, handle, bytesRead, bytesWritten, errCount, testSector, mismat
     utils.evaluateSubValue(sd.getTestErrorCount(), @"no further injection", 1)
     utils.showSubTestResults()
 
-    ' Test 8: setTestFailWriteAfter names a write by its position in a sequence
+    ' Test 9: setTestFailWriteAfter names a write by its position in a sequence
     ' rather than by LBA - how a specific write inside a multi-write operation
     ' (a FAT2 mirror update, a directory rewrite) is made to fail on its own.
     utils.startTest(@"setTestFailWriteAfter fails the nth write, not the first")
@@ -267,7 +307,7 @@ PUB go() | result, handle, bytesRead, bytesWritten, errCount, testSector, mismat
     ' ======================================================================
     utils.startTestGroup(@"Arming Precision")
 
-    ' Test 9: An injection armed on a sector nothing touches has no effect on
+    ' Test 10: An injection armed on a sector nothing touches has no effect on
     ' anything else. Armed for both directions and sticky - the loudest setting.
     utils.startTest(@"Injection armed on an untouched LBA affects nothing")
     utils.setCheckCountPerTest(4)
@@ -293,7 +333,7 @@ PUB go() | result, handle, bytesRead, bytesWritten, errCount, testSector, mismat
     utils.evaluateSubValue(errCount, @"nothing injected", 0)
     utils.showSubTestResults()
 
-    ' Test 10: Direction is honored - a read-armed LBA does not fail writes to it.
+    ' Test 11: Direction is honored - a read-armed LBA does not fail writes to it.
     utils.startTest(@"TF_READ arming does not fail a write to the same LBA")
     utils.setCheckCountPerTest(2)
     sd.clearTestErrors()
@@ -303,7 +343,7 @@ PUB go() | result, handle, bytesRead, bytesWritten, errCount, testSector, mismat
     utils.evaluateSubValue(sd.getTestErrorCount(), @"write consumed no injection", 0)
     utils.showSubTestResults()
 
-    ' Test 11: clearTestErrors leaves no residue at all - no armed sector, no
+    ' Test 12: clearTestErrors leaves no residue at all - no armed sector, no
     ' pending write countdown, no stale counters for the next suite to trip over.
     utils.startTest(@"clearTestErrors leaves no residue")
     utils.setCheckCountPerTest(5)
@@ -323,10 +363,738 @@ PUB go() | result, handle, bytesRead, bytesWritten, errCount, testSector, mismat
     utils.showSubTestResults()
 
     ' ======================================================================
-    ' Cleanup and Summary
+    ' TEST GROUP: Primitive Failure Reporting
     ' ======================================================================
+    utils.startTestGroup(@"Primitive Failure Reporting")
+
+    ' The internal FAT-chain reader hands back a dereferenceable pointer even when
+    ' the read failed, so the contents are whatever the previous read left in the
+    ' buffer. Every caller now consults the companion status before trusting it.
+    '
+    ' Two arming details make these tests fire reliably:
+    '   - Read injection fires only on a cache MISS, so each test unmounts and
+    '     remounts first; mount invalidates the FAT buffer.
+    '   - A one-shot read injection is recovered by the driver's own retry, so
+    '     these must be TF_STICKY to reach the caller as a failure.
+    '
+    ' The armed LBA is the first FAT sector, which holds the entries for the low
+    ' cluster numbers a freshly written test file receives. The "injection fired"
+    ' sub-check is what keeps a miss from reading as a pass.
+
+    ' Test 13: A failed FAT read during delete must abort the chain walk. Walking a
+    ' stale link frees clusters belonging to OTHER files while reporting success --
+    ' the single most destructive outcome the audit found.
+    utils.startTest(@"Failed FAT read aborts delete instead of freeing a stale chain")
+    utils.setCheckCountPerTest(4)
     sd.clearTestErrors()
     sd.deleteFile(@injFile)
+    utils.fillBufferWithPattern(@writeBuffer, BUFFER_SIZE, $30)
+    handle := sd.createFileNew(@injFile)
+    bytesWritten := 0
+    if handle >= 0
+        ' Write past one cluster so the file owns a chain, not a single link
+        repeat ((sd.clusterBytes() * 2) / BUFFER_SIZE)
+            bytesWritten += sd.writeHandle(handle, @writeBuffer, BUFFER_SIZE)
+        sd.closeFileHandle(handle)
+    utils.evaluateSubBool(bytesWritten > sd.clusterBytes(), @"test file spans more than one cluster", true)
+
+    sd.unmount()
+    sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    freeBefore := sd.freeSpace()
+    sd.setTestFailSector(sd.debugGetFatSec(), sd.TF_READ | sd.TF_STICKY)
+    result := sd.deleteFile(@injFile)
+    errCount := sd.getTestErrorCount()
+    sd.clearTestErrors()
+    freeAfter := sd.freeSpace()
+
+    utils.evaluateSubBool(errCount > 0, @"FAT read injection actually fired", true)
+    utils.evaluateSubBool(result < 0, @"deleteFile reports the I/O error", true)
+    ' The walk aborts before zeroing anything, so not one cluster is handed back.
+    utils.evaluateSubValue(freeAfter, @"no clusters freed from a stale chain", freeBefore)
+    utils.showSubTestResults()
+
+    ' Recover the card: the entry may already be marked deleted with its clusters
+    ' still allocated, which is the correct on-disk outcome above (an undeleted
+    ' file is recoverable; a chain freed under a live entry is not).
+    sd.unmount()
+    sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    sd.deleteFile(@injFile)
+
+    ' Test 14: the same failure reached through a different caller. A fragment count
+    ' derived from a garbage chain is a number with no meaning, so it must not be
+    ' returned as one.
+    utils.startTest(@"Failed FAT read is reported by fileFragments, not counted")
+    utils.setCheckCountPerTest(3)
+    sd.clearTestErrors()
+    utils.fillBufferWithPattern(@writeBuffer, BUFFER_SIZE, $40)
+    handle := sd.createFileNew(@injFile)
+    if handle >= 0
+        repeat ((sd.clusterBytes() * 2) / BUFFER_SIZE)
+            sd.writeHandle(handle, @writeBuffer, BUFFER_SIZE)
+        sd.closeFileHandle(handle)
+
+    sd.unmount()
+    sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    result := sd.fileFragments(@injFile)
+    utils.evaluateSubBool(result > 0, @"fragment count is positive when healthy", true)
+
+    sd.unmount()
+    sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    sd.setTestFailSector(sd.debugGetFatSec(), sd.TF_READ | sd.TF_STICKY)
+    result := sd.fileFragments(@injFile)
+    errCount := sd.getTestErrorCount()
+    sd.clearTestErrors()
+    utils.evaluateSubBool(errCount > 0, @"FAT read injection actually fired", true)
+    utils.evaluateSubBool(result < 0, @"fileFragments reports the error", true)
+    utils.showSubTestResults()
+
+    sd.unmount()
+    sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+
+    ' ======================================================================
+    ' TEST GROUP: Tier-1 Silent Corruption Paths
+    ' ======================================================================
+    utils.startTestGroup(@"Tier-1 Silent Corruption Paths")
+
+    ' Each test below fails ONE write inside a metadata update that used to ignore
+    ' its result. The assertion is never merely "an error was returned" -- it is
+    ' that the on-disk state after the failure is the recoverable one. Reverting
+    ' any one of the driver fixes turns its test here red.
+    '
+    ' These are WRITE injections, so unlike the read tests above they need no
+    ' cache-miss dance: writeSector short-circuits before the card is touched.
+
+    ' Test 15 (2.1): a failed FAT write must not report the cluster as allocated.
+    ' If it does, the next allocation scan finds that cluster still free on the card
+    ' and hands the SAME one to a second file -- two files over one chain.
+    utils.startTest(@"Failed FAT write does not hand the same cluster to two files")
+    utils.setCheckCountPerTest(4)
+    sd.clearTestErrors()
+    sd.deleteFile(@crossA)
+    sd.deleteFile(@crossB)
+    sd.sync()
+    sd.setTestFailSector(sd.debugGetFatSec(), sd.TF_WRITE)
+    result := sd.createFileNew(@injFile)
+    errCount := sd.getTestErrorCount()
+    sd.clearTestErrors()
+    sd.deleteFile(@injFile)
+    utils.evaluateSubBool(errCount > 0, @"FAT write injection actually fired", true)
+    utils.evaluateSubBool(result < 0, @"createFileNew reports the I/O error", true)
+
+    ' Now allocate twice for real. If the failed allocation had been reported as
+    ' successful, one of these two files would be reading the other's data.
+    utils.fillBufferWithPattern(@writeBuffer, BUFFER_SIZE, $51)
+    handle := sd.createFileNew(@crossA)
+    if handle >= 0
+        sd.writeHandle(handle, @writeBuffer, BUFFER_SIZE)
+        sd.closeFileHandle(handle)
+    utils.fillBufferWithPattern(@writeBuffer, BUFFER_SIZE, $62)
+    handle := sd.createFileNew(@crossB)
+    if handle >= 0
+        sd.writeHandle(handle, @writeBuffer, BUFFER_SIZE)
+        sd.closeFileHandle(handle)
+    sd.sync()
+
+    bytefill(@readBuffer, 0, BUFFER_SIZE)
+    handle := sd.openFileRead(@crossA)
+    if handle >= 0
+        sd.readHandle(handle, @readBuffer, BUFFER_SIZE)
+        sd.closeFileHandle(handle)
+    utils.evaluateSubBool(utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $51), @"first file holds its own data", true)
+    bytefill(@readBuffer, 0, BUFFER_SIZE)
+    handle := sd.openFileRead(@crossB)
+    if handle >= 0
+        sd.readHandle(handle, @readBuffer, BUFFER_SIZE)
+        sd.closeFileHandle(handle)
+    utils.evaluateSubBool(utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $62), @"second file holds its own data", true)
+    utils.showSubTestResults()
+    sd.deleteFile(@crossA)
+    sd.deleteFile(@crossB)
+
+    ' Test 16 (2.2): a disk-full allocation returns E_DISK_FULL (-60). Unguarded,
+    ' that negative reached clus2sec() and the driver issued sec_per_clus sector
+    ' writes at a wild address derived from it.
+    utils.startTest(@"Disk-full directory creation fails without a wild write")
+    utils.setCheckCountPerTest(3)
+    sd.clearTestErrors()
+    sd.sync()
+    sd.setTestMaxClusters(3)                            ' Far too few clusters to satisfy the request
+    result := sd.newDirectory(@dirFull)
+    sd.clearTestErrors()
+    utils.evaluateSubBool(result < 0, @"newDirectory reports failure", true)
+    utils.evaluateSubValue(result, @"reports E_DISK_FULL specifically", sd.E_DISK_FULL)
+    ' The card must still be sound: a full create/read cycle works afterward.
+    utils.fillBufferWithPattern(@writeBuffer, BUFFER_SIZE, $73)
+    handle := sd.createFileNew(@injFile)
+    bytesRead := 0
+    if handle >= 0
+        sd.writeHandle(handle, @writeBuffer, BUFFER_SIZE)
+        sd.closeFileHandle(handle)
+        handle := sd.openFileRead(@injFile)
+        if handle >= 0
+            bytefill(@readBuffer, 0, BUFFER_SIZE)
+            bytesRead := sd.readHandle(handle, @readBuffer, BUFFER_SIZE)
+            sd.closeFileHandle(handle)
+    utils.evaluateSubBool(bytesRead == BUFFER_SIZE AND utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $73), @"filesystem still sound afterward", true)
+    utils.showSubTestResults()
+    sd.deleteFile(@injFile)
+
+    ' Test 17 (2.3): if the entry-deleted write fails, the chain must NOT be freed.
+    ' Entry live + clusters free is the unrecoverable combination: the file still
+    ' appears in the directory while its clusters get handed to the next allocation.
+    utils.startTest(@"Failed delete leaves the file intact, not half-deleted")
+    utils.setCheckCountPerTest(3)
+    sd.clearTestErrors()
+    utils.fillBufferWithPattern(@writeBuffer, BUFFER_SIZE, $84)
+    handle := sd.createFileNew(@injFile)
+    if handle >= 0
+        sd.writeHandle(handle, @writeBuffer, BUFFER_SIZE)
+        sd.closeFileHandle(handle)
+    sd.sync()
+    sd.setTestFailSector(sd.debugGetRootSec(), sd.TF_WRITE)
+    result := sd.deleteFile(@injFile)
+    errCount := sd.getTestErrorCount()
+    sd.clearTestErrors()
+    utils.evaluateSubBool(errCount > 0, @"entry-write injection actually fired", true)
+    utils.evaluateSubBool(result < 0, @"deleteFile reports the I/O error", true)
+    bytefill(@readBuffer, 0, BUFFER_SIZE)
+    bytesRead := 0
+    handle := sd.openFileRead(@injFile)
+    if handle >= 0
+        bytesRead := sd.readHandle(handle, @readBuffer, BUFFER_SIZE)
+        sd.closeFileHandle(handle)
+    utils.evaluateSubBool(bytesRead == BUFFER_SIZE AND utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $84), @"file still opens and reads correctly", true)
+    utils.showSubTestResults()
+    sd.deleteFile(@injFile)
+
+    ' Test 18 (2.4): the ./.. write is what makes a new cluster a directory. If it
+    ' fails, the parent must gain no entry pointing at that uninitialized cluster.
+    ' The driver writes ./.. BEFORE the parent entry precisely so this holds.
+    ' Self-calibrating: measure a healthy newDirectory, then fail its ./.. write,
+    ' which is the second-to-last write of the operation.
+    utils.startTest(@"Failed ./.. write leaves no parent entry for the directory")
+    utils.setCheckCountPerTest(3)
+    sd.sync()                                           ' Flush first so no pending write is counted
+    sd.clearTestErrors()                                ' Zeroes the write counter
+    sd.newDirectory(@dirGood)
+    writeCalls := sd.getTestWriteCallCount()            ' Sampled BEFORE any sync of our own
+    utils.evaluateSubBool(writeCalls > 1, @"healthy newDirectory write count measured", true)
+
+    sd.sync()
+    sd.clearTestErrors()
+    sd.setTestFailWriteAfter(writeCalls - 1)            ' The ./.. write, not the parent entry
+    result := sd.newDirectory(@dirBad)
+    errCount := sd.getTestErrorCount()
+    sd.clearTestErrors()
+    utils.evaluateSubBool(errCount > 0 AND result < 0, @"injection fired and error reported", true)
+    ' The decisive assertion: nothing in the parent refers to that cluster.
+    utils.evaluateSubBool(sd.changeDirectory(@dirBad) < 0, @"parent has no entry for it", true)
+    utils.showSubTestResults()
+    sd.changeDirectory(@rootPath)
+
+    ' Test 19 (2.5): the rewritten 8.3 entry IS the whole product of a rename. If it
+    ' does not land, the file keeps its old name -- so success must not be reported.
+    utils.startTest(@"Failed rename reports the error and keeps the original name")
+    utils.setCheckCountPerTest(3)
+    sd.clearTestErrors()
+    sd.deleteFile(@renFile)
+    sd.deleteFile(@renNewName)
+    utils.fillBufferWithPattern(@writeBuffer, BUFFER_SIZE, $95)
+    handle := sd.createFileNew(@renFile)
+    if handle >= 0
+        sd.writeHandle(handle, @writeBuffer, BUFFER_SIZE)
+        sd.closeFileHandle(handle)
+    sd.sync()
+    sd.setTestFailSector(sd.debugGetRootSec(), sd.TF_WRITE)
+    result := sd.rename(@renFile, @renNewName)
+    errCount := sd.getTestErrorCount()
+    sd.clearTestErrors()
+    utils.evaluateSubBool(errCount > 0, @"rename-entry injection actually fired", true)
+    utils.evaluateSubBool(result < 0, @"rename reports the I/O error", true)
+    handle := sd.openFileRead(@renFile)
+    if handle >= 0
+        sd.closeFileHandle(handle)
+    utils.evaluateSubBool(handle >= 0, @"file still findable under its ORIGINAL name", true)
+    utils.showSubTestResults()
+    sd.deleteFile(@renFile)
+    sd.deleteFile(@renNewName)
+
+    ' Test 20 (2.6): a move is a source delete plus a destination write. If the
+    ' source delete fails the move must be abandoned -- one file live in two
+    ' directories over one cluster chain means deleting either frees clusters the
+    ' other still points at.
+    utils.startTest(@"Failed move never leaves the file in two directories")
+    utils.setCheckCountPerTest(3)
+    sd.clearTestErrors()
+    sd.changeDirectory(@rootPath)
+    sd.deleteFile(@mvSrcFile)
+    sd.newDirectory(@dirMoveDest)
+    utils.fillBufferWithPattern(@writeBuffer, BUFFER_SIZE, $A6)
+    handle := sd.createFileNew(@mvSrcFile)
+    if handle >= 0
+        sd.writeHandle(handle, @writeBuffer, BUFFER_SIZE)
+        sd.closeFileHandle(handle)
+    sd.sync()
+    sd.setTestFailSector(sd.debugGetRootSec(), sd.TF_WRITE)
+    result := sd.moveFile(@mvSrcFile, @dirMoveDest)
+    errCount := sd.getTestErrorCount()
+    sd.clearTestErrors()
+    utils.evaluateSubBool(errCount > 0, @"source-delete injection actually fired", true)
+    utils.evaluateSubBool(result < 0, @"moveFile reports the I/O error", true)
+    ' Exactly one directory may hold it. The source is where it must still be.
+    sd.changeDirectory(@rootPath)
+    handle := sd.openFileRead(@mvSrcFile)
+    if handle >= 0
+        sd.closeFileHandle(handle)
+    bytesRead := handle
+    sd.changeDirectory(@dirMoveDest)
+    result := sd.openFileRead(@mvSrcFile)
+    if result >= 0
+        sd.closeFileHandle(result)
+    sd.changeDirectory(@rootPath)
+    utils.evaluateSubBool(bytesRead >= 0 AND result < 0, @"present in source only, not both", true)
+    utils.showSubTestResults()
+    sd.deleteFile(@mvSrcFile)
+
+    ' ======================================================================
+    ' TEST GROUP: Search Failure Is Not "Not Found"
+    ' ======================================================================
+    utils.startTestGroup(@"Search Failure Is Not Not-Found")
+
+    ' searchDirectory() returns FALSE both for "the name is not there" and for "the
+    ' directory could not be read", and the companion field search_io_status is what
+    ' separates them. The create paths are where conflating the two is destructive:
+    ' FALSE read as "the name is available" makes the driver write a SECOND entry and
+    ' allocate a SECOND chain for a file that already exists.
+
+    ' Test 21: the decisive case. Ask to create a file that ALREADY EXISTS while the
+    ' directory read is failing. Fail-open would create a duplicate; fail-closed
+    ' reports the I/O error and leaves exactly one entry.
+    utils.startTest(@"Failed existence check refuses to create a duplicate entry")
+    utils.setCheckCountPerTest(4)
+    sd.clearTestErrors()
+    sd.changeDirectory(@rootPath)
+    sd.deleteFile(@injFile)
+    utils.fillBufferWithPattern(@writeBuffer, BUFFER_SIZE, $B7)
+    handle := sd.createFileNew(@injFile)
+    if handle >= 0
+        sd.writeHandle(handle, @writeBuffer, BUFFER_SIZE)
+        sd.closeFileHandle(handle)
+    sd.sync()
+
+    ' Remount so the directory read is a cache MISS, then make it fail for good.
+    sd.unmount()
+    sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    sd.setTestFailSector(sd.debugGetRootSec(), sd.TF_READ | sd.TF_STICKY)
+    result := sd.createFileNew(@injFile)
+    errCount := sd.getTestErrorCount()
+    sd.clearTestErrors()
+    utils.evaluateSubBool(errCount > 0, @"directory read injection actually fired", true)
+    utils.evaluateSubBool(result < 0, @"createFileNew reports an error", true)
+    ' It must NOT be E_FILE_EXISTS either -- the check never completed, so the driver
+    ' cannot claim to know the name was taken.
+    utils.evaluateSubBool(result <> sd.E_FILE_EXISTS, @"error is the I/O failure, not FILE_EXISTS", true)
+
+    ' The assertion the whole finding is about: one name, one entry.
+    sd.unmount()
+    sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    nameMatches := 0
+    handle := sd.openDirectory(@rootPath)
+    if handle >= 0
+        repeat while sd.readDirectoryHandle(handle)
+            if strcomp(sd.fileName(), @injFile)
+                nameMatches++
+        sd.closeDirectoryHandle(handle)
+    utils.evaluateSubValue(nameMatches, @"exactly one directory entry for the name", 1)
+    utils.showSubTestResults()
+
+    ' Test 22: a genuinely absent file must still report E_FILE_NOT_FOUND, with the
+    ' companion field clean. The fix must not turn every miss into an I/O error.
+    utils.startTest(@"A genuinely absent file still reports FILE_NOT_FOUND")
+    utils.setCheckCountPerTest(2)
+    sd.clearTestErrors()
+    sd.deleteFile(@injFile)
+    result := sd.openFileRead(@injFile)
+    utils.evaluateSubValue(result, @"absent file reports E_FILE_NOT_FOUND", sd.E_FILE_NOT_FOUND)
+    utils.evaluateSubValue(sd.getTestErrorCount(), @"nothing was injected", 0)
+    utils.showSubTestResults()
+
+    ' ======================================================================
+    ' TEST GROUP: Short Count Is Not End Of File
+    ' ======================================================================
+    utils.startTestGroup(@"Short Count Is Not End Of File")
+
+    ' readHandle() and writeHandle() return a byte COUNT, and a failure part-way through
+    ' a transfer returns the bytes moved so far. A partial count is POSITIVE, so the
+    ' documented read loop
+    '
+    '     repeat while (n := sd.readHandle(h, @buf, 512)) > 0
+    '
+    ' ends identically on a card failure and on a clean end of file: a file truncated
+    ' part-way through is processed as a complete one. handleError(handle) is what
+    ' separates them, and these tests are the proof that it does.
+    '
+    ' A ZERO-BYTE FAILURE IS THE ONE CASE THAT DOES NOT WORK THIS WAY. When a transfer
+    ' fails before moving a single byte there is no partial count to return, and a zero
+    ' would BE the loop's stop condition -- so the driver returns the error code instead.
+    ' Zero therefore means end of file and nothing else. Test 24 pins that down.
+    '
+    ' Arming a DATA sector needs its LBA, and no accessor reports one. Each read test
+    ' below therefore DISCOVERS it: read the wanted offset once on a healthy card and
+    ' ask debugGetReadSectorDiag() which sector that read touched. The remount that
+    ' follows is required - a read injection fires only on a cache MISS - and the
+    ' arming is TF_STICKY because the driver's own retry recovers a one-shot.
+    '
+    ' NOT COVERED HERE: the E_BAD_CHAIN metadata-region write guard. Reaching it means
+    ' forging a FAT entry to point at cluster 0 or 1, which needs the file's cluster
+    ' number, and the public API exposes no way to learn it. The guard is a
+    ' correct-by-construction backstop that must never fire in a passing run; its
+    ' reporting is proven by inspection, not by injection.
+
+    ' Test 23: the control. Both clean stops - a full read and a genuine end of file -
+    ' must report SUCCESS, or a test that looks for an error afterward proves nothing.
+    utils.startTest(@"A complete read and a genuine EOF both report clean")
+    utils.setCheckCountPerTest(4)
+    sd.clearTestErrors()
+    sd.changeDirectory(@rootPath)
+    sd.deleteFile(@injFile)
+    utils.fillBufferWithPattern(@writeBuffer, BUFFER_SIZE, $5A)
+    handle := sd.createFileNew(@injFile)
+    bytesWritten := 0
+    if handle >= 0
+        repeat 4                                        ' Four sectors: room to fail somewhere other than the first
+            bytesWritten += sd.writeHandle(handle, @writeBuffer, BUFFER_SIZE)
+        sd.closeFileHandle(handle)
+    sd.sync()
+    utils.evaluateSubValue(bytesWritten, @"test file is four sectors long", BUFFER_SIZE * 4)
+
+    sd.unmount()
+    sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    handle := sd.openFileRead(@injFile)
+    bytesRead := sd.readHandle(handle, @readBuffer, BUFFER_SIZE)
+    utils.evaluateSubValue(bytesRead, @"full sector read returns every byte", BUFFER_SIZE)
+    utils.evaluateSubValue(sd.handleError(handle), @"handleError clean after a good read", 0)
+
+    ' Seek to the end, then ask for more. This is the stop the read loop is written
+    ' around, and it must be indistinguishable from success.
+    sd.seekHandle(handle, BUFFER_SIZE * 4)
+    bytesRead := sd.readHandle(handle, @readBuffer, BUFFER_SIZE)
+    utils.evaluateSubBool(bytesRead == 0 AND sd.handleError(handle) == 0, @"genuine EOF returns 0 and reports clean", true)
+    sd.closeFileHandle(handle)
+    utils.showSubTestResults()
+
+    ' Test 24: the finding itself, and the fix for it. A failure on the FIRST sector
+    ' transfers nothing. Returning 0 there would hand back the exact value test 23 just
+    ' established means "end of file", making a dying card and a finished file the same
+    ' event to every caller. The driver returns the error code instead, so the count
+    ' alone is now enough - and handleError() agrees with it rather than being the only
+    ' way to find out.
+    utils.startTest(@"A read failure at the first sector returns an error, not a zero that reads as EOF")
+    utils.setCheckCountPerTest(4)
+    sd.clearTestErrors()
+
+    dataSector := discoverDataSector(0)
+    utils.evaluateSubBool(dataSector > sd.debugGetRootSec(), @"discovered a data-region LBA to arm", true)
+
+    ' Remount so the read is a cache miss, then make that one sector fail for good.
+    sd.unmount()
+    sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    sd.setTestFailSector(dataSector, sd.TF_READ | sd.TF_STICKY)
+    handle := sd.openFileRead(@injFile)
+    bytesRead := sd.readHandle(handle, @readBuffer, BUFFER_SIZE)
+    result := sd.handleError(handle)
+    errCount := sd.getTestErrorCount()
+    sd.closeFileHandle(handle)
+    sd.clearTestErrors()
+
+    utils.evaluateSubBool(errCount > 0, @"data sector injection actually fired", true)
+    utils.evaluateSubValue(bytesRead, @"nothing transferred, so the ERROR is returned, never a zero", sd.E_IO_ERROR)
+    utils.evaluateSubValue(result, @"handleError agrees: the I/O failure, not EOF", sd.E_IO_ERROR)
+    utils.showSubTestResults()
+
+    ' Test 25: the same failure one sector later, inside a single two-sector request.
+    ' Now the count is POSITIVE and short - a truncated file that a length check alone
+    ' would accept as complete.
+    utils.startTest(@"A read failure mid-request returns a partial count and says why")
+    utils.setCheckCountPerTest(4)
+    sd.clearTestErrors()
+
+    dataSector := discoverDataSector(BUFFER_SIZE)       ' The file's SECOND sector this time
+
+    sd.unmount()
+    sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    sd.setTestFailSector(dataSector, sd.TF_READ | sd.TF_STICKY)
+    handle := sd.openFileRead(@injFile)
+    bytesRead := sd.readHandle(handle, @spanBuffer, BUFFER_SIZE * 2)
+    result := sd.handleError(handle)
+    errCount := sd.getTestErrorCount()
+    sd.closeFileHandle(handle)
+    sd.clearTestErrors()
+
+    utils.evaluateSubBool(errCount > 0, @"second-sector injection actually fired", true)
+    utils.evaluateSubValue(bytesRead, @"first sector delivered, second refused", BUFFER_SIZE)
+    utils.evaluateSubBool(bytesRead > 0, @"the short count is POSITIVE -- unreadable as an error", true)
+    utils.evaluateSubValue(result, @"handleError reports the I/O failure", sd.E_IO_ERROR)
+    utils.showSubTestResults()
+
+    ' Test 26: the write path's existing contract must not change. When NOTHING has
+    ' been accepted, writeHandle() still returns the negative code, and handleError()
+    ' agrees with it rather than contradicting it.
+    utils.startTest(@"A write that accepts nothing still returns the error code")
+    utils.setCheckCountPerTest(3)
+    sd.clearTestErrors()
+    sd.deleteFile(@injFile)
+    handle := sd.createFileNew(@injFile)
+    ' Fill one sector exactly. Nothing reaches the card yet -- the handle buffer is
+    ' dirty and the next call must flush it before it can accept anything.
+    sd.writeHandle(handle, @writeBuffer, BUFFER_SIZE)
+    sd.setTestFailWriteAfter(1)                         ' The stale-buffer flush is the very next write
+    bytesWritten := sd.writeHandle(handle, @writeBuffer, BUFFER_SIZE)
+    result := sd.handleError(handle)
+    errCount := sd.getTestErrorCount()
+    sd.clearTestErrors()
+    sd.closeFileHandle(handle)
+
+    utils.evaluateSubBool(errCount > 0, @"flush injection actually fired", true)
+    utils.evaluateSubValue(bytesWritten, @"zero accepted, so the return stays negative", sd.E_IO_ERROR)
+    utils.evaluateSubValue(result, @"handleError agrees with the return value", sd.E_IO_ERROR)
+    utils.showSubTestResults()
+
+    ' Test 27: bytes accepted, then a failure. The count must be returned rather than
+    ' an error -- the caller has to know how much of the file is valid -- which is
+    ' exactly why the reason has to live somewhere else.
+    utils.startTest(@"A write failure mid-request returns a partial count and says why")
+    utils.setCheckCountPerTest(4)
+    sd.clearTestErrors()
+    sd.deleteFile(@injFile)
+    utils.fillBufferWithPattern(@spanBuffer, BUFFER_SIZE * 2, $6C)
+    handle := sd.createFileNew(@injFile)
+    sd.setTestFailWriteAfter(1)                         ' Fail the first sector's flush, after its bytes are counted
+    bytesWritten := sd.writeHandle(handle, @spanBuffer, BUFFER_SIZE * 2)
+    result := sd.handleError(handle)
+    errCount := sd.getTestErrorCount()
+    sd.clearTestErrors()
+    sd.closeFileHandle(handle)
+
+    utils.evaluateSubBool(errCount > 0, @"write injection actually fired", true)
+    utils.evaluateSubValue(bytesWritten, @"first sector counted, second never started", BUFFER_SIZE)
+    utils.evaluateSubBool(bytesWritten > 0, @"the short count is POSITIVE -- unreadable as an error", true)
+    utils.evaluateSubValue(result, @"handleError reports the I/O failure", sd.E_IO_ERROR)
+    utils.showSubTestResults()
+
+    ' Test 28: attribution. The whole reason this is per-handle rather than per-cog is
+    ' that one cog can have several files open; a failure on one must not appear on
+    ' another, and must not be erased by another handle's success.
+    utils.startTest(@"handleError belongs to the handle, not the driver")
+    utils.setCheckCountPerTest(4)
+    sd.clearTestErrors()
+    sd.deleteFile(@injFile)
+    sd.deleteFile(@crossA)
+    handle := sd.createFileNew(@injFile)
+    handleB := sd.createFileNew(@crossA)
+    utils.evaluateSubBool(handle >= 0 AND handleB >= 0 AND handle <> handleB, @"two distinct handles open", true)
+
+    sd.writeHandle(handle, @writeBuffer, BUFFER_SIZE)   ' Dirty, nothing on the card yet
+    sd.setTestFailWriteAfter(1)
+    sd.writeHandle(handle, @writeBuffer, BUFFER_SIZE)   ' Its flush fails
+    errCount := sd.getTestErrorCount()
+    sd.clearTestErrors()
+
+    ' A healthy write on the OTHER handle, AFTER the failure. If the slot were shared
+    ' this would wipe the record of it.
+    bytesWritten := sd.writeHandle(handleB, @writeBuffer, BUFFER_SIZE)
+
+    utils.evaluateSubBool(errCount > 0, @"injection fired on the first handle", true)
+    utils.evaluateSubValue(sd.handleError(handle), @"failing handle still reports its error", sd.E_IO_ERROR)
+    utils.evaluateSubValue(sd.handleError(handleB), @"healthy handle reports clean", 0)
+    utils.showSubTestResults()
+
+    sd.closeFileHandle(handle)
+    sd.closeFileHandle(handleB)
+
+    ' ======================================================================
+    ' TEST GROUP: A Background Flush Failure Reaches Somebody
+    ' ======================================================================
+    utils.startTestGroup(@"A Background Flush Failure Reaches Somebody")
+
+    ' SLOW-RUNNING BY NECESSITY. Each test below has to let the driver sit idle past
+    ' IDLE_FLUSH_MS with no command traffic, so it spends real time doing nothing. The
+    ' waits cannot be shortened - they ARE the condition under test.
+    '
+    ' The idle flush is the path a caller's data takes when they write without ever
+    ' calling sync. The worker starts it on its own, so there is no call of theirs for
+    ' it to fail on: before lastFlushError() existed, a failure here meant the data was
+    ' gone and every later API call still returned success.
+    '
+    ' Only pure accessors may be called during an idle window. Anything that issues a
+    ' command resets the idle timer and the flush never fires.
+
+    ' Test 29: the control. A healthy idle flush must leave the report clean, or an
+    ' error seen in test 30 proves nothing.
+    utils.startTest(@"A clean background flush reports no error")
+    utils.setCheckCountPerTest(3)
+    sd.clearTestErrors()
+    sd.clearFlushError()
+    sd.changeDirectory(@rootPath)
+    sd.deleteFile(@injFile)
+    utils.fillBufferWithPattern(@writeBuffer, BUFFER_SIZE, $A3)
+    handle := sd.createFileNew(@injFile)
+    utils.evaluateSubBool(handle >= 0, @"handle open for the flush to find", true)
+    ' A partial sector leaves the handle dirty with nothing yet on the card.
+    sd.writeHandle(handle, @writeBuffer, BUFFER_SIZE / 2)
+    waitms(IDLE_FLUSH_WAIT_MS)                          ' No commands -- let the worker flush on its own
+
+    utils.evaluateSubValue(sd.lastFlushError(), @"healthy flush leaves the report clean", 0)
+    utils.evaluateSubValue(sd.getTestErrorCount(), @"nothing was injected", 0)
+    utils.showSubTestResults()
+    sd.closeFileHandle(handle)
+
+    ' Test 30: the finding. Fail the flush's own write. Nobody is waiting on it, so
+    ' without this field the loss is silent and permanent.
+    utils.startTest(@"A failed background flush is reported, and the data is still retrievable")
+    utils.setCheckCountPerTest(5)
+    sd.clearTestErrors()
+    sd.clearFlushError()
+    sd.deleteFile(@injFile)
+    handle := sd.createFileNew(@injFile)
+    sd.writeHandle(handle, @writeBuffer, BUFFER_SIZE / 2)
+    sd.setTestFailWriteAfter(1)                         ' The flush's data write is the next one to happen
+    waitms(IDLE_FLUSH_WAIT_MS)
+
+    result := sd.lastFlushError()
+    errCount := sd.getTestErrorCount()
+    sd.clearTestErrors()                                ' Also zeroes the write counter
+
+    utils.evaluateSubBool(errCount > 0, @"flush injection actually fired", true)
+    utils.evaluateSubValue(result, @"lastFlushError reports the I/O failure", sd.E_IO_ERROR)
+
+    ' Reading must not clear it -- the whole point is that it survives until polled.
+    utils.evaluateSubValue(sd.lastFlushError(), @"reading the report does not clear it", sd.E_IO_ERROR)
+
+    ' The handle is still dirty, so the data is recoverable. A sync that actually
+    ' writes proves it; a sync of a clean handle would make no card write at all.
+    result := sd.syncHandle(handle)
+    utils.evaluateSubBool(result == 0 AND sd.getTestWriteCallCount() > 0, @"retry sync still had the data to write", true)
+
+    sd.clearFlushError()
+    utils.evaluateSubValue(sd.lastFlushError(), @"clearFlushError clears it", 0)
+    utils.showSubTestResults()
+    sd.closeFileHandle(handle)
+
+    ' Test 31: ordinary command traffic must not manufacture a flush error. The report
+    ' belongs to the automatic path alone -- a write that fails on a caller's own call
+    ' is that call's business, and is reported to that caller.
+    '
+    ' NOTE: the abort branch INSIDE do_idle_flush(), where a command arrives between
+    ' two handle syncs, is not directly reachable from a single test cog - it would
+    ' have to issue a command while the worker is mid-flush. What is asserted here is
+    ' the property that branch exists to protect: a flush that never gets to run
+    ' because commands keep arriving leaves nothing behind.
+    utils.startTest(@"Command traffic never manufactures a flush error")
+    utils.setCheckCountPerTest(3)
+    sd.clearTestErrors()
+    sd.clearFlushError()
+    sd.deleteFile(@injFile)
+    handle := sd.createFileNew(@injFile)
+    ' Keep the driver busy: every call resets the idle timer, so no flush window opens.
+    repeat 8
+        sd.writeHandle(handle, @writeBuffer, BUFFER_SIZE)
+    bytesWritten := sd.tellHandle(handle)
+
+    utils.evaluateSubValue(bytesWritten, @"the writes went through normally", BUFFER_SIZE * 8)
+    utils.evaluateSubValue(sd.lastFlushError(), @"no flush ran, so nothing is reported", 0)
+    utils.evaluateSubValue(sd.getTestErrorCount(), @"nothing was injected", 0)
+    utils.showSubTestResults()
+    sd.closeFileHandle(handle)
+
+    ' ======================================================================
+    ' TEST GROUP: Operations That Could Not Fail, Now Can
+    ' ======================================================================
+    utils.startTestGroup(@"Operations That Could Not Fail, Now Can")
+
+    ' Three methods used to report success no matter what happened underneath, because
+    ' the status was computed and then thrown away. sync()'s dispatcher hardcoded
+    ' SUCCESS while do_sync() swallowed both its read and its write; freeSpace()'s did
+    ' the same while an aborted FAT scan returned a partial count as fact; stop()
+    ' discarded the final unmount status and then halted the worker, making the failure
+    ' permanently unobservable.
+
+    ' Test 32: a failed sync must SAY so, and must keep the pending entry so a later
+    ' sync can still land it. Clearing the pending flag on failure would discard the
+    ' only copy of a directory entry the card never received.
+    utils.startTest(@"A failed sync reports the error instead of a hardcoded SUCCESS")
+    utils.setCheckCountPerTest(4)
+    sd.clearTestErrors()
+    sd.clearFlushError()
+    sd.changeDirectory(@rootPath)
+    sd.deleteFile(@injFile)
+    handle := sd.createFileNew(@injFile)                ' Leaves a directory entry pending
+    utils.evaluateSubBool(handle >= 0, @"file created, entry pending", true)
+    sd.setTestFailWriteAfter(1)
+    result := sd.sync()
+    errCount := sd.getTestErrorCount()
+    sd.clearTestErrors()
+
+    utils.evaluateSubBool(errCount > 0, @"sync injection actually fired", true)
+    utils.evaluateSubBool(result < 0, @"sync reports the failure", true)
+    ' The entry is still pending, so an unimpeded retry has something to write.
+    result := sd.sync()
+    utils.evaluateSubValue(result, @"retry sync succeeds -- the entry was retained", 0)
+    utils.showSubTestResults()
+    sd.closeFileHandle(handle)
+
+    ' Test 33: an aborted FAT scan must not be reported as a free-space figure. A count
+    ' that stopped part-way is simply too low, and an application sizing a write against
+    ' it is told something false as though it were measured.
+    utils.startTest(@"An incomplete free-space scan reports an error, not a number")
+    utils.setCheckCountPerTest(3)
+    sd.clearTestErrors()
+    sd.unmount()
+    sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    freeBefore := sd.freeSpace()                        ' The true figure, measured cleanly
+    utils.evaluateSubBool(freeBefore > 0, @"a healthy scan returns a real count", true)
+
+    sd.unmount()
+    sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    sd.setTestFailSector(sd.debugGetFatSec(), sd.TF_READ | sd.TF_STICKY)
+    freeAfter := sd.freeSpace()
+    result := sd.ERROR()
+    errCount := sd.getTestErrorCount()
+    sd.clearTestErrors()
+
+    utils.evaluateSubBool(errCount > 0, @"FAT read injection actually fired", true)
+    ' Zero-with-an-error cannot be mistaken for "the volume is nearly full".
+    utils.evaluateSubBool(freeAfter == 0 AND result < 0, @"failed scan returns 0 AND reports why", true)
+    utils.showSubTestResults()
+
+    ' Test 34: stop() is the last chance buffered data has to reach the card, and it
+    ' halts the worker immediately afterward. Its return value is the only place the
+    ' outcome can still be seen.
+    utils.startTest(@"stop() returns the outcome of its final unmount")
+    utils.setCheckCountPerTest(2)
+    sd.unmount()
+    sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    sd.clearTestErrors()
+    result := sd.stop()
+    utils.evaluateSubValue(result, @"a clean shutdown returns SUCCESS", 0)
+
+    ' Bring the driver back up for the cleanup below.
+    result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    utils.evaluateSubValue(result, @"driver remounts after stop()", 0)
+    utils.showSubTestResults()
+
+    ' ======================================================================
+    ' Cleanup and Summary
+    ' ======================================================================
+    sd.clearFlushError()
+    sd.clearTestErrors()
+    sd.changeDirectory(@rootPath)
+    sd.deleteFile(@injFile)
+    sd.deleteFile(@crossA)
+    sd.deleteFile(@crossB)
+    sd.deleteFile(@renFile)
+    sd.deleteFile(@renNewName)
+    sd.deleteFile(@mvSrcFile)
 
     sd.unmount()
 
@@ -334,6 +1102,28 @@ PUB go() | result, handle, bytesRead, bytesWritten, errCount, testSector, mismat
 
     debug(" ")
     debug("END_SESSION")
+
+PRI discoverDataSector(fileOffset) : sector | handle
+' Find the LBA of the data sector holding a given offset of the test file.
+'
+' No accessor reports where a file's data lives, so this measures it: read that
+' offset on a healthy card, then ask the read diagnostic which sector the read
+' just touched. The remount first makes the read a genuine card access rather
+' than a cache hit, so the diagnostic reflects this read and not an earlier one.
+'
+' @param fileOffset - Byte offset within the test file
+' @returns sector - LBA of the sector containing that offset
+' @local handle - Read handle used for the probing read
+
+  sd.unmount()
+  sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+  handle := sd.openFileRead(@injFile)
+  if fileOffset > 0
+    sd.seekHandle(handle, fileOffset)
+  sd.readHandle(handle, @readBuffer, BUFFER_SIZE)
+  sd.debugGetReadSectorDiag(@diagLastSector, @diagScratch[0], @diagScratch[1], @diagScratch[2], @diagScratch[3], @diagScratch[4], @diagScratch[5], @diagScratch[6])
+  sector := diagLastSector
+  sd.closeFileHandle(handle)
 
 con { license }
 
