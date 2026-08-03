@@ -767,6 +767,70 @@ if [[ ${#VEHICLES[@]} -gt 0 ]]; then
     echo ""
 fi
 
+# --- Phase 1c: Consumer-compatibility compile sweep -----------------------------
+#
+# The regression suites and the three support vehicles above are OUR code. They are
+# not what a user builds. The shipped consumers are src/EXAMPLES/, src/DEMO/ and the
+# rest of src/UTILS/ -- and until v1.7.0 NOTHING compiled them, so a driver change
+# could rename a public method, ship a green suite sweep, and leave the demo shell
+# broken in the release bundle. That is the most invisible kind of break: no test
+# names it, and the first person to find it is the user.
+#
+# Each file is compiled from ITS OWN directory with EXACTLY the include flags its
+# README gives the user -- not the harness's everything-on-the-path invocation.
+# v1.6.1 found three utilities that built green in the harness for years while
+# failing the command in the docs, and this sweep is where that class of defect is
+# caught. Do not "simplify" these to a shared -I list.
+CONSUMER_PASS=0
+CONSUMER_FAIL=0
+CONSUMER_FAILED_FILES=()
+
+_sweep_consumer_dir() {
+    local dir="$1"; shift
+    local includes="$1"; shift      # documented -I flags, verbatim
+    local dbg="$1"; shift           # "-d" or ""
+    local spin_file base
+
+    cd "$PROJECT_ROOT/$dir" || return
+    for spin_file in *.spin2; do
+        [[ -f "$spin_file" ]] || continue
+        base="${spin_file%.spin2}"
+        if [[ "$RUN_ONLY" == true ]] && ! _needs_compile "$spin_file"; then
+            continue
+        fi
+        if pnut-ts $dbg $CACHE_FLAGS $includes "$spin_file" >/dev/null 2>&1; then
+            CONSUMER_PASS=$((CONSUMER_PASS + 1))
+        else
+            echo -e "  ${RED}FAIL${NC}: $dir/$spin_file"
+            pnut-ts $dbg $CACHE_FLAGS $includes "$spin_file" 2>&1 | grep -i error || true
+            CONSUMER_FAIL=$((CONSUMER_FAIL + 1))
+            CONSUMER_FAILED_FILES+=("$dir/$spin_file")
+        fi
+    done
+    cd "$SCRIPT_DIR"
+}
+
+echo -e "${CYAN}--- Phase 1c: Consumer compile sweep (EXAMPLES, DEMO, UTILS) ---${NC}"
+echo ""
+_sweep_consumer_dir "src/EXAMPLES" "-I .."              ""
+_sweep_consumer_dir "src/DEMO"     "-I .. -I ../UTILS"  ""
+_sweep_consumer_dir "src/UTILS"    "-I .."              "-d"
+
+if [[ $CONSUMER_FAIL -gt 0 ]]; then
+    echo ""
+    echo -e "${RED}Consumer compile failures:${NC}"
+    for f in "${CONSUMER_FAILED_FILES[@]}"; do
+        echo "  - $f"
+    done
+    echo ""
+    echo -e "${RED}A shipped consumer no longer builds with the command its README${NC}"
+    echo -e "${RED}gives the user. Fix the source or the documented command before${NC}"
+    echo -e "${RED}running on hardware.${NC}"
+    exit 1
+fi
+echo -e "  ${GREEN}${CONSUMER_PASS} consumer program(s) compiled with their documented commands.${NC}"
+echo ""
+
 if [[ "$COMPILE_ONLY" == true ]]; then
     if [[ $COMPILE_PASS -gt 0 ]]; then
         echo -e "${GREEN}All ${COMPILE_PASS} test suites compiled successfully.${NC}"

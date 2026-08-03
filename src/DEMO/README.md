@@ -10,11 +10,12 @@ An interactive command-line shell for exploring the P2 SD card filesystem driver
 |------|-------------|
 | `SD_demo_shell.spin2` | Main shell application |
 | `isp_serial_singleton.spin2` | Serial terminal driver (singleton, shared across cogs) |
-| `isp_stack_check.spin2` | Stack usage monitoring and reporting |
 
 The shell also uses `micro_sd_fat32_fs.spin2` and `isp_mem_strings.spin2` from the parent
-directory (included via `-I ..`). `isp_mem_strings.spin2` is shared with the utilities, so
-it lives at `src/` rather than here.
+directory (included via `-I ..`), and `isp_fsck_utility.spin2` and `isp_format_utility.spin2`
+from `src/UTILS/` (included via `-I ../UTILS`) to back the `fsck`, `audit` and `format`
+commands. `isp_mem_strings.spin2` is shared with the utilities, so it lives at `src/` rather
+than here.
 
 ## Building and Running
 
@@ -28,11 +29,13 @@ it lives at `src/` rather than here.
 From this `DEMO/` directory:
 
 ```bash
-pnut-ts -I .. SD_demo_shell.spin2
+pnut-ts -I .. -I ../UTILS SD_demo_shell.spin2
 pnut-term-ts -r SD_demo_shell.bin
 ```
 
-The `-I ..` flag tells the compiler to find `micro_sd_fat32_fs.spin2` in the parent directory.
+The `-I ..` flag tells the compiler to find `micro_sd_fat32_fs.spin2` in the parent directory;
+`-I ../UTILS` finds the fsck and format libraries. Both are required — the shell will not
+compile without them.
 
 **Important:** Do NOT use the `-d` (debug) flag when compiling the demo shell. The debug runtime emits cog-start frames on pin 62 that corrupt the serial output when the SD worker cog starts mid-session (e.g., during `mount`). The demo shell uses `isp_serial_singleton.spin2` for all terminal I/O, not the debug system.
 
