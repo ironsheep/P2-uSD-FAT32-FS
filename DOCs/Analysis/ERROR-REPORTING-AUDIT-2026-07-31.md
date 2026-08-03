@@ -245,11 +245,22 @@ the same way.
 4786          status := SUCCESS
 ```
 
-The move has already written the entry into the destination directory by this point; this
-write is what marks the *source* entry deleted. Unchecked, and `status := SUCCESS`
+This write is what marks the *source* entry deleted. Unchecked, and `status := SUCCESS`
 follows. On failure the on-disk state is one file with two live directory entries in two
 directories, sharing one cluster chain — and deleting either one frees clusters the other
 still points at. This is A3's failure mode reached from the other direction.
+
+> **Correction, 2026-08-02 (during «#28»).** This finding originally read "The move has
+> already written the entry into the destination directory by this point." It has not.
+> `do_newfile()` only stages `entry_buffer` and sets `F_NEWDIR`; the destination entry is
+> actually written by the `do_close()` on the *following* line. The predicted failure — one
+> file live in two directories over one chain — is real, but it is reached by the source
+> delete failing and `do_close()` then adding the destination entry, not by a destination
+> entry that already exists. The fix follows from the true order: abort before `do_close()`,
+> and clear `F_NEWDIR` explicitly so that no *later* `do_close()` from an unrelated
+> operation writes the stale destination entry. The source-delete-first ordering was kept
+> deliberately — its abort path changes nothing on the card, and its unavoidable failure
+> window leaks a recoverable chain rather than creating the duplicate.
 
 **Not a defect — `do_attempt_high_speed()` (4992).** The script flags this bare
 `writeSector()` too, and it is the one benign case: the method reads a sector, writes the

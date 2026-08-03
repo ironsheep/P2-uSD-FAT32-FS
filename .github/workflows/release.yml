@@ -67,6 +67,8 @@ jobs:
           cp DOCs/SD-CARD-UTILITIES.md "${DEST}/DOCs/"
           cp DOCs/CONDITIONAL-COMPILATION-GUIDE.md "${DEST}/DOCs/"
           cp DOCs/MIGRATION-GUIDE-v1.2.0.md "${DEST}/DOCs/"
+          cp DOCs/MIGRATION-GUIDE-v1.7.0.md "${DEST}/DOCs/"
+          cp DOCs/ERROR-HANDLING-GUIDE.md "${DEST}/DOCs/"
 
           # DOCs/images/ - card photos for purchase recommendations
           mkdir -p "${DEST}/DOCs/images"

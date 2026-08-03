@@ -158,10 +158,11 @@ PUB copyFile(src_name, dest_name) | src_h, dest_h, buf[128], bytes
     sd.closeFileHandle(src_h)
     return false
 
-  ' Copy in chunks
+  ' Copy in chunks. `<= 0` stops on both endings: 0 is a clean end of file,
+  ' negative is a failure that transferred nothing.
   repeat
     bytes := sd.readHandle(src_h, @buf, 512)
-    if bytes == 0
+    if bytes <= 0
       quit
     sd.writeHandle(dest_h, @buf, bytes)
 
@@ -360,7 +361,7 @@ For more advanced use cases, the driver provides handle-based directory enumerat
 ```spin2
 PUB openDirectory(p_path) : handle
 PUB readDirectoryHandle(handle) : p_entry
-PUB closeDirectoryHandle(handle)
+PUB closeDirectoryHandle(handle) : status
 ```
 
 Directory handles share the same pool as file handles (`MAX_OPEN_FILES` total). Pass `"."` or `""` to enumerate the calling cog's CWD, or any path to enumerate a specific directory.
@@ -463,7 +464,27 @@ PUB readHandle(handle, p_buffer, count) : bytes_read
 | `p_buffer` | Pointer to your receive buffer |
 | `count` | Maximum bytes to read |
 
-**Returns:** Actual number of bytes read (may be less than requested at end of file)
+**Returns:** Actual number of bytes read. A negative value means *nothing* was transferred,
+so `0` means a genuine end of file and nothing else — both `repeat while n > 0` and
+`repeat until n == 0` stop for the right reason.
+
+**A POSITIVE short count has two possible meanings.** It is the normal end-of-file signal,
+and it is also what you get when the card fails part-way through a transfer — both are a
+positive number smaller than `count`, so the return value alone cannot tell them apart.
+`handleError(handle)` does: it reports `SUCCESS` after a clean end of file, and the
+specific error otherwise.
+
+```spin2
+  bytes_this_read := sd.readHandle(handle, @chunk, CHUNK_SIZE)
+  if bytes_this_read < CHUNK_SIZE
+    if sd.handleError(handle) <> 0
+      debug("Read failed part-way: ", sdec(sd.handleError(handle)))
+      quit                                      ' A truncated file, not a complete one
+```
+
+Reading `handleError()` does not clear it — the next read or write on that handle
+overwrites it, the same rule `error()` follows. Read it before you close the handle;
+closing returns the slot to the pool and clears it.
 
 ### Reading Examples
 
@@ -500,8 +521,8 @@ PUB readLargeFile() | handle, total_read, bytes_this_read
   total_read := 0
   repeat
     bytes_this_read := sd.readHandle(handle, @chunk, CHUNK_SIZE)
-    if bytes_this_read == 0
-      quit                                    ' End of file
+    if bytes_this_read <= 0
+      quit                                    ' 0 = end of file, negative = read failed
 
     ' Process chunk here...
     processData(@chunk, bytes_this_read)
@@ -541,6 +562,18 @@ PUB writeHandle(handle, p_buffer, count) : bytes_written
 | `handle` | File handle from createFileNew() or openFileWrite() |
 | `p_buffer` | Pointer to data to write |
 | `count` | Number of bytes to write |
+
+**Returns:** Number of bytes written. A negative value means *nothing* was accepted. Once
+any byte has been accepted, a failure returns the **partial count** instead — so you always
+know how much of the file is valid — and `handleError(handle)` tells you why it stopped:
+`E_IO_ERROR` for a card failure, `E_DISK_FULL` when the volume filled up, `E_BAD_CHAIN` if
+the file's cluster chain is inconsistent. Check it whenever the count is short:
+
+```spin2
+  written := sd.writeHandle(handle, @record, RECORD_SIZE)
+  if written < RECORD_SIZE
+    debug("Only ", udec(written), " bytes stored: ", sdec(sd.handleError(handle)))
+```
 
 ### Writing Examples
 
@@ -604,6 +637,37 @@ PUB longRunningWrite() | handle, idx
 
   sd.closeFileHandle(handle)
 ```
+
+### When the Driver Flushes For You
+
+If you write and then simply stop, the driver notices the card has been idle for 200ms and
+flushes your dirty buffers on its own. For an application that writes without explicit
+syncs, **this is the path the data actually takes**.
+
+That flush is started by the worker cog itself, so there is no call of yours for it to fail
+on. If it fails, nothing you call afterward will tell you: the data never reached the card,
+and every subsequent operation still reports success. `lastFlushError()` is how you find
+out, and a long-running writer should poll it:
+
+```spin2
+  repeat idx from 0 to 999
+    sd.writeHandle(handle, @data_point, DATA_SIZE)
+
+    if idx // 100 == 99
+      if sd.lastFlushError() <> 0
+        debug("Background flush failed: ", sdec(sd.lastFlushError()))
+        sd.clearFlushError()
+        sd.syncHandle(handle)               ' The data is still buffered -- try again explicitly
+```
+
+It keeps the **first** failure, not the most recent — flushes run on a timer, so a later
+clean one would otherwise erase the report before you looked. Reading does not clear it;
+call `clearFlushError()` once you have handled it. And a failed flush leaves the handle
+dirty, so the data is still in the driver's buffer: `syncHandle()` or `closeFileHandle()`
+can still get it to the card once the cause is resolved.
+
+A flush cut short because one of your commands arrived is not a failure and is not
+reported — the buffers stay dirty and the next idle window picks them up.
 
 ---
 
@@ -812,7 +876,7 @@ PUB readerTask() | handle, buf[128], bytes_read
     if handle >= 0
         repeat
             bytes_read := sd.readHandle(handle, @buf, 512)
-            if bytes_read == 0
+            if bytes_read <= 0                  ' 0 = end of file, negative = read failed
                 quit
             processData(@buf, bytes_read)
         sd.closeFileHandle(handle)
@@ -879,13 +943,27 @@ While an async operation is in flight, the **API lock is held**. No other cog ca
 - Call `getResult()` as soon as you're ready for the data
 - If you need to bail out, call `cancelAsync()` (it still waits for the SPI transfer to finish safely)
 
+### Important: One Async Operation, and It Belongs to One Cog
+
+There is a **single in-flight slot for the whole driver**, not one per cog. A second cog
+that starts an async operation while one is pending gets `E_ASYNC_BUSY`.
+
+The operation also **belongs to the cog that started it**. Only that cog may collect it
+with `getResult()` or drop it with `cancelAsync()`; another cog calling either gets
+`E_NO_ASYNC_OP` and changes nothing. `isComplete()` likewise reports `FALSE` in a cog that
+does not own the operation — that cog has none.
+
+This matters more than it looks. The async calls release the API lock as their last act,
+so a cog collecting a result it does not own would release a lock it never held, freeing
+the driver out from under the cog that did.
+
 ### Error Codes
 
 | Code | Constant | Description |
 |------|----------|-------------|
 | 1 | `PENDING` | Operation launched successfully |
 | -95 | `E_ASYNC_BUSY` | Another async operation is already in flight |
-| -96 | `E_NO_ASYNC_OP` | No async operation to get result from |
+| -96 | `E_NO_ASYNC_OP` | No async operation to get result from, or it belongs to another cog |
 
 ### Example: Async Read with Sensor Polling
 
@@ -987,6 +1065,8 @@ PUB check_boot_file() | frags
 
 `fileFragments()` returns the number of non-contiguous runs in the cluster chain (1 = fully contiguous). `isFileContiguous()` is a convenience wrapper that returns TRUE when the fragment count is 1.
 
+Both of these return a **plain boolean**, never an error code mixed in. A query that fails reports `FALSE` — "not contiguous, or not known to be" — and `error()` says which. That is the safe reading: an error that reported TRUE would let you skip a compaction the file actually needed.
+
 ### Compacting a Fragmented File
 
 ```spin2
@@ -1036,7 +1116,7 @@ If the pre-allocated space is exhausted (caller writes more than `file_size` byt
 | Method | Description |
 |--------|-------------|
 | `fileFragments(path)` | Count non-contiguous runs (1 = contiguous, 0 = empty file) |
-| `isFileContiguous(path)` | TRUE if fragment count is 1 |
+| `isFileContiguous(path)` | TRUE only if the count was obtained AND equals 1 (see `error()`) |
 | `compactFile(path)` | Relocate to contiguous clusters with read-back verify |
 | `createFileContiguous(path, size)` | Create file with pre-allocated contiguous chain |
 
@@ -1079,14 +1159,18 @@ Returns the error code from the most recent operation. Thread-safe (each cog has
 | -21 | `E_INIT_FAILED` | Card initialization failed |
 | -22 | `E_NOT_FAT32` | Card not formatted as FAT32 |
 | -23 | `E_BAD_SECTOR_SIZE` | Sector size not 512 bytes |
+| -24 | `E_BAD_FSINFO` | FSInfo sector signatures invalid (free-space hint cannot be updated) |
+| -25 | `E_BAD_CHAIN` | Cluster chain disagrees with the directory entry (chain walk went wrong) |
+| -26 | `E_STACK_OVERFLOW` | Worker cog wrote past its stack -- nothing it reports can be trusted |
 | -40 | `E_FILE_NOT_FOUND` | File doesn't exist |
 | -41 | `E_FILE_EXISTS` | File already exists |
 | -42 | `E_NOT_A_FILE` | Expected file, found directory |
 | -43 | `E_NOT_A_DIR` | Expected directory, found file |
-| -45 | `E_FILE_NOT_OPEN` | File not open |
+| -45 | `E_FILE_NOT_OPEN` | RESERVED -- never produced; a closed handle reports `E_INVALID_HANDLE` |
 | -46 | `E_END_OF_FILE` | Read past end of file |
 | -60 | `E_DISK_FULL` | No free clusters |
 | -64 | `E_NO_LOCK` | Couldn't allocate hardware lock |
+| -65 | `E_NO_COG` | No free cog to run the worker (all eight in use) |
 | -7 | `E_IO_ERROR` | I/O error during read or write |
 | -90 | `E_TOO_MANY_FILES` | All file handles in use |
 | -91 | `E_INVALID_HANDLE` | Handle not valid or not open |
@@ -1150,7 +1234,7 @@ PUB readConfig() | handle, charIdx, ch
   repeat
     charIdx := 0
     repeat
-      if sd.readHandle(handle, @ch, 1) == 0   ' End of file
+      if sd.readHandle(handle, @ch, 1) <= 0   ' 0 = end of file, negative = read failed
         quit
       if ch == 10                             ' Newline
         quit
@@ -1353,9 +1437,12 @@ These methods are always available in the core driver (no feature flags required
 |--------|-------------|
 | `mount(cs, mosi, miso, sck)` | Mount card, returns true/false |
 | `unmount()` | Unmount card cleanly |
-| `stop()` | Stop worker cog |
+| `stop()` | Stop worker cog; returns the final unmount's status |
 | `error()` | Last error code for calling cog |
-| `checkStackGuard()` | Verify worker cog stack integrity (requires `SD_INCLUDE_STACK_CHECK`) |
+| `handleError(handle)` | Why the last read/write on this handle came up short |
+| `lastFlushError()` | First failure of an automatic background flush (sticky) |
+| `clearFlushError()` | Clear the automatic-flush error report |
+| `checkStackGuard()` | Verify worker cog stack integrity (always compiled) |
 
 ### Handle-Based File Operations
 | Method | Description |
@@ -1364,11 +1451,11 @@ These methods are always available in the core driver (no feature flags required
 | `openFileWrite(path)` | Open for append writing, returns handle |
 | `createFileNew(path)` | Create new file for writing, returns handle |
 | `closeFileHandle(handle)` | Close file handle, flush writes |
-| `readHandle(handle, buffer, count)` | Read bytes, returns count read |
-| `writeHandle(handle, buffer, count)` | Write bytes, returns count written |
+| `readHandle(handle, buffer, count)` | Read bytes; count read, `0` only at EOF, negative if nothing moved (short count: see `handleError()`) |
+| `writeHandle(handle, buffer, count)` | Write bytes; count written, negative if nothing accepted (short count: see `handleError()`) |
 | `seekHandle(handle, position)` | Set file position, returns SUCCESS (0) or error |
 | `tellHandle(handle)` | Get current position |
-| `eofHandle(handle)` | Check if at end of file |
+| `eofHandle(handle)` | Check if at end of file (TRUE if the query failed too -- see `error()`) |
 | `fileSizeHandle(handle)` | Get file size by handle |
 | `syncHandle(handle)` | Flush writes on handle |
 | `syncAllHandles()` | Flush all open handles |
@@ -1388,7 +1475,7 @@ These methods are always available in the core driver (no feature flags required
 | `readDirectory(index)` | Get CWD entry at index |
 | `openDirectory(path)` | Open directory for enumeration, returns handle |
 | `readDirectoryHandle(handle)` | Read next entry from directory handle |
-| `closeDirectoryHandle(handle)` | Close directory handle |
+| `closeDirectoryHandle(handle)` | Close directory handle, returns status |
 
 ### Information
 | Method | Description |
@@ -1460,7 +1547,7 @@ For applications that need contiguous file storage (boot files, firmware images)
 | Method | Description |
 |--------|-------------|
 | `fileFragments(path)` | Count non-contiguous cluster chain runs (1 = contiguous) |
-| `isFileContiguous(path)` | Returns TRUE if fragment count is 1 |
+| `isFileContiguous(path)` | TRUE only if the count was obtained AND equals 1 (see `error()`) |
 | `compactFile(path)` | Relocate file to contiguous clusters with read-back verify |
 | `createFileContiguous(path, size)` | Create file with pre-allocated contiguous chain |
 

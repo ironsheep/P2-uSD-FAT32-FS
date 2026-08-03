@@ -36,12 +36,14 @@ This project provides a robust, high-performance SD card driver for the P2 micro
 |----------|-------------|
 | **[Driver Tutorial](DOCs/SD-CARD-DRIVER-TUTORIAL.md)** | Complete guide with practical examples — start here |
 | **[Driver Theory of Operations](DOCs/SD-CARD-DRIVER-THEORY.md)** | Architecture, handle system, SPI engine, and internals |
+| **[Error Handling Guide](DOCs/ERROR-HANDLING-GUIDE.md)** | Detecting and responding to every error the driver reports |
+| **[Migration Guide v1.7.0](DOCs/MIGRATION-GUIDE-v1.7.0.md)** | Moving from v1.6.x |
 | **[Card Performance](DOCs/SD-CARD-PERFORMANCE.md)** | SD card selection guide and ranked performance comparisons |
 | **[Card Catalog](DOCs/cards/CARD-CATALOG.md)** | All tested cards with register data and throughput |
 | **[FAT32 API Concepts](DOCs/Reference/FAT32-API-CONCEPTS-REFERENCE.md)** | FAT32 background for embedded developers |
 | **[Utilities Guide](DOCs/SD-CARD-UTILITIES.md)** | Standalone utility programs (format, audit, fsck, benchmark) |
 | **[Utility Internals](DOCs/Utils/)** | Theory of operations for each utility |
-| **[Regression Testing](src/regression-tests/README.md)** | Test infrastructure, 483 tests across 27 suites (as of v1.7.0) |
+| **[Regression Testing](src/regression-tests/README.md)** | Test infrastructure, 513 tests across 27 suites (as of v1.7.0) |
 | **[Example Programs](src/EXAMPLES/README.md)** | Compilable examples: read/write, data logger, directory walk, multi-cog |
 | **[Demo Shell](src/DEMO/README.md)** | Full-featured terminal shell with card formatting, filesystem repair, file management, and benchmarking |
 
@@ -142,7 +144,7 @@ P2-uSD-FAT32-FS/
 │   ├── DEMO/                       # Interactive demo application
 │   │   ├── SD_demo_shell.spin2        # Terminal shell (dir, cd, type, etc.)
 │   │   └── isp_serial_singleton.spin2 # Serial terminal driver
-│   └── regression-tests/          # Regression test suite (483 tests as of v1.7.0)
+│   └── regression-tests/          # Regression test suite (513 tests as of v1.7.0)
 │       ├── SD_RT_*_tests.spin2        # 27 test files (mount, file ops, seek, fatchain, async, defrag, etc.)
 │       ├── isp_rt_utilities.spin2     # Shared test framework
 │       └── TestCard/                  # Test card setup and validation

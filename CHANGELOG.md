@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v1.7.0 (2026-08-03)
+
+Failures the driver detected but discarded are now reported.
+
+### New Features
+
+- `handleError(handle)` reports why the last `readHandle()` or `writeHandle()` on a handle came up short. Both return a byte count, and a partial count is positive, so the read loop the tutorial shows ends the same way at end of file and on a card failure part-way through a file.
+- The write path reports `E_NO_CONTIGUOUS_SPACE` when a pre-allocated contiguous reservation runs out, and `E_BAD_CHAIN` when a cluster chain walk lands in the metadata region. Both were previously reported as a zero-byte write.
+- `lastFlushError()` and `clearFlushError()` report failures of the automatic idle flush. That flush is started by the worker cog, so a failure had no caller to return to: the data did not reach the card and every later call still reported success.
+- `SD_INCLUDE_TEST_HOOKS` builds in fault injection — `setTestFailSector()`, `setTestFailWriteAfter()`, `getTestWriteCallCount()`, `setTestMaxClusters()`, `clearTestErrors()`. Enabled by `SD_INCLUDE_ALL`, and deliberately not by `SD_INCLUDE_DEBUG`.
+- `DOCs/ERROR-HANDLING-GUIDE.md` covers detecting and responding to every error the driver reports. `DOCs/MIGRATION-GUIDE-v1.7.0.md` covers moving from v1.6.x.
+
+### Bug Fixes
+
+- `error()` describes the operation that just completed rather than the last failure since boot. Every method that issues a command records its outcome on both exit paths; the pure accessors are exempt so a diagnostic call cannot erase the error being diagnosed.
+- A metadata write that fails part-way no longer leaves the filesystem in a state that reports success. Cluster allocation, delete, directory creation, rename and move each check every write and leave the recoverable outcome on the card.
+- An unreadable directory is no longer indistinguishable from a name that is not there, so a create no longer writes a second entry for a file that already exists.
+- `sync()` reports failure, and keeps the pending directory entry so a later sync can still write it. It previously discarded the entry whether or not it reached the card.
+- `freeSpace()` returns 0 with an error rather than the partial count from an interrupted FAT scan.
+- `stop()` returns the status of its final unmount. It halts the worker cog immediately afterward, so nothing else could report it.
+- A worker-cog stack-guard violation reaches `error()` instead of only the debug channel, which the driver ships with disabled.
+- `getResult()` and `cancelAsync()` refuse a cog that did not start the operation. They release the API lock as their last act, so such a call released a lock the caller never held.
+- The card registers, high-speed negotiation and CMD6 paths report the specific failure instead of a single false. A card that lacks high-speed support is reported as lacking it, not as a failed query.
+- `SD_FAT32_fsck` recovers directory entries stranded past a spurious end-of-directory marker, rewriting the marker as a deleted-entry tombstone so a conforming scan reaches them. It previously freed their cluster chains and left the entries in place pointing at them.
+- `SD_FAT32_audit` and `SD_FAT32_fsck` check every sector read. An unchecked read left the previous sector in the buffer, which was then validated as directory entries or FAT data; a run that cannot read the media now says so and never reports `CLEAN`.
+
+### Breaking Changes
+
+- **BREAKING**: `eofHandle()` and `isFileContiguous()` return a boolean only. They previously returned `TRUE`, `FALSE`, or a negative error code, and `TRUE` is -1 in Spin2 while `E_TIMEOUT` is also -1 — there was no correct way to call either one. `eofHandle()` reports `TRUE` when the query fails, `isFileContiguous()` reports `FALSE`, and `error()` distinguishes.
+- **BREAKING**: `readHandle()` and `writeHandle()` return their error code when nothing at all was transferred, so a return of 0 from `readHandle()` now means end of file and nothing else. A read that failed on its first sector previously returned 0, and a file on a failing card was processed as a complete file. A failure part-way through still returns the partial count. A read loop that stops on `n =< 0` or `n > 0` needs no change; one that stops only on `n == 0` will not terminate on a persistent failure.
+- **BREAKING**: `unmount()` on a card with invalid FSInfo signatures reports the new `E_BAD_FSINFO` (-24) rather than `E_IO_ERROR`.
+- New error constants: `E_BAD_FSINFO` (-24), `E_BAD_CHAIN` (-25), `E_STACK_OVERFLOW` (-26), `E_NO_COG` (-65). `E_NO_COG` replaces `E_NO_LOCK` when `start()` cannot get a cog. `E_FILE_NOT_OPEN` (-45) is documented as reserved; no code path produces it.
+- `stop()` and `closeDirectoryHandle()` return a status where they previously returned nothing. Existing calls compile and behave as before.
+
 ## v1.6.1 (2026-07-27)
 
 Utility output and build instructions, and one debug method renamed to match what it does.

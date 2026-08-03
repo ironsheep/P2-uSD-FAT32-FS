@@ -652,10 +652,18 @@ At the top of the write loop the driver refuses to write any sector below `root_
 
 ```spin2
 if h_sector[handle] < root_sec
-  ' REFUSING metadata-region write -> return partial bytes_written
+  ' REFUSING metadata-region write -> report E_BAD_CHAIN
 ```
 
-File data always lives at or after `root_sec` (the first data cluster maps to `root_sec`). A target below it means the chain walk has gone wrong and landed in the FAT, VBR, or reserved region. This is a correct-by-construction backstop: it must **never** fire during a passing run, and if it does it stops before corrupting filesystem metadata, returning the bytes written so far rather than an error. Its firing is treated as a real defect, not a recoverable condition.
+File data always lives at or after `root_sec` (the first data cluster maps to `root_sec`). A target below it means the chain walk has gone wrong and landed in the FAT, VBR, or reserved region. This is a correct-by-construction backstop: it must **never** fire during a passing run, and if it does it stops before corrupting filesystem metadata. It reports `E_BAD_CHAIN` — as the return value if nothing had been accepted yet, otherwise as the bytes written so far with the reason in `handleError()`. Its firing is treated as a real defect, not a recoverable condition.
+
+### Why a zero-byte return is reserved for "nothing to do"
+
+Both `do_read_h` and `do_write_h` return a byte **count**, and every stopping point records its reason in the per-handle `h_error` slot. Once any byte has moved, a failure returns the partial count: the caller must be able to tell how much of the file is valid, and an error code would destroy that information. `handleError()` supplies the reason.
+
+A failure that moves **no** bytes is the one case where that reasoning inverts. There is no partial count worth preserving, and zero is the value every read loop is written to stop on — `repeat while n > 0`, `repeat until n == 0`. Returning zero there makes a failing card indistinguishable from a finished file, and the driver's own dispatcher compounds it: `pb_status := pb_data0 < 0 ? pb_data0 : SUCCESS` means a zero return also drives `ERROR()` to report `SUCCESS`, and `getResult()` inherits the same value on the async path.
+
+So every zero-byte failure exit returns its error code instead. `readHandle()` returning `0` therefore means a genuine end of file and nothing else, and both loop idioms stop for the right reason. `do_read_h` implements this as a single guard at its tail rather than at each stopping point, so a future early-exit cannot forget it.
 
 ## Auto-Flush on Idle
 
@@ -669,6 +677,16 @@ The worker cog monitors idle time between commands. When no command arrives for 
 4. Reset the idle timer after flush or after any command completes
 
 This ensures data reaches the card even if the application forgets to call `syncHandle()` or `closeFileHandle()`. The 200ms threshold is short enough for data safety but long enough that it doesn't interfere with normal write bursts.
+
+### Reporting a failed background flush
+
+The flush is started by the worker itself, so unlike every other write path there is no calling cog to return a status to — and no cog error slot that would be the right place to put one, since the failure belongs to no cog's operation. The worker therefore records the **first** failure in `flush_error`, which `lastFlushError()` exposes:
+
+- Each `do_sync_h()` that returns non-`SUCCESS` is recorded.
+- `updateFSInfo()`'s outcome is read from its `fsinfo_error` companion, not from its boolean return — a `FALSE` there also means "there was nothing to update".
+- A flush **cut short by an arriving command records nothing**. That abort is by design: the handles stay dirty and the next idle window retries.
+
+The field is sticky on the first failure and is cleared only by `clearFlushError()`. Flushes run on a timer, so a later clean one would otherwise erase the report before the application ever polled for it. A failed flush leaves the handle `HF_DIRTY`, so the data is still in the driver's buffer and a later `syncHandle()` or `closeFileHandle()` can still land it.
 
 ## Defragmentation
 
@@ -707,7 +725,7 @@ The copy-then-free ordering ensures the original data is always intact until ver
 4. Create the directory entry with the first cluster set
 5. Return a write handle with `h_prealloc_end` set to the last pre-allocated cluster
 
-When `h_prealloc_end` is non-zero, `writeHandle()` skips the normal `allocateCluster()` path at cluster boundaries. Instead, it simply advances to the next sequential cluster (which is already allocated). This eliminates FAT reads/writes during the write path, improving write throughput. If writes exceed the pre-allocated space, the write returns 0 bytes written.
+When `h_prealloc_end` is non-zero, `writeHandle()` skips the normal `allocateCluster()` path at cluster boundaries. Instead, it simply advances to the next sequential cluster (which is already allocated). This eliminates FAT reads/writes during the write path, improving write throughput. If writes exceed the pre-allocated space, the write reports `E_NO_CONTIGUOUS_SPACE` — as the return value when the reservation ran out before any byte of that call was accepted, and via `handleError()` when it ran out part-way through and a partial count is returned instead.
 
 ### Shared Helpers
 
@@ -792,17 +810,21 @@ All structs are packed (Spin2 default) with offsets matching their respective ha
 | `E_INIT_FAILED` | -21 | Card initialization failed |
 | `E_NOT_FAT32` | -22 | Card not formatted as FAT32 |
 | `E_BAD_SECTOR_SIZE` | -23 | Sector size not 512 bytes |
+| `E_BAD_FSINFO` | -24 | FSInfo sector signatures invalid (free-space hint cannot be updated) |
+| `E_BAD_CHAIN` | -25 | Cluster chain disagrees with the directory entry (chain walk went wrong) |
+| `E_STACK_OVERFLOW` | -26 | Worker cog wrote past its stack -- nothing it reports can be trusted |
 | `E_FILE_NOT_FOUND` | -40 | File doesn't exist |
 | `E_FILE_EXISTS` | -41 | File already exists |
 | `E_NOT_A_FILE` | -42 | Expected file, found directory |
 | `E_NOT_A_DIR` | -43 | Expected directory, found file |
-| `E_FILE_NOT_OPEN` | -45 | File not open |
+| `E_FILE_NOT_OPEN` | -45 | RESERVED -- never produced; a closed handle reports `E_INVALID_HANDLE` |
 | `E_END_OF_FILE` | -46 | Read past end of file |
 | `E_DISK_FULL` | -60 | No free clusters available |
 | `E_NO_CONTIGUOUS_SPACE` | -61 | No contiguous run of sufficient length (defrag) |
 | `E_FILE_OPEN_FOR_COMPACT` | -62 | File is open, cannot compact (defrag) |
 | `E_VERIFY_FAILED` | -63 | Read-back verification failed after compact (defrag) |
 | `E_NO_LOCK` | -64 | Could not acquire hardware lock |
+| `E_NO_COG` | -65 | No free cog to run the worker (all eight in use) |
 | `E_TOO_MANY_FILES` | -90 | All handle slots in use |
 | `E_INVALID_HANDLE` | -91 | Handle out of range or not open |
 | `E_FILE_ALREADY_OPEN` | -92 | File already open for writing |
@@ -820,8 +842,11 @@ All structs are packed (Spin2 default) with offsets matching their respective ha
 |--------|-------------|
 | `mount(cs, mosi, miso, sck)` | Initialize card and mount filesystem |
 | `unmount()` | Flush all handles, update FSInfo, unmount |
-| `stop()` | Stop worker cog and release hardware lock |
+| `stop()` | Stop worker cog and release hardware lock; returns the final unmount's status |
 | `error()` | Last error code for calling cog |
+| `handleError(handle)` | Why the last read/write on this handle came up short |
+| `lastFlushError()` | First failure of an automatic background flush (sticky) |
+| `clearFlushError()` | Clear the automatic-flush error report |
 | `checkStackGuard() : bIntact` | Verify worker cog stack guard is intact |
 
 **Handle-Based File Operations:**
@@ -831,11 +856,11 @@ All structs are packed (Spin2 default) with offsets matching their respective ha
 | `openFileRead(pPath) : handle` | Open existing file for reading |
 | `openFileWrite(pPath) : handle` | Open existing file for append writing |
 | `createFileNew(pPath) : handle` | Create new file for writing |
-| `readHandle(handle, pBuf, count) : bytes` | Read bytes from file |
-| `writeHandle(handle, pBuf, count) : bytes` | Write bytes to file |
+| `readHandle(handle, pBuf, count) : bytes` | Read bytes from file (short count: see `handleError()`) |
+| `writeHandle(handle, pBuf, count) : bytes` | Write bytes to file (short count: see `handleError()`) |
 | `seekHandle(handle, position) : result` | Seek to byte position |
 | `tellHandle(handle) : position` | Get current byte position |
-| `eofHandle(handle) : bool` | Check if at end of file |
+| `eofHandle(handle) : bool` | Check if at end of file (TRUE if the query failed too -- see `error()`) |
 | `fileSizeHandle(handle) : size` | Get file size in bytes |
 | `syncHandle(handle) : result` | Flush pending writes |
 | `syncAllHandles() : result` | Flush all open handles |
@@ -858,7 +883,7 @@ All structs are packed (Spin2 default) with offsets matching their respective ha
 | `readDirectory(entry) : pEntry` | Enumerate CWD by index |
 | `openDirectory(pPath) : handle` | Open directory for handle-based enumeration |
 | `readDirectoryHandle(handle) : pEntry` | Read next directory entry |
-| `closeDirectoryHandle(handle)` | Close directory handle |
+| `closeDirectoryHandle(handle)` | Close directory handle, returns status |
 
 **Information:**
 
@@ -972,7 +997,7 @@ genuine one: same error code, same cache invalidation, same diagnostic counters.
 | Method | Description |
 |--------|-------------|
 | `fileFragments(pPath) : count` | Count non-contiguous fragments (1 = contiguous, 0 = empty) |
-| `isFileContiguous(pPath) : bool` | TRUE if file has exactly 1 fragment |
+| `isFileContiguous(pPath) : bool` | TRUE only if the count was obtained AND equals 1 (see `error()`) |
 | `createFileContiguous(pPath, size) : handle` | Create new file with pre-allocated contiguous chain |
 | `compactFile(pPath) : result` | Relocate file clusters into contiguous chain (file must be closed) |
 
