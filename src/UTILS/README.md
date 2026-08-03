@@ -270,7 +270,7 @@ pnut-term-ts -r SD_FAT32_fsck.bin
 | Pass | Name | Purpose |
 |------|------|---------|
 | **Pass 1** | Structural Integrity | Repair VBR backup, FSInfo signatures/backup, FAT[0]/[1]/[2] entries |
-| **Pass 2** | Directory & Chain Validation | Walk directory tree, validate cluster chains, detect cross-links |
+| **Pass 2** | Directory & Chain Validation | Walk directory tree, validate cluster chains, detect cross-links, recover entries stranded past a spurious end-of-directory marker |
 | **Pass 3** | Lost Cluster Recovery | Free allocated clusters not referenced by any file or directory |
 | **Pass 4** | FAT Sync & Free Count | Synchronize FAT1 -> FAT2, correct FSInfo free cluster count |
 
@@ -283,6 +283,7 @@ pnut-term-ts -r SD_FAT32_fsck.bin
 | **FAT entries** | Fix media type (FAT[0]), EOC marker (FAT[1]), root cluster (FAT[2]) |
 | **Cluster chains** | Truncate chains with bad references |
 | **Cross-links** | Detect clusters referenced by multiple chains |
+| **Stranded entries** | Rewrite a spurious `$00` end-of-directory marker as `$E5` so live entries beyond it are reachable again |
 | **Lost clusters** | Free allocated but unreferenced clusters |
 | **FAT sync** | Copy FAT1 to FAT2 where sectors differ |
 | **Free count** | Recalculate and update FSInfo free cluster count |

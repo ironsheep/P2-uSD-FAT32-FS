@@ -98,6 +98,10 @@ CON { FAT32 structure constants }
 
   ' Safety limits
   MAX_DIR_DEPTH       = 16
+  ' Ceiling on the look-ahead's walk of one directory's cluster chain. A corrupt chain can
+  ' loop, and the look-ahead runs on damaged filesystems by definition, so it must not be
+  ' able to spin forever. Far above any real directory.
+  MAX_DIR_CHAIN_HOPS  = 4096
   MAX_CHAIN_LENGTH    = 2_000_000
 
   ' Audit fail tracking
@@ -484,6 +488,32 @@ PRI readGeometry() : ok | numFats, rdStatus
         fifo.put(@" ")
 
 
+PRI readOrFail(sector, pBuf) : bOk
+' Read a sector, and make a failure impossible to ignore.
+'
+' A CHECKER THAT CANNOT READ THE MEDIA MUST SAY SO. An unchecked read leaves the PREVIOUS
+' sector's contents sitting in the buffer, and every caller here then validates those
+' stale bytes as directory entries or FAT data -- so the tool either invents corruption
+' that is not on the card, or certifies CLEAN over a sector it never actually saw. For a
+' tool whose entire job is telling the truth about the media, that is the worst failure
+' available to it.
+'
+' Each failure is reported and counted as an error, which is what keeps the run from
+' reaching the CLEAN verdict: that verdict is computed from v_errorCount, so no separate
+' suppression is needed. Callers must treat FALSE as "this sector's contents are unknown"
+' and skip whatever they were about to conclude from it.
+'
+' @param sector - LBA to read
+' @param pBuf - Pointer to the 512-byte destination
+' @returns bOk - TRUE if the sector was read; FALSE if its contents are unknown
+
+    if sd.readSectorRaw(sector, pBuf) < 0
+        fifo.putFmt1(@"  ERROR: Could not read sector %d -- contents unknown", sector)
+        v_errorCount++
+        return false
+    return true
+
+
 PRI doRepairWrite(sector, pBuf)
 ' Perform a repair sector write, or skip the write in MODE_AUDIT (dry-run).
 ' Every fsck repair site routes its write through here so audit mode can
@@ -523,7 +553,9 @@ PRI auditMBR() | result
 
     fifo.put(@"Checking MBR (sector 0)...")
 
-    sd.readSectorRaw(0, @buf)
+    if not readOrFail(0, @buf)
+        fifo.put(@"  MBR checks SKIPPED -- nothing can be concluded from an unread sector")
+        return
 
     auditRunTest(@"MBR boot signature ($AA55)", WORD[@buf + sd.BOOT_SIG_OFFSET] == sd.BOOT_SIGNATURE)
 
@@ -548,7 +580,9 @@ PRI auditVBR() | result
 
     fifo.put(@"Checking VBR (boot sector)...")
 
-    sd.readSectorRaw(partitionStart, @buf)
+    if not readOrFail(partitionStart, @buf)
+        fifo.put(@"  VBR checks SKIPPED -- nothing can be concluded from an unread sector")
+        return
 
     result := buf[0]
     auditRunTest(@"VBR jump ($EB or $E9)", result == $EB OR result == $E9)
@@ -628,8 +662,10 @@ PRI fsckPass1() | idx, mismatch, fsinfoDirty, startRepairs
     startRepairs := v_repairCount
 
     ' === VBR backup (sector 6) ===
-    sd.readSectorRaw(partitionStart, @buf)
-    sd.readSectorRaw(partitionStart + 6, @buf2)
+    if not readOrFail(partitionStart, @buf)
+        return                                                                  '  a mismatch reported from stale bytes would be a lie
+    if not readOrFail(partitionStart + 6, @buf2)
+        return
 
     mismatch := false
     repeat idx from 0 to sd.SECTOR_SIZE - 1
@@ -645,7 +681,8 @@ PRI fsckPass1() | idx, mismatch, fsinfoDirty, startRepairs
         fifo.put(@"  [OK] Backup VBR matches")
 
     ' === FSInfo signatures (sector 1) ===
-    sd.readSectorRaw(partitionStart + 1, @buf)
+    if not readOrFail(partitionStart + 1, @buf)
+        return
     fsinfoDirty := false
 
     if LONG[@buf] <> sd.FSINFO_LEAD_SIG
@@ -672,8 +709,10 @@ PRI fsckPass1() | idx, mismatch, fsinfoDirty, startRepairs
         fifo.put(@"  [OK] FSInfo signatures")
 
     ' === FSInfo backup (sector 7) ===
-    sd.readSectorRaw(partitionStart + 1, @buf)
-    sd.readSectorRaw(partitionStart + 7, @buf2)
+    if not readOrFail(partitionStart + 1, @buf)
+        return
+    if not readOrFail(partitionStart + 7, @buf2)
+        return
 
     mismatch := false
     repeat idx from 0 to sd.SECTOR_SIZE - 1
@@ -692,7 +731,8 @@ PRI fsckPass1() | idx, mismatch, fsinfoDirty, startRepairs
     ' FAT[0]'s low byte mirrors the BPB media byte ($F0 removable / $F8 fixed).
     ' Validate and repair against the card's ACTUAL media byte -- assuming $F8 here
     ' would rewrite a perfectly valid $F0-media filesystem ($0FFFFFF0) and corrupt it.
-    sd.readSectorRaw(fat1Start, @buf)
+    if not readOrFail(fat1Start, @buf)
+        return
 
     if (LONG[@buf] & sd.FAT32_ENTRY_MASK) <> (($0FFFFF00 | mediaType) & sd.FAT32_ENTRY_MASK)
         fifo.putFmt1(@"  %s: FAT[0] media type byte wrong", repairTag())
@@ -809,7 +849,9 @@ PRI fsckScanDir(dirCluster) | dirDone, sector, entSector, entIdx, pEntry, attr, 
         repeat entSector from 0 to sectorsPerCluster - 1
             if dirDone
                 quit
-            sd.readSectorRaw(sector + entSector, @buf)
+            if not readOrFail(sector + entSector, @buf)
+                dirDone := true                                                 '  stale bytes are not directory entries -- stop rather than invent findings
+                quit
 
             ' Process directory entries per sector
             repeat entIdx from 0 to ENTRIES_PER_SECTOR - 1
@@ -820,6 +862,23 @@ PRI fsckScanDir(dirCluster) | dirDone, sector, entSector, entIdx, pEntry, attr, 
 
                 ' End of directory
                 if name0 == DIR_END_MARKER
+                    ' Halting at $00 is CORRECT FAT32 and is what terminates every healthy
+                    ' directory -- so this is NOT treated as suspicious on its own. It is
+                    ' only wrong when live entries lie BEYOND it, which is the one case the
+                    ' look-ahead reports. A healthy directory never reaches the branch below.
+                    if liveEntriesPastMarker(dirCluster, entSector, entIdx)
+                        if currentWindow == 0
+                            fifo.put(@"  ERROR: Live entries stranded past end-of-directory marker")
+                            fifo.putFmt1(@"         %s: rewriting the marker as a deleted-entry tombstone", repairTag())
+                            v_errorCount++
+                            v_repairCount++
+                        ' $00 means "end of directory, stop"; $E5 means "deleted, keep
+                        ' scanning". Rewriting the terminator as a tombstone makes the
+                        ' stranded entries reachable to any conforming scan. No data is
+                        ' invented -- a terminator becomes a tombstone, nothing more.
+                        BYTE[pEntry] := sd.DIR_ENTRY_DELETED
+                        doRepairWrite(sector + entSector, @buf)
+                        next                                                    '  keep scanning: the entries beyond this are real
                     dirDone := true
                     quit
 
@@ -852,7 +911,9 @@ PRI fsckScanDir(dirCluster) | dirDone, sector, entSector, entIdx, pEntry, attr, 
                             fsckValidateChain(startClus, 0, true)
                             fsckScanDir(startClus)
                             ' Re-read our sector after recursion
-                            sd.readSectorRaw(sector + entSector, @buf)
+                            if not readOrFail(sector + entSector, @buf)
+                                dirDone := true                                 '  buf no longer holds this directory -- do not keep walking it
+                                quit
                         elseif currentWindow == 0
                             fifo.putFmt1(@"  ERROR: Bad dir start cluster %d", startClus)
                             v_errorCount++
@@ -981,6 +1042,70 @@ PRI fsckValidateChain(startClus, fSize, isDir) | clus, nextClus, chainLen, expec
                     v_warningCount++
 
 
+PRI liveEntriesPastMarker(dirCluster, fromEntSector, fromEntIdx) : bLive | clus, sec, entSector, entIdx, firstIdx, nameByte, hops
+' Look past an end-of-directory marker for entries that are still alive.
+'
+' A $00 first byte is the normal terminator of every healthy directory, so it cannot be
+' treated as damage by itself. It is damage only when real entries survive BEYOND it --
+' then a conforming scan stops early and those files become unreachable, while their
+' cluster chains still look unreferenced to the lost-cluster pass. That combination is
+' what lets fsck free the chains and leave the entries pointing at them, so the files
+' resurrect the moment the directory refills and the clusters have been handed to
+' somebody else.
+'
+' Scans the remainder of the current sector, the remainder of the current cluster, and the
+' rest of the directory's cluster chain. Uses buf2 so the caller's buf -- which holds the
+' sector being walked -- is left untouched; buf2 is otherwise used only by passes 1 and 4.
+'
+' @param dirCluster - Cluster containing the marker
+' @param fromEntSector - Sector offset within that cluster where the marker sits
+' @param fromEntIdx - Entry index of the marker within that sector
+' @returns bLive - TRUE if any live entry exists past the marker
+' @local clus - Cluster being examined
+' @local sec - First sector of clus
+' @local entSector - Sector offset within clus
+' @local entIdx - Entry index within the sector
+' @local firstIdx - Where to start within the first sector examined
+' @local nameByte - First byte of the entry under test
+' @local hops - Chain-walk guard
+
+    bLive := false
+    clus := dirCluster
+    hops := 0
+
+    repeat while clus >= 2 and clus < (totalClusters + 2) and not bLive
+        sec := clus2sec(clus)
+        repeat entSector from fromEntSector to sectorsPerCluster - 1
+            if not readOrFail(sec + entSector, @buf2)
+                ' Unknown contents. Report NOTHING live: repairing a directory terminator
+                ' on the strength of bytes we could not read would be the worse mistake,
+                ' and readOrFail has already made the run non-CLEAN.
+                return false
+            ' Only the sector holding the marker starts part-way in; every later sector
+            ' is examined from its first entry.
+            firstIdx := 0
+            if clus == dirCluster and entSector == fromEntSector
+                firstIdx := fromEntIdx + 1
+            repeat entIdx from firstIdx to ENTRIES_PER_SECTOR - 1
+                nameByte := BYTE[@buf2 + (entIdx * sd.DIR_ENTRY_SIZE)]
+                ' Anything that is neither a terminator nor a tombstone is a live entry.
+                if nameByte <> DIR_END_MARKER and nameByte <> sd.DIR_ENTRY_DELETED
+                    bLive := true
+                    quit
+            if bLive
+                quit
+
+        ' Later clusters are examined in full
+        fromEntSector := 0
+
+        hops++
+        if hops > MAX_DIR_CHAIN_HOPS                                            '  refuse to ride a corrupt chain forever
+            quit
+        clus := readFAT(clus) & sd.FAT32_ENTRY_MASK
+        if clus >= sd.FAT32_EOC_MIN
+            quit
+
+
 ' =========================================================================
 ' FSCK Pass 3: Lost cluster recovery
 ' =========================================================================
@@ -1028,7 +1153,8 @@ PRI fsckPass4() | fatSector, entIdx, clus, fatVal, freeCount, syncCount, mismatc
 
     repeat fatSector from 0 to sectorsPerFat - 1
         ' Read FAT1 sector
-        sd.readSectorRaw(fat1Start + fatSector, @buf)
+        if not readOrFail(fat1Start + fatSector, @buf)
+            quit                                                                '  a FAT mismatch reported from stale bytes would be a lie
 
         ' Count free clusters in this sector
         repeat entIdx from 0 to FAT_ENTRIES_PER_SECTOR - 1
@@ -1040,7 +1166,8 @@ PRI fsckPass4() | fatSector, entIdx, clus, fatVal, freeCount, syncCount, mismatc
             clus++
 
         ' Read FAT2 sector and compare
-        sd.readSectorRaw(fat2Start + fatSector, @buf2)
+        if not readOrFail(fat2Start + fatSector, @buf2)
+            quit
 
         mismatch := false
         repeat idx from 0 to sd.SECTOR_SIZE - 1
@@ -1062,7 +1189,8 @@ PRI fsckPass4() | fatSector, entIdx, clus, fatVal, freeCount, syncCount, mismatc
     fifo.putFmt1(@"  Free clusters: %d", freeCount)
 
     ' Update FSInfo free cluster count
-    sd.readSectorRaw(partitionStart + 1, @buf)
+    if not readOrFail(partitionStart + 1, @buf)
+        return
 
     if LONG[@buf + FSINFO_FREE_COUNT_OFFSET] <> freeCount
         fifo.putFmt3(@"  %s: FSInfo free count wrong (says %d, actually %d)", repairTag(), LONG[@buf + FSINFO_FREE_COUNT_OFFSET], freeCount)
@@ -1097,15 +1225,22 @@ PRI repairTag() : pStr
 PRI readFAT(cluster) : value | sector, offset
 ' Read a FAT entry with sector caching.
 '
+' If the cache fill fails the entry cannot be known. Returning whatever the PREVIOUS FAT
+' sector left in the buffer would send every chain walk off into unrelated clusters, so
+' the buffer is zeroed instead: the entry reads as FAT_FREE, which the walkers already
+' treat as "no link here" rather than following it somewhere wrong. readOrFail has already
+' reported the failure and made the run non-CLEAN.
+'
 ' @param cluster - Cluster number to read
-' @returns value - Raw 32-bit FAT entry
+' @returns value - Raw 32-bit FAT entry, or FAT_FREE if the sector could not be read
 
     sector := fat1Start + (cluster >> CLUSTER_SHIFT)
     offset := (cluster & CLUSTER_OFFSET_MASK) * 4
 
     if sector <> fatBufSector
         flushFAT()
-        sd.readSectorRaw(sector, @fatBuf)
+        if not readOrFail(sector, @fatBuf)
+            longfill(@fatBuf, FAT_FREE, FAT_ENTRIES_PER_SECTOR)                 '  never hand back the previous sector's links
         fatBufSector := sector
 
     value := LONG[@fatBuf + offset]
@@ -1113,6 +1248,12 @@ PRI readFAT(cluster) : value | sector, offset
 
 PRI writeFAT(cluster, value) | sector, offset, existing
 ' Write a FAT entry with sector caching. Preserves upper 4 reserved bits.
+'
+' THIS IS A READ-MODIFY-WRITE over a whole FAT sector: 128 entries are read into the
+' cache, one is changed, and the sector is written back. If the read fails, flushing the
+' cache would overwrite 127 live FAT entries with whatever was in the buffer -- turning an
+' unreadable sector into a destroyed one. So a failed fill abandons the repair entirely.
+' The entry stays as it was on the card, and readOrFail has reported why.
 '
 ' @param cluster - Cluster number to write
 ' @param value - New FAT entry value (only lower 28 bits used)
@@ -1122,7 +1263,10 @@ PRI writeFAT(cluster, value) | sector, offset, existing
 
     if sector <> fatBufSector
         flushFAT()
-        sd.readSectorRaw(sector, @fatBuf)
+        if not readOrFail(sector, @fatBuf)
+            fatBufSector := -1                                                  '  cache holds nothing trustworthy
+            fatBufDirty := false                                                '  and must never be flushed over a live FAT sector
+            return
         fatBufSector := sector
 
     existing := LONG[@fatBuf + offset]

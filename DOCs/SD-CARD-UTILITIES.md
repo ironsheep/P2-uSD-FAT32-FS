@@ -415,7 +415,7 @@ pnut-term-ts -r SD_FAT32_fsck.bin
 | Pass | Name | Purpose |
 |------|------|---------|
 | **Pass 1** | Structural Integrity | Repair VBR backup, FSInfo signatures/backup, FAT[0]/[1]/[2] entries |
-| **Pass 2** | Directory & Chain Validation | Walk directory tree, validate cluster chains, detect cross-links (windowed) |
+| **Pass 2** | Directory & Chain Validation | Walk directory tree, validate cluster chains, detect cross-links, recover entries stranded past a spurious end-of-directory marker (windowed) |
 | **Pass 3** | Lost Cluster Recovery | Free allocated clusters not referenced by any file or directory (per window, interleaved with Pass 2) |
 | **Pass 4** | FAT Sync & Free Count | Synchronize FAT1 -> FAT2, correct FSInfo free cluster count |
 
@@ -428,8 +428,53 @@ pnut-term-ts -r SD_FAT32_fsck.bin
 | **FAT entries** | Fix media type (FAT[0]), EOC marker (FAT[1]), root cluster (FAT[2]) |
 | **Cluster chains** | Truncate chains with bad references |
 | **Cross-links** | Detect clusters referenced by multiple chains |
+| **Stranded entries** | Rewrite a spurious `$00` end-of-directory marker as `$E5` |
 | **Lost clusters** | Free allocated but unreferenced clusters |
 | **FAT sync** | Copy FAT1 to FAT2 where sectors differ |
+
+### A Checker That Cannot Read the Media Never Reports CLEAN
+
+Every sector read in the scan engine is checked. A failed read is reported as
+`ERROR: Could not read sector N -- contents unknown` and counted, which is what keeps the
+run off the CLEAN verdict — that verdict is computed from the error count.
+
+This matters more here than anywhere else in the codebase. An unchecked read leaves the
+*previous* sector's contents in the buffer, and the caller then validates those stale
+bytes as directory entries or FAT data. The tool would either invent corruption that is
+not on the card, or certify a sector it never actually saw. Callers therefore treat a
+failed read as "contents unknown" and skip whatever they were about to conclude:
+
+- MBR and VBR checks are skipped rather than run against stale bytes.
+- The VBR-backup, FSInfo-backup and FAT1/FAT2 comparisons abort rather than report a
+  mismatch that may not exist.
+- A directory walk stops rather than parse stale bytes as entries.
+- The stranded-entry look-ahead reports nothing, because repairing a directory terminator
+  on the strength of bytes that could not be read would be the worse mistake.
+- `writeFAT()` abandons its repair. It is a read-modify-write over a whole FAT sector, so
+  flushing a cache that was never filled would overwrite 127 live entries and turn an
+  unreadable sector into a destroyed one.
+
+### Entries Stranded Past an End-of-Directory Marker
+
+Stopping a directory scan at a `$00` first byte is correct FAT32 behavior — it is what
+ends every healthy directory, and it is never treated as damage on its own. It *is*
+damage when live entries survive **beyond** it: a conforming scan stops early, so those
+files are unreachable, and their cluster chains look unreferenced to the lost-cluster
+pass.
+
+That combination is why this is repaired rather than merely reported. Left alone, Pass 3
+frees the chains while the entries stay physically in place still pointing at them. The
+filesystem is then internally inconsistent, and the stale entries resurrect as soon as the
+directory refills and those clusters have been handed to something else.
+
+The repair writes `$E5` — "deleted, keep scanning" — over the spurious `$00`. A conforming
+scan then continues into the later sectors and the stranded entries become reachable
+again. **No data is invented**: a terminator becomes a tombstone, and nothing else
+changes. Because the detection runs inside the Pass 2 walk, the recovered chains are
+marked live before Pass 3 looks at them, so they are never freed.
+
+The look-ahead only fires when it actually finds a live entry past the marker, so the
+trailing `$00` of a healthy directory is left untouched.
 | **Free count** | Recalculate and update FSInfo free cluster count |
 
 **Memory Requirements:**
