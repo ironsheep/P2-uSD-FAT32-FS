@@ -1,0 +1,175 @@
+'' =================================================================================================
+''
+''   File....... SD_stack_guard_collision_probe.spin2
+''   Purpose.... PROVE (or refute) the claimed cause of E_STACK_OVERFLOW (-26):
+''               that isp_stack_check.prepStackForCheck() writes its end-of-stack marker
+''               into the FIRST LONG of the driver's cog_stack_guard, corrupting it.
+''
+''   THE CLAIM UNDER TEST
+''     isp_stack_check.prepStackForCheck() does:
+''         pEndStackMark := @LONG[pStack][nStackLongCt]     ' one long PAST the stack
+''         LONG[pEndStackMark] := DO_NOT_WRITE_MARK         ' $addee5e5
+''     The driver declares cog_stack_guard immediately after cog_stack, so that address
+''     IS cog_stack_guard[0]. start() bytefills the guard with $CC and then immediately
+''     calls prepStackForCheck, which overwrites the first four bytes.
+''
+''   FALSIFIABLE PREDICTIONS -- stated BEFORE the run:
+''     P1: @LONG[@cog_stack][STACK_SIZE] == @cog_stack_guard   (same address, exactly)
+''     P2: after bytefill, guard bytes are CC CC CC CC
+''     P3: after prepStackForCheck, guard bytes are E5 E5 DE AD
+''         ($addee5e5 stored little-endian -- and $E5 is the byte the driver's own
+''          checkStackGuard() reported at offset 0 on hardware)
+''     P4: guard bytes 4..15 remain CC (only the FIRST long is clobbered)
+''     P5: CONTROL -- with one dedicated long inserted between stack and guard, the
+''         guard survives untouched as CC CC CC CC
+''
+''   If P1-P4 hold, the mechanism is proven. If P5 also holds, the proposed fix is proven.
+''   This probe uses NO SD card and never calls the driver -- it tests memory semantics only.
+''
+'' =================================================================================================
+
+CON
+    _CLKFREQ    = 350_000_000
+    DEBUG_BAUD  = 2_000_000
+
+    STACK_SIZE          = 160                   ' must match the driver's shipped value
+    STACK_GUARD_LONGS   = 4
+    STACK_GUARD_BYTE    = $CC
+
+OBJ
+    stackUtils  : "isp_stack_check"
+
+DAT
+' ---- Layout A: EXACTLY the driver's current layout (stack immediately followed by guard)
+    cog_stack           LONG    0[STACK_SIZE]
+    cog_stack_guard     LONG    0[STACK_GUARD_LONGS]
+    tailA               LONG    $DEAD_BEEF      ' witness: must never be touched
+
+' ---- Layout B: CONTROL -- proposed fix, one dedicated long between stack and guard
+    cog_stack2          LONG    0[STACK_SIZE]
+    stack_end_mark      LONG    0               ' dedicated home for isp_stack_check's marker
+    cog_stack_guard2    LONG    0[STACK_GUARD_LONGS]
+    tailB               LONG    $DEAD_BEEF      ' witness: must never be touched
+
+PUB go() | fails
+
+    debug(" ")
+    debug("=========================================================")
+    debug("  Stack-guard collision probe (no SD card involved)")
+    debug("=========================================================")
+    debug(" ")
+
+    fails := 0
+    fails += testP1()
+    fails += testP2toP4()
+    fails += testP5()
+
+    debug(" ")
+    debug("=========================================================")
+    if fails == 0
+        debug("  VERDICT: CLAIM CONFIRMED -- all predictions held.")
+        debug("           prepStackForCheck() DOES clobber cog_stack_guard[0],")
+        debug("           and the dedicated-long fix DOES prevent it.")
+    else
+        debug("  VERDICT: CLAIM REFUTED -- ", udec_(fails), " prediction(s) FAILED.")
+        debug("           The -26 cause is NOT what was claimed. Investigate further.")
+    debug("=========================================================")
+    debug(" ")
+
+    waitms(500)                                 ' drain the debug FIFO before the marker
+    debug("END_SESSION")
+
+PRI testP1() : bad
+' P1: the address prepStackForCheck writes to IS cog_stack_guard[0].
+
+    debug("--- P1: address identity ---")
+    debug("  @cog_stack ....................... $", uhex_long_(@cog_stack))
+    debug("  @cog_stack_guard ................. $", uhex_long_(@cog_stack_guard))
+    debug("  @LONG[@cog_stack][STACK_SIZE] .... $", uhex_long_(@LONG[@cog_stack][STACK_SIZE]))
+    debug("  gap (guard - stack) .............. ", udec_(@cog_stack_guard - @cog_stack), " bytes (STACK_SIZE*4 = ", udec_(STACK_SIZE * 4), ")")
+
+    if @LONG[@cog_stack][STACK_SIZE] == @cog_stack_guard
+        debug("  [ ok ] P1 HOLDS -- prepStackForCheck's target IS guard[0]")
+    else
+        bad := 1
+        debug("  [BAD!] P1 FAILS -- addresses differ; the claimed mechanism is impossible")
+    debug(" ")
+
+PRI testP2toP4() : bad | b0, b1, b2, b3, idx, tailOK
+
+    debug("--- P2: guard state AFTER bytefill, BEFORE prepStackForCheck ---")
+    bytefill(@cog_stack_guard, STACK_GUARD_BYTE, STACK_GUARD_LONGS * 4)
+    showGuard(@"  guard now", @cog_stack_guard)
+
+    if allGuardBytesAre(@cog_stack_guard, STACK_GUARD_BYTE)
+        debug("  [ ok ] P2 HOLDS -- guard is fully $CC before the call")
+    else
+        bad += 1
+        debug("  [BAD!] P2 FAILS -- guard was not clean to begin with")
+    debug(" ")
+
+    debug("--- P3/P4: guard state AFTER prepStackForCheck ---")
+    debug("  PREDICTED first four bytes: E5 E5 DE AD   (from DO_NOT_WRITE_MARK = $addee5e5)")
+    stackUtils.prepStackForCheck(@cog_stack, STACK_SIZE)
+    showGuard(@"  guard now", @cog_stack_guard)
+
+    b0 := BYTE[@cog_stack_guard][0]
+    b1 := BYTE[@cog_stack_guard][1]
+    b2 := BYTE[@cog_stack_guard][2]
+    b3 := BYTE[@cog_stack_guard][3]
+
+    if b0 == $E5 AND b1 == $E5 AND b2 == $DE AND b3 == $AD
+        debug("  [ ok ] P3 HOLDS -- guard[0..3] clobbered with the EXACT predicted pattern")
+        debug("         ($E5 at offset 0 is what checkStackGuard() reported on hardware)")
+    else
+        bad += 1
+        debug("  [BAD!] P3 FAILS -- guard[0..3] is not the predicted marker")
+
+    ' P4: only the first long should be damaged
+    tailOK := true
+    repeat idx from 4 to (STACK_GUARD_LONGS * 4) - 1
+        if BYTE[@cog_stack_guard][idx] <> STACK_GUARD_BYTE
+            tailOK := false
+    if tailOK
+        debug("  [ ok ] P4 HOLDS -- guard bytes 4..15 still $CC (only the first long hit)")
+    else
+        bad += 1
+        debug("  [BAD!] P4 FAILS -- damage extends beyond the first long")
+
+    if LONG[@tailA] == $DEAD_BEEF
+        debug("  [ ok ] witness past the guard intact ($DEADBEEF)")
+    else
+        bad += 1
+        debug("  [BAD!] witness past the guard was overwritten -- damage is wider than claimed")
+    debug(" ")
+
+PRI testP5() : bad
+
+    debug("--- P5: CONTROL -- proposed fix (one dedicated long between stack and guard) ---")
+    bytefill(@cog_stack_guard2, STACK_GUARD_BYTE, STACK_GUARD_LONGS * 4)
+    stackUtils.prepStackForCheck(@cog_stack2, STACK_SIZE)
+    showGuard(@"  guard now", @cog_stack_guard2)
+    debug("  dedicated stack_end_mark ......... $", uhex_long_(LONG[@stack_end_mark]))
+
+    if allGuardBytesAre(@cog_stack_guard2, STACK_GUARD_BYTE) AND LONG[@stack_end_mark] == $addee5e5
+        debug("  [ ok ] P5 HOLDS -- marker landed in its own long; guard untouched")
+    else
+        bad := 1
+        debug("  [BAD!] P5 FAILS -- the proposed fix does not protect the guard")
+
+    if LONG[@tailB] <> $DEAD_BEEF
+        bad += 1
+        debug("  [BAD!] control witness overwritten")
+    debug(" ")
+
+PRI showGuard(p_label, p_guard)
+' Dump the 16 guard bytes.
+
+    debug("  ", zstr_(p_label), " = ", uhex_byte_(BYTE[p_guard][0]), " ", uhex_byte_(BYTE[p_guard][1]), " ", uhex_byte_(BYTE[p_guard][2]), " ", uhex_byte_(BYTE[p_guard][3]), " | ", uhex_byte_(BYTE[p_guard][4]), " ", uhex_byte_(BYTE[p_guard][5]), " ", uhex_byte_(BYTE[p_guard][6]), " ", uhex_byte_(BYTE[p_guard][7]))
+
+PRI allGuardBytesAre(p_guard, val) : bMatch | idx
+
+    bMatch := true
+    repeat idx from 0 to (STACK_GUARD_LONGS * 4) - 1
+        if BYTE[p_guard][idx] <> val
+            bMatch := false

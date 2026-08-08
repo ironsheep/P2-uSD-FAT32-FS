@@ -1,0 +1,160 @@
+'' =================================================================================================
+''
+''   File....... SD_worker_stack_depth_probe.spin2
+''   Purpose.... Measure the worker cog's ACTUAL peak stack usage against the shipped
+''               STACK_SIZE, to decide whether E_STACK_OVERFLOW (-26) is a real overflow
+''               or a false-tripping guard.
+''
+''   WHY THIS PROBE EXISTS
+''   Regression sweeps on two unrelated cards (SDHC 7GB SN $0001_B9D5 and SDXC 58GB
+''   SN $0000_0F14) both fail SD_RT_mount_tests 15/16 with mount() = -26 = E_STACK_OVERFLOW.
+''   That error code was introduced by f34610f; before it, a guard violation reached DEBUG
+''   only and the driver ships DEBUG_MASK = 0, so the condition could not be reported at all.
+''
+''   HOW IT MEASURES
+''   reportStackDepth() travels through send_command(), which now returns E_STACK_OVERFLOW
+''   and discards the payload once the guard is broken -- so a depth cannot be read back
+''   from an already-overflowed worker. This probe therefore runs against a TEMPORARILY
+''   ENLARGED STACK_SIZE (512) so the worker never overflows, the guard stays intact, the
+''   mailbox keeps working, and getStackDepth() returns a true high-water mark.
+''
+''   Compare the reported peak against the shipped value of 160.
+''
+''   REQUIRES: STACK_SIZE temporarily raised in micro_sd_fat32_fs.spin2. Revert afterward.
+''
+'' =================================================================================================
+
+CON
+    _CLKFREQ    = 350_000_000
+    DEBUG_BAUD  = 2_000_000
+    DEBUG_MASK  = 0
+
+    SD_CS = 60, SD_MOSI = 59, SD_MISO = 58, SD_SCK = 61
+
+    SHIPPED_STACK_SIZE = 160                    ' the value the driver actually ships
+
+#pragma exportdef SD_INCLUDE_ALL
+#pragma exportdef SD_INCLUDE_STACK_CHECK
+
+OBJ
+    sd  : "micro_sd_fat32_fs"
+
+DAT
+    dirName     BYTE    "STKDIR", 0
+    fileName    BYTE    "STKTEST.TXT", 0
+    file2Name   BYTE    "STKTEST2.TXT", 0
+    rootPath    BYTE    "/", 0
+    payload     BYTE    "The quick brown fox jumps over the lazy dog. 0123456789. ", 0
+
+VAR
+    LONG    peak
+    BYTE    buffer[1024]
+
+PUB go() | status, handle, idx, n
+
+    debug(" ")
+    debug("==============================================")
+    debug("  Worker cog stack depth probe")
+    debug("==============================================")
+    debug("  Shipped STACK_SIZE ... ", udec_(SHIPPED_STACK_SIZE), " longs")
+    debug(" ")
+
+    peak := 0
+
+    status := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    sample(@"after mount()                ")
+    if status <> 0
+        debug("  mount() FAILED: ", sdec_(status))
+        debug("  (depth samples below may be meaningless)")
+
+    ' --- directory create / chdir / newfile -- do_newdir gained 2 locals in f34610f
+    sd.newDirectory(@dirName)
+    sample(@"after newDirectory()         ")
+
+    sd.changeDirectory(@dirName)
+    sample(@"after changeDirectory()      ")
+
+    ' --- file create + write -- do_write_h / writeAdvanceCluster / allocateCluster
+    handle := sd.createFileNew(@fileName)
+    sample(@"after createFileNew()        ")
+    if handle > 0
+        repeat idx from 0 to 63
+            sd.writeHandle(handle, @payload, 56)
+        sample(@"after 64x writeHandle()      ")
+        sd.closeFileHandle(handle)
+        sample(@"after closeFileHandle()      ")
+
+    ' --- read back -- do_read_h / readNextSector
+    handle := sd.openFileRead(@fileName)
+    if handle > 0
+        repeat idx from 0 to 31
+            n := sd.readHandle(handle, @buffer, 64)
+        sample(@"after 32x readHandle()       ")
+        sd.seekHandle(handle, 0)
+        sample(@"after seekHandle()           ")
+        sd.closeFileHandle(handle)
+
+    ' --- rename / move / delete -- do_rename, do_movefile gained work in f34610f
+    sd.rename(@fileName, @file2Name)
+    sample(@"after rename()               ")
+
+    sd.changeDirectory(@rootPath)
+    sample(@"after changeDirectory(root)  ")
+
+    ' --- contiguous create + fragment walk -- do_create_contiguous / countFileFragments
+    handle := sd.createFileContiguous(@fileName, 8192)
+    if handle > 0
+        sd.closeFileHandle(handle)
+    sample(@"after createFileContiguous() ")
+
+    sd.fileFragments(@fileName)
+    sample(@"after fileFragments()        ")
+
+    sd.isFileContiguous(@fileName)
+    sample(@"after isFileContiguous()     ")
+
+    ' --- volume-level work
+    sd.freeSpace()
+    sample(@"after freeSpace()            ")
+
+    sd.syncAllHandles()
+    sample(@"after syncAllHandles()       ")
+
+    ' --- cleanup
+    sd.deleteFile(@fileName)
+    sample(@"after deleteFile()           ")
+
+    sd.unmount()
+    sample(@"after unmount()              ")
+
+    debug(" ")
+    debug("==============================================")
+    debug("  PEAK DEPTH ......... ", udec_(peak), " longs")
+    debug("  SHIPPED STACK_SIZE . ", udec_(SHIPPED_STACK_SIZE), " longs")
+    debug(" ")
+    if peak > SHIPPED_STACK_SIZE
+        debug("  VERDICT: REAL OVERFLOW -- peak EXCEEDS the shipped stack by ", udec_(peak - SHIPPED_STACK_SIZE), " longs")
+        debug("           STACK_SIZE = 160 is too small. -26 is reporting a genuine fault.")
+    elseif peak == SHIPPED_STACK_SIZE
+        debug("  VERDICT: AT THE LIMIT -- peak exactly fills the shipped stack, zero headroom")
+    else
+        debug("  VERDICT: FITS -- peak is ", udec_(SHIPPED_STACK_SIZE - peak), " longs BELOW the shipped stack.")
+        debug("           A -26 at this workload would be a FALSE TRIP, not an overflow.")
+    debug("==============================================")
+    debug(" ")
+
+    waitms(500)                                 ' drain the debug FIFO before the marker
+    debug("END_SESSION")
+
+PRI sample(p_label) | depth
+' Read the worker's high-water mark and fold it into the running peak.
+' A negative depth means the query itself failed -- report it rather than silently
+' folding a -1 into the peak.
+
+    depth := sd.reportStackDepth()
+    if depth < 0
+        debug("  ", zstr_(p_label), " depth UNAVAILABLE (query returned ", sdec_(depth), " -- error() = ", sdec_(sd.error()), ")")
+    else
+        if depth > peak
+            peak := depth
+        debug("  ", zstr_(p_label), " depth = ", udec_(depth), "   (running peak ", udec_(peak), ")")

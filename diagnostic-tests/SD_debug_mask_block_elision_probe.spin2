@@ -1,0 +1,112 @@
+'' =================================================================================================
+''   File....... SD_debug_mask_block_elision_probe.spin2
+''   Purpose.... Prove a code shape that makes an ENTIRE BLOCK disappear from the same switch
+''               that clears its DEBUG_MASK bit.
+''
+''   THE PROBLEM
+''   -----------
+''   DEBUG_MASK elides the debug STATEMENT only -- never the block around it. (P2KB
+''   p2kbSpin2DebugMask: "DEBUG[n] with bit n NOT set: Entire statement omitted".) So this
+''   shape leaves a live conditional whose body is now partly empty:
+''
+''       if NOT checkGuard()                  ' <-- still compiled, still evaluated
+''         DEBUG[CH_API]("guard failed")      ' <-- vanishes
+''         halt()                             ' <-- still compiled
+''
+''   You cannot fix that with the preprocessor directly: there is no #IF <expression> in
+''   Spin2, only #IFDEF / #IFNDEF / #ELSEIFDEF, which test symbol PRESENCE. DEBUG_MASK is a
+''   CON integer the compiler resolves AFTER the preprocessor has finished, so no directive
+''   can read a bit out of it.
+''
+''   THE SHAPE THAT WORKS -- INVERT THE DEPENDENCY
+''   ---------------------------------------------
+''   Do not derive block-elision from the mask. Derive THE MASK from per-channel #DEFINE
+''   symbols, and guard the blocks with those same symbols. One switch, both effects.
+''
+''   PROBE 1 below is the broken shape (masked statement, live block).
+''   PROBE 2 below is the working shape (#IFDEF-guarded block).
+''   Compile twice and compare .bin size to see which one actually disappears:
+''
+''       pnut-ts -d SD_debug_mask_block_elision_probe.spin2                  ' CH_B OFF
+''       pnut-ts -d -D DBG_CH_B SD_debug_mask_block_elision_probe.spin2      ' CH_B ON
+'' =================================================================================================
+
+CON
+    _CLKFREQ    = 350_000_000
+    DEBUG_BAUD  = 2_000_000
+
+    CH_A = 0                                            ' always-on channel
+    CH_B = 1                                            ' the channel under test
+
+' ---- ONE SOURCE OF TRUTH ------------------------------------------------------------------
+' Channel A is hard-enabled here. Channel B is enabled only when DBG_CH_B is defined,
+' either by uncommenting the line below or with -D DBG_CH_B on the command line.
+#define DBG_CH_A
+'#define DBG_CH_B
+
+' ---- DERIVE THE MASK FROM THOSE SYMBOLS ---------------------------------------------------
+' This is the whole trick: DEBUG_MASK is a RESULT of the #define switches, not a parallel
+' setting that can drift out of step with them.
+CON
+#ifdef DBG_CH_A
+    M_A = 1 << CH_A
+#else
+    M_A = 0
+#endif
+
+#ifdef DBG_CH_B
+    M_B = 1 << CH_B
+#else
+    M_B = 0
+#endif
+
+    DEBUG_MASK = M_A | M_B
+
+DAT
+    probeCount  LONG    0
+    probeFlag   LONG    0
+
+PUB main() | guardOk
+
+    guardOk := true                                     ' never false -- both blocks stay untaken
+
+    ' ---- PROBE 1: the BROKEN shape -------------------------------------------------------
+    ' The DEBUG[CH_B] statement vanishes when CH_B is off, but the `if`, the comparison, and
+    ' the two assignments all still compile. The block does NOT disappear.
+#ifdef PROBE_ONE
+    if NOT guardOk
+        DEBUG[CH_B]("probe1: guard failed ", udec_(probeCount))
+        probeCount := probeCount + 1
+        probeFlag := 1
+#endif
+
+    ' ---- PROBE 2: the WORKING shape ------------------------------------------------------
+    ' Guarded by the SAME symbol that contributes CH_B's bit to DEBUG_MASK. When DBG_CH_B is
+    ' undefined the mask bit is 0 AND every line below is gone -- no live conditional left.
+#ifdef PROBE_TWO
+#ifdef DBG_CH_B
+    if NOT guardOk
+        DEBUG[CH_B]("probe2: guard failed ", udec_(probeCount))
+        probeCount := probeCount + 1
+        probeFlag := 2
+#endif
+#endif
+
+    ' ---- PROBE 3: the COMPLETE shape -----------------------------------------------------
+    ' Probe 2 tracks the channel but not the build: with DBG_CH_B defined and no -d, its
+    ' block still compiles. Nesting the auto-defined __DEBUG__ symbol closes that hole, so
+    ' the block tracks BOTH conditions that decide whether DEBUG[CH_B] would compile.
+#ifdef PROBE_THREE
+#ifdef __DEBUG__
+#ifdef DBG_CH_B
+    if NOT guardOk
+        DEBUG[CH_B]("probe3: guard failed ", udec_(probeCount))
+        probeCount := probeCount + 1
+        probeFlag := 3
+#endif
+#endif
+#endif
+
+    DEBUG("PROBE built with DEBUG_MASK=", uhex_(DEBUG_MASK))
+    waitms(500)                                         ' let the debug line drain
+    DEBUG("END_SESSION")

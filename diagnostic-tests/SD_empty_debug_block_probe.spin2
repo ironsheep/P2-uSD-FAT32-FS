@@ -1,0 +1,109 @@
+'' =================================================================================================
+''
+''   File....... SD_empty_debug_block_probe.spin2
+''   Purpose.... Determine whether an `if` whose ONLY body is a masked-off DEBUG[n]()
+''               statement compiles into correct control flow.
+''
+''   P2KB (p2kbSpin2DebugMask) states: "DEBUG[n] with bit n NOT set: Entire statement
+''   omitted (no code generated)" / "Unset channels generate NO code (complete
+''   elimination)". The driver ships DEBUG_MASK = 0 and contains many conditionals whose
+''   entire body is a single DEBUG[CH_xxx]() call. Those blocks are therefore EMPTY in a
+''   production build. This probe asks whether pnut-ts still binds the surrounding
+''   else / elseif / outer-scope statements correctly when that happens.
+''
+''   Channel 1 is enabled (reporting), channel 2 is masked (the empty-block source).
+''   Branch conditions come from methods so they cannot be constant-folded away.
+''
+'' =================================================================================================
+
+CON
+    _CLKFREQ    = 350_000_000
+    DEBUG_BAUD  = 2_000_000
+
+    DEBUG_MASK  = %0000_0010                    ' channel 1 ON (reporting), channel 2 OFF (masked)
+
+    CH_OFF      = 2                             ' masked channel -- these calls generate NO code
+
+PUB go() | a, b, c, d, e, fails
+
+    debug(" ")
+    debug("==============================================")
+    debug("  Empty DEBUG-only block codegen probe")
+    debug("==============================================")
+    debug(" ")
+
+    fails := 0
+
+    ' Shape A -- if-arm is ONLY a masked debug; the else carries the work.
+    ' Driver example: probeHighSpeed() SCR-failure arm.
+    a := 0
+    if falseVal()
+        DEBUG[CH_OFF]("never taken")
+    else
+        a := 7
+    fails += check(@"A  if(only-debug) / else does work    ", a, 7)
+
+    ' Shape B -- if-arm is ONLY a masked debug AND is taken; code follows at outer level.
+    b := 0
+    if trueVal()
+        DEBUG[CH_OFF]("taken, but masked away")
+    b := 5
+    fails += check(@"B  if(only-debug) taken, outer follows", b, 5)
+
+    ' Shape C -- elseif chain whose FIRST arm is only a masked debug.
+    ' Driver example: fetchSCR() CMD55 timeout / error / else ladder.
+    c := 0
+    if falseVal()
+        DEBUG[CH_OFF]("arm 1")
+    elseif trueVal()
+        c := 3
+    else
+        c := 9
+    fails += check(@"C  elseif ladder, arm1 only-debug     ", c, 3)
+
+    ' Shape D -- nested if/else where the INNER arm is only a masked debug.
+    d := 0
+    if trueVal()
+        if falseVal()
+            DEBUG[CH_OFF]("inner arm")
+        else
+            d := 4
+    fails += check(@"D  nested if/else, inner only-debug   ", d, 4)
+
+    ' Shape E -- BOTH arms are only masked debugs; code follows at outer level.
+    e := 0
+    if trueVal()
+        DEBUG[CH_OFF]("arm A")
+    else
+        DEBUG[CH_OFF]("arm B")
+    e := 6
+    fails += check(@"E  both arms only-debug, outer follows", e, 6)
+
+    debug(" ")
+    if fails == 0
+        debug("RESULT: PASS -- all 5 shapes generate correct control flow")
+    else
+        debug("RESULT: FAIL -- ", udec_(fails), " shape(s) MISCOMPILED")
+    debug(" ")
+
+    waitms(500)                                 ' drain the debug FIFO before the marker
+    debug("END_SESSION")
+
+PRI check(p_name, actual, expected) : bad
+' Report one shape; returns 1 when the observed value is wrong.
+
+    if actual == expected
+        debug("  [ ok ] ", zstr_(p_name), "  -> ", sdec_(actual))
+    else
+        bad := 1
+        debug("  [BAD!] ", zstr_(p_name), "  -> ", sdec_(actual), "  (expected ", sdec_(expected), ")")
+
+PRI trueVal() : v
+' Runtime TRUE -- defeats constant folding of the branch condition.
+
+    v := true
+
+PRI falseVal() : v
+' Runtime FALSE -- defeats constant folding of the branch condition.
+
+    v := false
