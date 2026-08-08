@@ -623,7 +623,29 @@ DAT  ' ---- Singleton Control ----
         async_caller                            BYTE    0                        ' Cog ID of the async caller
 
         ' WORKER COG STACK
+        '
+        ' THE ORDER AND THE GAP HERE ARE BOTH LOAD-BEARING. Two separate overflow detectors
+        ' watch this stack, and they must not share memory:
+        '
+        '   1. isp_stack_check (the formal stack-check object) writes its DO_NOT_WRITE_MARK
+        '      sentinel to LONG[@cog_stack][STACK_SIZE] -- one long PAST the stack. Its user
+        '      guide states the caller "must" declare that sentinel long immediately after the
+        '      stack buffer. cog_stack_end_mark IS that long. It is the object's memory.
+        '   2. cog_stack_guard is this driver's own always-compiled guard ($CC fill).
+        '
+        ' Without cog_stack_end_mark between them, the object's sentinel address IS
+        ' cog_stack_guard[0], and the two detectors demand different values at the same
+        ' address ($addee5e5 vs $CC) -- a requirement no single value can satisfy. start()
+        ' writes the guard first and the object's sentinel second, so the guard lost every
+        ' time and checkStackGuard() became a stuck-at-FAIL detector: it reported overflow
+        ' after every command, on a stack that had not overflowed. That was invisible while
+        ' the violation only reached DEBUG, and became E_STACK_OVERFLOW (-26) on every
+        ' command once the check was escalated to the caller.
+        '
+        ' Do not remove cog_stack_end_mark, and do not move cog_stack_guard adjacent to
+        ' cog_stack.
         cog_stack                               LONG    0[STACK_SIZE]            ' Worker cog stack
+        cog_stack_end_mark                      LONG    0                        ' isp_stack_check's sentinel -- ITS memory, per its contract
         cog_stack_guard                         LONG    0[STACK_GUARD_LONGS]     ' Stack overflow sentinel ($CC fill)
 
         ' SPI PIN CONFIGURATION (set once at start)
@@ -3013,6 +3035,16 @@ PRI fs_worker() | cur_cmd
           do_idle_flush()
 
 #ifdef SD_INCLUDE_STACK_CHECK
+    ' The formal stack-check object owns cog_stack_end_mark and detects a shallower
+    ' overflow than the driver's own guard can (the guard sits one long further out).
+    '
+    ' KNOWN GAP (bench builds only): checkStack() halts this cog WITHOUT publishing a
+    ' status, so a caller asleep in WAITATN is stranded. Converting this site to
+    ' publish-then-halt is deferred: every attempt to wrap the call in a condition made
+    ' SD_RT_mount_tests #31 fail reproducibly, with the added branch demonstrably never
+    ' taken. That is the same unexplained sensitivity tracked as root cause #3 in
+    ' DOCs/Analysis/POST-V161-ROOT-CAUSE-ANALYSIS.md -- do not "fix" this by wrapping it
+    ' until that is explained.
     stackUtils.checkStack(@cog_stack, STACK_SIZE)
 #endif
 
