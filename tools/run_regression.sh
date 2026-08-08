@@ -28,8 +28,15 @@
 #      run_test.sh exit 2 (serial download / checksum glitch — a known USB
 #      transient on this bench) is retried once. If it fails twice it is
 #      reported as INFRA, kept distinct from a real test failure.
-#   2. After a failing destructive suite the card is returned to a clean FAT32
-#      baseline before the next suite, so one failure cannot cascade.
+#   2. After a failing suite that is listed in REFORMAT_AFTER, the card is returned
+#      to a clean FAT32 baseline before the next suite.
+#
+#      NOTE THE LIMIT: that list holds only fatchain and format. Every OTHER suite
+#      starts on whatever the previous one left behind, so cascade IS possible and
+#      debris from an earlier suite can read as a defect in a later one. Use
+#      --clean-each for certification sweeps to reformat before EVERY suite and make
+#      each result an independent measurement. (This note replaces an earlier claim
+#      here that one failure "cannot cascade" -- the code never did that.)
 #
 # Use --stop-on-failure for DETECT-style forensic runs, where the on-card damage
 # left by the failing suite IS the evidence and must not be reformatted away.
@@ -104,6 +111,7 @@ RUN_ONLY=false
 FROM_SUITE=""
 EXTERNAL_PINS=false
 REFORMAT=true
+CLEAN_EACH=false
 REFORMAT_ONLY=false
 STOP_ON_FAILURE=false
 PREFLIGHT=true
@@ -132,6 +140,7 @@ while [[ $# -gt 0 ]]; do
         --run-only)        RUN_ONLY=true; shift ;;
         --external)        EXTERNAL_PINS=true; shift ;;
         --no-reformat)     REFORMAT=false; shift ;;
+        --clean-each)      CLEAN_EACH=true; shift ;;
         --reformat-only)   REFORMAT_ONLY=true; shift ;;
         --stop-on-failure) STOP_ON_FAILURE=true; shift ;;
         --no-preflight)    PREFLIGHT=false; shift ;;
@@ -148,6 +157,10 @@ while [[ $# -gt 0 ]]; do
             echo "  --external         Compile with -D SD_PINS_EXTERNAL (use external SD header)"
             echo "                     Default (no flag): P2 Edge onboard SD slot."
             echo "  --no-reformat      Do not reformat the card during the run"
+            echo "  --clean-each       Reformat before EVERY suite, so each one starts from a"
+            echo "                     known-clean card. Use for certification sweeps: without"
+            echo "                     it a suite inherits whatever the previous one left, and"
+            echo "                     debris is indistinguishable from a real defect."
             echo "  --reformat-only    Reformat the card and exit (recovery after a failed run)"
             echo "  --stop-on-failure  Halt at the first failing suite, preserving on-card"
             echo "                     evidence. Default: record it and CONTINUE to the end."
@@ -905,7 +918,8 @@ for i in "${!SUITES[@]}"; do
     # Suites that require a guaranteed-clean card going in. Skipped when the
     # card was just formatted and nothing has run since (avoids a double format
     # at the head of a --from resume).
-    if [[ "$REFORMAT" == true && "$CARD_IS_FRESH" == false ]] && _in_list "$BASENAME" "${REFORMAT_BEFORE[@]}"; then
+    if [[ "$REFORMAT" == true && "$CARD_IS_FRESH" == false ]] && \
+       { [[ "$CLEAN_EACH" == true ]] || _in_list "$BASENAME" "${REFORMAT_BEFORE[@]}"; }; then
         if ! _reformat_card "before $BASENAME"; then
             REFORMAT_FAILED=true
             break

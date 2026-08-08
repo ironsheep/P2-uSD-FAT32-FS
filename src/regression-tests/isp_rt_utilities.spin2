@@ -106,6 +106,23 @@ PUB ShowTestEndCounts() | pMsg
       debug("*  BAD TEST COUNTS: ", udec_(numberTests), " <> ", udec_(passCount + failCount), " (", zstr_(pMsg), " ", udec_(abs(numberTests - (passCount + failCount))), " tests)")
     debug(" ============================================================")
 
+    ' DRAIN THE DEBUG STREAM BEFORE THE CALLER EMITS END_SESSION.
+    ' Every suite calls this and then immediately does debug("END_SESSION"), which makes the
+    ' harness shut the serial capture down. Without this delay the shutdown races the last
+    ' lines out of the buffer and truncates them mid-word -- and the line most often lost is
+    ' the totals line this method just printed, which is the ONLY line run_regression.sh
+    ' parses for a suite's score.
+    '
+    ' That failure is silent and it lies in BOTH directions. Observed 2026-08-07 in one
+    ' sweep: SD_RT_speed_tests passed 15/0 but its totals line was cut to "* 15 " and the
+    ' suite was scored 0 pass / 0 fail; SD_RT_subdir_ops_tests had REAL failures cut to
+    ' "-> FA" and was likewise scored 0/0, hiding them. A truncated pass and a truncated
+    ' failure are indistinguishable downstream.
+    '
+    ' 500 ms at 2 Mbaud is far more than the buffered text needs, and it is paid once per
+    ' suite, not per test.
+    waitms(500)
+
 
 PUB setCheckCountPerTest(countTests)
 '' Set the number of subtests per record/group
