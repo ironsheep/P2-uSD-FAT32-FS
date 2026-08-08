@@ -321,12 +321,18 @@ PUB go() | result, handle, h1, h2, h3, h4, h5, hDir, bytesRead, bytesWritten
         utils.evaluateSingleValue(result, @"fileSizeHandle(dirH)", sd.E_NOT_A_DIR_HANDLE)
         sd.closeDirectoryHandle(hDir)
 
-    ' Test: eofHandle on dir handle returns E_NOT_A_DIR_HANDLE
+    ' Test: eofHandle on dir handle reports TRUE, and ERROR() carries E_NOT_A_DIR_HANDLE.
+    ' eofHandle is boolean-only by design -- it cannot return the code itself, because
+    ' TRUE and E_TIMEOUT are both -1. The code is recovered from ERROR().
     utils.startTest(@"eofHandle on dir handle returns error")
     hDir := sd.openDirectory(@".")
     if hDir >= 0
+        utils.setCheckCountPerTest(2)
         result := sd.eofHandle(hDir)
-        utils.evaluateSingleValue(result, @"eofHandle(dirH)", sd.E_NOT_A_DIR_HANDLE)
+        utils.evaluateSubBool(result <> 0, @"eofHandle(dirH) reports TRUE", true)
+        utils.evaluateSubValue(sd.ERROR(), @"ERROR() is E_NOT_A_DIR_HANDLE", sd.E_NOT_A_DIR_HANDLE)
+        utils.showSubTestResults()
+        utils.setCheckCountPerTest(1)
         sd.closeDirectoryHandle(hDir)
 
     ' Test: syncHandle on dir handle returns E_NOT_A_DIR_HANDLE

@@ -433,10 +433,16 @@ PUB go() | result, handle, h1, h2, h3, h4, h5, h6, hDir, hDir2, bytesRead, bytes
     result := sd.syncHandle(-1)
     utils.evaluateSingleValue(result, @"syncHandle(-1)", sd.E_INVALID_HANDLE)
 
-    ' Test: eofHandle with invalid handle returns E_INVALID_HANDLE
+    ' Test: eofHandle(-1) reports TRUE, and ERROR() carries E_INVALID_HANDLE.
+    ' eofHandle is boolean-only by design -- it cannot return the code itself, because
+    ' TRUE and E_TIMEOUT are both -1. The code is recovered from ERROR().
     utils.startTest(@"eofHandle(-1) returns E_INVALID_HANDLE")
+    utils.setCheckCountPerTest(2)
     result := sd.eofHandle(-1)
-    utils.evaluateSingleValue(result, @"eofHandle(-1)", sd.E_INVALID_HANDLE)
+    utils.evaluateSubBool(result <> 0, @"eofHandle(-1) reports TRUE", true)
+    utils.evaluateSubValue(sd.ERROR(), @"ERROR() is E_INVALID_HANDLE", sd.E_INVALID_HANDLE)
+    utils.showSubTestResults()
+    utils.setCheckCountPerTest(1)
 
     ' ======================================================================
     ' TEST GROUP: Use-After-Close (recently valid handle)
@@ -445,7 +451,7 @@ PUB go() | result, handle, h1, h2, h3, h4, h5, h6, hDir, hDir2, bytesRead, bytes
 
     ' Create file, open, close, then test all 7 operations on stale handle
     utils.startTest(@"All handle ops fail on closed handle")
-    utils.setCheckCountPerTest(7)
+    utils.setCheckCountPerTest(8)                       ' 7 ops; eofHandle contributes 2 (bool + ERROR())
     sd.deleteFile(@testfile1)
     handle := sd.createFileNew(@testfile1)
     if handle >= 0
@@ -467,8 +473,10 @@ PUB go() | result, handle, h1, h2, h3, h4, h5, h6, hDir, hDir2, bytesRead, bytes
         result := sd.fileSizeHandle(handle)
         utils.evaluateSubValue(result, @"fileSizeHandle(closed)", sd.E_INVALID_HANDLE)
 
+        ' eofHandle is boolean-only -- TRUE on failure, with the code in ERROR()
         result := sd.eofHandle(handle)
-        utils.evaluateSubValue(result, @"eofHandle(closed)", sd.E_INVALID_HANDLE)
+        utils.evaluateSubBool(result <> 0, @"eofHandle(closed) reports TRUE", true)
+        utils.evaluateSubValue(sd.ERROR(), @"eofHandle(closed) ERROR()", sd.E_INVALID_HANDLE)
 
         result := sd.syncHandle(handle)
         utils.evaluateSubValue(result, @"syncHandle(closed)", sd.E_INVALID_HANDLE)
