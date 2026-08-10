@@ -94,8 +94,9 @@ PUB go() | result, handle, h2, frags, bytesWritten, bytesRead, idx, secPerClus, 
 
     ' Mount the card
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if result < 0
+    ifnot utils.requireSetup(result == 0, @"SETUP: mount SD card")
         debug("ERROR: Could not mount SD card!")
+        utils.ShowTestEndCounts()
         debug("END_SESSION")
         return
 
@@ -138,6 +139,14 @@ PUB go() | result, handle, h2, frags, bytesWritten, bytesRead, idx, secPerClus, 
     ' =========================================================================
     utils.startTestGroup(@"Fragment Query API")
 
+    ' CLUSTER-SIZE CAVEAT for every "exactly 1 fragment" assertion in this suite
+    ' (Tests 1, 2 and the sequential-create test at the end). WRITE_SIZE is smaller
+    ' than one cluster on the rig's cards, so a fresh file occupies a single cluster
+    ' and one fragment is the only possible answer -- the assertion is real but weak,
+    ' and it says nothing about the allocator's behavior across cluster boundaries.
+    ' On a card formatted with a much smaller cluster size the same write would span
+    ' several clusters and could legitimately report more than one fragment. If these
+    ' tests ever fail on a new card, check the geometry before suspecting the driver.
     ' --- Test 1: fileFragments() on fresh file ---
     utils.startTest(@"fileFragments() on fresh file returns 1")
     handle := sd.createFileNew(@fileA)
@@ -202,15 +211,24 @@ PUB go() | result, handle, h2, frags, bytesWritten, bytesRead, idx, secPerClus, 
     utils.startTestGroup(@"compactFile API")
 
     ' --- Test 4: compactFile() makes fragmented file contiguous ---
+    ' FILE_A is expected to still be fragmented from Test 3 -- but that was never
+    ' checked here, and an already-contiguous file makes this test vacuous: compact
+    ' does nothing, isFileContiguous says yes, and the test passes without ever
+    ' exercising compaction. Test 5 four lines below already guards exactly this
+    ' way; Test 4 now matches it.
     utils.startTest(@"compactFile() makes fragmented file contiguous")
-    ' FILE_A is still fragmented from Test 3
+    utils.setCheckCountPerTest(2)
+    frags := sd.fileFragments(@fileA)
+    debug("  fragments before compact: ", sdec_(frags))
+    utils.evaluateSubBool(frags >= 2, @"file really is fragmented going in", true)
     result := sd.compactFile(@fileA)
     if result == 0
         result := sd.isFileContiguous(@fileA)
-        utils.evaluateBool(result, @"isFileContiguous after compact", true)
+        utils.evaluateSubBool(result, @"isFileContiguous after compact", true)
     else
         debug("  compactFile returned error: ", sdec_(result))
-        utils.recordFail()
+        utils.evaluateSubBool(false, @"isFileContiguous after compact", true)
+    utils.showSubTestResults()
     ' Clean up Test 3/4 files
     sd.deleteFile(@fileA)
     sd.deleteFile(@spacerFile)
@@ -259,6 +277,10 @@ PUB go() | result, handle, h2, frags, bytesWritten, bytesRead, idx, secPerClus, 
         utils.evaluateSubBool(false, @"data intact after compact", true)
     utils.showSubTestResults()
     utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+    ' writeBuffer_guard was initialized at start-up and then never checked, so a
+    ' driver overrun past writeBuffer would have gone unreported for the whole run.
+    ' Checked here, after the heaviest write traffic in the suite.
+    utils.checkGuard(@writeBuffer_guard, @"writeBuffer guard")
     sd.deleteFile(@fileA)
     sd.deleteFile(@spacerFile)
 

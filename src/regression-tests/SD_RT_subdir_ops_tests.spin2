@@ -72,7 +72,7 @@ dotdotPath     BYTE    "..", 0
 rootPath       BYTE    "/", 0
 testContent1   BYTE    "Hello from subdir", 0
 
-PUB go() | result, handle, dh, count, pEntry
+PUB go() | result, handle, dh, count, pEntry, bInSubdir
 '' Main entry point for subdirectory operations regression tests
 
     debug(" ")
@@ -83,8 +83,9 @@ PUB go() | result, handle, dh, count, pEntry
 
     ' Mount the card first
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if result < 0
+    ifnot utils.requireSetup(result == 0, @"SETUP: mount SD card")
         debug("ERROR: Could not mount SD card!")
+        utils.ShowTestEndCounts()
         debug("END_SESSION")
         return
 
@@ -207,9 +208,25 @@ PUB go() | result, handle, dh, count, pEntry
     utils.setCheckCountPerTest(2)
     result := sd.newDirectory(@testdir)
     utils.evaluateSubValue(result, @"newDirectory()", sd.SUCCESS)
+    bInSubdir := (result == sd.SUCCESS)
     result := sd.changeDirectory(@testdir)
     utils.evaluateSubValue(result, @"changeDirectory()", sd.SUCCESS)
+    bInSubdir := bInSubdir and (result == sd.SUCCESS)
     utils.showSubTestResults()
+
+    ' Every test from here on operates INSIDE the test subdirectory. Un-gated, a
+    ' failed test #7 leaves CWD at root and the remainder runs against ROOT while
+    ' every test name claims the subdirectory -- observed as three induced
+    ' failures testing the wrong thing. Gated, one root cause reads as one named
+    ' setup failure plus an explicit skip of the dependents.
+    ifnot utils.requireSetup(bInSubdir, @"SETUP: test subdirectory created and current")
+        cleanupTestItems()
+        sd.unmount()
+        utils.ShowTestEndCounts()
+        debug(" ")
+        debug("* Subdirectory Ops Tests Complete")
+        debug("END_SESSION")
+        return
 
     ' Test #8: Create file in subdirectory
     utils.startTest(@"createFileNew() in subdirectory")

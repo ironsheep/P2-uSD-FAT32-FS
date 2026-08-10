@@ -39,8 +39,10 @@ CON
      SD_MISO = 58
      SD_SCK  = 61
 #endif
-' Maximum handles (must match driver's MAX_OPEN_FILES)
-     MAX_TEST_HANDLES = 6
+' NOTE: the handle-pool test asserts sd.MAX_OPEN_FILES directly rather than
+' mirroring it in a local CON. The old MAX_TEST_HANDLES constant was never
+' referenced, so it could drift from the driver without anything noticing --
+' a mirrored constant that nothing checks is worse than no constant.
 
 OBJ
     sd    : "micro_sd_fat32_fs"
@@ -69,7 +71,7 @@ dhContent       BYTE    "Directory handle test content", 0
 readBuffer      BYTE    0[256]
 readBuffer_guard BYTE   0[16]
 
-PUB go() | result, h1, h2, h3, h4, h5, hDir, hDir2, pEntry, pName, attrs, entryCount, foundFiles, foundDirs, bytesRead
+PUB go() | result, h1, h2, h3, h4, h5, hDir, hDir2, pEntry, pName, attrs, entryCount, foundFiles, foundDirs, bytesRead, bFoundSub
 '' Main entry point for directory handle regression tests
 ''
 '' Tests directory handle enumeration API
@@ -81,8 +83,9 @@ PUB go() | result, h1, h2, h3, h4, h5, hDir, hDir2, pEntry, pName, attrs, entryC
 
     ' Mount the card first
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if result < 0
+    ifnot utils.requireSetup(result == 0, @"SETUP: mount SD card")
         debug("ERROR: Could not mount SD card!")
+        utils.ShowTestEndCounts()
         debug("END_SESSION")
         return
 
@@ -95,8 +98,15 @@ PUB go() | result, h1, h2, h3, h4, h5, hDir, hDir2, pEntry, pName, attrs, entryC
     ' Clean up any existing test items
     cleanupTestItems()
 
-    ' Create test directory structure
-    createTestStructure()
+    ' Create test directory structure. Gated: every test in this suite enumerates
+    ' that structure, so an incomplete build is one named setup failure rather than
+    ' a spray of meaningless counts and vanished tests.
+    ifnot utils.requireSetup(createTestStructure(), @"SETUP: create dir-handle test structure")
+        cleanupTestItems()
+        sd.unmount()
+        utils.ShowTestEndCounts()
+        debug("END_SESSION")
+        return
 
     ' ======================================================================
     ' TEST GROUP: Basic Enumeration
@@ -161,7 +171,7 @@ PUB go() | result, h1, h2, h3, h4, h5, hDir, hDir2, pEntry, pName, attrs, entryC
 
     ' Test: Enumerate returns all expected files
     utils.startTest(@"Enumerate DHTDIR1 finds all 3 files and subdirectory")
-    utils.setCheckCountPerTest(4)
+    utils.setCheckCountPerTest(2)                                               ' 2 actual checks; the declared 4 was a guaranteed shortfall
     hDir := sd.openDirectory(@dhTestDir)
     if hDir >= 0
         foundFiles := 0
@@ -203,6 +213,8 @@ PUB go() | result, h1, h2, h3, h4, h5, hDir, hDir2, pEntry, pName, attrs, entryC
             utils.evaluateSubBool(strsize(pName) > 0, @"filename non-empty", true)
             entryCount++
         sd.closeDirectoryHandle(hDir)
+    else
+        utils.evaluateBool(false, @"filename non-empty (directory would not open)", true)
 
     ' Test: attributes() distinguishes file from directory
     utils.startTest(@"attributes() distinguishes file vs directory")
@@ -222,6 +234,8 @@ PUB go() | result, h1, h2, h3, h4, h5, hDir, hDir2, pEntry, pName, attrs, entryC
         utils.evaluateSubBool(foundFiles > 0, @"has file entries", true)
         utils.evaluateSubBool(foundDirs > 0, @"has dir entries", true)
         sd.closeDirectoryHandle(hDir)
+    else
+        utils.evaluateBool(false, @"file/dir attributes (directory would not open)", true)
 
     ' Test: Empty directory returns only dot entries (. and ..)
     utils.startTest(@"Empty directory has only dot entries")
@@ -236,6 +250,8 @@ PUB go() | result, h1, h2, h3, h4, h5, hDir, hDir2, pEntry, pName, attrs, entryC
         ' FAT32 empty directories contain . and .. entries (2 entries)
         utils.evaluateSingleValue(entryCount, @"empty dir entry count", 2)
         sd.closeDirectoryHandle(hDir)
+    else
+        utils.evaluateBool(false, @"empty dir entry count (directory would not open)", true)
 
     ' Test: Subdirectory enumeration works
     utils.startTest(@"Subdirectory enumeration finds file")
@@ -284,6 +300,8 @@ PUB go() | result, h1, h2, h3, h4, h5, hDir, hDir2, pEntry, pName, attrs, entryC
         result := sd.readDirectoryHandle(h1)
         utils.evaluateSingleValue(result, @"readDirHandle(fileHandle)", 0)
         sd.closeFileHandle(h1)
+    else
+        utils.evaluateBool(false, @"readDirHandle(fileHandle) (file would not open)", true)
     sd.changeDirectory(@"/")
 
     ' Test: closeDirectoryHandle on file handle (should be harmless or error)
@@ -299,6 +317,8 @@ PUB go() | result, h1, h2, h3, h4, h5, hDir, hDir2, pEntry, pName, attrs, entryC
         bytesRead := sd.readHandle(hDir, @readBuffer, 10)
         utils.evaluateSingleValue(bytesRead, @"readHandle(dirH)", sd.E_NOT_A_DIR_HANDLE)
         sd.closeDirectoryHandle(hDir)
+    else
+        utils.evaluateBool(false, @"readHandle(dirH) (directory would not open)", true)
 
     ' Test: writeHandle on dir handle returns E_NOT_A_DIR_HANDLE
     utils.startTest(@"writeHandle on dir handle returns E_NOT_A_DIR_HANDLE")
@@ -307,6 +327,8 @@ PUB go() | result, h1, h2, h3, h4, h5, hDir, hDir2, pEntry, pName, attrs, entryC
         result := sd.writeHandle(hDir, @dhContent, 10)
         utils.evaluateSingleValue(result, @"writeHandle(dirH)", sd.E_NOT_A_DIR_HANDLE)
         sd.closeDirectoryHandle(hDir)
+    else
+        utils.evaluateBool(false, @"writeHandle(dirH) (directory would not open)", true)
 
     ' Test: seekHandle on dir handle returns E_NOT_A_DIR_HANDLE
     utils.startTest(@"seekHandle on dir handle returns E_NOT_A_DIR_HANDLE")
@@ -322,8 +344,15 @@ PUB go() | result, h1, h2, h3, h4, h5, hDir, hDir2, pEntry, pName, attrs, entryC
     utils.startTestGroup(@"Handle Pool Interaction")
 
     ' Test: Dir handle consumes shared pool slot
+    ' The 5-files-plus-1-dir arithmetic below only fills the pool if the pool holds
+    ' exactly 6, so that assumption is now a scored sub-check rather than a silent
+    ' one -- a driver built with a different MAX_OPEN_FILES would otherwise make
+    ' "7th handle fails" wrong in whichever direction the change went.
+    ' Declared count was 4 against 3 actual checks; under the framework's
+    ' executed-vs-declared rule that shortfall is a guaranteed failure every run.
     utils.startTest(@"Dir handle shares pool with file handles")
     utils.setCheckCountPerTest(4)
+    utils.evaluateSubValue(sd.MAX_OPEN_FILES, @"handle pool is the size this test assumes", 6)
     ' Open 5 files + 1 dir = 6 handles (pool full)
     sd.changeDirectory(@dhTestDir)
     h1 := sd.openFileRead(@dhFile1)
@@ -338,6 +367,8 @@ PUB go() | result, h1, h2, h3, h4, h5, hDir, hDir2, pEntry, pName, attrs, entryC
     ' 7th should fail
     result := sd.openDirectory(@dhTestDir)
     utils.evaluateSubValue(result, @"7th handle fails", sd.E_TOO_MANY_FILES)
+    if result >= 0                                      ' Must fail. If it ever opens, the slot leaks
+        sd.closeDirectoryHandle(result)                 '  and poisons the pool-recycling test later
     ' Clean up
     sd.closeFileHandle(h1)
     sd.closeFileHandle(h2)
@@ -433,19 +464,32 @@ PUB go() | result, h1, h2, h3, h4, h5, hDir, hDir2, pEntry, pName, attrs, entryC
         sd.closeDirectoryHandle(hDir)
 
     ' Test: After changeDirectory, "." reflects new CWD
+    ' Two defects here. The cd was unasserted, and ">= 4 entries" is satisfied by
+    ' ROOT just as well as by DHTDIR1 -- so a failed cd enumerated root and passed,
+    ' which is the exact opposite of the property being tested. Now the cd is
+    ' scored, and the content check looks for a name only DHTDIR1 contains.
     utils.startTest(@"After changeDirectory, . reflects new CWD")
-    sd.changeDirectory(@dhTestDir)
+    utils.setCheckCountPerTest(3)
+    result := sd.changeDirectory(@dhTestDir)
+    utils.evaluateSubValue(result, @"cd into the test directory", sd.SUCCESS)
     hDir := sd.openDirectory(@".")
+    utils.evaluateSubBool(hDir >= 0, @"openDirectory(.) after cd", true)
     if hDir >= 0
         foundFiles := 0
+        bFoundSub := false
         repeat
             pEntry := sd.readDirectoryHandle(hDir)
             if pEntry == 0
                 quit
+            if strcomp(sd.fileName(), @dhSubDir)
+                bFoundSub := true
             foundFiles++
-        ' DHTDIR1 has files + subdir, different count from root
-        utils.evaluateSubBool(foundFiles >= 4, @"CWD entries match subdir", true)
+        ' DHSUB1 exists ONLY inside DHTDIR1 -- root cannot satisfy this.
+        utils.evaluateSubBool(foundFiles >= 4 and bFoundSub, @"CWD is the subdir (DHSUB1 present)", true)
         sd.closeDirectoryHandle(hDir)
+    else
+        utils.evaluateSubBool(false, @"CWD is the subdir (DHSUB1 present)", true)
+    utils.showSubTestResults()
     sd.changeDirectory(@"/")
 
     ' Test: openDirectory does NOT change CWD
@@ -480,51 +524,58 @@ PUB go() | result, h1, h2, h3, h4, h5, hDir, hDir2, pEntry, pName, attrs, entryC
     debug(" ")
     debug("END_SESSION")
 
-PRI createTestStructure() | handle
+PRI createTestStructure() : bOk
 ' Create test directory structure:
 '   /DHTDIR1/DH1.TXT, DH2.TXT, DH3.TXT, DHSUB1/DHSUB.TXT
 '   /DHTEMPTY/   (empty directory)
 '
+' @returns bOk - TRUE only when EVERY item above was created
+'
+' Every step is checked. Unchecked, one failed mkdir left roughly twenty tests
+' enumerating a structure that was not there: a third of them vanished unscored
+' rather than failing, and the rest reported entry counts that meant nothing.
+' Nested ifs rather than a chain of AND -- these operands have side effects and
+' Spin2's AND is not documented as short-circuiting.
 
     debug(" ")
     debug("* Creating test directory structure...")
 
-    ' Create main test directory
-    sd.newDirectory(@dhTestDir)
-    sd.changeDirectory(@dhTestDir)
+    bOk := false
+    sd.changeDirectory(@"/")
 
-    ' Create files in test directory
-    handle := sd.createFileNew(@dhFile1)
-    if handle >= 0
-        sd.writeHandle(handle, @dhContent, strsize(@dhContent))
-        sd.closeFileHandle(handle)
-
-    handle := sd.createFileNew(@dhFile2)
-    if handle >= 0
-        sd.writeHandle(handle, @dhContent, strsize(@dhContent))
-        sd.closeFileHandle(handle)
-
-    handle := sd.createFileNew(@dhFile3)
-    if handle >= 0
-        sd.writeHandle(handle, @dhContent, strsize(@dhContent))
-        sd.closeFileHandle(handle)
-
-    ' Create subdirectory with a file
-    sd.newDirectory(@dhSubDir)
-    sd.changeDirectory(@dhSubDir)
-    handle := sd.createFileNew(@dhSubFile)
-    if handle >= 0
-        sd.writeHandle(handle, @dhContent, strsize(@dhContent))
-        sd.closeFileHandle(handle)
-    sd.changeDirectory(@"..")
-
+    if sd.newDirectory(@dhTestDir) == sd.SUCCESS
+        if sd.changeDirectory(@dhTestDir) == sd.SUCCESS
+            if writeFixtureFile(@dhFile1)
+                if writeFixtureFile(@dhFile2)
+                    if writeFixtureFile(@dhFile3)
+                        ' Create subdirectory with a file
+                        if sd.newDirectory(@dhSubDir) == sd.SUCCESS
+                            if sd.changeDirectory(@dhSubDir) == sd.SUCCESS
+                                bOk := writeFixtureFile(@dhSubFile)
+                                sd.changeDirectory(@"..")
     sd.changeDirectory(@"/")
 
     ' Create empty directory
-    sd.newDirectory(@dhEmptyDir)
+    if bOk
+        bOk := (sd.newDirectory(@dhEmptyDir) == sd.SUCCESS)
 
-    debug("* Test structure created")
+    if bOk
+        debug("* Test structure created")
+    else
+        debug("* Test structure INCOMPLETE -- dependent tests will be skipped")
     debug(" ")
+
+PRI writeFixtureFile(pName) : bOk | handle
+' Create one fixture file holding the standard content.
+'
+' @param pName - pointer to the 8.3 filename to create in the current directory
+' @returns bOk - TRUE only when the file was created AND the whole content landed
+
+    bOk := false
+    handle := sd.createFileNew(pName)
+    if handle >= 0
+        bOk := (sd.writeHandle(handle, @dhContent, strsize(@dhContent)) == strsize(@dhContent))
+        sd.closeFileHandle(handle)
 
 PRI cleanupTestItems()
 ' Delete all test files and directories (deepest first).

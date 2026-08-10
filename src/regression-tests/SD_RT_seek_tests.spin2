@@ -39,13 +39,14 @@ DAT
 ' Test filename
 testSeek        BYTE    "RTSEEK.BIN", 0
 testEmpty       BYTE    "RTEMPTY.BIN", 0
+testDirty       BYTE    "RTDIRTY.BIN", 0
 
 ' Buffers
 writeBuffer     BYTE    0[TEST_FILE_SIZE]
 readBuffer      BYTE    0[64]
 readBuffer_guard BYTE   0[16]
 
-PUB go() | result, bytesRead, idx, fileSize, actualByte, handle
+PUB go() | result, bytesRead, bytesWritten, idx, fileSize, actualByte, handle, nonce
 '' Main entry point for seek operation regression tests
 ''
 '' Tests seek operations and random access reading
@@ -57,8 +58,9 @@ PUB go() | result, bytesRead, idx, fileSize, actualByte, handle
 
     ' Mount the card first
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if result < 0
+    ifnot utils.requireSetup(result == 0, @"SETUP: mount SD card")
         debug("ERROR: Could not mount SD card!")
+        utils.ShowTestEndCounts()
         debug("END_SESSION")
         return
 
@@ -81,14 +83,23 @@ PUB go() | result, bytesRead, idx, fileSize, actualByte, handle
         writeBuffer[idx] := idx & $FF
     debug("  Buffer filled with position pattern (0-255 repeating)")
 
+    ' The write is the fixture EVERY seek test below reads back. It was unchecked:
+    ' a short or failed write produced a file whose contents no longer match the
+    ' position pattern, and the seek tests then reported wrong-byte failures that
+    ' looked like seek defects. Scored here, a bad fixture is named as a bad fixture.
     utils.startTest(@"Create test file with 2048 bytes")
+    utils.setCheckCountPerTest(2)
     handle := sd.createFileNew(@testSeek)
-    utils.evaluateBool(handle >= 0, @"createFileNew()", true)
+    utils.evaluateSubBool(handle >= 0, @"createFileNew()", true)
 
     ' Write test data and close (setup)
-    sd.writeHandle(handle, @writeBuffer, TEST_FILE_SIZE)
-    sd.closeFileHandle(handle)
-    debug("  Wrote ", udec_(TEST_FILE_SIZE), " bytes")
+    bytesWritten := 0
+    if handle >= 0
+        bytesWritten := sd.writeHandle(handle, @writeBuffer, TEST_FILE_SIZE)
+        sd.closeFileHandle(handle)
+    utils.evaluateSubValue(bytesWritten, @"writeHandle() wrote the whole fixture", TEST_FILE_SIZE)
+    utils.showSubTestResults()
+    debug("  Wrote ", udec_(bytesWritten), " bytes")
 
     utils.startTest(@"Verify file size")
     handle := sd.openFileRead(@testSeek)
@@ -268,10 +279,16 @@ PUB go() | result, bytesRead, idx, fileSize, actualByte, handle
     handle := sd.openFileRead(@testSeek)
     utils.evaluateBool(handle >= 0, @"openFileRead()", true)
 
+    ' An expected-failure test on a handle nobody validated is not a test: if the
+    ' open above failed, seekHandle returns E_INVALID_HANDLE, which is negative, and
+    ' "seek beyond EOF is rejected" passes without a file ever being involved.
     utils.startTest(@"seek() beyond EOF should fail")
+    utils.setCheckCountPerTest(2)
+    utils.evaluateSubBool(handle >= 0, @"seeking on a real open handle", true)
     ' EXPECTED ERROR: seek beyond EOF must fail because the position would be past the file's data
     result := sd.seekHandle(handle, TEST_FILE_SIZE + 100)
-    utils.evaluateBool(result < 0, @"seekHandle(beyond EOF) returns error", true)
+    utils.evaluateSubBool(result < 0, @"seekHandle(beyond EOF) returns error", true)
+    utils.showSubTestResults()
 
     utils.startTest(@"seek() to exact EOF should succeed")
     ' EXPECTED SUCCESS: seek to the last byte position (EOF-1) is valid as it positions at the end-of-file boundary
@@ -334,22 +351,31 @@ PUB go() | result, bytesRead, idx, fileSize, actualByte, handle
         utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
         utils.evaluateSubValue(readBuffer[0], @"first byte", 0)
         sd.closeFileHandle(handle)
+    else
+        utils.evaluateBool(false, @"seek-to-0 (file would not open)", true)
 
     ' Test: Seek to exact EOF and verify read returns 0
     utils.startTest(@"Seek to exact EOF position")
+    utils.setCheckCountPerTest(2)
     handle := sd.openFileRead(@testSeek)
     if handle >= 0
         ' Seek to exact end (file size position)
+        ' This should succeed - seeking to EOF is valid (seeking PAST EOF is what
+        ' fails). The result used to be printed and thrown away, so a rejected seek
+        ' left the position wherever it was and the read-returns-0 check below could
+        ' pass for a completely different reason.
         result := sd.seekHandle(handle, TEST_FILE_SIZE)
-        ' This should succeed - seeking to EOF is valid
-        ' (seeking past EOF is what fails)
         debug("  seekHandle(", udec_(TEST_FILE_SIZE), ") = ", sdec_(result))
+        utils.evaluateSubValue(result, @"seekHandle(exact EOF) succeeds", sd.SUCCESS)
         ' Try to read - should get 0 bytes
         utils.initGuard(@readBuffer_guard)
         bytesRead := sd.readHandle(handle, @readBuffer, 10)
         utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
-        utils.evaluateSingleValue(bytesRead, @"read at EOF", 0)
+        utils.evaluateSubValue(bytesRead, @"read at EOF", 0)
         sd.closeFileHandle(handle)
+        utils.showSubTestResults()
+    else
+        utils.evaluateBool(false, @"seek-to-EOF (file would not open)", true)
 
     ' Test: Seek in empty file
     utils.startTest(@"Seek in empty file behavior")
@@ -371,7 +397,44 @@ PUB go() | result, bytesRead, idx, fileSize, actualByte, handle
         result := sd.seekHandle(handle, 1)
         utils.evaluateSubBool(result < 0, @"seekHandle(1) in empty fails", true)
         sd.closeFileHandle(handle)
+    else
+        utils.evaluateBool(false, @"seek-in-empty (file would not open)", true)
     sd.deleteFile(@testEmpty)
+
+    ' ----------------------------------
+    ' TEST GROUP: Dirty-buffer seek integrity
+    ' ----------------------------------
+    ' A cross-sector seek on a write handle with unflushed data must land that
+    ' data on the card before the buffer identity changes. The defective driver
+    ' discarded the dirty buffer at the seek -- the bytes past the last sector
+    ' boundary vanished, and the handle was left flushing to sector $FFFF_FFFF.
+    utils.startTestGroup(@"Dirty-Buffer Seek Integrity")
+
+    utils.startTest(@"Unsynced write survives cross-sector seek")
+    utils.setCheckCountPerTest(5)
+    sd.deleteFile(@testDirty)
+    nonce := utils.perRunNonce()
+    handle := sd.createFileNew(@testDirty)
+    utils.evaluateSubBool(handle >= 0, @"createFileNew()", true)
+    if handle >= 0
+        utils.fillBufferWithPattern(@writeBuffer, 600, nonce)
+        result := sd.writeHandle(handle, @writeBuffer, 600)
+        utils.evaluateSubValue(result, @"write 600 bytes", 600)
+        result := sd.seekHandle(handle, 0)
+        utils.evaluateSubValue(result, @"seek to 0 with dirty buffer", sd.SUCCESS)
+        bytefill(@writeBuffer, 0, 600)
+        bytesRead := sd.readHandle(handle, @writeBuffer, 600)
+        utils.evaluateSubValue(bytesRead, @"read-back 600 bytes", 600)
+        utils.evaluateSubBool(utils.verifyBufferPattern(@writeBuffer, 600, nonce), @"data intact after dirty seek", true)
+    else
+        ' Without this the 4 gated checks short the record and the failure reads as
+        ' "SUB-CHECK SHORTFALL" rather than naming the create that actually failed.
+        utils.evaluateSubValue(-1, @"write 600 bytes", 600)
+        utils.evaluateSubValue(-1, @"seek to 0 with dirty buffer", sd.SUCCESS)
+        utils.evaluateSubValue(-1, @"read-back 600 bytes", 600)
+        utils.evaluateSubBool(false, @"data intact after dirty seek", true)
+        sd.closeFileHandle(handle)
+    sd.deleteFile(@testDirty)
 
     ' ----------------------------------
     ' Cleanup

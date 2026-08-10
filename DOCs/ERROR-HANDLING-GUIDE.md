@@ -201,7 +201,7 @@ leaves behind:
 |---|---|
 | `writeHandle()` | partial count if any byte was accepted, else the error code; the bytes counted but unflushed stay in the handle buffer |
 | `readHandle()` | partial count if any byte moved, else the error code; position advanced only by what was delivered |
-| `sync()` | the pending directory entry is **retained**, so a later `sync()` retries it |
+| `sync()` | continues through every open write handle, reports the **first** error; failed handles stay dirty, so a later `sync()` retries them |
 | `syncHandle()` | the handle stays dirty; the data is still recoverable |
 | `unmount()` / `stop()` | reports the failure; the shutdown still completes |
 | `freeSpace()` | returns 0 rather than a plausible-but-wrong count |
@@ -291,8 +291,10 @@ the card failed. Treat them as reasons to stop and investigate, not to retry.
 | -41 | `E_FILE_EXISTS` | File already exists |
 | -42 | `E_NOT_A_FILE` | Expected file, found directory |
 | -43 | `E_NOT_A_DIR` | Expected directory, found file |
+| -44 | `E_DIR_NOT_EMPTY` | `deleteFile()` on a directory that still has entries — empty it first |
 | -45 | `E_FILE_NOT_OPEN` | **Reserved** — never produced; a closed handle reports `E_INVALID_HANDLE` |
 | -46 | `E_END_OF_FILE` | Read past end of file |
+| -47 | `E_FILE_OPEN` | `deleteFile()` on a file that still has an open handle — close it first |
 | -60 | `E_DISK_FULL` | No free clusters |
 | -61 | `E_NO_CONTIGUOUS_SPACE` | No contiguous run of sufficient length |
 | -62 | `E_FILE_OPEN_FOR_COMPACT` | File is open; cannot compact |
@@ -313,6 +315,30 @@ the card failed. Treat them as reasons to stop and investigate, not to retry.
 | -96 | `E_NO_ASYNC_OP` | No async operation, or it belongs to another cog |
 
 ---
+
+## Two refusals that mean "do something first", not "this failed"
+
+`E_DIR_NOT_EMPTY` (-44) and `E_FILE_OPEN` (-47) are both returned by `deleteFile()`, and
+both are recoverable by the caller. Treating them as ordinary failures produces programs
+that give up where they should take one more step.
+
+```spin2
+    result := sd.deleteFile(@name)
+    if result == sd.E_FILE_OPEN
+        sd.closeFileHandle(handle)                  ' the handle you still hold
+        result := sd.deleteFile(@name)
+    elseif result == sd.E_DIR_NOT_EMPTY
+        ' remove the contents first -- children before parents, no recursion in the driver
+        result := emptyThenDelete(@name)
+    if result <> sd.SUCCESS
+        debug("delete failed: ", sdec(result))
+```
+
+Both refusals exist because the old permissive behavior corrupted state silently: deleting
+a populated directory stranded every child's cluster chain as unreachable space, and
+deleting a file with an open handle let a later idle flush write that handle's stale
+buffer into a cluster that had already been freed and reallocated. A refusal you can act
+on is strictly better than a success that quietly damages the volume.
 
 ## Checklist by program shape
 

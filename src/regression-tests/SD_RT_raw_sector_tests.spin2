@@ -21,9 +21,13 @@
 ''     Sector 100004: Pattern E - Incrementing with sector offset
 ''
 ''   Each sector has:
-''     - Head marker (bytes 0-7): sector#, sector#, pattern, pattern, DE AD BE EF
+''     - Head marker (bytes 0-7): sector#, sector#, pattern, pattern, DEADBEEF ^ nonce
 ''     - Fill pattern (bytes 8-503): Pattern-specific data
-''     - Tail marker (bytes 504-511): CA FE BA BE, pattern, pattern, sector#, sector#
+''     - Tail marker (bytes 504-511): CAFEBABE ^ nonce, pattern, pattern, sector#, sector#
+''
+''   The nonce is a per-run byte (utils.perRunNonce()). Without it every run wrote
+''   byte-identical markers, so a write that silently did nothing still verified --
+''   against the previous run's data. The nonce makes stale sectors detectable.
 ''
 ''   This provides a full round-trip test of the streamer-based sector I/O.
 ''
@@ -95,7 +99,7 @@ VAR
     LONG    pass_count
     LONG    fail_count
 
-PUB go() | result, idx, sector, cardSectors
+PUB go() | result, idx, sector, cardSectors, wroteA, wroteB, wroteC, wroteD, wroteE
 '' Main entry point for raw sector round-trip tests
 ''
 '' Tests readSectorRaw/writeSectorRaw operations with various patterns
@@ -112,8 +116,9 @@ PUB go() | result, idx, sector, cardSectors
     ' Initialize card only (no filesystem mount - we're doing raw sector access)
     debug("Initializing SD card (V2 driver with streamer)...")
     result := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if result < 0
+    ifnot utils.requireSetup(result == 0, @"SETUP: initialize SD card")
         debug("ERROR: Card init failed!")
+        utils.ShowTestEndCounts()
         debug("END_SESSION")
         return
 
@@ -124,8 +129,12 @@ PUB go() | result, idx, sector, cardSectors
     ' ----------------------------------------
     cardSectors := sd.cardSizeSectors()
     debug("Card size: ", udec_(cardSectors), " sectors; scratch range ", udec_(TEST_SECTOR_A), "..", udec_(TEST_SECTOR_MAX))
-    if cardSectors <= TEST_SECTOR_MAX
+    ' Scored, not just printed: the rig's regression cards all satisfy this
+    ' range, so a failed check means the wrong card (or something worse) and
+    ' must not read as a green 0-fail run.
+    ifnot utils.requireSetup(cardSectors > TEST_SECTOR_MAX, @"SETUP: card large enough for scratch range")
         debug("  *** SETUP NOT MET: card has ", udec_(cardSectors), " sectors, scratch range needs > ", udec_(TEST_SECTOR_MAX), " -- raw sector tests NOT run ***")
+        utils.ShowTestEndCounts()
         debug("END_SESSION")
         return
     debug(" ")
@@ -136,13 +145,25 @@ PUB go() | result, idx, sector, cardSectors
     debug("--- PHASE 1: Writing test patterns ---")
     debug(" ")
 
+    ' PHASES 2 AND 3 RE-READ WHAT PHASE 1 WROTE. When a phase-1 write fails, the
+    ' matching phase-2 and phase-3 checks are reading a sector nobody wrote this run,
+    ' so one root cause used to score as three separate failures and the sweep looked
+    ' three times worse than it was. Each phase-1 result is remembered here and the
+    ' dependent checks report SKIPPED instead of inventing failures of their own.
+    wroteA := false
+    wroteB := false
+    wroteC := false
+    wroteD := false
+    wroteE := false
+
     ' Write Pattern A: Sequential bytes
     sector := TEST_SECTOR_A
     debug("* Test: Write Pattern A (sequential) to sector ", udec_(sector))
     repeat idx from 0 to 511
         write_buf[idx] := idx & $FF
     addBoundaryMarkers(sector, $A0)
-    if writeAndVerify(sector, $A0)
+    wroteA := writeAndVerify(sector, $A0)
+    if wroteA
         recordPass()
     else
         recordFail()
@@ -153,7 +174,8 @@ PUB go() | result, idx, sector, cardSectors
     repeat idx from 0 to 511
         write_buf[idx] := (idx & 1) ? $55 : $AA
     addBoundaryMarkers(sector, $B0)
-    if writeAndVerify(sector, $B0)
+    wroteB := writeAndVerify(sector, $B0)
+    if wroteB
         recordPass()
     else
         recordFail()
@@ -163,7 +185,8 @@ PUB go() | result, idx, sector, cardSectors
     debug("* Test: Write Pattern C (all FF) to sector ", udec_(sector))
     bytefill(@write_buf, $FF, 512)
     addBoundaryMarkers(sector, $C0)
-    if writeAndVerify(sector, $C0)
+    wroteC := writeAndVerify(sector, $C0)
+    if wroteC
         recordPass()
     else
         recordFail()
@@ -173,7 +196,8 @@ PUB go() | result, idx, sector, cardSectors
     debug("* Test: Write Pattern D (all 00) to sector ", udec_(sector))
     bytefill(@write_buf, $00, 512)
     addBoundaryMarkers(sector, $D0)
-    if writeAndVerify(sector, $D0)
+    wroteD := writeAndVerify(sector, $D0)
+    if wroteD
         recordPass()
     else
         recordFail()
@@ -184,7 +208,8 @@ PUB go() | result, idx, sector, cardSectors
     repeat idx from 0 to 511
         write_buf[idx] := (idx + $E0) & $FF          ' Offset by $E0 to distinguish from pattern A
     addBoundaryMarkers(sector, $E0)
-    if writeAndVerify(sector, $E0)
+    wroteE := writeAndVerify(sector, $E0)
+    if wroteE
         recordPass()
     else
         recordFail()
@@ -201,7 +226,9 @@ PUB go() | result, idx, sector, cardSectors
     ' Read Pattern E first (was written last)
     sector := TEST_SECTOR_E
     debug("* Test: Read sector ", udec_(sector), " (expect pattern E=$E0)")
-    if verifyPattern(sector, $E0)
+    ifnot wroteE
+        debug("  -> SKIPPED (pattern E was never written this run)")
+    elseif verifyPattern(sector, $E0)
         recordPass()
     else
         recordFail()
@@ -209,7 +236,9 @@ PUB go() | result, idx, sector, cardSectors
     ' Read Pattern D
     sector := TEST_SECTOR_D
     debug("* Test: Read sector ", udec_(sector), " (expect pattern D=$D0)")
-    if verifyPattern(sector, $D0)
+    ifnot wroteD
+        debug("  -> SKIPPED (pattern D was never written this run)")
+    elseif verifyPattern(sector, $D0)
         recordPass()
     else
         recordFail()
@@ -217,7 +246,9 @@ PUB go() | result, idx, sector, cardSectors
     ' Read Pattern C
     sector := TEST_SECTOR_C
     debug("* Test: Read sector ", udec_(sector), " (expect pattern C=$C0)")
-    if verifyPattern(sector, $C0)
+    ifnot wroteC
+        debug("  -> SKIPPED (pattern C was never written this run)")
+    elseif verifyPattern(sector, $C0)
         recordPass()
     else
         recordFail()
@@ -225,7 +256,9 @@ PUB go() | result, idx, sector, cardSectors
     ' Read Pattern B
     sector := TEST_SECTOR_B
     debug("* Test: Read sector ", udec_(sector), " (expect pattern B=$B0)")
-    if verifyPattern(sector, $B0)
+    ifnot wroteB
+        debug("  -> SKIPPED (pattern B was never written this run)")
+    elseif verifyPattern(sector, $B0)
         recordPass()
     else
         recordFail()
@@ -233,7 +266,9 @@ PUB go() | result, idx, sector, cardSectors
     ' Read Pattern A last (was written first)
     sector := TEST_SECTOR_A
     debug("* Test: Read sector ", udec_(sector), " (expect pattern A=$A0)")
-    if verifyPattern(sector, $A0)
+    ifnot wroteA
+        debug("  -> SKIPPED (pattern A was never written this run)")
+    elseif verifyPattern(sector, $A0)
         recordPass()
     else
         recordFail()
@@ -248,14 +283,18 @@ PUB go() | result, idx, sector, cardSectors
 
     ' Verify all 512 bytes of Pattern A (sequential)
     debug("* Test: Full verify Pattern A (512 sequential bytes)")
-    if verifyFullPattern(TEST_SECTOR_A, 0)
+    ifnot wroteA
+        debug("  -> SKIPPED (pattern A was never written this run)")
+    elseif verifyFullPattern(TEST_SECTOR_A, 0)
         recordPass()
     else
         recordFail()
 
     ' Verify all 512 bytes of Pattern B (AA/55)
     debug("* Test: Full verify Pattern B (alternating AA/55)")
-    if verifyFullPatternAlt(TEST_SECTOR_B)
+    ifnot wroteB
+        debug("  -> SKIPPED (pattern B was never written this run)")
+    elseif verifyFullPatternAlt(TEST_SECTOR_B)
         recordPass()
     else
         recordFail()
@@ -293,17 +332,30 @@ PUB go() | result, idx, sector, cardSectors
     utils.initGuard(@read_buf_guard)
     result := sd.readSectorRaw(1_000_000, @read_buf)
     utils.checkGuard(@read_buf_guard, @"read_buf guard")
-    ' This tests that the driver can address high sector numbers
-    ' The read may or may not succeed depending on card size, but it shouldn't crash
-    if result == sd.SUCCESS
-        debug("  High sector read completed (result=", sdec_(result), ")")
-        debug("  First bytes: $", uhex_byte_(read_buf[0]), " $", uhex_byte_(read_buf[1]), " $", uhex_byte_(read_buf[2]), " $", uhex_byte_(read_buf[3]))
-        debug("  -> pass (driver handled large LBA)")
-        recordPass()
+    ' Both branches used to call recordPass(), which made this test incapable of
+    ' failing -- it asserted only that the call returned. The real property is that
+    ' the driver's answer AGREES WITH THE CARD: sector 1,000,000 must read
+    ' successfully on a card that has it, and must be refused on a card that does
+    ' not. Either answer is correct; the WRONG answer for this card is the failure.
+    if 1_000_000 < cardSectors
+        if result == sd.SUCCESS
+            debug("  High sector read completed (result=", sdec_(result), ")")
+            debug("  First bytes: $", uhex_byte_(read_buf[0]), " $", uhex_byte_(read_buf[1]), " $", uhex_byte_(read_buf[2]), " $", uhex_byte_(read_buf[3]))
+            debug("  -> pass (in-range large LBA read succeeded)")
+            recordPass()
+        else
+            debug("  ERROR: sector 1,000,000 is WITHIN this card (", udec_(cardSectors), " sectors) but read returned ", sdec_(result))
+            debug("  -> FAIL")
+            recordFail()
     else
-        debug("  High sector read returned: ", sdec_(result))
-        debug("  -> pass (driver returned error for out-of-range sector)")
-        recordPass()
+        if result == sd.SUCCESS
+            debug("  ERROR: sector 1,000,000 is BEYOND this card (", udec_(cardSectors), " sectors) but the read reported success")
+            debug("  -> FAIL")
+            recordFail()
+        else
+            debug("  High sector read returned: ", sdec_(result))
+            debug("  -> pass (out-of-range sector correctly refused)")
+            recordPass()
 
     ' Report stack depth while worker cog is still running
 #ifdef SD_INCLUDE_STACK_CHECK
@@ -318,32 +370,41 @@ PUB go() | result, idx, sector, cardSectors
     debug(" ")
     debug("END_SESSION")
 
-PRI addBoundaryMarkers(sector, patternId) | secLow
+PRI addBoundaryMarkers(sector, patternId) | secLow, nonce
 ' Add head and tail boundary markers to write_buf
 '
 ' @param sector - sector number for marker
 ' @param patternId - pattern identifier byte
+' @local nonce - per-run byte mixed into the magic values (see below)
 '
-' Head (bytes 0-7): sector#, sector#, pattern, pattern, DE AD BE EF
-' Tail (bytes 504-511): CA FE BA BE, pattern, pattern, sector#, sector#
+' Head (bytes 0-7): sector#, sector#, pattern, pattern, DEADBEEF ^ nonce
+' Tail (bytes 504-511): CAFEBABE ^ nonce, pattern, pattern, sector#, sector#
+'
+' THE NONCE IS WHY THESE MARKERS MEAN ANYTHING. Every run used to write byte-for-byte
+' IDENTICAL markers, so a write that silently did nothing still read back a perfect
+' match -- from the PREVIOUS run's data sitting in those sectors. Phases 2 and 3
+' re-read what phase 1 wrote, so all three phases could pass without a single byte
+' having been written this run. Mixing utils.perRunNonce() into the magic values
+' makes last run's bytes distinguishable from this run's.
 
     secLow := sector & $FF
+    nonce := utils.perRunNonce()
 
     ' Head marker (bytes 0-7)
     write_buf[0] := secLow
     write_buf[1] := secLow
     write_buf[2] := patternId
     write_buf[3] := patternId
-    write_buf[4] := $DE
-    write_buf[5] := $AD
-    write_buf[6] := $BE
-    write_buf[7] := $EF
+    write_buf[4] := $DE ^ nonce
+    write_buf[5] := $AD ^ nonce
+    write_buf[6] := $BE ^ nonce
+    write_buf[7] := $EF ^ nonce
 
     ' Tail marker (bytes 504-511)
-    write_buf[504] := $CA
-    write_buf[505] := $FE
-    write_buf[506] := $BA
-    write_buf[507] := $BE
+    write_buf[504] := $CA ^ nonce
+    write_buf[505] := $FE ^ nonce
+    write_buf[506] := $BA ^ nonce
+    write_buf[507] := $BE ^ nonce
     write_buf[508] := patternId
     write_buf[509] := patternId
     write_buf[510] := secLow
@@ -405,15 +466,18 @@ PRI verifyPattern(sector, expectedPattern) : success | rdStatus
         debug("  -> FAIL (readback mismatch, API returned SUCCESS)")
         dumpReadFailDiag()
 
-PRI verifyMarkers(sector, expectedPattern) : success | secLow
+PRI verifyMarkers(sector, expectedPattern) : success | secLow, nonce
 ' Verify head and tail markers in read_buf
 '
 ' @param sector - sector number for expected marker values
 ' @param expectedPattern - expected pattern ID
 ' @returns success - true if all markers match
+' @local nonce - the same per-run byte addBoundaryMarkers() mixed in; a sector left
+'                by an EARLIER run carries that run's nonce and fails here
 
     success := true
     secLow := sector & $FF
+    nonce := utils.perRunNonce()
 
     ' Check head marker
     if read_buf[0] <> secLow or read_buf[1] <> secLow
@@ -424,13 +488,14 @@ PRI verifyMarkers(sector, expectedPattern) : success | secLow
         debug("  ERROR: Pattern ID mismatch! Expected $", uhex_byte_(expectedPattern), ", got $", uhex_byte_(read_buf[2]))
         success := false
 
-    if read_buf[4] <> $DE or read_buf[5] <> $AD or read_buf[6] <> $BE or read_buf[7] <> $EF
-        debug("  ERROR: Head magic mismatch! Expected DEADBEEF, got $", uhex_byte_(read_buf[4]), uhex_byte_(read_buf[5]), uhex_byte_(read_buf[6]), uhex_byte_(read_buf[7]))
+    if read_buf[4] <> ($DE ^ nonce) or read_buf[5] <> ($AD ^ nonce) or read_buf[6] <> ($BE ^ nonce) or read_buf[7] <> ($EF ^ nonce)
+        debug("  ERROR: Head magic mismatch! Expected DEADBEEF^$", uhex_byte_(nonce), ", got $", uhex_byte_(read_buf[4]), uhex_byte_(read_buf[5]), uhex_byte_(read_buf[6]), uhex_byte_(read_buf[7]))
+        debug("         (a mismatch here can mean STALE DATA from an earlier run, not just corruption)")
         success := false
 
     ' Check tail marker
-    if read_buf[504] <> $CA or read_buf[505] <> $FE or read_buf[506] <> $BA or read_buf[507] <> $BE
-        debug("  ERROR: Tail magic mismatch! Expected CAFEBABE")
+    if read_buf[504] <> ($CA ^ nonce) or read_buf[505] <> ($FE ^ nonce) or read_buf[506] <> ($BA ^ nonce) or read_buf[507] <> ($BE ^ nonce)
+        debug("  ERROR: Tail magic mismatch! Expected CAFEBABE^$", uhex_byte_(nonce))
         success := false
 
     if read_buf[508] <> expectedPattern or read_buf[509] <> expectedPattern

@@ -4,12 +4,37 @@
 **Unique ID:** `GigastoneOEM_ASTC_2.0_00000F14_202306`
 **Test Date:** 2026-02-25 (characterization + benchmark)
 
+> ### ROLE: shakedown / diagnostic card - NOT a certification card
+>
+> This card carries the whole 2026-08-03 to 2026-08-07 root-cause-#3 symptom
+> history, which is exactly why the v1.7.0 sprint runs its shakedown sweep on it:
+> symptom continuity with the 08-07 baseline table is the point. Scoring that
+> sweep is done against
+> `DOCs/Agent-Reports/SYMPTOM-MAPPING-2026-08-07-TO-v1.7.0-INSTRUMENT.md`.
+>
+> **It is not one of the two certification cards.** Release certification uses
+> `$0001_B9D5` (Gigastone 7GB, 8 sectors/cluster) and `$3584_1E2E` (Amazon Basics
+> 64GB, 64 sectors/cluster) - a pairing chosen for an 8x cluster-size spread. This
+> card would add no geometry coverage to that pair and must not be substituted
+> into it.
+>
+> Real-CRC card: `cardWarnings() = $00`.
+>
+> *Role recorded: 2026-08-09 (v1.7.0 sprint, «#61» §13)*
+
 ### Card Designator
 
 ```
 Gigastone ASTC SDXC 58GB [FAT32] SD 6.x rev2.0 SN:00000F14 2023/06
 Class 10, U3, V30, SPI 25 MHz  [formatted by P2FMTER]
 ```
+
+Runs of `SD_card_identify` before 2026-08-09 print this card as **"Unknown ASTC"**
+rather than "Gigastone ASTC" - see
+`tools/logs/SD_card_identify_260807-155417.log`. That was a gap in the identify
+utility's manufacturer table, which had no entry for MID `$12` while
+`SD_card_characterize` did. Fixed in the v1.7.0 sprint; older logs still show
+the old wording and are correct as recorded.
 
 ### Raw Registers
 

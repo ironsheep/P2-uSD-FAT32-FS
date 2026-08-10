@@ -1,0 +1,93 @@
+{{ =================================================================================================
+   File....... RT_stack_watermark_probe.spin2
+   Purpose.... Prove the worker-stack watermark METER MOVES (v1.7.0 §11).
+               The per-suite watermark line (SD_INCLUDE_STACK_REPORT) is only trustworthy
+               if the underlying sentinel-scan depth actually tracks call depth. This probe
+               measures the same worker across two sessions of increasing depth:
+                 Session 1: initCardOnly() (raw mode, card init only)      -> W_raw
+                 Session 2: mount() + create/write/read/delete a file      -> W_fs
+               reportStackDepth() retains the peak ACROSS sessions (cumulative max), so
+               W_fs > W_raw holds exactly when the filesystem session drove the worker
+               strictly deeper than raw card init did -- which is the meter-moves claim.
+               Both readings must also sit below the compiled sd.STACK_SIZE, whatever
+               this build sets it to.
+               Companion: SD_worker_stack_depth_probe.spin2 measures peak-vs-shipped-size
+               for overflow investigations; this probe proves the meter responds at all.
+   EXPECTED... "* 5 Tests - Pass: 5, Fail: 0"
+   REQUIRES... SD card in the P2 Edge slot. HARDWARE test — rides the #64 shakedown;
+               container builds compile it only.
+   Author..... Stephen M Moraco
+   Started.... 09 AUG 2026
+================================================================================================= }}
+
+CON
+    _CLKFREQ        = 350_000_000
+    DEBUG_BAUD      = 2_000_000
+
+    SD_CS = 60, SD_MOSI = 59, SD_MISO = 58, SD_SCK = 61
+
+' Depth machinery only -- this probe reads depths itself; it does not need the
+' per-suite watermark line (SD_INCLUDE_STACK_REPORT) to be lit.
+#pragma exportdef SD_INCLUDE_STACK_CHECK
+#pragma exportdef SD_INCLUDE_RAW
+
+OBJ
+    sd    : "micro_sd_fat32_fs"
+    utils : "isp_rt_utilities"
+
+DAT
+    probeFile       BYTE    "WMPROBE.BIN", 0
+    writeBuf        BYTE    0[512]
+    readBuf         BYTE    0[512]
+
+PUB go() | status, wRaw, wFs, handle, nonce
+
+    utils.startTestGroup(@"Stack watermark meter-moves probe")
+
+    ' --- Session 1: raw mode only (shallow worker paths) ---
+    utils.startTest(@"initCardOnly (raw session)")
+    status := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    utils.evaluateSingleValue(status, @"initCardOnly status", sd.SUCCESS)
+
+    wRaw := sd.reportStackDepth()
+    showWatermark(@"W_raw (card init only)", wRaw)
+    sd.stop()
+
+    ' --- Session 2: filesystem mount + file traffic (deep worker paths) ---
+    utils.startTest(@"mount (filesystem session)")
+    status := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    utils.evaluateSingleValue(status, @"mount status", sd.SUCCESS)
+
+    utils.startTest(@"file traffic drives deep worker paths")
+    sd.deleteFile(@probeFile)                           ' debris from a prior run is not an error
+    nonce := utils.perRunNonce()                        ' fresh pattern -- stale WMPROBE.BIN content cannot false-pass
+    utils.fillBufferWithPattern(@writeBuf, 512, nonce)
+    handle := sd.createFileNew(@probeFile)
+    if utils.requireSetup(handle >= 0, @"createFileNew(WMPROBE.BIN)")
+        sd.writeHandle(handle, @writeBuf, 512)
+        sd.closeFileHandle(handle)
+        handle := sd.openFileRead(@probeFile)
+        if utils.requireSetup(handle >= 0, @"openFileRead(WMPROBE.BIN)")
+            sd.readHandle(handle, @readBuf, 512)
+            sd.closeFileHandle(handle)
+            utils.evaluateBool(utils.verifyBufferPattern(@readBuf, 512, nonce), @"read-back matches", true)
+    sd.deleteFile(@probeFile)                           ' leave the card as found
+
+    wFs := sd.reportStackDepth()
+    showWatermark(@"W_fs (mount + file ops)", wFs)
+
+    ' --- The meter-moves assertions ---
+    utils.startTest(@"meter moves: W_fs exceeds W_raw")
+    utils.evaluateBool(wFs > wRaw, @"W_fs > W_raw", true)
+
+    utils.startTest(@"watermarks well inside measurement stack")
+    utils.setCheckCountPerTest(2)
+    utils.evaluateSubBool(wRaw > 0 and wRaw < sd.STACK_SIZE, @"W_raw in (0, STACK_SIZE)", true)
+    utils.evaluateSubBool(wFs > 0 and wFs < sd.STACK_SIZE, @"W_fs in (0, STACK_SIZE)", true)
+
+    sd.unmount()
+    utils.ShowTestEndCounts()
+    debug("END_SESSION")
+
+PRI showWatermark(pLabel, depth)
+    debug("  ", zstr_(pLabel), ": ", udec_(depth), " of ", udec_(sd.STACK_SIZE), " longs")

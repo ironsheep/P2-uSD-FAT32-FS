@@ -94,7 +94,38 @@ PUB go() | result, dataStart, fat1Start, fat2Start, idx, mismatch, cardSectors
     debug(" ")
 
     ' ----------------------------------------
-    ' TEST 1: Format card with default label
+    ' PRE-FLIGHT: measure the card BEFORE erasing it
+    ' ----------------------------------------
+    ' This gate used to sit AFTER fmt.format(). On a card below the FAT32 minimum
+    ' that meant erasing every byte on it and THEN declining to verify -- paying the
+    ' card's entire contents to reach a check that was always going to stop the run.
+    ' Nothing destructive may happen above this point.
+    utils.startTestGroup(@"Pre-Flight (before anything is erased)")
+
+    result := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    ifnot utils.requireSetup(result == 0, @"SETUP: initialize SD card for size pre-flight")
+        debug("ERROR: Cannot initialize card! Nothing was erased.")
+        utils.ShowTestEndCounts()
+        debug("END_SESSION")
+        return
+
+    cardSectors := sd.cardSizeSectors()
+    debug("  Card size: ", udec(cardSectors), " sectors (", udec(cardSectors / 2048), " MB)")
+
+    utils.startTest(@"Card meets FAT32 64MB minimum")
+    utils.evaluateBool(cardSectors >= MIN_CARD_SECTORS, @"card >= 64MB", true)
+    if cardSectors < MIN_CARD_SECTORS
+        debug("  *** SETUP NOT MET: card has ", udec_(cardSectors), " sectors, FAT32 needs >= ", udec_(MIN_CARD_SECTORS), " -- NOTHING WAS ERASED, format checks NOT run ***")
+        sd.stop()
+        utils.ShowTestEndCounts()
+        debug("END_SESSION")
+        return
+
+    ' Release the raw-access worker so the format utility can own the pins
+    sd.stop()
+
+    ' ----------------------------------------
+    ' TEST 1: Format card with default label  (DESTRUCTIVE FROM HERE)
     ' ----------------------------------------
     utils.startTestGroup(@"Format Operation")
     utils.startTest(@"Format card with default label")
@@ -105,20 +136,10 @@ PUB go() | result, dataStart, fat1Start, fat2Start, idx, mismatch, cardSectors
     ' Release format utility's worker cog before using sd driver for verification
     fmt.stop()
 
-    ' Initialize card for raw access
+    ' Re-initialize card for raw-access verification of what the format wrote
     result := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if result < 0
+    ifnot utils.requireSetup(result == 0, @"SETUP: re-initialize SD card for verification")
         debug("ERROR: Cannot initialize card for verification!")
-        debug("END_SESSION")
-        return
-
-    cardSectors := sd.cardSizeSectors()
-    debug("  Card size: ", udec(cardSectors), " sectors (", udec(cardSectors / 2048), " MB)")
-
-    utils.startTest(@"Card meets FAT32 64MB minimum")
-    utils.evaluateBool(cardSectors >= MIN_CARD_SECTORS, @"card >= 64MB", true)
-    if cardSectors < MIN_CARD_SECTORS
-        debug("  *** SETUP NOT MET: card has ", udec_(cardSectors), " sectors, FAT32 needs >= ", udec_(MIN_CARD_SECTORS), " -- remaining format checks NOT run ***")
         utils.ShowTestEndCounts()
         debug("END_SESSION")
         return
@@ -128,9 +149,8 @@ PUB go() | result, dataStart, fat1Start, fat2Start, idx, mismatch, cardSectors
     ' ========================================
     utils.startTestGroup(@"MBR Verification")
 
-    utils.initGuard(@buf_guard)
-    sd.readSectorRaw(0, @buf)
-    utils.checkGuard(@buf_guard, @"buf guard")
+    utils.startTest(@"Read MBR (sector 0)")
+    utils.evaluateBool(readVerifySector(0, @buf, @buf_guard), @"readSectorRaw(MBR)", true)
 
     utils.startTest(@"MBR boot signature")
     result := WORD[@buf + sd.BOOT_SIG_OFFSET]
@@ -148,6 +168,19 @@ PUB go() | result, dataStart, fat1Start, fat2Start, idx, mismatch, cardSectors
     partitionStart := LONG[@buf + sd.MBR_PART_LBA_OFFSET]
     utils.evaluateBool(partitionStart == PARTITION_START, @"8192 (4MB aligned)", true)
 
+    ' Everything downstream -- the VBR, both FSInfo copies, both FAT copies and the
+    ' root directory -- is addressed relative to partitionStart. A garbage value here
+    ' does not produce one failure, it produces a dozen reads of unrelated sectors
+    ' whose content checks all fail for reasons that have nothing to do with the
+    ' format. Stop at the one real failure and say what is being skipped.
+    ifnot utils.requireSetup(partitionStart > 0 and partitionStart < cardSectors, @"SETUP: partition start LBA is usable")
+        debug("  *** partitionStart = ", udec_(partitionStart), " is not a sector on this card")
+        debug("  *** VBR / FSInfo / FAT / root-directory checks SKIPPED (all derive from it)")
+        sd.stop()
+        utils.ShowTestEndCounts()
+        debug("END_SESSION")
+        return
+
     utils.startTest(@"Partition 1 size")
     result := LONG[@buf + sd.MBR_PART_SIZE_OFFSET]
     ' Partition size should be card size minus partition start
@@ -159,9 +192,8 @@ PUB go() | result, dataStart, fat1Start, fat2Start, idx, mismatch, cardSectors
     ' ========================================
     utils.startTestGroup(@"VBR Verification")
 
-    utils.initGuard(@buf_guard)
-    sd.readSectorRaw(partitionStart, @buf)
-    utils.checkGuard(@buf_guard, @"buf guard")
+    utils.startTest(@"Read VBR (partition start)")
+    utils.evaluateBool(readVerifySector(partitionStart, @buf, @buf_guard), @"readSectorRaw(VBR)", true)
 
     utils.startTest(@"VBR jump instruction")
     ' EXPECTED VALUE: FAT VBR must start with JMP SHORT ($EB) or JMP FAR ($E9) boot jump instruction
@@ -226,6 +258,17 @@ PUB go() | result, dataStart, fat1Start, fat2Start, idx, mismatch, cardSectors
     utils.evaluateBool(sectorsPerFat > 0, @"Sectors per FAT > 0", true)
     debug("  Sectors per FAT: ", udec(sectorsPerFat))
 
+    ' fat2Start and dataStart are both computed from this. A wild value sends the
+    ' FAT-mirror and root-directory reads off to arbitrary sectors -- same cascade
+    ' as a bad partitionStart, same treatment.
+    ifnot utils.requireSetup(sectorsPerFat > 0 and (partitionStart + 32 + 2 * sectorsPerFat) < cardSectors, @"SETUP: sectors-per-FAT yields usable FAT/data LBAs")
+        debug("  *** sectorsPerFat = ", udec_(sectorsPerFat), " puts the data region off the end of the card")
+        debug("  *** FAT-table and root-directory checks SKIPPED (both derive from it)")
+        sd.stop()
+        utils.ShowTestEndCounts()
+        debug("END_SESSION")
+        return
+
     utils.startTest(@"Root cluster number")
     result := LONG[@buf + $2C]
     utils.evaluateBool(result == 2, @"Root cluster = 2", true)
@@ -257,9 +300,8 @@ PUB go() | result, dataStart, fat1Start, fat2Start, idx, mismatch, cardSectors
 
     utils.startTest(@"Backup VBR matches primary")
     ' Read backup boot sector at partition + 6
-    utils.initGuard(@buf2_guard)
-    sd.readSectorRaw(partitionStart + 6, @buf2)
-    utils.checkGuard(@buf2_guard, @"buf2 guard")
+    utils.startTest(@"Read backup VBR (partition start + 6)")
+    utils.evaluateBool(readVerifySector(partitionStart + 6, @buf2, @buf2_guard), @"readSectorRaw(backup VBR)", true)
 
     ' Compare the two boot sectors
     mismatch := false
@@ -275,9 +317,8 @@ PUB go() | result, dataStart, fat1Start, fat2Start, idx, mismatch, cardSectors
     ' ========================================
     utils.startTestGroup(@"FSInfo Verification")
 
-    utils.initGuard(@buf_guard)
-    sd.readSectorRaw(partitionStart + 1, @buf)
-    utils.checkGuard(@buf_guard, @"buf guard")
+    utils.startTest(@"Read FSInfo (partition start + 1)")
+    utils.evaluateBool(readVerifySector(partitionStart + 1, @buf, @buf_guard), @"readSectorRaw(FSInfo)", true)
 
     utils.startTest(@"FSInfo lead signature")
     result := LONG[@buf + 0]
@@ -304,9 +345,8 @@ PUB go() | result, dataStart, fat1Start, fat2Start, idx, mismatch, cardSectors
     debug("  Next free hint: ", udec(result))
 
     utils.startTest(@"Backup FSInfo matches primary")
-    utils.initGuard(@buf2_guard)
-    sd.readSectorRaw(partitionStart + 7, @buf2)
-    utils.checkGuard(@buf2_guard, @"buf2 guard")
+    utils.startTest(@"Read backup FSInfo (partition start + 7)")
+    utils.evaluateBool(readVerifySector(partitionStart + 7, @buf2, @buf2_guard), @"readSectorRaw(backup FSInfo)", true)
     mismatch := false
     repeat idx from 0 to 511
         if buf[idx] <> buf2[idx]
@@ -323,9 +363,8 @@ PUB go() | result, dataStart, fat1Start, fat2Start, idx, mismatch, cardSectors
     fat2Start := fat1Start + sectorsPerFat
 
     ' Read FAT1 first sector for multiple tests
-    utils.initGuard(@buf_guard)
-    sd.readSectorRaw(fat1Start, @buf)
-    utils.checkGuard(@buf_guard, @"buf guard")
+    utils.startTest(@"Read FAT1 first sector")
+    utils.evaluateBool(readVerifySector(fat1Start, @buf, @buf_guard), @"readSectorRaw(FAT1)", true)
 
     utils.startTest(@"FAT[0] media type entry")
     result := LONG[@buf + 0]
@@ -344,9 +383,7 @@ PUB go() | result, dataStart, fat1Start, fat2Start, idx, mismatch, cardSectors
     utils.evaluateBool(result == 0, @"FAT[3] = 0 (free)", true)
 
     utils.startTest(@"FAT2 mirrors FAT1 (first sector)")
-    utils.initGuard(@buf2_guard)
-    sd.readSectorRaw(fat2Start, @buf2)
-    utils.checkGuard(@buf2_guard, @"buf2 guard")
+    utils.evaluateBool(readVerifySector(fat2Start, @buf2, @buf2_guard), @"readSectorRaw(FAT2)", true)
     mismatch := false
     repeat idx from 0 to 511
         if buf[idx] <> buf2[idx]
@@ -356,9 +393,7 @@ PUB go() | result, dataStart, fat1Start, fat2Start, idx, mismatch, cardSectors
     utils.evaluateBool(mismatch == false, @"FAT1 and FAT2 identical", true)
 
     utils.startTest(@"FAT1 second sector is zeroed")
-    utils.initGuard(@buf_guard)
-    sd.readSectorRaw(fat1Start + 1, @buf)
-    utils.checkGuard(@buf_guard, @"buf guard")
+    utils.evaluateBool(readVerifySector(fat1Start + 1, @buf, @buf_guard), @"readSectorRaw(FAT1 sector 2)", true)
     mismatch := false
     repeat idx from 0 to 511
         if buf[idx] <> 0
@@ -367,9 +402,7 @@ PUB go() | result, dataStart, fat1Start, fat2Start, idx, mismatch, cardSectors
     utils.evaluateBool(mismatch == false, @"All zeros", true)
 
     utils.startTest(@"FAT2 second sector is zeroed")
-    utils.initGuard(@buf_guard)
-    sd.readSectorRaw(fat2Start + 1, @buf)
-    utils.checkGuard(@buf_guard, @"buf guard")
+    utils.evaluateBool(readVerifySector(fat2Start + 1, @buf, @buf_guard), @"readSectorRaw(FAT2 sector 2)", true)
     mismatch := false
     repeat idx from 0 to 511
         if buf[idx] <> 0
@@ -385,9 +418,8 @@ PUB go() | result, dataStart, fat1Start, fat2Start, idx, mismatch, cardSectors
     dataStart := partitionStart + 32 + 2 * sectorsPerFat
     debug("  Data region starts at sector ", udec(dataStart))
 
-    utils.initGuard(@buf_guard)
-    sd.readSectorRaw(dataStart, @buf)
-    utils.checkGuard(@buf_guard, @"buf guard")
+    utils.startTest(@"Read root directory first sector")
+    utils.evaluateBool(readVerifySector(dataStart, @buf, @buf_guard), @"readSectorRaw(root dir)", true)
 
     utils.startTest(@"Volume label entry present")
     ' First entry should be volume label
@@ -447,6 +479,27 @@ PUB go() | result, dataStart, fat1Start, fat2Start, idx, mismatch, cardSectors
 
     debug(" ")
     debug("END_SESSION")
+
+PRI readVerifySector(lba, pBuf, pGuard) : bOk
+' Read one sector for structural verification, poisoning the buffer first.
+'
+' @param lba - absolute sector to read
+' @param pBuf - 512-byte destination buffer
+' @param pGuard - that buffer's 16-byte guard zone
+' @returns bOk - TRUE only when readSectorRaw reported SUCCESS
+'
+' The poison fill is the point. These checks run back to back through the same two
+' buffers, so a FAILED read used to leave the PREVIOUS sector's contents in place
+' and let the next content check pass on them. The concrete case: "FAT2 second
+' sector is zeroed" read into the buffer the "FAT1 second sector is zeroed" check
+' had just filled with zeros, so a FAT2 read that never happened passed. $A5 is
+' chosen because it matches nothing this suite looks for -- not zero, not $AA55,
+' not $0FFFFFF8.
+
+    bytefill(pBuf, $A5, sd.SECTOR_SIZE)
+    utils.initGuard(pGuard)
+    bOk := (sd.readSectorRaw(lba, pBuf) == sd.SUCCESS)
+    utils.checkGuard(pGuard, @"sector buffer guard")
 
 con { license }
 

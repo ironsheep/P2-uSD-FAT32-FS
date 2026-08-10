@@ -16,8 +16,36 @@
 #   --no-reformat      Do NOT reformat the card during the run (see below)
 #   --reformat-only    Reformat the card and exit (recovery after a failed run)
 #   --stop-on-failure  Halt at the first failing suite (forensic runs — see below)
-#   --no-preflight     Skip the card-identify / incoming-audit preflight
+#   --no-preflight     Skip the card-identify / sweep-start-fsck preflight
 #   --log <file>       Tee all output to <file> (poll it while a background run works)
+#
+# SCORING: SILENCE IS NOT SUCCESS
+# -------------------------------
+# A suite is scored ok ONLY if it produced a parseable totals line. Two rules
+# enforce that, and both exist because the runner used to score silence green:
+#
+#   * NO-SUMMARY => FAIL. SUITE_STATE defaults to "ok", so a suite that failed
+#     its mount, bailed, and printed nothing but END_SESSION exited 0 with no
+#     totals and was recorded as ok 0/0. Every mount-fail and every
+#     SETUP-NOT-MET path in every suite was therefore a silent pass. A completed
+#     run with no "Tests - Pass:" line now scores fail with reason "no-summary".
+#   * BAD TEST COUNTS => FAIL. The framework prints that line when the number of
+#     tests it started does not match the number it scored -- i.e. a test was
+#     counted and then never recorded a result. That now scores fail with
+#     reason "count-mismatch" rather than being a warning nobody reads.
+#
+# Truncation is the reason both matter on real hardware: the serial capture can
+# be cut off mid-line, and the line most often lost is the totals line itself.
+# A truncated pass and a truncated failure are indistinguishable downstream, so
+# the only safe reading of "no totals" is failure.
+#
+# REFORMAT-AFTER IS CONDITIONAL
+# -----------------------------
+# REFORMAT_AFTER runs only when the suite did NOT pass. On a green run the
+# suite's own verified end state IS a clean baseline, so a reformat there costs
+# a minute of wall clock and proves nothing. REFORMAT_BEFORE is a different
+# thing and is not conditional: fatchain wants a deterministic FAT layout so a
+# chain bug reproduces, not a capacity guarantee.
 #
 # END-TO-END BY DEFAULT
 # ---------------------
@@ -44,13 +72,15 @@
 # PREFLIGHT / CLOSING AUDIT
 # -------------------------
 # Before anything writes to the card, a hardware run identifies the card
-# (SD_card_identify: capacity, geometry, SN, warnings) and runs a read-only
-# SD_FAT32_audit on its INCOMING state, so the transcript is self-labeling.
-# An incoming-audit failure is NOT fatal — the card may have been left dirty by
-# an earlier aborted run, and the baseline reformat is about to fix it. A
-# card-identify failure IS fatal: no card, no run. After the last suite the
-# audit runs again; that CLOSING audit must pass — it is the run's proof that
-# the sweep leaves the card healthy.
+# (SD_card_identify: capacity, geometry, SN, warnings) and runs SD_FAT32_fsck
+# (check AND repair) on its INCOMING state, so the transcript is self-labeling
+# and lost cluster chains leaked by the previous run are reclaimed — once, at
+# sweep start, never mid-sweep. The reported Repairs count is the per-run leak
+# metric. A sweep-start fsck failure is NOT fatal — the card may have been left
+# dirty by an earlier aborted run, and the baseline reformat is about to fix it.
+# A card-identify failure IS fatal: no card, no run. After the last suite a
+# read-only SD_FAT32_audit runs; that CLOSING audit must pass — it is the run's
+# proof that the sweep leaves the card healthy.
 #
 # CARD IS SCRATCH (regression runner only)
 # ----------------------------------------
@@ -116,6 +146,7 @@ REFORMAT_ONLY=false
 STOP_ON_FAILURE=false
 PREFLIGHT=true
 TEE_LOG=""
+STACK_REPORT=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -144,10 +175,11 @@ while [[ $# -gt 0 ]]; do
         --reformat-only)   REFORMAT_ONLY=true; shift ;;
         --stop-on-failure) STOP_ON_FAILURE=true; shift ;;
         --no-preflight)    PREFLIGHT=false; shift ;;
+        --stack-report)    STACK_REPORT=true; shift ;;
         -h|--help)
             echo "Usage: $0 [--from <name>] [--include-format] [--compile-only] [--run-only]"
             echo "          [--external] [--no-reformat] [--reformat-only]"
-            echo "          [--stop-on-failure] [--no-preflight] [--log <file>]"
+            echo "          [--stop-on-failure] [--no-preflight] [--log <file>] [--stack-report]"
             echo ""
             echo "Options:"
             echo "  --from <name>      Resume from suite matching <name> (substring match)"
@@ -164,8 +196,13 @@ while [[ $# -gt 0 ]]; do
             echo "  --reformat-only    Reformat the card and exit (recovery after a failed run)"
             echo "  --stop-on-failure  Halt at the first failing suite, preserving on-card"
             echo "                     evidence. Default: record it and CONTINUE to the end."
-            echo "  --no-preflight     Skip card-identify + incoming read-only audit"
+            echo "  --no-preflight     Skip card-identify + sweep-start fsck (audit + reclaim)"
             echo "  --log <file>       Tee output to <file> (pollable during a background run)"
+            echo "  --stack-report     MEASUREMENT BUILD: compile every suite with"
+            echo "                     -D SD_INCLUDE_STACK_REPORT (enlarged worker stack +"
+            echo "                     per-suite watermark line) and collect the watermarks"
+            echo "                     into the sweep summary. Release sizing input; see the"
+            echo "                     formula at the STACK_SIZE CON in the driver."
             echo ""
             echo "The card is treated as SCRATCH on hardware runs: a clean FAT32 baseline is"
             echo "established before the first suite and the card is reformatted around the"
@@ -186,6 +223,7 @@ while [[ $# -gt 0 ]]; do
             echo "  $0 --reformat-only              # Restore a card left dirty by a failed run"
             echo "  $0 --stop-on-failure            # Forensic run: halt + preserve evidence"
             echo "  $0 --log ../DOCs/sweep.txt      # Full sweep, transcript teed to a file"
+            echo "  $0 --stack-report               # Measurement sweep: collect stack watermarks"
             exit 0
             ;;
         *) echo -e "${RED}Error: Unknown option: $1${NC}"; exit 1 ;;
@@ -209,6 +247,17 @@ if [[ "$EXTERNAL_PINS" == "true" ]]; then
     PIN_DEFINE_FLAG="-D SD_PINS_EXTERNAL"
 fi
 
+# Measurement-build flag pass-through (--stack-report → run_test.sh) and direct
+# pnut-ts define for the compile phases that invoke pnut-ts themselves. Suites
+# only — the support vehicles (format/identify/audit/fsck) don't use the test
+# framework and stay on the release stack size.
+STACK_FLAG=""
+STACK_DEFINE_FLAG=""
+if [[ "$STACK_REPORT" == "true" ]]; then
+    STACK_FLAG="--stack-report"
+    STACK_DEFINE_FLAG="-D SD_INCLUDE_STACK_REPORT"
+fi
+
 # --- Card-as-scratch (reformat) machinery -------------------------------------
 # DESTRUCTIVE. Regression runner only — see the header block. Nothing here is
 # reachable from tools/run_test.sh; it is only used as the launcher below.
@@ -217,13 +266,21 @@ FORMAT_VEHICLE_BASE="SD_format_card"
 FORMAT_VEHICLE="$PROJECT_ROOT/src/UTILS/${FORMAT_VEHICLE_BASE}.spin2"
 REFORMAT_TIMEOUT=300
 
-# Preflight / closing vehicles (read-only; both live in src/UTILS).
+# Preflight / closing vehicles (all live in src/UTILS). Identify and the
+# closing audit are read-only; the sweep-start fsck REPAIRS (reclaims lost
+# cluster chains) — see _run_fsck.
 IDENTIFY_VEHICLE_BASE="SD_card_identify"
 IDENTIFY_TIMEOUT=60
 AUDIT_VEHICLE_BASE="SD_FAT32_audit"
 AUDIT_TIMEOUT=300
+FSCK_VEHICLE_BASE="SD_FAT32_fsck"
+FSCK_TIMEOUT=300
 
-# Suites that need a guaranteed-clean card going IN (capacity/geometry gates).
+# Suites that need a freshly-formatted card going IN. fatchain is here for
+# FAT-LAYOUT DETERMINISM: its tests build and verify specific cluster-chain
+# shapes, and starting from a just-formatted FAT is what makes a failure
+# reproduce identically run-to-run. (Not a capacity gate — the suite fits on
+# any supported card.)
 REFORMAT_BEFORE=(
     "SD_RT_fatchain_tests"
 )
@@ -231,6 +288,9 @@ REFORMAT_BEFORE=(
 # Suites that can leave the card unusable/altered on the way OUT.
 #   fatchain — on an unfixed driver its writes damage the FAT/VBR (Bug A)
 #   format   — leaves whatever label/geometry the format suite chose
+# Applied ONLY when the suite did not end ok (decision 7, 2026-08-09): a green
+# run of these suites leaves a healthy card — the closing audit proves it — so
+# the redundant format is skipped.
 REFORMAT_AFTER=(
     "SD_RT_fatchain_tests"
     "SD_RT_format_tests"
@@ -315,8 +375,9 @@ _latest_log() {  # _latest_log <basename> -> path of newest matching log, or emp
     ls -t "$LOG_DIR/${1}_"*.log 2>/dev/null | head -1
 }
 
-# --- Read-only preflight / closing vehicles ------------------------------------
-# Neither writes to the card. Both are run through the unmodified run_test.sh.
+# --- Preflight / closing vehicles ----------------------------------------------
+# Identify and the closing audit are read-only; the sweep-start fsck REPAIRS
+# (reclaims lost chains). All are run through the unmodified run_test.sh.
 
 # Identify the card in the socket. Echoes the vehicle's own L1/L2/L3 summary into
 # the transcript so the run is self-labeling (capacity, geometry, SN, warnings).
@@ -428,6 +489,68 @@ _run_audit() {   # _run_audit <label>
         return 1
     fi
     printf "${GREEN}OK${NC} (%d/%d) [%3ds]\n" "$AUDIT_PASS" "$AUDIT_PASS" "$elapsed"
+    return 0
+}
+
+# Run the FAT32 fsck (check AND repair) — the sweep-start reclamation step.
+# Same four-pass engine as the audit, but repairs are APPLIED: lost cluster
+# chains left by a prior run are reclaimed here, once, before suite 1 — never
+# mid-sweep (decision 8, 2026-08-09). The Repairs count is the per-run leak
+# metric: error_injection T13 leaks ~2 clusters by design; markedly more than
+# that is a signal worth reading the fsck log over.
+# Sets FSCK_ERRORS / FSCK_REPAIRS / FSCK_LOG. Returns non-zero if fsck did not
+# complete, was unparseable, or left errors it could not repair.
+_run_fsck() {   # _run_fsck <label>
+    local why="$1"
+    local exit_code clean summary start end elapsed
+    FSCK_ERRORS=""
+    FSCK_REPAIRS=""
+    FSCK_LOG=""
+
+    printf "  ${CYAN}[fsck]${NC}      %-36s " "$why"
+    start=$(date +%s)
+    set +e
+    "$SCRIPT_DIR/run_test.sh" "$PROJECT_ROOT/src/UTILS/${FSCK_VEHICLE_BASE}.spin2" \
+        -t "$FSCK_TIMEOUT" $EXTERNAL_FLAG > /dev/null 2>&1
+    exit_code=$?
+    set -e
+    end=$(date +%s)
+    elapsed=$((end - start))
+
+    FSCK_LOG=$(_latest_log "$FSCK_VEHICLE_BASE")
+    if [[ $exit_code -ne 0 || -z "$FSCK_LOG" ]]; then
+        printf "${RED}DID NOT RUN${NC} [%3ds]\n" "$elapsed"
+        return 1
+    fi
+
+    clean=$(_clean_log "$FSCK_LOG")
+    if ! echo "$clean" | grep -qa "FSCK COMPLETE"; then
+        printf "${RED}INCOMPLETE${NC} [%3ds]\n" "$elapsed"
+        return 1
+    fi
+
+    # Repair mode summarizes as "Errors: N  Repairs: N". Never default to 0 —
+    # an unparseable summary is not a clean card.
+    summary=$(echo "$clean" | grep -aE "Errors: *[0-9]+" | tail -1)
+    if [[ -n "$summary" ]]; then
+        FSCK_ERRORS=$(echo "$summary" | sed -E 's/.*Errors: *([0-9]+).*/\1/')
+        FSCK_REPAIRS=$(echo "$summary" | sed -E 's/.*Repairs: *([0-9]+).*/\1/')
+    fi
+    if ! [[ "$FSCK_ERRORS" =~ ^[0-9]+$ && "$FSCK_REPAIRS" =~ ^[0-9]+$ ]]; then
+        printf "${RED}UNPARSEABLE${NC} [%3ds]\n" "$elapsed"
+        return 1
+    fi
+
+    if [[ $FSCK_ERRORS -gt 0 ]]; then
+        printf "${RED}%d errors, %d repairs${NC} [%3ds]\n" "$FSCK_ERRORS" "$FSCK_REPAIRS" "$elapsed"
+        echo -e "              ${CYAN}fsck log: ${FSCK_LOG}${NC}"
+        return 1
+    fi
+    if [[ $FSCK_REPAIRS -gt 0 ]]; then
+        printf "${YELLOW}clean after %d repairs (reclaimed lost chains)${NC} [%3ds]\n" "$FSCK_REPAIRS" "$elapsed"
+    else
+        printf "${GREEN}clean, nothing to reclaim${NC} [%3ds]\n" "$elapsed"
+    fi
     return 0
 }
 
@@ -570,7 +693,7 @@ else
     echo "  Card:        preserved (--no-reformat) — suites must self-establish"
 fi
 if [[ "$COMPILE_ONLY" != true ]]; then
-    echo "  Preflight:   $([[ "$PREFLIGHT" == true ]] && echo "card identify + incoming/closing audit" || echo "skipped (--no-preflight)")"
+    echo "  Preflight:   $([[ "$PREFLIGHT" == true ]] && echo "card identify + sweep-start fsck (reclaim) / closing audit" || echo "skipped (--no-preflight)")"
     echo "  On failure:  $([[ "$STOP_ON_FAILURE" == true ]] && echo "STOP (preserve on-card evidence)" || echo "record and CONTINUE to the end")"
 fi
 if [[ -n "$TEE_LOG" ]]; then
@@ -582,6 +705,9 @@ elif [[ "$RUN_ONLY" == true ]]; then
     echo "  Mode: RUN ONLY (using existing .bin files)"
 else
     echo "  Mode: COMPILE + RUN"
+fi
+if [[ "$STACK_REPORT" == true ]]; then
+    echo "  Build:       STACK MEASUREMENT (-D SD_INCLUDE_STACK_REPORT, enlarged worker stack)"
 fi
 echo ""
 
@@ -634,13 +760,13 @@ if [[ "$RUN_ONLY" == true ]]; then
         BASENAME="${FILE%.spin2}"
 
         if _needs_compile "$FILE"; then
-            if pnut-ts -d $CACHE_FLAGS $PIN_DEFINE_FLAG -I "$SRC_PATH" -I "$UTILS_PATH" -I "$DEMO_PATH" -I . "$FILE" >/dev/null 2>&1; then
+            if pnut-ts -d $CACHE_FLAGS $PIN_DEFINE_FLAG $STACK_DEFINE_FLAG -I "$SRC_PATH" -I "$UTILS_PATH" -I "$DEMO_PATH" -I . "$FILE" >/dev/null 2>&1; then
                 SIZE=$(wc -c < "${BASENAME}.bin" | tr -d ' ')
                 echo -e "  ${GREEN}OK${NC}: $FILE (${SIZE} bytes) [recompiled]"
                 COMPILE_PASS=$((COMPILE_PASS + 1))
             else
                 echo -e "  ${RED}FAIL${NC}: $FILE"
-                pnut-ts -d $CACHE_FLAGS $PIN_DEFINE_FLAG -I "$SRC_PATH" -I "$UTILS_PATH" -I "$DEMO_PATH" -I . "$FILE" 2>&1 | grep -i error || true
+                pnut-ts -d $CACHE_FLAGS $PIN_DEFINE_FLAG $STACK_DEFINE_FLAG -I "$SRC_PATH" -I "$UTILS_PATH" -I "$DEMO_PATH" -I . "$FILE" 2>&1 | grep -i error || true
                 COMPILE_FAIL=$((COMPILE_FAIL + 1))
                 COMPILE_FAILED_FILES+=("$FILE")
             fi
@@ -706,13 +832,13 @@ else
         fi
 
         BASENAME="${FILE%.spin2}"
-        if pnut-ts -d $CACHE_FLAGS $PIN_DEFINE_FLAG -I "$SRC_PATH" -I "$UTILS_PATH" -I "$DEMO_PATH" -I . "$FILE" >/dev/null 2>&1; then
+        if pnut-ts -d $CACHE_FLAGS $PIN_DEFINE_FLAG $STACK_DEFINE_FLAG -I "$SRC_PATH" -I "$UTILS_PATH" -I "$DEMO_PATH" -I . "$FILE" >/dev/null 2>&1; then
             SIZE=$(wc -c < "${BASENAME}.bin" | tr -d ' ')
             echo -e "  ${GREEN}OK${NC}: $FILE (${SIZE} bytes)"
             COMPILE_PASS=$((COMPILE_PASS + 1))
         else
             echo -e "  ${RED}FAIL${NC}: $FILE"
-            pnut-ts -d $CACHE_FLAGS $PIN_DEFINE_FLAG -I "$SRC_PATH" -I "$UTILS_PATH" -I "$DEMO_PATH" -I . "$FILE" 2>&1 | grep -i error || true
+            pnut-ts -d $CACHE_FLAGS $PIN_DEFINE_FLAG $STACK_DEFINE_FLAG -I "$SRC_PATH" -I "$UTILS_PATH" -I "$DEMO_PATH" -I . "$FILE" 2>&1 | grep -i error || true
             COMPILE_FAIL=$((COMPILE_FAIL + 1))
             COMPILE_FAILED_FILES+=("$FILE")
         fi
@@ -739,12 +865,14 @@ fi
 # Built here so a broken vehicle fails the run up front, not halfway through on
 # hardware. run_test.sh recompiles each at launch time anyway.
 #   reformat vehicle  — SD_format_card   (needed unless --no-reformat)
-#   preflight vehicles— SD_card_identify + SD_FAT32_audit (unless --no-preflight)
+#   preflight vehicles— SD_card_identify + SD_FAT32_audit + SD_FAT32_fsck
+#                       (unless --no-preflight)
 VEHICLES=()
 [[ "$REFORMAT"  == true ]] && VEHICLES+=("${FORMAT_VEHICLE_BASE}:reformat vehicle")
 if [[ "$PREFLIGHT" == true ]]; then
     VEHICLES+=("${IDENTIFY_VEHICLE_BASE}:preflight: card identify")
     VEHICLES+=("${AUDIT_VEHICLE_BASE}:preflight/closing: FAT32 audit")
+    VEHICLES+=("${FSCK_VEHICLE_BASE}:preflight: sweep-start fsck")
 fi
 
 if [[ ${#VEHICLES[@]} -gt 0 ]]; then
@@ -771,7 +899,7 @@ if [[ ${#VEHICLES[@]} -gt 0 ]]; then
                 echo -e "${RED}a clean card. Fix it, or rerun with --no-reformat.${NC}"
             else
                 echo -e "${RED}A preflight vehicle does not compile. Fix it, or rerun with${NC}"
-                echo -e "${RED}--no-preflight to skip card identify + audit.${NC}"
+                echo -e "${RED}--no-preflight to skip card identify + fsck/audit.${NC}"
             fi
             exit 1
         fi
@@ -863,6 +991,11 @@ declare -a RESULT_PASS=()
 declare -a RESULT_FAIL=()
 declare -a RESULT_TIME=()
 declare -a RESULT_STATE=()   # ok | fail | infra
+declare -a RESULT_REASON=()  # "" | no-summary | count-mismatch
+declare -a RESULT_STACK=()   # --stack-report only: "<used>/<size>" | "n/a" | "-"
+STACK_MAX=0                  # highest watermark seen across the sweep
+STACK_MAX_SUITE=""
+STACK_MAX_SIZE=0
 TOTAL_PASS=0
 TOTAL_FAIL=0
 TOTAL_TIME=0
@@ -873,21 +1006,34 @@ declare -a INFRA_SUITES=()
 REFORMAT_FAILED=false
 CARD_LEFT_DIRTY=false
 CARD_IS_FRESH=false        # true = nothing has touched the card since the last format
-PREFLIGHT_AUDIT_FAIL=false
+PREFLIGHT_FSCK_FAIL=false
 CLOSING_AUDIT_FAIL=false
 
-# --- Preflight: identify the card, audit its INCOMING state -------------------
+# --- Preflight: identify the card, fsck its INCOMING state --------------------
 # Runs BEFORE the baseline reformat, while the card still holds whatever the last
-# run left. Read-only. Identify is fatal (no card, no run); the incoming audit is
-# informational — a dirty card is exactly what the baseline reformat fixes.
+# run left. The fsck REPAIRS: lost cluster chains leaked by the previous run are
+# reclaimed here, once, at sweep start (decision 8, 2026-08-09 — never
+# mid-sweep), and the reported Repairs count is the per-run leak metric.
+# Identify is fatal (no card, no run); a dirty or failed fsck is informational —
+# the baseline reformat below establishes a known state regardless.
 if [[ "$PREFLIGHT" == true ]]; then
     if ! _identify_card; then
         exit 1
     fi
-    if ! _run_audit "incoming (read-only)"; then
-        PREFLIGHT_AUDIT_FAIL=true
-        echo -e "              ${YELLOW}incoming card not clean — informational only;${NC}"
-        echo -e "              ${YELLOW}the baseline reformat below establishes a known state.${NC}"
+    if [[ "$REFORMAT" == true ]]; then
+        if ! _run_fsck "sweep-start (audit + reclaim)"; then
+            PREFLIGHT_FSCK_FAIL=true
+            echo -e "              ${YELLOW}sweep-start fsck failed or could not fully repair —${NC}"
+            echo -e "              ${YELLOW}informational; the baseline reformat below establishes a known state.${NC}"
+        fi
+    else
+        # --no-reformat preserves card contents. Fsck repairs are WRITES, so
+        # the incoming check stays read-only on this path.
+        if ! _run_audit "incoming (read-only)"; then
+            PREFLIGHT_FSCK_FAIL=true
+            echo -e "              ${YELLOW}incoming card not clean — informational only (--no-reformat:${NC}"
+            echo -e "              ${YELLOW}no baseline reformat will run; suites must self-establish).${NC}"
+        fi
     fi
     echo ""
 fi
@@ -937,11 +1083,11 @@ for i in "${!SUITES[@]}"; do
     # driver defect and must not be papered over.
     RETRIED=false
     set +e
-    ./run_test.sh "../src/regression-tests/$FILE" -t "$TIMEOUT" $EXTERNAL_FLAG > /dev/null 2>&1
+    ./run_test.sh "../src/regression-tests/$FILE" -t "$TIMEOUT" $EXTERNAL_FLAG $STACK_FLAG > /dev/null 2>&1
     RUN_EXIT=$?
     if [[ $RUN_EXIT -eq 2 ]]; then
         RETRIED=true
-        ./run_test.sh "../src/regression-tests/$FILE" -t "$TIMEOUT" $EXTERNAL_FLAG > /dev/null 2>&1
+        ./run_test.sh "../src/regression-tests/$FILE" -t "$TIMEOUT" $EXTERNAL_FLAG $STACK_FLAG > /dev/null 2>&1
         RUN_EXIT=$?
     fi
     set -e
@@ -952,6 +1098,8 @@ for i in "${!SUITES[@]}"; do
     # Parse log for pass/fail counts
     SUITE_PASS=0
     SUITE_FAIL=0
+    SUMMARY_FOUND=false
+    BAD_COUNTS=false
 
     LATEST_LOG=$(ls -t "$LOG_DIR/${BASENAME}_"*.log 2>/dev/null | head -1)
 
@@ -970,16 +1118,57 @@ for i in "${!SUITES[@]}"; do
         if [[ -n "$SUMMARY_LINE" ]]; then
             SUITE_PASS=$(echo "$SUMMARY_LINE" | sed -E 's/.*Pass: *([0-9]+).*/\1/')
             SUITE_FAIL=$(echo "$SUMMARY_LINE" | sed -E 's/.*Fail: *([0-9]+).*/\1/')
+            SUMMARY_FOUND=true
+        fi
+
+        # The framework prints "BAD TEST COUNTS" when its own bookkeeping shows
+        # tests that were counted but never scored (or scored extra) — a suite
+        # whose totals line balances can still be hiding vanished tests.
+        if echo "$CLEAN_LOG" | grep -qa "BAD TEST COUNTS"; then
+            BAD_COUNTS=true
         fi
     fi
 
+    # Measurement builds: capture the per-suite worker-stack watermark line
+    # (emitted by isp_rt_utilities beside the totals). Absence is NOT a failure
+    # here — a suite that died before its totals is already scored by the
+    # no-summary rule; "-" just marks the missing datum.
+    SUITE_STACK="-"
+    if [[ "$STACK_REPORT" == true && -n "$LATEST_LOG" ]]; then
+        # Single contract point for BOTH line forms the framework emits (numeric and
+        # n/a) -- see reportStackWatermark in isp_rt_utilities.spin2.
+        WM_LINE=$(echo "$CLEAN_LOG" | grep -aE "STACK WATERMARK: (n/a|[0-9]+) of [0-9]+" | tail -1)
+        if [[ "$WM_LINE" =~ STACK\ WATERMARK:\ (n/a|[0-9]+)\ of\ ([0-9]+) ]]; then
+            WM_USED="${BASH_REMATCH[1]}"
+            WM_SIZE="${BASH_REMATCH[2]}"
+            SUITE_STACK="${WM_USED}/${WM_SIZE}"
+            if [[ "$WM_USED" != "n/a" ]] && (( WM_USED > STACK_MAX )); then
+                STACK_MAX=$WM_USED
+                STACK_MAX_SUITE="$BASENAME"
+                STACK_MAX_SIZE=$WM_SIZE
+            fi
+        fi
+    fi
+    RESULT_STACK+=("$SUITE_STACK")
+
     # Classify the outcome:
     #   infra — the suite never executed (download/serial died twice)
-    #   fail  — it executed and reported failures, or timed out / crashed
-    #   ok    — executed, zero failures
+    #   fail  — it executed and reported failures, timed out / crashed, produced
+    #           no parseable totals line (no-summary), or its framework flagged
+    #           inconsistent bookkeeping (count-mismatch)
+    #   ok    — executed, zero failures, totals parsed, counts consistent
+    # SILENCE IS NEVER SUCCESS: a suite that fails mount, bails, and prints only
+    # END_SESSION used to score ok 0/0 — it now scores fail/no-summary.
     SUITE_STATE="ok"
+    SUITE_REASON=""
     if [[ $RUN_EXIT -eq 2 ]]; then
         SUITE_STATE="infra"
+    elif [[ "$SUMMARY_FOUND" == false && $RUN_EXIT -eq 0 ]]; then
+        SUITE_STATE="fail"
+        SUITE_REASON="no-summary"
+    elif [[ "$BAD_COUNTS" == true ]]; then
+        SUITE_STATE="fail"
+        SUITE_REASON="count-mismatch"
     elif [[ $RUN_EXIT -ne 0 || $SUITE_FAIL -gt 0 ]]; then
         SUITE_STATE="fail"
     fi
@@ -990,6 +1179,7 @@ for i in "${!SUITES[@]}"; do
     RESULT_FAIL+=("$SUITE_FAIL")
     RESULT_TIME+=("$ELAPSED")
     RESULT_STATE+=("$SUITE_STATE")
+    RESULT_REASON+=("$SUITE_REASON")
     TOTAL_PASS=$((TOTAL_PASS + SUITE_PASS))
     TOTAL_FAIL=$((TOTAL_FAIL + SUITE_FAIL))
     TOTAL_TIME=$((TOTAL_TIME + ELAPSED))
@@ -1005,8 +1195,9 @@ for i in "${!SUITES[@]}"; do
             INFRA_SUITES+=("$BASENAME")
             ;;
         fail)
-            printf "  ${RED}[%2d/%d] %-38s %4d pass, %3d fail  [%3ds]%s${NC}\n" \
-                "$SUITE_NUM" "$TOTAL_SUITES" "$BASENAME" "$SUITE_PASS" "$SUITE_FAIL" "$ELAPSED" "$RETRY_NOTE"
+            printf "  ${RED}[%2d/%d] %-38s %4d pass, %3d fail  [%3ds]%s%s${NC}\n" \
+                "$SUITE_NUM" "$TOTAL_SUITES" "$BASENAME" "$SUITE_PASS" "$SUITE_FAIL" "$ELAPSED" "$RETRY_NOTE" \
+                "${SUITE_REASON:+  ($SUITE_REASON)}"
             FAILED_SUITE="$BASENAME"
             FAILED_SUITES+=("$BASENAME")
             ;;
@@ -1025,11 +1216,14 @@ for i in "${!SUITES[@]}"; do
         break
     fi
 
-    # Default (continue) mode: return the card to a clean baseline after any
-    # destructive suite — INCLUDING one that just failed. The run has to keep
-    # going, and a damaged card would cascade the failure into every suite after
-    # it. Forensics on a failed destructive suite need --stop-on-failure.
-    if [[ "$REFORMAT" == true ]] && _in_list "$BASENAME" "${REFORMAT_AFTER[@]}"; then
+    # Default (continue) mode: return the card to a clean baseline after a
+    # destructive suite that did NOT end ok (decision 7, 2026-08-09). A GREEN
+    # destructive run leaves a healthy card — its own pass plus the closing
+    # audit prove it — so the redundant format is skipped. A failing one still
+    # reformats, because the run has to keep going and a damaged card would
+    # cascade the failure into every suite after it. Forensics on a failed
+    # destructive suite need --stop-on-failure.
+    if [[ "$REFORMAT" == true && "$SUITE_STATE" != "ok" ]] && _in_list "$BASENAME" "${REFORMAT_AFTER[@]}"; then
         if ! _reformat_card "after $BASENAME"; then
             REFORMAT_FAILED=true
             break
@@ -1064,8 +1258,9 @@ for j in "${!RESULT_NAMES[@]}"; do
                 "$IDX" "${RESULT_NAMES[$j]}" "-" "-" "${RESULT_TIME[$j]}"
             ;;
         fail)
-            printf "  ${RED}%2d  %-38s %5d %5d %4ds${NC}\n" \
-                "$IDX" "${RESULT_NAMES[$j]}" "${RESULT_PASS[$j]}" "${RESULT_FAIL[$j]}" "${RESULT_TIME[$j]}"
+            printf "  ${RED}%2d  %-38s %5d %5d %4ds%s${NC}\n" \
+                "$IDX" "${RESULT_NAMES[$j]}" "${RESULT_PASS[$j]}" "${RESULT_FAIL[$j]}" "${RESULT_TIME[$j]}" \
+                "${RESULT_REASON[$j]:+  (${RESULT_REASON[$j]})}"
             ;;
         *)
             printf "  %2d  %-38s %5d %5d %4ds\n" \
@@ -1080,6 +1275,30 @@ if [[ $REFORMAT_COUNT -gt 0 ]]; then
     printf "  %-4s %-38s %5s %5s %4ds\n" "" "card reformats (${REFORMAT_COUNT})" "" "" "$REFORMAT_TIME"
 fi
 echo ""
+
+# --- Stack watermarks (--stack-report measurement sweeps only) -----------------
+# The max across a FULL green sweep is the release-sizing input. The sizing
+# formula and its application rules live at the STACK_SIZE CON in the driver --
+# the arithmetic below implements it; change them together.
+if [[ "$STACK_REPORT" == true ]]; then
+    echo -e "${BOLD}  Worker-stack watermarks (measurement build)${NC}"
+    printf "  %-4s %-38s %s\n" "#" "Suite" "Stack used/size (longs)"
+    for j in "${!RESULT_NAMES[@]}"; do
+        IDX=$((START_INDEX + j + 1))
+        printf "  %2d  %-38s %s\n" "$IDX" "${RESULT_NAMES[$j]}" "${RESULT_STACK[$j]}"
+    done
+    if [[ $STACK_MAX -gt 0 ]]; then
+        SUGGESTED=$(( ((STACK_MAX + 32 + 15) / 16) * 16 ))
+        echo ""
+        echo -e "  Max watermark: ${BOLD}${STACK_MAX}${NC} of ${STACK_MAX_SIZE} longs (${STACK_MAX_SUITE})"
+        echo -e "  Suggested release STACK_SIZE: ${BOLD}${SUGGESTED}${NC} (max + 32, rounded up to multiple of 16)"
+        echo -e "  ${YELLOW}Apply ONLY after a FULL green sweep; annotate with sweep date + card serial.${NC}"
+    else
+        echo ""
+        echo -e "  ${YELLOW}No watermark lines captured — no suite reached its totals line.${NC}"
+    fi
+    echo ""
+fi
 
 # --- Verdict ------------------------------------------------------------------
 # Anything short of "every suite ran and passed, and the card ends healthy" is a
@@ -1121,8 +1340,10 @@ if [[ "$CLOSING_AUDIT_FAIL" == true ]]; then
     RUN_OK=false
 fi
 
-if [[ "$PREFLIGHT_AUDIT_FAIL" == true ]]; then
-    echo -e "  ${YELLOW}Note: the INCOMING card was not clean (pre-existing, informational).${NC}"
+if [[ "$PREFLIGHT_FSCK_FAIL" == true ]]; then
+    echo -e "  ${YELLOW}Note: the sweep-start card check did not come back clean — fsck failed,${NC}"
+    echo -e "  ${YELLOW}could not fully repair, or the read-only audit found issues. Pre-existing,${NC}"
+    echo -e "  ${YELLOW}informational.${NC}"
 fi
 
 if [[ "$CARD_LEFT_DIRTY" == true ]]; then

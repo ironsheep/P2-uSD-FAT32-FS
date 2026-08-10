@@ -87,6 +87,13 @@ VAR
     BYTE    cmd12_buf[16]
     BYTE    cmd12_pre_buf[7]
 
+DAT
+' TEST 6 (CMD25 cache coherence) filenames, plus their 11-byte on-disk SFN forms
+cohFileA        BYTE    "MBCOHA.TXT", 0
+cohFileB        BYTE    "MBCOHB.TXT", 0
+sfnCohA         BYTE    "MBCOHA  TXT"
+sfnCohB         BYTE    "MBCOHB  TXT"
+
 PUB go() | result, cardSectors
 '' Main entry point for multi-block data integrity tests
 ''
@@ -104,8 +111,9 @@ PUB go() | result, cardSectors
     ' Mount the card (starts worker cog needed for multi-block operations)
     debug("Mounting SD card (V2 driver)...")
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if result < 0
+    ifnot utils.requireSetup(result == 0, @"SETUP: mount SD card")
         debug("ERROR: Mount failed!")
+        utils.ShowTestEndCounts()
         debug("END_SESSION")
         return
 
@@ -126,9 +134,24 @@ PUB go() | result, cardSectors
     ' ----------------------------------------
     cardSectors := sd.cardSizeSectors()
     debug("Card size: ", udec_(cardSectors), " sectors; scratch range ", udec_(TEST_SECTOR_BASE), "..", udec_(TEST_SECTOR_MAX))
-    if cardSectors <= TEST_SECTOR_MAX
+    ' Scored, not just printed: the rig's regression cards all satisfy this
+    ' range, so a failed check means the wrong card (or something worse) and
+    ' must not read as a green 0-fail run.
+    ' ASSUMPTION, stated here because it is load-bearing and invisible otherwise:
+    ' this suite writes RAW LBAs from TEST_SECTOR_BASE (200,000) upward, on the
+    ' understanding that they sit past the filesystem's allocated clusters on the
+    ' regression cards -- i.e. writing them destroys no live file data. That holds
+    ' for the rig's cards because the FAT32 data region on them starts far below
+    ' 200,000 and is nowhere near full. It is NOT a general guarantee: on a heavily
+    ' populated or much smaller card these LBAs could hold real file content. The
+    ' card-size gate below is what keeps the range on the card; it deliberately does
+    ' NOT prove the range is unallocated, because MODE_RAW has no filesystem view to
+    ' ask. A regression card is project scratch by standing policy, which is what
+    ' makes that acceptable.
+    ifnot utils.requireSetup(cardSectors > TEST_SECTOR_MAX, @"SETUP: card large enough for scratch range")
         debug("  *** SETUP NOT MET: card has ", udec_(cardSectors), " sectors, scratch range needs > ", udec_(TEST_SECTOR_MAX), " -- multi-block tests NOT run ***")
         sd.unmount()
+        utils.ShowTestEndCounts()
         debug("END_SESSION")
         return
     debug(" ")
@@ -158,6 +181,11 @@ PUB go() | result, cardSectors
     ' ========================================
     testLargeMultiBlock()
 
+    ' ========================================
+    ' TEST 6: CMD25 cache coherence
+    ' ========================================
+    testCmd25CacheCoherence()
+
     ' Report stack depth while worker cog is still running
 #ifdef SD_INCLUDE_STACK_CHECK
     debug(" ")
@@ -176,7 +204,7 @@ PUB go() | result, cardSectors
     debug("END_SESSION")
 
 
-PRI testRoundTripMultiBlock() | sector, idx, written, readCt, errors
+PRI testRoundTripMultiBlock() | sector, idx, written, readCt, errors, nonce
 ' TEST 1: Write 8 sectors with writeSectorsRaw, read back with readSectorsRaw
 '
 ' @local sector - Starting sector number for the test
@@ -188,9 +216,13 @@ PRI testRoundTripMultiBlock() | sector, idx, written, readCt, errors
     debug("--- TEST 1: Round-trip Multi-Block (8 sectors) ---")
     sector := TEST_SECTOR_BASE
 
-    ' Fill write buffer with known pattern: each byte = (sector_offset * 17 + byte_offset) & $FF
+    ' Fill write buffer with a known pattern, offset by the per-run nonce so this
+    ' run's data is distinguishable from what a previous run left in these sectors.
+    ' The nonce is read ONCE -- it is stable for the run, and calling it per byte
+    ' would put a method call in a 4 KB..32 KB loop for no benefit.
+    nonce := utils.perRunNonce()
     repeat idx from 0 to (SMALL_COUNT * sd.SECTOR_SIZE) - 1
-        write_buf[idx] := ((idx / sd.SECTOR_SIZE) * 17 + (idx // sd.SECTOR_SIZE)) & $FF
+        write_buf[idx] := ((idx / sd.SECTOR_SIZE) * 17 + (idx // sd.SECTOR_SIZE) + nonce) & $FF
 
     ' Write all 8 sectors at once
     debug("* Writing 8 sectors starting at ", udec_(sector))
@@ -233,7 +265,7 @@ PRI testRoundTripMultiBlock() | sector, idx, written, readCt, errors
         recordFail()
 
 
-PRI testMultiWriteSingleRead() | sector, idx, jdx, written, errors, expected, actual, bufOffset
+PRI testMultiWriteSingleRead() | sector, idx, jdx, written, errors, expected, actual, bufOffset, nonce
 ' TEST 2: Write 8 sectors with writeSectorsRaw, read back with individual readSectorRaw calls
 '
 ' @local sector - Starting sector number for the test
@@ -249,9 +281,10 @@ PRI testMultiWriteSingleRead() | sector, idx, jdx, written, errors, expected, ac
     debug("--- TEST 2: Multi-Write, Single-Read (8 sectors) ---")
     sector := TEST_SECTOR_BASE + 10
 
-    ' Fill write buffer with different pattern
+    ' Fill write buffer with a different pattern; nonce read once, not per byte
+    nonce := utils.perRunNonce()
     repeat idx from 0 to (SMALL_COUNT * sd.SECTOR_SIZE) - 1
-        write_buf[idx] := ((idx / sd.SECTOR_SIZE) * 23 + (idx // sd.SECTOR_SIZE) + $A0) & $FF
+        write_buf[idx] := ((idx / sd.SECTOR_SIZE) * 23 + (idx // sd.SECTOR_SIZE) + $A0 + nonce) & $FF
 
     ' Write all 8 sectors at once
     debug("* Writing 8 sectors with writeSectorsRaw at ", udec_(sector))
@@ -265,8 +298,15 @@ PRI testMultiWriteSingleRead() | sector, idx, jdx, written, errors, expected, ac
     errors := 0
     utils.initGuard(@read_buf_guard)
     repeat idx from 0 to SMALL_COUNT - 1
-        ' Read single sector into read_buf (reuse first 512 bytes)
-        sd.readSectorRaw(sector + idx, @read_buf)
+        ' Read single sector into read_buf (reuse first 512 bytes).
+        ' The status was discarded: a FAILED read left the previous sector's bytes
+        ' in read_buf and the mismatch loop below then reported it as a DATA
+        ' CORRUPTION defect. Wrong diagnosis, and it pointed at the multi-block
+        ' write path rather than at the read that actually failed.
+        if sd.readSectorRaw(sector + idx, @read_buf) < 0
+            debug("  FAIL: readSectorRaw failed for sector ", udec_(sector + idx), " (not a data mismatch)")
+            recordFail()
+            return
         utils.initAndCheckGuard(@read_buf_guard, @"read_buf guard")
 
         ' Verify this sector's data against write_buf
@@ -287,7 +327,7 @@ PRI testMultiWriteSingleRead() | sector, idx, jdx, written, errors, expected, ac
         recordFail()
 
 
-PRI testSingleWriteMultiRead() | sector, idx, jdx, readCt, errors, expected, actual, bufOffset
+PRI testSingleWriteMultiRead() | sector, idx, jdx, readCt, errors, expected, actual, bufOffset, nonce
 ' TEST 3: Write 8 sectors with individual writeSectorRaw calls, read back with readSectorsRaw
 '
 ' @local sector - Starting sector number for the test
@@ -305,11 +345,12 @@ PRI testSingleWriteMultiRead() | sector, idx, jdx, readCt, errors, expected, act
 
     ' Write 8 sectors one at a time with unique pattern per sector
     debug("* Writing 8 sectors with individual writeSectorRaw at ", udec_(sector))
+    nonce := utils.perRunNonce()
     repeat idx from 0 to SMALL_COUNT - 1
         ' Fill single sector buffer
         bufOffset := idx * sd.SECTOR_SIZE
         repeat jdx from 0 to sd.SECTOR_SIZE - 1
-            write_buf[bufOffset + jdx] := ((idx * 31) + jdx + $B0) & $FF
+            write_buf[bufOffset + jdx] := ((idx * 31) + jdx + $B0 + nonce) & $FF
 
         ' Write this sector
         if sd.writeSectorRaw(sector + idx, @write_buf + bufOffset) < 0
@@ -351,7 +392,7 @@ PRI testSingleWriteMultiRead() | sector, idx, jdx, readCt, errors, expected, act
         recordFail()
 
 
-PRI testEdgeCases() | sector, idx, written, readCt, errors
+PRI testEdgeCases() | sector, idx, written, readCt, errors, nonce
 ' TEST 4: Edge cases - count=1, count=0
 '
 ' @local sector - Starting sector number for the test
@@ -367,9 +408,10 @@ PRI testEdgeCases() | sector, idx, written, readCt, errors
     sector := TEST_SECTOR_BASE + 30
     debug("* Test 4a: writeSectorsRaw/readSectorsRaw with count=1")
 
-    ' Fill single sector
+    ' Fill single sector; nonce read once, not per byte
+    nonce := utils.perRunNonce()
     repeat idx from 0 to sd.SECTOR_SIZE - 1
-        write_buf[idx] := (idx + $C0) & $FF
+        write_buf[idx] := (idx + $C0 + nonce) & $FF
 
     written := sd.writeSectorsRaw(sector, 1, @write_buf)
     if written <> 1
@@ -411,7 +453,7 @@ PRI testEdgeCases() | sector, idx, written, readCt, errors
         recordFail()
 
 
-PRI testLargeMultiBlock() | sector, idx, written, readCt, errors
+PRI testLargeMultiBlock() | sector, idx, written, readCt, errors, nonce
 ' TEST 5: Large multi-block (64 sectors = 32KB)
 '
 ' @local sector - Starting sector number for the test
@@ -426,8 +468,10 @@ PRI testLargeMultiBlock() | sector, idx, written, readCt, errors
 
     ' Fill large write buffer with pattern
     debug("* Filling 32KB buffer with pattern...")
+    ' Nonce read ONCE. A per-byte call here would be 32768 method calls.
+    nonce := utils.perRunNonce()
     repeat idx from 0 to (LARGE_COUNT * sd.SECTOR_SIZE) - 1
-        large_write_buf[idx] := ((idx / sd.SECTOR_SIZE) + (idx // sd.SECTOR_SIZE)) & $FF
+        large_write_buf[idx] := ((idx / sd.SECTOR_SIZE) + (idx // sd.SECTOR_SIZE) + nonce) & $FF
 
     ' Write 64 sectors at once
     debug("* Writing 64 sectors starting at ", udec_(sector))
@@ -467,6 +511,103 @@ PRI testLargeMultiBlock() | sector, idx, written, readCt, errors
         debug("  -> FAIL: ", udec_(errors), " byte mismatches in 32KB")
         recordFail()
 
+
+PRI testCmd25CacheCoherence() | rootSec, secIdx, entryOfs, entrySec, written, hNew, hStale
+' TEST 6: CMD25 (writeSectorsRaw) must invalidate the filesystem's cache tiers.
+'
+' Creates a file, locates its directory entry on disk, primes the directory
+' cache with that sector, then REWRITES the sector via CMD25 with the entry
+' renamed -- a raw multi-block write behind the filesystem's back. Opening the
+' new name must succeed and the old name must be gone. CAN-FAIL: against a
+' driver whose writeSectors performs no cache invalidation, the directory
+' cache serves the stale pre-rename sector: the new name returns
+' E_FILE_NOT_FOUND and the old name still "opens".
+'
+' @local rootSec - First sector of the root directory
+' @local secIdx - Root-sector scan index
+' @local entryOfs - Byte offset of the entry within its sector
+' @local entrySec - Absolute sector holding the file's directory entry
+' @local written - writeSectorsRaw() result
+' @local hNew - Handle for the post-rewrite (new-name) open
+' @local hStale - Handle for the post-rewrite (old-name) open
+
+    debug("--- TEST 6: CMD25 cache coherence (root dir rewrite) ---")
+
+    sd.deleteFile(@cohFileA)                            ' self-establishing preconditions
+    sd.deleteFile(@cohFileB)
+
+    hNew := sd.createFileNew(@cohFileA)
+    if hNew < 0
+        debug("  FAIL: could not create ", zstr_(@cohFileA), ": ", sdec_(hNew))
+        recordFail()
+        return
+    sd.writeHandle(hNew, @"coherence probe", 15)
+    sd.closeFileHandle(hNew)
+
+    ' Locate the on-disk sector holding the new entry (first root cluster;
+    ' 8 sectors covers the smallest cluster size in the certification pairing)
+    rootSec := sd.debugGetRootSec()
+    entrySec := -1
+    repeat secIdx from 0 to 7
+        if sd.readSectorRaw(rootSec + secIdx, @read_buf) < 0
+            quit
+        repeat entryOfs from 0 to sd.SECTOR_SIZE - 32 step 32
+            if sfnMatches(@read_buf + entryOfs, @sfnCohA)
+                entrySec := rootSec + secIdx
+                quit
+        if entrySec >= 0
+            quit
+    if entrySec < 0
+        debug("  *** SETUP NOT MET: entry not in first 8 root sectors -- test NOT run ***")
+        sd.deleteFile(@cohFileA)
+        return
+
+    ' Prime the directory cache with the entry's sector (the open's search
+    ' walks the root directory and leaves that sector cached)
+    hNew := sd.openFileRead(@cohFileA)
+    if hNew >= 0
+        sd.closeFileHandle(hNew)
+
+    ' Rename the entry ON DISK via CMD25, behind the filesystem's back
+    bytemove(@read_buf + entryOfs, @sfnCohB, 11)
+    written := sd.writeSectorsRaw(entrySec, 1, @read_buf)
+    if written <> 1
+        debug("  FAIL: writeSectorsRaw returned ", udec_(written), " (expected 1)")
+        sd.deleteFile(@cohFileA)
+        recordFail()
+        return
+
+    ' The filesystem must see the post-CMD25 directory contents
+    hNew := sd.openFileRead(@cohFileB)
+    hStale := sd.openFileRead(@cohFileA)
+    if hStale >= 0
+        sd.closeFileHandle(hStale)
+    if hNew >= 0
+        sd.closeFileHandle(hNew)
+
+    if hNew >= 0 AND hStale < 0
+        debug("  -> PASS: new name opens, old name gone (cache re-read after CMD25)")
+        recordPass()
+    else
+        debug("  -> FAIL: openFileRead new=", sdec_(hNew), " old=", sdec_(hStale), " (stale directory cache after CMD25)")
+        recordFail()
+
+    sd.deleteFile(@cohFileB)                            ' entry's on-disk name is B after the rewrite
+    sd.deleteFile(@cohFileA)                            ' harmless when already renamed; covers early-failure residue
+
+PRI sfnMatches(pEntry, pName) : bMatch | idx
+' Compare a directory entry's 11-byte on-disk SFN field against an expected name
+'
+' @param pEntry - Pointer to the 32-byte directory entry (SFN at offset 0)
+' @param pName - Pointer to the expected 11-byte space-padded SFN
+' @returns bMatch - TRUE when all 11 bytes match
+' @local idx - Byte index
+
+    bMatch := true
+    repeat idx from 0 to 10
+        if BYTE[pEntry + idx] <> BYTE[pName + idx]
+            bMatch := false
+            quit
 
 PRI recordPass()
 ' Record a passing test

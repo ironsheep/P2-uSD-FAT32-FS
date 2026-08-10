@@ -68,6 +68,10 @@ testfile5       BYTE    "ERTEST5.TXT", 0
 testdir1        BYTE    "ERTDIR1", 0
 testdir2        BYTE    "NONEXIST", 0
 badPath1        BYTE    "NOEXIST/CHILD", 0    ' parent doesn't exist
+noexistDir      BYTE    "NOEXIST", 0          ' pre-clean target: badPath1's parent
+childName       BYTE    "CHILD", 0            ' pre-clean target: badPath1's leaf
+noexistFile     BYTE    "NOEXIST.TXT", 0      ' pre-clean target: unowned negative-test name
+rootPath        BYTE    "/", 0
 testContent     BYTE    "0123456789", 0       ' Exactly 10 bytes
 
 ' Buffer for MBR integrity check
@@ -88,8 +92,9 @@ PUB go() | result, handle, h1, h2, h3, h4, h5, hDir, bytesRead, bytesWritten
 
     ' Mount the card first
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if result < 0
+    ifnot utils.requireSetup(result == 0, @"SETUP: mount SD card")
         debug("ERROR: Could not mount SD card!")
+        utils.ShowTestEndCounts()
         debug("END_SESSION")
         return
 
@@ -104,6 +109,18 @@ PUB go() | result, handle, h1, h2, h3, h4, h5, hDir, bytesRead, bytesWritten
     sd.deleteFile(@testfile4)
     sd.deleteFile(@testfile5)
     sd.deleteFile(@testdir1)
+
+    ' The names this suite expects NOT to exist must be pre-cleaned too. Debris
+    ' named NONEXIST turns the cd-negative test at "cd to non-existent dir" into a
+    ' successful cd, and the suite then runs the ENTIRE remainder inside that
+    ' directory. NOEXIST must go child-first: its child has to be removed before
+    ' the parent, or the child's cluster chain is stranded.
+    if sd.changeDirectory(@noexistDir) == sd.SUCCESS
+        sd.deleteFile(@childName)
+        sd.changeDirectory(@rootPath)
+    sd.deleteFile(@noexistDir)
+    sd.deleteFile(@noexistFile)
+    sd.deleteFile(@testdir2)
 
     ' ----------------------------------
     ' TEST GROUP: File State Errors
@@ -163,6 +180,9 @@ PUB go() | result, handle, h1, h2, h3, h4, h5, hDir, bytesRead, bytesWritten
     ' First try to cd to non-existent directory
     result := sd.changeDirectory(@testdir2)
     utils.evaluateSingleValue(result, @"cd to non-existent dir", sd.E_NOT_A_DIR)
+    ' Defensive: if that cd unexpectedly SUCCEEDED, every remaining test would run
+    ' inside NONEXIST while its name claims root. Cost is one no-op call.
+    sd.changeDirectory(@rootPath)
 
     ' ----------------------------------
     ' TEST GROUP: Handle Reuse Patterns
@@ -418,8 +438,10 @@ PUB go() | result, handle, h1, h2, h3, h4, h5, hDir, bytesRead, bytesWritten
     utils.setCheckCountPerTest(3)
     sd.readHandle(99, @readBuffer, 10)                  ' handle tier
     utils.evaluateSubValue(sd.ERROR(), @"handle tier", sd.E_INVALID_HANDLE)
-    sd.openFileRead(@testdir2)                          ' file tier: NONEXIST
+    handle := sd.openFileRead(@testdir2)                ' file tier: NONEXIST
     utils.evaluateSubValue(sd.ERROR(), @"file tier", sd.E_FILE_NOT_FOUND)
+    if handle >= 0                                      ' Must fail; if it ever opens, do not leak the slot
+        sd.closeFileHandle(handle)
     sd.newDirectory(@testdir1)                          ' filesystem tier: already exists
     sd.newDirectory(@testdir1)
     utils.evaluateSubValue(sd.ERROR(), @"already-exists tier", sd.E_FILE_EXISTS)
@@ -431,12 +453,21 @@ PUB go() | result, handle, h1, h2, h3, h4, h5, hDir, bytesRead, bytesWritten
     ' ----------------------------------
     debug(" ")
     debug("* Cleaning up test files...")
+    sd.changeDirectory(@rootPath)                       ' Cleanup names are root-relative -- never delete from a stray CWD
     sd.deleteFile(@testfile1)
     sd.deleteFile(@testfile2)
     sd.deleteFile(@testfile3)
     sd.deleteFile(@testfile4)
     sd.deleteFile(@testfile5)
     sd.deleteFile(@testdir1)
+    ' Same negative-test names as the pre-clean, so this suite never leaves debris
+    ' behind for the next one to trip over. Child-first again.
+    if sd.changeDirectory(@noexistDir) == sd.SUCCESS
+        sd.deleteFile(@childName)
+        sd.changeDirectory(@rootPath)
+    sd.deleteFile(@noexistDir)
+    sd.deleteFile(@noexistFile)
+    sd.deleteFile(@testdir2)
 
     ' Unmount
     sd.unmount()

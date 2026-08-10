@@ -290,14 +290,36 @@ PUB go() | result, pLabel, freeSpace, handle, bytesRead
             utils.evaluateSubValue(bytesRead, @"read 20 bytes", 20)
             utils.evaluateSubBool(sectorBuffer[0] == $41 and sectorBuffer[10] == $4B, @"data intact", true)
             sd.closeFileHandle(handle)
+        else
+            ' Reopen failed. Score the two checks it gated instead of letting the
+            ' record run short -- the same labels, so the shape still matches.
+            debug("  reopen after double mount failed: ", sdec_(handle))
+            utils.evaluateSubBool(false, @"read 20 bytes", true)
+            utils.evaluateSubBool(false, @"data intact", true)
+    else
+        ' Create failed, so ALL FOUR checks are gated: the test would be counted by
+        ' startTest and never scored, vanishing into BAD TEST COUNTS rather than
+        ' failing. Score all four so one setup failure reads as one failing test.
+        debug("  createFileNew failed, cannot test double mount: ", sdec_(handle))
+        utils.evaluateSubBool(false, @"mount() during write", true)
+        utils.evaluateSubBool(false, @"write after mount", true)
+        utils.evaluateSubBool(false, @"read 20 bytes", true)
+        utils.evaluateSubBool(false, @"data intact", true)
     utils.showSubTestResults()
     utils.setCheckCountPerTest(1)
 
+    ' The property under test is that the mount does not reset CWD. That only means
+    ' anything if we were provably IN the subdirectory first -- unasserted, the mkdir
+    ' and cd could both fail and the whole test would pass while running at root,
+    ' testing nothing. Both are now scored sub-checks.
     utils.startTest(@"Double mount preserves working directory")
-    utils.setCheckCountPerTest(2)
-    sd.deleteFile(@"DMTDIR")
-    sd.newDirectory(@"DMTDIR")
-    sd.changeDirectory(@"DMTDIR")
+    utils.setCheckCountPerTest(4)
+    sd.deleteFile(@"DMTDIR/DMTFILE.TXT")                ' empty first: an aborted prior run leaves the file inside,
+    sd.deleteFile(@"DMTDIR")                            '  and delete of a populated directory now refuses (E_DIR_NOT_EMPTY)
+    result := sd.newDirectory(@"DMTDIR")
+    utils.evaluateSubValue(result, @"newDirectory(DMTDIR)", sd.SUCCESS)
+    result := sd.changeDirectory(@"DMTDIR")
+    utils.evaluateSubValue(result, @"changeDirectory(DMTDIR)", sd.SUCCESS)
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
     utils.evaluateSubValue(result, @"mount() in subdir", sd.SUCCESS)
     sd.deleteFile(@"DMTFILE.TXT")

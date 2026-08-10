@@ -28,6 +28,10 @@
 '   Diagnostic features:
 '   #pragma exportdef SD_INCLUDE_DEBUG      ' Debug/diagnostic methods & CRC getters
 '   #pragma exportdef SD_INCLUDE_STACK_CHECK ' Worker cog stack depth measurement
+'   SD_INCLUDE_STACK_REPORT: measurement-build flag, normally injected by the tools
+'   as a compile-line define (-D SD_INCLUDE_STACK_REPORT), not a pragma. Implies
+'   SD_INCLUDE_STACK_CHECK, enlarges STACK_SIZE (see its CON), and lights the
+'   per-suite stack-watermark line in isp_rt_utilities. Release builds never define it.
 '
 '   Test features:
 '   #pragma exportdef SD_INCLUDE_TEST_HOOKS ' Fault injection: make sector I/O fail on purpose
@@ -64,6 +68,12 @@
 #endif
 #ifndef SD_INCLUDE_TEST_HOOKS
 #define SD_INCLUDE_TEST_HOOKS
+#endif
+#endif
+
+#ifdef SD_INCLUDE_STACK_REPORT
+#ifndef SD_INCLUDE_STACK_CHECK
+#define SD_INCLUDE_STACK_CHECK                  ' REPORT implies CHECK (file-local is enough; CHECK is consumed only in this file)
 #endif
 #endif
 
@@ -187,6 +197,7 @@ CON ' buffer types for sector read/write (diagnostic: separate buffers to isolat
 CON ' error codes
   {Spin2_Doc_CON}
   SUCCESS                  = 0
+  END_OF_CHAIN             = 1                                                ' readNextSector(): chain ended, zeros served (not an error; callers checking < 0 are unaffected)
   E_TIMEOUT                = -1                                               ' Card didn't respond in time
   E_NO_RESPONSE            = -2                                               ' Card not responding
   E_BAD_RESPONSE           = -3                                               ' Unexpected response from card
@@ -207,8 +218,10 @@ CON ' error codes
   E_FILE_EXISTS            = -41                                              ' File already exists
   E_NOT_A_FILE             = -42                                              ' Expected file, found directory
   E_NOT_A_DIR              = -43                                              ' Expected directory, found file
+  E_DIR_NOT_EMPTY          = -44                                              ' Directory still contains entries (delete refused; empty it first)
   E_FILE_NOT_OPEN          = -45                                              ' RESERVED -- never produced; the driver reports E_INVALID_HANDLE for a closed handle
   E_END_OF_FILE            = -46                                              ' Read past end of file
+  E_FILE_OPEN              = -47                                              ' File has an open handle (delete refused; close it first)
   E_DISK_FULL              = -60                                              ' No free clusters
 #ifdef SD_INCLUDE_DEFRAG
   E_NO_CONTIGUOUS_SPACE    = -61                                              ' No contiguous run of sufficient length
@@ -262,10 +275,22 @@ CON ' Multi-file handle configuration
   HF_READ         = 1
   HF_WRITE        = 2
   HF_DIR          = 4
+  HF_DIRSTALE     = $40                                 ' Directory entry update failed and is owed (see do_sync_h)
   HF_DIRTY        = $80
 
 CON ' worker cog stack size
-  STACK_SIZE         = 160                                                    ' 160 longs = 640 bytes (measured peak: 113 longs, 29% headroom)
+  ' RELEASE SIZING FORMULA: release STACK_SIZE = (max watermark measured across a FULL
+  ' successful hardware sweep with -D SD_INCLUDE_STACK_REPORT) + 32 longs minimum
+  ' headroom, rounded UP to a multiple of 16, annotated here with the sweep date and
+  ' card serial it was measured on. Applied ONLY after that full sweep passes -- the
+  ' stack-finalization task owns applying it. The current 160 carries a 'measured
+  ' peak 113' annotation that PREDATES f34610f's +1237 lines and is due for
+  ' re-measurement.
+#ifdef SD_INCLUDE_STACK_REPORT
+  STACK_SIZE         = 512                                                    ' MEASUREMENT BUILD: generous headroom so the watermark, not an overflow, is the datum
+#else
+  STACK_SIZE         = 160                                                    ' 160 longs = 640 bytes (measured peak: 113 longs pre-f34610f -- STALE, see formula above)
+#endif
   STACK_GUARD_LONGS  = 4                                                      ' 4 longs = 16 bytes guard zone after stack
   STACK_GUARD_BYTE   = $CC                                                    ' Sentinel value (matches isp_rt_utilities convention)
 
@@ -567,6 +592,7 @@ DAT  ' ---- Singleton Control ----
         hs_query_error                          LONG    0                        ' Companion to the high-speed capability queries: set when the card could not be ASKED
         advance_cluster_error                   LONG    0                        ' Companion to writeAdvanceCluster(): E_IO_ERROR vs E_DISK_FULL when it returns FALSE
         search_io_status                        LONG    0                        ' Companion to searchDirectory(): SUCCESS, or E_IO_ERROR when FALSE means "could not look" not "not there"
+        search_parent_sec                       LONG    0                        ' Companion to searchDirectory(): first sector of the directory the final component was scanned in
 
         ' CMD13 STATUS STAGING - Preserved for diagnostic inspection
         last_cmd13_r1                           BYTE    0                        ' Last R1 byte from CMD13
@@ -647,6 +673,8 @@ DAT  ' ---- Singleton Control ----
         cog_stack                               LONG    0[STACK_SIZE]            ' Worker cog stack
         cog_stack_end_mark                      LONG    0                        ' isp_stack_check's sentinel -- ITS memory, per its contract
         cog_stack_guard                         LONG    0[STACK_GUARD_LONGS]     ' Stack overflow sentinel ($CC fill)
+        stack_peak_longs                        LONG    0                        ' Retained high-water across worker sessions (start() refills the sentinel, so a per-session read alone under-reports)
+        stack_prepped                           LONG    0                        ' Nonzero once prepStackForCheck has ever run -- before that the stack holds zeros, not sentinel, and a scan would read full
 
         ' SPI PIN CONFIGURATION (set once at start)
         cs                                      LONG    0                        ' Chip select pin
@@ -795,6 +823,8 @@ DAT  ' ---- Singleton Control ----
         test_fail_mode                          LONG    0                        ' TF_READ / TF_WRITE / TF_BOTH, optionally | TF_STICKY
         test_fail_write_after                   LONG    0                        ' Fail the nth subsequent writeSector() (0 = disarmed)
         test_write_call_count                   LONG    0                        ' writeSector() calls counted since arming
+        test_fail_read_after                    LONG    0                        ' Fail the nth subsequent card read (cache misses only; 0 = disarmed)
+        test_read_call_count                    LONG    0                        ' readSector() cache-miss transfers counted since arming
 #endif
 
         ' BUFFERS (must be in DAT for worker cog access)
@@ -911,8 +941,14 @@ PUB start(_cs, _mosi, _miso, _sck) : workerCogId
       ' Initialize stack guard zone before launching worker
       bytefill(@cog_stack_guard, STACK_GUARD_BYTE, STACK_GUARD_LONGS * 4)
 #ifdef SD_INCLUDE_STACK_CHECK
+      ' Retain the outgoing session's high-water before the sentinel refill below
+      ' erases it -- reportStackDepth() reports the max across ALL sessions, so a
+      ' suite that stops/restarts the worker still reports its true peak.
+      if stack_prepped
+        stack_peak_longs #>= stackUtils.getStackDepth(@cog_stack, STACK_SIZE)
       ' Prepare stack for depth measurement (fills with sentinel pattern)
       stackUtils.prepStackForCheck(@cog_stack, STACK_SIZE)
+      stack_prepped := 1
 #endif
 
       ' Launch worker cog
@@ -1201,18 +1237,21 @@ PUB syncAllHandles() : status
     DEBUG[CH_API]("  [syncAllHandles] Failed: ", sdec_(status))
 
 PUB sync() : status
-'' Flush buffers (multi-cog safe) - flushes pending writes without closing file.
-'' Use to checkpoint data during long operations.
+'' Flush all pending writes to the card (multi-cog safe): every open write
+'' handle's buffered data and directory entry, then the FSInfo free-space
+'' sector. The full unmount-grade persistence pass, without unmounting --
+'' call it before power-down or card removal to make everything durable.
 ''
-'' A failure here means a pending directory entry did NOT reach the card. The entry stays
-'' pending in the driver, so a later sync() or the close still has it to write -- but a
-'' caller that treats sync() as a checkpoint must check the return, or it will believe
-'' data is safe that is not.
+'' Use syncHandle() to checkpoint a single handle without paying for the rest.
+''
+'' On failure the affected handles stay dirty and this method reports the
+'' first error encountered, so a later sync() retries whatever did not land.
 ''
 '' @returns status - SUCCESS (0) on success, negative error code on failure
 
   status := send_command(CMD_SYNC, 0, 0, 0, 0)
-  DEBUG[CH_API]("  [sync] status=", sdec_(status))
+  if status <> SUCCESS
+    DEBUG[CH_API]("  [sync] Failed: ", sdec_(status))
 
 CON ' ---- Directory ----
 
@@ -1290,10 +1329,16 @@ PUB changeDirectory(name_ptr) : status
 CON ' ---- Metadata ----
 
 PUB deleteFile(name_ptr) : status
-'' Delete file (multi-cog safe) - deletes file from current directory.
+'' Delete file or empty directory (multi-cog safe) - deletes from current directory.
+''
+'' Refuses two dangerous deletes (v1.7.0 contract):
+'' - a file any handle still has open returns E_FILE_OPEN (-47); close it first
+'' - a non-empty directory returns E_DIR_NOT_EMPTY (-44) and is left intact;
+''   delete its contents first (there is no recursive delete)
 ''
 '' @param name_ptr - Pointer to null-terminated filename string
 '' @returns status - SUCCESS (0) on success, negative error code on failure
+''                   (E_FILE_NOT_FOUND, E_FILE_OPEN, E_DIR_NOT_EMPTY, E_IO_ERROR)
 
   status := send_command(CMD_DELETE, name_ptr, 0, 0, 0)
 
@@ -1786,14 +1831,20 @@ PUB checkStackGuard() : bIntact | idx
 #ifdef SD_INCLUDE_STACK_CHECK
 
 PUB reportStackDepth() : depth
-'' DIAG: Ask worker cog to report stack depth used (high-water mark).
-'' Returns the number of stack longs used. Compare against STACK_SIZE.
-'' Returns -1 if the command failed (e.g., worker not running).
+'' DIAG: Report worker stack high-water mark (longs used), retained across worker
+'' sessions -- start() refills the measurement sentinel, so without retention a
+'' suite that stops/restarts the worker would report only its last session.
+'' Works even after stop(): the stack lives in hub DAT, so the last session is
+'' still readable from the calling cog. Compare against STACK_SIZE.
 ''
-'' @returns depth - Number of longs used (high-water mark), or -1 on failure
+'' @returns depth - Number of longs used (max across all sessions), or -1 if the
+''                  worker has never run
 
   if send_command(CMD_STACK_DEPTH, 0, 0, 0, 0) == SUCCESS
     depth := pb_data0
+  elseif stack_prepped
+    stack_peak_longs #>= stackUtils.getStackDepth(@cog_stack, STACK_SIZE)
+    depth := stack_peak_longs
   else
     depth := -1
 
@@ -2073,8 +2124,10 @@ CON ' ---- Speed Control [SD_INCLUDE_SPEED] + Card Info ----
 PUB attemptHighSpeed() : hs_ok
 '' Attempt to enable 50 MHz high-speed mode with verification.
 '' Routes through worker cog which owns the SPI pins.
-'' Queries capability, switches mode, verifies with sector read/write.
-'' Safe to call - will not break operation on failure.
+'' Queries capability, switches mode, then verifies READ-ONLY: a baseline
+'' sector captured at the pre-switch speed is re-read at 50 MHz and compared.
+'' Nothing is written to the card at the unverified speed.
+'' Safe to call - will not break operation on failure (falls back to 25 MHz).
 ''
 '' RETURNS AN HONEST BOOLEAN -- TRUE means 50 MHz is active, FALSE means it is not, and
 '' that is all. "The card does not offer high speed" and "the card could not be asked" are
@@ -2710,6 +2763,33 @@ PUB getTestWriteCallCount() : count
 
   count := test_write_call_count
 
+PUB setTestFailReadAfter(readIndex)
+'' Arm a failure on the nth subsequent CARD read - readSector() calls that
+'' actually transfer from the card; cache hits are not counted. Use this when
+'' the read that must fail is not known by LBA in advance but its position in
+'' a read sequence is (v1.7.0 task #50: the re-read of the source entry's sector
+'' inside moveFile, which shares its LBA with reads an LBA-armed injection
+'' would kill first).
+''
+'' The failure is one-shot: the armed read returns E_CRC_ERROR before any
+'' transfer starts, modeling an unrecoverable read; the cache tag for that
+'' tier is left invalid, exactly as a genuine exhausted-retries read leaves it.
+''
+'' @param readIndex - Which subsequent card read fails (1 = the very next; 0 disarms)
+
+  test_fail_read_after := (readIndex > 0) ? readIndex : 0
+  test_read_call_count := 0
+
+PUB getTestReadCallCount() : count
+'' Get the number of card reads (readSector() cache misses) since the counter
+'' was last reset - by setTestFailReadAfter() or clearTestErrors(). Counting
+'' runs whether or not anything is armed, so a test can measure how many card
+'' reads an operation actually makes and then arm the one it wants to fail.
+''
+'' @returns count - card reads seen since the last reset
+
+  count := test_read_call_count
+
 PUB clearTestErrors()
 '' Reset all test error injection state. Disarms every read/write hook,
 '' zeroes the triggered error counter, and clears diagnostic overrides.
@@ -2724,6 +2804,8 @@ PUB clearTestErrors()
   test_fail_mode := TF_OFF
   test_fail_write_after := 0
   test_write_call_count := 0
+  test_fail_read_after := 0
+  test_read_call_count := 0
 
 #endif                                                  ' SD_INCLUDE_TEST_HOOKS (fault injection)
 
@@ -3281,7 +3363,10 @@ PRI fs_worker() | cur_cmd
 
 #ifdef SD_INCLUDE_STACK_CHECK
       CMD_STACK_DEPTH:
-        pb_data0 := stackUtils.getStackDepth(@cog_stack, STACK_SIZE)
+        ' Fold the live depth into the retained cross-session peak and report that --
+        ' the meaning is "deepest this worker has EVER gone", not "deepest lately".
+        stack_peak_longs #>= stackUtils.getStackDepth(@cog_stack, STACK_SIZE)
+        pb_data0 := stack_peak_longs
         pb_status := SUCCESS
 #endif
 
@@ -3289,11 +3374,15 @@ PRI fs_worker() | cur_cmd
         DEBUG[CH_API]("  [fs_worker] Unknown command: ", udec_(cur_cmd))
         pb_status := E_BAD_RESPONSE
 
-    ' Signal completion and reset idle timer
+    ' Signal completion and reset idle timer. The flush arms only while a
+    ' filesystem is mounted: unmounted (the caller was told the card is
+    ' released) and RAW mode (nothing to flush, no FSInfo) must not schedule
+    ' timer-driven I/O. Same predicate as do_idle_flush()'s backstop guard,
+    ' which is pure defense-in-depth against arming paths that slip through.
     pb_cmd := CMD_NONE
     COGATN(1 << pb_caller)                                                      ' Wake the caller
     idle_timer := GETCT()
-    flush_done := false
+    flush_done := NOT (flags & F_MOUNTED)
 
 PRI tick_clock()
 ' Advance the live clock by 2 seconds. Operates directly on the packed
@@ -3442,20 +3531,49 @@ PRI validateHandle(handle) : bValid
   else
     bValid := TRUE                                      ' Handle is valid and in use
 
-PRI isFileOpenForWrite(dir_sector, dir_offset) : bOpenForWrite | handle
+PRI isFileOpenForWrite(dir_sector, dir_offset) : bOpenForWrite
 ' Check if file is already open for write - enforces single-writer policy.
 ' Multiple read handles allowed, only one write handle per file.
 '
 ' @param dir_sector - Directory sector containing the file entry
 ' @param dir_offset - Offset within sector of the file entry
 ' @returns bOpenForWrite - TRUE if file is open for write, FALSE otherwise
+
+  bOpenForWrite := handleReferencesEntry(dir_sector, dir_offset, HF_WRITE)
+
+PRI isFileOpen(dir_sector, dir_offset) : bOpen
+' Check if ANY open file handle (read or write) references the directory entry
+' at (dir_sector, dir_offset). Used by do_delete: deleting a file that a handle
+' still references lets a later flush write the handle's dirty buffer into
+' freed -- possibly already reallocated -- clusters.
+'
+' @param dir_sector - Directory sector containing the file entry
+' @param dir_offset - Offset within sector of the file entry
+' @returns bOpen - TRUE if any file handle references the entry, FALSE otherwise
+
+  bOpen := handleReferencesEntry(dir_sector, dir_offset, HF_READ | HF_WRITE)
+
+PRI handleReferencesEntry(dir_sector, dir_offset, flag_mask) : bMatch | handle
+' Core handle-table scan shared by the isFileOpen* predicates: does any handle
+' whose flags intersect flag_mask reference the entry at (dir_sector, dir_offset)?
+'
+' CHOOSE THE MASK DELIBERATELY. h_dir_sector/h_dir_offset are only ever set by
+' the file-open paths; do_open_dir() leaves them at their previous values, so a
+' mask that admits HF_DIR handles (e.g. $FF) can match a recycled directory
+' handle on STALE coordinates from its previous life. HF_READ|HF_WRITE is the
+' safe mask when the caller means "a live file handle".
+'
+' @param dir_sector - Directory sector containing the file entry
+' @param dir_offset - Offset within sector of the file entry
+' @param flag_mask - h_flags bits that qualify a handle for the match
+' @returns bMatch - TRUE if a qualifying handle references the entry
 ' @local handle - Loop variable for handle search
 
-  bOpenForWrite := FALSE
+  bMatch := FALSE
   repeat handle from 0 TO MAX_OPEN_FILES - 1
-    if h_flags[handle] & HF_WRITE                       ' Check if handle has write access
+    if h_flags[handle] & flag_mask
       if h_dir_sector[handle] == dir_sector AND h_dir_offset[handle] == dir_offset
-        bOpenForWrite := TRUE                           ' File is already open for write
+        bMatch := TRUE
         quit
 
 PRI getHandleBuffer(handle) : p_buffer
@@ -3847,6 +3965,16 @@ PRI do_unmount() : status | sync_status, close_status
   if fsinfo_error < 0 AND status == SUCCESS
     status := fsinfo_error
 
+  ' From this moment the card belongs to the user (may be pulled or swapped).
+  ' No cache may keep describing it: a stale tag surviving into the next
+  ' initCardOnly()/mount() window could serve the OLD card's bytes as a cache
+  ' hit on the new one. Handle-buffer tags are cleared for the same reason --
+  ' every dirty buffer already reached disk (or was reported) via do_sync_all().
+  dir_sec_in_buf := -1
+  fat_sec_in_buf := -1
+  sec_in_buf := -1
+  longfill(@h_buf_sector, -1, MAX_OPEN_FILES)
+
   flags := flags & !F_MOUNTED
   driver_mode := MODE_NONE
   DEBUG[CH_MOUNT]("  [do_unmount] Card unmounted, mode=NONE, status=", sdec_(status))
@@ -3886,6 +4014,17 @@ PRI do_close() : status
       if writeSector(entry_address >> SECTOR_SHIFT, BUF_DIR) < 0
         DEBUG[CH_FILE]("  [do_close] Directory write FAILED for sector ", udec_(entry_address >> SECTOR_SHIFT))
         status := E_IO_ERROR
+
+  abandonPendingEntry()
+
+PRI abandonPendingEntry()
+' Discard the staged directory entry as ONE unit: entry_buffer and F_NEWDIR
+' must always clear together. A cleared flag with a live buffer is harmless;
+' a set flag with a stale or foreign buffer is the ghost-entry corruption the
+' do_movefile abandon paths exist to prevent (v1.7.0 task #50). Every exit that
+' leaves a staged entry unwritten goes through here -- this helper is what
+' makes do_sync's "F_NEWDIR cannot be pending at a command boundary" claim
+' structural rather than a by-hand enumeration of clearing sites.
 
   bytefill(@entry_buffer, 0, DIR_ENTRY_SIZE)
   flags := flags & !F_NEWDIR
@@ -4087,13 +4226,12 @@ PRI do_create(p_path) : handle | temp, first_cluster
           h_flags[handle] := HF_WRITE
           DEBUG[CH_FILE]("  [do_create] Success: handle=", udec_(handle), " cluster=", udec_(first_cluster))
 
-PRI do_close_h(handle) : status | p_buf
+PRI do_close_h(handle) : status
 ' Close file handle - closes handle, flushing writes and updating directory.
 ' For write handles, the directory entry is updated with the final file size.
 '
 ' @param handle - Handle to close
 ' @returns status - SUCCESS (0) on success, E_INVALID_HANDLE on failure
-' @local p_buf - Pointer to handle's buffer
 
 ' Validate handle
 
@@ -4103,27 +4241,10 @@ PRI do_close_h(handle) : status | p_buf
   elseif h_flags[handle] & HF_DIR
     status := E_NOT_A_DIR_HANDLE
   else
-    status := SUCCESS
-
-    ' If buffer is dirty, flush it to disk
-    if h_flags[handle] & HF_DIRTY
-      p_buf := getHandleBuffer(handle)
-      bytemove(@buf, p_buf, SECTOR_SIZE)                                              ' Copy to shared buffer
-      if writeSector(h_buf_sector[handle], BUF_DATA) < 0
-        DEBUG[CH_FILE]("  [do_close_h] Data write FAILED for sector ", udec_(h_buf_sector[handle]))
-        status := E_IO_ERROR
-
-    ' If opened for write, update directory entry with final size
-    if h_flags[handle] & HF_WRITE
-      if readSector(h_dir_sector[handle], BUF_DIR) < 0
-        DEBUG[CH_FILE]("  [do_close_h] Directory read FAILED for sector ", udec_(h_dir_sector[handle]))
-        status := E_IO_ERROR
-      else
-        LONG[@dir_buf + h_dir_offset[handle] + DE_FILESIZE_OFFSET] := h_size[handle]  ' Update size field
-        LONG[@dir_buf + h_dir_offset[handle] + DE_WRT_TIME_OFFSET] := date_stamp      ' Update modification timestamp
-        if writeSector(h_dir_sector[handle], BUF_DIR) < 0
-          DEBUG[CH_FILE]("  [do_close_h] Directory write FAILED for sector ", udec_(h_dir_sector[handle]))
-          status := E_IO_ERROR
+    ' Close IS "sync, then free": the data flush, the publish gate (no size
+    ' update over unlanded bytes), and the directory update are exactly
+    ' do_sync_h's -- one copy means close can never drift from sync.
+    status := do_sync_h(handle)
 
 #ifdef SD_INCLUDE_DEFRAG
     ' Clear pre-allocation tracking
@@ -4184,30 +4305,43 @@ PRI do_read_h(handle, p_buffer, count) : bytes_read | p_hbuf, available, offset,
     ' Advance past sector boundary left by previous read that ended exactly at 512-byte boundary.
     ' Without this, the next read returns stale data from the previous sector's buffer.
     if (h_position[handle] & SECTOR_OFFSET_MASK) == 0 AND h_position[handle] > 0 AND h_buf_sector[handle] == h_sector[handle]
-      h_buf_sector[handle] := -1
-      h_sector[handle]++
-      if ((h_sector[handle] - cluster_offset) & (sec_per_clus - 1)) == 0
-        ' Follow FAT chain to next cluster
-        cluster := h_cluster[handle]
-        if readSector(cluster >> 7 + fat_sec, BUF_FAT) < 0
-          DEBUG[CH_FILE]("  [do_read_h] FAT chain follow FAILED at boundary advance")
-          h_error[handle] := E_IO_ERROR                 ' Zero bytes read, and it is NOT end of file
-          count := 0                                    ' Skip main loop
-        else
-          fat_addr := @fat_buf + ((cluster << 2) & SECTOR_OFFSET_MASK)
-          next_cluster := LONG[fat_addr]
-          if next_cluster +>= FAT32_EOC_MIN
-            DEBUG[CH_FILE]("  [do_read_h] End of chain at boundary advance")
-            h_error[handle] := E_BAD_CHAIN              ' Bytes remain per h_size, but the chain ended -- entry and chain disagree
+      ' Read-after-write at a sector boundary: a dirty buffer must reach the
+      ' card before its identity is discarded (reads on write handles are
+      ' legal). On a failed flush the advance is refused and the handle state
+      ' stays intact so a later flush can retry.
+      if flushHandleBuffer(handle) < 0
+        h_error[handle] := E_IO_ERROR                   ' Zero bytes read, and it is NOT end of file
+        count := 0                                      ' Skip advance and main loop
+      else
+        h_buf_sector[handle] := -1
+        h_sector[handle]++
+        if ((h_sector[handle] - cluster_offset) & (sec_per_clus - 1)) == 0
+          ' Follow FAT chain to next cluster
+          cluster := h_cluster[handle]
+          if readSector(cluster >> 7 + fat_sec, BUF_FAT) < 0
+            DEBUG[CH_FILE]("  [do_read_h] FAT chain follow FAILED at boundary advance")
+            h_error[handle] := E_IO_ERROR               ' Zero bytes read, and it is NOT end of file
             count := 0                                  ' Skip main loop
           else
-            h_cluster[handle] := next_cluster
-            h_sector[handle] := clus2sec(next_cluster)
+            fat_addr := @fat_buf + ((cluster << 2) & SECTOR_OFFSET_MASK)
+            next_cluster := LONG[fat_addr]
+            if next_cluster +>= FAT32_EOC_MIN
+              DEBUG[CH_FILE]("  [do_read_h] End of chain at boundary advance")
+              h_error[handle] := E_BAD_CHAIN            ' Bytes remain per h_size, but the chain ended -- entry and chain disagree
+              count := 0                                ' Skip main loop
+            else
+              h_cluster[handle] := next_cluster
+              h_sector[handle] := clus2sec(next_cluster)
 
     bytes_read := 0
     repeat while count > 0
       ' Ensure current sector is loaded into handle's buffer
       if h_buf_sector[handle] <> h_sector[handle]
+        ' Flush a dirty buffer before evicting it -- a read landing outside the
+        ' buffered sector must not destroy unwritten write data.
+        if flushHandleBuffer(handle) < 0
+          h_error[handle] := E_IO_ERROR                 ' Short count follows -- say why, or it reads as EOF
+          quit                                          ' Return partial read count; dirty buffer intact for retry
         ' Load sector into shared buffer, then copy to handle's buffer
         if readSector(h_sector[handle], BUF_DATA) < 0
           DEBUG[CH_FILE]("  [do_read_h] Sector read FAILED for sector ", udec_(h_sector[handle]))
@@ -4354,15 +4488,10 @@ PRI do_write_h(handle, p_buffer, count) : bytes_written | p_hbuf, offset, to_wri
     ' Advance past sector boundary left by previous write that ended exactly at 512-byte boundary.
     ' Without this, the next write overwrites the unflushed handle buffer before it reaches disk.
     if (h_position[handle] & SECTOR_OFFSET_MASK) == 0 AND h_position[handle] > 0 AND h_buf_sector[handle] == h_sector[handle]
-      if h_flags[handle] & HF_DIRTY
-        DEBUG[CH_FILE]("  [do_write_h] Flushing stale sector ", udec_(h_buf_sector[handle]))
-        bytemove(@buf, p_hbuf, SECTOR_SIZE)
-        if writeSector(h_buf_sector[handle], BUF_DATA) < 0
-          DEBUG[CH_FILE]("  [do_write_h] Stale sector flush FAILED for sector ", udec_(h_buf_sector[handle]))
-          bytes_written := E_IO_ERROR                  ' Surface I/O failure (sector still dirty -- next sync retries)
-          h_error[handle] := E_IO_ERROR
-          return
-        h_flags[handle] &= !HF_DIRTY
+      if flushHandleBuffer(handle) < 0
+        bytes_written := E_IO_ERROR                    ' Surface I/O failure (sector still dirty -- next sync retries)
+        h_error[handle] := E_IO_ERROR
+        return
       h_buf_sector[handle] := -1
       h_sector[handle]++
       if ((h_sector[handle] - cluster_offset) & (sec_per_clus - 1)) == 0
@@ -4406,16 +4535,11 @@ PRI do_write_h(handle, p_buffer, count) : bytes_written | p_hbuf, offset, to_wri
       ' Ensure current sector is in handle's buffer
       if h_buf_sector[handle] <> h_sector[handle]
         ' Flush dirty buffer first if needed
-        if h_flags[handle] & HF_DIRTY
-          DEBUG[CH_FILE]("  [do_write_h] Flushing dirty sector ", udec_(h_buf_sector[handle]))
-          bytemove(@buf, p_hbuf, SECTOR_SIZE)
-          if writeSector(h_buf_sector[handle], BUF_DATA) < 0
-            DEBUG[CH_FILE]("  [do_write_h] Dirty sector flush FAILED for sector ", udec_(h_buf_sector[handle]))
-            h_error[handle] := E_IO_ERROR
-            if bytes_written == 0
-              bytes_written := E_IO_ERROR              ' No data accepted yet -- surface failure
-            quit                                       ' Otherwise return partial write count to caller
-          h_flags[handle] &= !HF_DIRTY
+        if flushHandleBuffer(handle) < 0
+          h_error[handle] := E_IO_ERROR
+          if bytes_written == 0
+            bytes_written := E_IO_ERROR                ' No data accepted yet -- surface failure
+          quit                                         ' Otherwise return partial write count to caller
 
         ' Load sector (or zero-fill if writing past end).
         ' Load when this sector's FIRST byte is within the file, so a mid-sector
@@ -4456,14 +4580,11 @@ PRI do_write_h(handle, p_buffer, count) : bytes_written | p_hbuf, offset, to_wri
 
       ' If we've filled this sector, flush and advance to next
       if (h_position[handle] & SECTOR_OFFSET_MASK) == 0 AND count > 0
-        ' Flush current sector
-        DEBUG[CH_FILE]("  [do_write_h] Sector full, flushing sector ", udec_(h_sector[handle]))
-        bytemove(@buf, p_hbuf, SECTOR_SIZE)
-        if writeSector(h_sector[handle], BUF_DATA) < 0
-          DEBUG[CH_FILE]("  [do_write_h] Full-sector flush FAILED for sector ", udec_(h_sector[handle]))
+        ' Flush current (full) sector -- h_buf_sector == h_sector here: the
+        ' load/zero-fill above set them equal and HF_DIRTY is set by the copy
+        if flushHandleBuffer(handle) < 0
           h_error[handle] := E_IO_ERROR                ' The counted bytes did NOT reach the card -- the count alone would lie
           quit                                         ' Return partial write count -- this sector's bytes were already counted but did not reach disk
-        h_flags[handle] &= !HF_DIRTY
         h_buf_sector[handle] := -1
 
         h_sector[handle]++
@@ -4523,50 +4644,81 @@ PRI do_seek_h(handle, position) : status | target_cluster_idx, cluster, idx, fat
       h_position[handle] := position
       DEBUG[CH_FILE]("  [do_seek_h] Same sector, fast path")
     else
-      ' Calculate which cluster the target position is in
-      ' target_cluster_idx = how many clusters from the start
-      target_cluster_idx := position / (sec_per_clus << SECTOR_SHIFT)
+      ' Flush a dirty buffer BEFORE its identity is invalidated below: discarding
+      ' it loses the unwritten data AND leaves HF_DIRTY set with h_buf_sector
+      ' of -1, so every later flush writes to sector $FFFF_FFFF. On a failed
+      ' flush the seek is refused and the handle state is left untouched.
+      status := flushHandleBuffer(handle)
+      if status == SUCCESS
+        ' Calculate which cluster the target position is in
+        ' target_cluster_idx = how many clusters from the start
+        target_cluster_idx := position / (sec_per_clus << SECTOR_SHIFT)
 
-      ' Walk the FAT chain from the file's start cluster
-      cluster := h_start_clus[handle]
+        ' Walk the FAT chain from the file's start cluster
+        cluster := h_start_clus[handle]
 
-      ' BUG FIX: Guard against Spin2's count-down behavior
-      ' When target_cluster_idx is 0, "repeat idx from 0 to -1" would execute twice
-      ' (counting down from 0 to -1), incorrectly walking the FAT chain.
-      ' Only walk the chain if we need to move to a different cluster.
-      if target_cluster_idx > 0
-        repeat idx from 0 TO target_cluster_idx - 1
-          ' Read FAT entry for current cluster
-          if readSector(cluster >> 7 + fat_sec, BUF_FAT) < 0
-            DEBUG[CH_FILE]("  [do_seek_h] FAT read FAILED for cluster ", udec_(cluster))
-            status := E_IO_ERROR
-            quit
-          fat_addr := @fat_buf + ((cluster << 2) & SECTOR_OFFSET_MASK)
-          cluster := LONG[fat_addr]
-          if cluster +>= FAT32_EOC_MIN
-            ' End of chain reached before target - shouldn't happen
-            DEBUG[CH_FILE]("  [do_seek_h] Unexpected end of FAT chain at index ", udec_(idx))
-            status := E_END_OF_FILE
-            quit
+        ' BUG FIX: Guard against Spin2's count-down behavior
+        ' When target_cluster_idx is 0, "repeat idx from 0 to -1" would execute twice
+        ' (counting down from 0 to -1), incorrectly walking the FAT chain.
+        ' Only walk the chain if we need to move to a different cluster.
+        if target_cluster_idx > 0
+          repeat idx from 0 TO target_cluster_idx - 1
+            ' Read FAT entry for current cluster
+            if readSector(cluster >> 7 + fat_sec, BUF_FAT) < 0
+              DEBUG[CH_FILE]("  [do_seek_h] FAT read FAILED for cluster ", udec_(cluster))
+              status := E_IO_ERROR
+              quit
+            fat_addr := @fat_buf + ((cluster << 2) & SECTOR_OFFSET_MASK)
+            cluster := LONG[fat_addr]
+            if cluster +>= FAT32_EOC_MIN
+              ' End of chain reached before target - shouldn't happen
+              DEBUG[CH_FILE]("  [do_seek_h] Unexpected end of FAT chain at index ", udec_(idx))
+              status := E_END_OF_FILE
+              quit
 
-      if status == 0
-        ' Calculate sector within cluster
-        sector_in_cluster := (position >> SECTOR_SHIFT) & (sec_per_clus - 1)
+        if status == 0
+          ' Calculate sector within cluster
+          sector_in_cluster := (position >> SECTOR_SHIFT) & (sec_per_clus - 1)
 
-        ' Update handle state
-        h_cluster[handle] := cluster
-        h_sector[handle] := clus2sec(cluster) + sector_in_cluster
-        h_position[handle] := position
-        h_buf_sector[handle] := -1                      ' Invalidate buffer cache
-        DEBUG[CH_FILE]("  [do_seek_h] Seek complete: cluster=", udec_(cluster), " sector=", udec_(h_sector[handle]))
+          ' Update handle state
+          h_cluster[handle] := cluster
+          h_sector[handle] := clus2sec(cluster) + sector_in_cluster
+          h_position[handle] := position
+          if h_buf_sector[handle] <> h_sector[handle]
+            h_buf_sector[handle] := -1                  ' Invalidate only when the buffer holds a different sector
+          DEBUG[CH_FILE]("  [do_seek_h] Seek complete: cluster=", udec_(cluster), " sector=", udec_(h_sector[handle]))
 
-PRI do_sync_h(handle) : status | p_buf
+PRI flushHandleBuffer(handle) : status | p_buf
+' Flush the handle's dirty sector buffer to the card, if dirty.
+' Clears HF_DIRTY only on a successful write -- on failure the data stays
+' pending in the handle buffer (identity intact) so a later flush can retry.
+' Shared by EVERY path that evicts or invalidates a handle buffer, including
+' all three do_write_h flush points (inline copies collapsed 2026-08-09,
+' Stephen's call at the task #48 handoff: one copy owns the HF_DIRTY discipline,
+' and invalidateCacheRange()'s dirty-handle exemption depends on this exact
+' ordering -- writeSector is called while HF_DIRTY is still set).
+'
+' @param handle - Valid file handle
+' @returns status - SUCCESS (0), or E_IO_ERROR if the write failed
+' @local p_buf - Pointer to handle's buffer
+
+  status := SUCCESS
+  if h_flags[handle] & HF_DIRTY
+    DEBUG[CH_FILE]("  [flushHandleBuffer] Flushing dirty buffer for sector ", udec_(h_buf_sector[handle]))
+    p_buf := getHandleBuffer(handle)
+    bytemove(@buf, p_buf, SECTOR_SIZE)
+    if writeSector(h_buf_sector[handle], BUF_DATA) < 0
+      DEBUG[CH_FILE]("  [flushHandleBuffer] Dirty buffer write FAILED for sector ", udec_(h_buf_sector[handle]))
+      status := E_IO_ERROR
+    else
+      h_flags[handle] &= !HF_DIRTY
+
+PRI do_sync_h(handle) : status
 ' Sync handle buffer to disk - flushes pending writes and updates directory.
 ' Does NOT close handle - file remains open for further operations.
 '
 ' @param handle - Valid file handle
 ' @returns status - SUCCESS (0) on success, E_INVALID_HANDLE on failure
-' @local p_buf - Pointer to handle's buffer
 
 ' Validate handle
 
@@ -4577,20 +4729,10 @@ PRI do_sync_h(handle) : status | p_buf
     status := E_NOT_A_DIR_HANDLE
   else
     DEBUG[CH_FILE]("  [do_sync_h] Syncing handle=", udec_(handle), " flags=$", uhex_byte_(h_flags[handle]))
-    status := SUCCESS
 
-    ' If buffer is dirty, flush it to disk. Only clear HF_DIRTY on a successful
-    ' write -- on failure the data is still pending in the handle buffer and a
-    ' future sync must retry it.
-    if h_flags[handle] & HF_DIRTY
-      DEBUG[CH_FILE]("  [do_sync_h] Flushing dirty buffer for sector ", udec_(h_buf_sector[handle]))
-      p_buf := getHandleBuffer(handle)
-      bytemove(@buf, p_buf, SECTOR_SIZE)
-      if writeSector(h_buf_sector[handle], BUF_DATA) < 0
-        DEBUG[CH_FILE]("  [do_sync_h] Dirty buffer write FAILED for sector ", udec_(h_buf_sector[handle]))
-        status := E_IO_ERROR
-      else
-        h_flags[handle] &= !HF_DIRTY
+    ' If buffer is dirty, flush it to disk. HF_DIRTY survives a failed write --
+    ' the data is still pending in the handle buffer and a future sync retries.
+    status := flushHandleBuffer(handle)
 
     ' If opened for write, update directory entry with current size. Skip when
     ' the dirty-buffer flush above failed -- writing a dir entry that claims
@@ -4606,6 +4748,14 @@ PRI do_sync_h(handle) : status | p_buf
         if writeSector(h_dir_sector[handle], BUF_DIR) < 0
           DEBUG[CH_FILE]("  [do_sync_h] Directory write FAILED for sector ", udec_(h_dir_sector[handle]))
           status := E_IO_ERROR
+      ' Track the directory entry's staleness in its OWN flag: re-arming
+      ' HF_DIRTY here would be cancelled by any intervening buffer-evicting
+      ' flush (seek, read), silently dropping the background retry.
+      ' do_idle_flush selects on either flag; success clears the debt.
+      if status == SUCCESS
+        h_flags[handle] &= !HF_DIRSTALE
+      else
+        h_flags[handle] |= HF_DIRSTALE
 
     DEBUG[CH_FILE]("  [do_sync_h] Sync complete, status=", sdec_(status))
 
@@ -4628,16 +4778,24 @@ PRI do_idle_flush() | idx, bAborted, status
 ' @local bAborted - TRUE when an arriving command cut the flush short
 ' @local status - Per-handle do_sync_h result
 
+  ' Backstop (defense-in-depth; the dispatcher already arms on this same
+  ' predicate): with no filesystem mounted there is nothing to flush and no
+  ' FSInfo to update -- and the card may already be out of the slot. Disarms
+  ' so a slipped-through arming does not re-fire every worker-loop pass.
+  if NOT (flags & F_MOUNTED)
+    flush_done := true
+    return
+
   bAborted := false
   repeat idx from 0 TO MAX_OPEN_FILES - 1
     if pb_cmd <> CMD_NONE
       bAborted := true                                  ' Command arrived, abort flush
       quit
-    if h_flags[idx] & HF_DIRTY
+    if h_flags[idx] & (HF_DIRTY | HF_DIRSTALE)
       status := do_sync_h(idx)
       if status <> SUCCESS
         DEBUG[CH_FILE]("  [do_idle_flush] Background sync FAILED on handle ", udec_(idx), ": ", sdec_(status))
-        recordFlushError(status)                        ' The handle stays dirty, so a later flush or sync can still retry
+        recordFlushError(status)                        ' The handle stays dirty/dir-stale, so a later flush or sync can still retry
   if NOT bAborted
     updateFSInfo()
     ' updateFSInfo()'s FALSE also means "nothing to update", so the companion field is
@@ -5017,8 +5175,18 @@ PRI do_delete(name_ptr) : status
 ' returns another file's data. Leaving an undeleted file behind is recoverable;
 ' freeing a chain out from under a live entry is not.
 '
+' TWO REFUSALS (contract set 2026-08-09, v1.7.0):
+' - E_FILE_OPEN: any open file handle still references the entry. Deleting under
+'   it would let a later sync/idle flush write the handle's dirty buffer into
+'   freed -- possibly reallocated -- clusters.
+' - E_DIR_NOT_EMPTY: the target is a directory with live children. Deleting it
+'   used to free only the directory's OWN chain, orphaning every child's clusters
+'   as lost chains. The caller empties the directory first (no recursive delete).
+'
 ' @param name_ptr - Pointer to null-terminated filename string
 ' @returns status - SUCCESS on success, E_FILE_NOT_FOUND if not found,
+'                   E_FILE_OPEN if a handle still references the file,
+'                   E_DIR_NOT_EMPTY if a directory still has entries,
 '                   E_IO_ERROR if the entry could not be marked deleted
 
   do_close()
@@ -5026,14 +5194,61 @@ PRI do_delete(name_ptr) : status
     status := (search_io_status < 0) ? search_io_status : E_FILE_NOT_FOUND
   elseif attributes() & ATTR_LFN                                                ' Check read-only, hidden, system, volume label
     status := E_FILE_NOT_FOUND                                                  ' Protected file (but allow directories)
+  elseif isFileOpen(entry_address >> SECTOR_SHIFT, entry_address & SECTOR_OFFSET_MASK)
+    status := E_FILE_OPEN                                                       ' See header: delete-while-open corruption path
   else
-    dir_buf[entry_address & SECTOR_OFFSET_MASK] := DIR_ENTRY_DELETED            ' Mark entry as deleted in dir buffer
-    if writeSector(entry_address >> SECTOR_SHIFT, BUF_DIR) < 0
-      DEBUG[CH_FILE]("  [do_delete] Entry-deleted write FAILED for sector ", udec_(entry_address >> SECTOR_SHIFT))
-      status := E_IO_ERROR                                                      ' Leave the chain intact -- see above
-    else
-      ' Only deallocate clusters if file has data (cluster >= 2)
-      status := freeClusterChain(firstCluster())
+    if attributes() & ATTR_DIRECTORY
+      status := checkDirectoryEmpty()                                           ' Clobbers n_sec and dir_buf
+    if status == SUCCESS
+      ' Re-read the entry's sector: the emptiness walk above (or any interim
+      ' caching) may have replaced dir_buf since searchDirectory loaded it.
+      if readSector(entry_address >> SECTOR_SHIFT, BUF_DIR) < 0
+        DEBUG[CH_FILE]("  [do_delete] Entry sector re-read FAILED for sector ", udec_(entry_address >> SECTOR_SHIFT))
+        status := E_IO_ERROR
+      else
+        dir_buf[entry_address & SECTOR_OFFSET_MASK] := DIR_ENTRY_DELETED        ' Mark entry as deleted in dir buffer
+        if writeSector(entry_address >> SECTOR_SHIFT, BUF_DIR) < 0
+          DEBUG[CH_FILE]("  [do_delete] Entry-deleted write FAILED for sector ", udec_(entry_address >> SECTOR_SHIFT))
+          status := E_IO_ERROR                                                  ' Leave the chain intact -- see above
+        else
+          ' Only deallocate clusters if file has data (cluster >= 2)
+          status := freeClusterChain(firstCluster())
+
+PRI checkDirectoryEmpty() : status | idx, ch, adv
+' Walk the directory whose entry sits in entry_buffer and report whether it
+' holds any live child. '.', '..' (both start with '.'), and deleted ($E5)
+' entries do not count. The walk cannot prove emptiness if a read fails, and
+' "unknown" must not delete a directory -- it fails closed as E_IO_ERROR.
+' Clobbers n_sec and dir_buf.
+'
+' @returns status - SUCCESS when empty, E_DIR_NOT_EMPTY when a live child
+'                   exists, E_IO_ERROR when the walk could not complete
+' @local idx - Byte offset of the current entry within the directory
+' @local ch - First byte of the current entry
+' @local adv - readNextSector() status at sector boundaries
+
+  status := SUCCESS
+  if firstCluster() < 2
+    return                                              ' No chain -- nothing can be inside
+  n_sec := clus2sec(firstCluster())
+  if readSector(n_sec, BUF_DIR) < 0
+    return E_IO_ERROR
+  idx := 0
+  repeat
+    ch := dir_buf[idx & SECTOR_OFFSET_MASK]
+    if ch == $00
+      quit                                              ' Terminator: nothing further exists
+    if ch <> DIR_ENTRY_DELETED AND ch <> "."
+      status := E_DIR_NOT_EMPTY                         ' A live child (LFN remnants count too)
+      quit
+    idx += DIR_ENTRY_SIZE
+    if idx & SECTOR_OFFSET_MASK == 0                    ' Crossed a sector boundary
+      adv := readNextSector(BUF_DIR)
+      if adv < 0
+        status := E_IO_ERROR                            ' Could not look -- not the same as empty
+        quit
+      if adv == END_OF_CHAIN
+        quit                                            ' Chain ended with no live child found
 
 PRI do_chdir(name_ptr) : status
 ' Internal change directory operation - changes current directory.
@@ -5090,32 +5305,39 @@ PRI do_freespace() : sectorCount | cluster
     sectorCount := sectorCount * sec_per_clus
 
 PRI do_sync() : status
-' Internal sync operation - flushes pending directory writes without closing file.
+' Internal sync operation: flush EVERYTHING -- every open write handle, then
+' the FSInfo sector -- the same persistence pairing do_unmount runs, without
+' unmounting. One copy of each routine means sync can never drift from unmount.
 '
-' F_NEWDIR IS CLEARED ONLY ON SUCCESS. It is the flag that says "entry_buffer holds a
-' directory entry that has not reached the card yet". Clearing it after a failed write
-' discards that pending entry from memory while the card still lacks it, so the file is
-' lost with nothing left to retry from. Retaining it means a later sync -- or the close
-' -- writes it again, the same rule do_write_h follows for a dirty sector buffer.
+' History: this method once flushed only a pending F_NEWDIR directory entry.
+' That flag provably cannot survive to a command boundary (v1.7.0 task #50: every
+' do_movefile exit clears it or reaches do_close, which clears it), so for a
+' while this was an honest no-op. But sync() is public API documented as
+' "flush all pending writes" (TUTORIAL, THEORY, ERROR-HANDLING guides), so the
+' no-op was a silent-dataloss trap wearing a SUCCESS return -- now it delivers
+' what the name and the docs promise.
 '
-' @returns status - SUCCESS (0), or E_IO_ERROR if the entry could not be written
+' Mode enforcement gates CMD_SYNC on MODE_FILESYSTEM, so mount state (and
+' fsinfo_sec) is always valid here.
+'
+' @returns status - SUCCESS (0) if every dirty handle and FSInfo reached disk;
+'                   first non-SUCCESS encountered otherwise. Failed handles
+'                   stay dirty, so a later sync() retries them.
 
-  status := SUCCESS
   if flags & F_NEWDIR
-    if readSector(entry_address >> SECTOR_SHIFT, BUF_DIR) < 0
-      DEBUG[CH_MOUNT]("  [do_sync] Directory read FAILED for sector ", udec_(entry_address >> SECTOR_SHIFT))
-      status := E_IO_ERROR
-    else
-      bytemove(@dir_buf + (entry_address & SECTOR_OFFSET_MASK), @entry_buffer, DIR_ENTRY_SIZE)
-      if writeSector(entry_address >> SECTOR_SHIFT, BUF_DIR) < 0
-        DEBUG[CH_MOUNT]("  [do_sync] Directory write FAILED for sector ", udec_(entry_address >> SECTOR_SHIFT))
-        status := E_IO_ERROR
-    if status == SUCCESS
-      flags := flags & !F_NEWDIR                        ' Entry is on the card; nothing left pending
-    else
-      DEBUG[CH_MOUNT]("  [do_sync] Entry still pending -- F_NEWDIR retained so a later sync retries")
+    ' Tripwire: should be impossible (see header). If this ever prints, some
+    ' new exit path leaked a staged entry -- the ghost-entry bug class is back.
+    DEBUG[CH_MOUNT]("  [do_sync] LEAKED F_NEWDIR -- an operation exited with a staged entry pending")
 
-PRI do_rename(old_name, new_name) : status | bookmark, temp_sec, idx, saved_entry[8], p_buf
+  status := do_sync_all()
+
+  ' updateFSInfo() returns FALSE for "nothing to update" as well as for a real
+  ' failure; fsinfo_error is what tells them apart (see do_unmount).
+  updateFSInfo()
+  if fsinfo_error < 0 AND status == SUCCESS
+    status := fsinfo_error
+
+PRI do_rename(old_name, new_name) : status | bookmark, temp_sec, idx, saved_entry[8], p_buf, name_83[4]
 ' Internal rename operation - renames file/directory by updating directory entry.
 ' Finds old file, saves entry, parses new_name into 8.3 format, writes back.
 '
@@ -5127,6 +5349,7 @@ PRI do_rename(old_name, new_name) : status | bookmark, temp_sec, idx, saved_entr
 ' @local idx - Loop counter
 ' @local saved_entry - Saved directory entry (32 bytes = 8 longs)
 ' @local p_buf - Pointer to buffer position
+' @local name_83 - Zeroed scratch for the 8.3 name conversion (16 bytes)
 
   DEBUG[CH_DIR]("  [do_rename] old=", zstr_(old_name), " new=", zstr_(new_name), " dir_sec=", udec_(cog_dir_sec[pb_caller]))
   if NOT searchDirectory(old_name)
@@ -5137,7 +5360,13 @@ PRI do_rename(old_name, new_name) : status | bookmark, temp_sec, idx, saved_entr
     bookmark := entry_address
     temp_sec := cog_dir_sec[pb_caller]
     bytemove(@saved_entry, @entry_buffer, DIR_ENTRY_SIZE)                       ' Save complete entry (32 bytes)
-    cog_dir_sec[pb_caller] := entry_address >> SECTOR_SHIFT                     ' Search in same directory
+    ' Search the SAME DIRECTORY the old entry lives in, from its FIRST sector.
+    ' entry_address >> SECTOR_SHIFT (used before) is the sector CONTAINING the
+    ' old entry -- starting there skipped every earlier sector of a multi-sector
+    ' directory, so a conflicting name in those sectors went undetected and the
+    ' rename minted a duplicate. search_parent_sec is captured by the
+    ' searchDirectory(old_name) call above.
+    cog_dir_sec[pb_caller] := search_parent_sec
     idx := 0
     repeat until BYTE[new_name + idx] == $00
       if BYTE[new_name + idx] == "/"
@@ -5160,23 +5389,28 @@ PRI do_rename(old_name, new_name) : status | bookmark, temp_sec, idx, saved_entr
         DEBUG[CH_DIR]("  [do_rename] Directory read FAILED for sector ", udec_(bookmark >> SECTOR_SHIFT))
         status := E_IO_ERROR
       else
-        ' Parse new_name directly into buffer in 8.3 format
+        ' Parse new_name into 8.3 format in a ZEROED SCRATCH, then copy exactly
+        ' the 11-byte SFN field onto the live entry. Converting in place on the
+        ' live entry clobbered DE_ATTR (byte 11): a 12-character name landed its
+        ' last extension character on the attribute byte, and the extension
+        ' rearrangement read byte 11 into the name even for shorter names.
+        ' The conversion mirrors searchDirectory's creation-path conversion.
         p_buf := @dir_buf + (bookmark & SECTOR_OFFSET_MASK)
         idx := 0
         repeat until BYTE[new_name + idx] == "/" OR BYTE[new_name + idx] == $00
           idx++
-        bytefill(p_buf, " ", SFN_TOTAL_LEN)                                     ' Clear name field
-        bytemove(p_buf, new_name, idx <# 12)                                    ' Copy name
-        ' Convert to uppercase first (must happen before 8.3 rearrangement)
-        repeat idx from 0 TO SFN_TOTAL_LEN - 1
-          case BYTE[p_buf + idx]
-            "a".."z" : BYTE[p_buf + idx] -= ASCII_CASE_OFFSET
-        ' Handle 8.3 extension separator
-        repeat idx from 0 TO SFN_TOTAL_LEN - 1
-          if BYTE[p_buf + idx] == "."
-            bytemove(p_buf + SFN_NAME_LEN, p_buf + idx + 1, SFN_EXT_LEN)
-            bytefill(p_buf + idx, " ", SFN_NAME_LEN - idx)
-            quit
+        longfill(@name_83, 0, 4)
+        bytemove(@name_83, new_name, idx <# SFN_WITH_DOT_LEN)                   ' Copy name, max 12 characters
+        repeat idx from 0 TO SFN_WITH_DOT_LEN - 1                               ' Uppercase before 8.3 rearrangement
+          case BYTE[@name_83][idx]
+            "a".."z" : BYTE[@name_83][idx] -= ASCII_CASE_OFFSET
+        idx := 0
+        repeat strsize(@name_83) <# SFN_NAME_LEN + 1                            ' Search name for extension
+          if BYTE[@name_83][idx++] == "."
+            bytemove(@name_83 + SFN_NAME_LEN, @name_83 + idx, SFN_EXT_LEN)      '  move extension to byte 8
+            bytefill(@name_83 + idx - 1, " ", SFN_NAME_LEN + 1 - idx)           '  fill space between name and extension
+        bytefill(@name_83 + strsize(@name_83), " ", SFN_WITH_DOT_LEN - strsize(@name_83))
+        bytemove(p_buf, @name_83, SFN_TOTAL_LEN)                                ' 11 bytes only -- DE_ATTR untouched
         ' The rewritten entry IS the entire product of a rename. If this write does
         ' not land the file simply keeps its old name, so reporting success would be
         ' telling the caller the rename happened when nothing changed on the card.
@@ -5292,8 +5526,18 @@ PRI do_movefile(name_ptr, dest_folder) : status | bookmark, p_temp, temp_sec
       elseif do_newfile(p_temp) == SUCCESS
         DEBUG[CH_DIR]("  [do_movefile] newfile OK, new entry_address=", uhex_(entry_address))
         DEBUG[CH_DIR]("  [do_movefile] Reading sector ", udec_(bookmark >> SECTOR_SHIFT), " (dir_sec_in_buf=", sdec_(dir_sec_in_buf), ")")
+        ' NOTE: error_injection Test 34 arms THIS read by ordinal (3rd card read
+        ' of the moveFile sequence) -- a caching change that renumbers moveFile's
+        ' reads silently retargets that test; update its arming comment together
+        ' with any change to what hits the card here.
         if readSector(bookmark >> SECTOR_SHIFT, BUF_DIR) < 0
+          ' Source unreadable, so the source entry cannot be deleted -- abandon
+          ' the move exactly as the source-delete WRITE failure below does.
+          ' Before v1.7.0 this path returned with F_NEWDIR still set and the
+          ' staged DESTINATION entry in entry_buffer, so the next do_close()
+          ' from any operation wrote it: one file live in two directories.
           DEBUG[CH_DIR]("  [do_movefile] Directory read FAILED for sector ", udec_(bookmark >> SECTOR_SHIFT))
+          abandonPendingEntry()
           status := E_IO_ERROR
         else
           DEBUG[CH_DIR]("  [do_movefile] After read: dir_buf[128]=[", lstr_(@dir_buf + 128, 11), "] dir_buf[", udec_(bookmark & SECTOR_OFFSET_MASK), "]=[", lstr_(@dir_buf + (bookmark & SECTOR_OFFSET_MASK), 11), "]")
@@ -5307,8 +5551,7 @@ PRI do_movefile(name_ptr, dest_folder) : status | bookmark, p_temp, temp_sec
             ' cleared explicitly or the NEXT do_close() from any operation would
             ' write that destination entry and produce the duplicate anyway.
             DEBUG[CH_DIR]("  [do_movefile] Source-entry delete write FAILED for sector ", udec_(bookmark >> SECTOR_SHIFT))
-            bytefill(@entry_buffer, 0, DIR_ENTRY_SIZE)
-            flags := flags & !F_NEWDIR
+            abandonPendingEntry()
             status := E_IO_ERROR
           else
             DEBUG[CH_DIR]("  [do_movefile] Calling do_close, flags=", uhex_(flags))
@@ -5500,6 +5743,14 @@ PRI do_attempt_high_speed() : hs_ok | idx, mismatch
 ' Uses existing DAT buffers (@buf and @dir_buf) instead of stack locals
 ' to stay within worker cog stack limits (STACK_SIZE=160 longs).
 '
+' VERIFY IS READ-ONLY (contract set 2026-08-09, v1.7.0). The baseline copy of
+' the verification sector is captured at the CURRENT, known-good speed BEFORE
+' CMD6, then the same sector is force-re-read at 50 MHz and compared. The old
+' scheme did both reads at the suspect speed -- consistent corruption compared
+' equal -- and wrote the root sector back at that suspect speed with the write
+' status ignored, so a bad 50 MHz link could destroy the root directory during
+' the very check meant to detect it.
+'
 ' @returns hs_ok - TRUE if 50 MHz active, FALSE if fell back to 25 MHz
 ' @local idx - Loop counter
 ' @local mismatch - Count of mismatched longs
@@ -5515,32 +5766,31 @@ PRI do_attempt_high_speed() : hs_ok | idx, mismatch
   elseif NOT hs_supported
     ' Asked and answered: this card does not offer high speed
     DEBUG[CH_HSPEED]("  [do_attempt_high_speed] Card does not support high-speed")
-  elseif applyHighSpeed() <> SUCCESS
-    ' Switch to high-speed mode
-    DEBUG[CH_HSPEED]("  [do_attempt_high_speed] Failed to switch to high-speed")
+  elseif readSector(root_sec, BUF_DATA) < 0
+    ' Baseline capture at the current known-good speed. Without a trusted
+    ' baseline the 50 MHz verify proves nothing, so no switch is attempted.
+    DEBUG[CH_HSPEED]("  [do_attempt_high_speed] Baseline read FAILED at current speed")
     hs_query_error := E_IO_ERROR
   else
-    ' Set 50 MHz SPI clock
-    applySPISpeed(50_000_000)
-    DEBUG[CH_HSPEED]("  [do_attempt_high_speed] SPI set to 50 MHz, verifying...")
+    bytemove(@dir_buf, @buf, SECTOR_SIZE)               ' Known-good baseline into dir_buf
 
-    ' Verify by reading a sector, writing it back, reading again
-    ' Use root directory sector as test (always valid after mount)
-    ' Use @buf (BUF_DATA) for read/write and @dir_buf as saved copy
-    if readSector(root_sec, BUF_DATA) < 0
-      DEBUG[CH_HSPEED]("  [do_attempt_high_speed] Read FAILED at 50 MHz")
+    if applyHighSpeed() <> SUCCESS
+      ' Switch to high-speed mode
+      DEBUG[CH_HSPEED]("  [do_attempt_high_speed] Failed to switch to high-speed")
       hs_query_error := E_IO_ERROR
     else
-      bytemove(@dir_buf, @buf, SECTOR_SIZE)             ' Save original to dir_buf
+      ' Set 50 MHz SPI clock
+      applySPISpeed(50_000_000)
+      DEBUG[CH_HSPEED]("  [do_attempt_high_speed] SPI set to 50 MHz, verifying (read-only)...")
 
-      writeSector(root_sec, BUF_DATA)                   ' status intentionally ignored: read-back verification rewrites identical data
-      bytefill(@buf, $AA, SECTOR_SIZE)                  ' Poison buf
-
-      if readSector(root_sec, BUF_DATA) < 0             ' Read again
-        DEBUG[CH_HSPEED]("  [do_attempt_high_speed] Verify read FAILED at 50 MHz")
+      bytefill(@buf, $AA, SECTOR_SIZE)                  ' Poison so a failed transfer cannot alias the baseline
+      sec_in_buf := -1                                  ' Force a REAL 50 MHz read -- a cache hit would verify nothing
+      if readSector(root_sec, BUF_DATA) < 0             ' Re-read the baseline sector at 50 MHz
+        DEBUG[CH_HSPEED]("  [do_attempt_high_speed] Verify read FAILED at 50 MHz - falling back to 25 MHz")
         hs_query_error := E_IO_ERROR
+        applySPISpeed(25_000_000)                       ' An unverified 50 MHz link must not stay active
       else
-        ' Compare dir_buf (original) vs buf (re-read) long-by-long
+        ' Compare dir_buf (safe-speed baseline) vs buf (50 MHz re-read) long-by-long
         mismatch := 0
         repeat idx from 0 TO FAT_ENTRIES_PER_SECTOR - 1
           if LONG[@dir_buf][idx] <> LONG[@buf][idx]
@@ -5550,11 +5800,12 @@ PRI do_attempt_high_speed() : hs_ok | idx, mismatch
           DEBUG[CH_HSPEED]("  [do_attempt_high_speed] VERIFICATION FAILED - ", udec_(mismatch), " long mismatches")
           DEBUG[CH_HSPEED]("  [do_attempt_high_speed] Falling back to 25 MHz")
           applySPISpeed(25_000_000)
+          sec_in_buf := -1                              ' buf holds the suspect-speed bytes -- must not stay cached as valid
         else
           DEBUG[CH_HSPEED]("  [do_attempt_high_speed] VERIFIED - 50 MHz high-speed mode ACTIVE")
           hs_ok := true
 
-    ' Invalidate dir cache since we borrowed dir_buf
+    ' Invalidate dir cache since we borrowed dir_buf as the baseline copy
     dir_sec_in_buf := -1
 
 PRI do_check_hs_capability() : capable | status[16]
@@ -5579,7 +5830,7 @@ PRI do_check_hs_capability() : capable | status[16]
 
 CON ' ---- SD Directory / FAT Operations ----
 
-PRI searchDirectory(name_ptr) : bFound | p_temp, p_entry, idx, search_sec, jdx
+PRI searchDirectory(name_ptr) : bFound | p_temp, p_entry, idx, search_sec, jdx, adv
 ' Search directory for a file/directory by name.
 '
 ' FALSE HAS TWO MEANINGS AND THE COMPANION FIELD IS WHAT SEPARATES THEM: "the name is
@@ -5610,6 +5861,9 @@ PRI searchDirectory(name_ptr) : bFound | p_temp, p_entry, idx, search_sec, jdx
 ' @local idx - Loop counter
 ' @local search_sec - Local directory sector for path resolution
 ' @local jdx - Loop counter for case-insensitive name comparison
+' @local adv - Last readNextSector() status: END_OF_CHAIN means the buffer holds
+'              served zeros and n_sec is OUTSIDE the directory's chain, so no
+'              free-slot address may be minted from the current scan position
 
   search_io_status := SUCCESS
   p_temp := @"FILENAMETXT"
@@ -5635,6 +5889,7 @@ PRI searchDirectory(name_ptr) : bFound | p_temp, p_entry, idx, search_sec, jdx
         "a".."z" : BYTE[@entry_buffer][idx] -= ASCII_CASE_OFFSET
 
     idx := 0                                                                                      '  convert 8.3 filename into short filename
+    ' do_rename mirrors this conversion on its own scratch -- keep the two in lockstep
     if strcomp(@entry_buffer,string("..")) == 0                                                   '  exception if changing directory to ".."
       repeat strsize(@entry_buffer) <# 9                                                          '  search name for extension
         if BYTE[@entry_buffer][idx++] == "."                                                      '  if extension found
@@ -5644,6 +5899,7 @@ PRI searchDirectory(name_ptr) : bFound | p_temp, p_entry, idx, search_sec, jdx
     BYTE[@entry_buffer][SFN_TOTAL_LEN] := $00                                                     '  append null
 
     idx := 0
+    search_parent_sec := n_sec                                                                    '  first sector of the directory this component is scanned in (do_rename's duplicate check starts here)
     DEBUG[CH_DIR]("  [searchDir] Starting search at n_sec=", udec_(n_sec), " for [", lstr_(@entry_buffer, 11), "]")
     if readSector(n_sec, BUF_DIR) < 0                                                             '  read 1st sector of directory
       DEBUG[CH_DIR]("  [searchDir] Directory read FAILED for sector ", udec_(n_sec))
@@ -5652,6 +5908,7 @@ PRI searchDirectory(name_ptr) : bFound | p_temp, p_entry, idx, search_sec, jdx
       quit
     DEBUG[CH_DIR]("  [searchDir] After read: dir_buf[0]=[", lstr_(@dir_buf, 11), "] dir_buf[32]=[", lstr_(@dir_buf + 32, 11), "]")
     entry_address := 0
+    adv := SUCCESS
     repeat
       p_entry := @dir_buf + (idx & SECTOR_OFFSET_MASK)                                            '  locate entry in directory (FIXED precedence)
       bytemove(p_temp,p_entry,SFN_TOTAL_LEN)                                                      '  copy short filename into p_temp
@@ -5670,7 +5927,13 @@ PRI searchDirectory(name_ptr) : bFound | p_temp, p_entry, idx, search_sec, jdx
           n_sec := clus2sec(firstCluster())                                                       '   set n_sec to 1st sector of 1st cluster of file
         quit
       elseif BYTE[name_ptr] == $00                                                                '  if end of path reached
-        if (entry_address == 0) AND (BYTE[p_temp] == DIR_ENTRY_DELETED OR BYTE[p_temp] == $00)    '  if entry_address not set, and 1st byte is $E5 or $00
+        ' A slot may only be minted from a sector that IS in the directory's chain.
+        ' Past END_OF_CHAIN the buffer holds served zeros and n_sec is the next
+        ' physical LBA -- a "free slot" built from it would hand do_create/do_newfile
+        ' /do_newdir a FOREIGN sector to write a directory entry into. A full
+        ' terminator-less directory (legal FAT32, typically PC-written) therefore
+        ' leaves entry_address == 0 and the create paths fail closed.
+        if (entry_address == 0) AND (adv <> END_OF_CHAIN) AND (BYTE[p_temp] == DIR_ENTRY_DELETED OR BYTE[p_temp] == $00)  '  if entry_address not set, and 1st byte is $E5 or $00
           entry_address := (n_sec << SECTOR_SHIFT) | (idx & SECTOR_OFFSET_MASK)                   '    set entry_address to 1st unused entry (for newFile / newDirectory)
           DEBUG[CH_DIR]("  [searchDir] Free slot at n_sec=", udec_(n_sec), " idx=", udec_(idx), " entry_address=$", uhex_(entry_address))
 
@@ -5679,7 +5942,8 @@ PRI searchDirectory(name_ptr) : bFound | p_temp, p_entry, idx, search_sec, jdx
         quit
       idx += DIR_ENTRY_SIZE                                                                       '  increment to next entry
       if idx & SECTOR_OFFSET_MASK == 0                                                            '  read new directory sector/cluster if needed
-        if readNextSector(BUF_DIR) < 0                                                            '   cannot advance -- stop rather than scan a stale buffer
+        adv := readNextSector(BUF_DIR)
+        if adv < 0                                                                                '   cannot advance -- stop rather than scan a stale buffer
           DEBUG[CH_DIR]("  [searchDir] Advance to next dir sector FAILED")
           search_io_status := E_IO_ERROR                                                          '   the search was cut short, so FALSE is not an answer
           bFound := false
@@ -5744,13 +6008,17 @@ PRI allocateCluster(cluster) : result | fat_idx, buf_idx, high_bits, start_fat_i
 
   if cluster > 0
     fat_idx := (cluster + 1) << 2                                                ' Start after previous cluster
-  elseif fsi_nxt_free <> $FFFF_FFFF AND fsi_nxt_free >= ROOT_CLUSTER
+  elseif fsi_nxt_free >= ROOT_CLUSTER AND fsi_nxt_free +< sec_per_fat << 7       ' Hint sane: within this FAT's entry count, UNSIGNED
+    ' The hint comes off the card (FSInfo sector) and is untrusted. The compare
+    ' must be unsigned and on the RAW hint: a garbage hint >= $2000_0000 passes
+    ' the signed lower bound, goes NEGATIVE after << 2, and a signed >= fat_limit
+    ' check never catches it. +< also rejects $FFFF_FFFF ("no hint") for free.
     fat_idx := fsi_nxt_free << 2                                                 ' Use FSInfo hint for new chains
   else
     fat_idx := 8                                                                 ' Default: cluster 2
 
   fat_limit := sec_per_fat << SECTOR_SHIFT                                       ' End of FAT in bytes
-  if fat_idx >= fat_limit                                                        ' Guard: if start is past end, wrap to cluster 2
+  if fat_idx +>= fat_limit                                                       ' Guard: if start is past end, wrap to cluster 2 (unsigned, matches hint guard)
     fat_idx := 8
 #ifdef SD_INCLUDE_TEST_HOOKS
   if test_max_clusters > 0 AND (fat_idx >> 2) >= test_max_clusters               ' Guard: if start is past test limit, wrap
@@ -5867,7 +6135,9 @@ PRI readNextSector(buf_type) : status | cluster, address, contents
 ' end-of-chain path -- as real directory entries.
 '
 ' @param buf_type - Buffer type: BUF_DIR, BUF_FAT, or BUF_DATA
-' @returns status - SUCCESS on success, E_IO_ERROR if a FAT or data read failed
+' @returns status - SUCCESS on success, END_OF_CHAIN (positive, so `< 0` error
+'                   checks are unaffected) when the chain ended and zeros were
+'                   served, E_IO_ERROR if a FAT or data read failed
 ' @local cluster - Current cluster number
 ' @local address - FAT entry address
 ' @local contents - FAT entry contents
@@ -5883,14 +6153,24 @@ PRI readNextSector(buf_type) : status | cluster, address, contents
       address := @fat_buf + ((cluster << 2) & SECTOR_OFFSET_MASK)               '   find long within FAT buffer for current cluster
       contents := LONG[address]                                                 '   read contents to determine next cluster number
       if contents +>= FAT32_EOC_MIN                                             '   end-of-chain marker detected
-        ' Fill appropriate buffer with zeros based on buf_type
+        ' Zeros are served in place of a sector that does not exist. The tier's
+        ' cache tag must not keep naming the LAST REAL sector while the buffer
+        ' holds these zeros -- a later readSector() of that sector would
+        ' cache-hit zeros and read a real directory sector as empty. n_sec now
+        ' also points OUTSIDE the chain (next physical LBA); END_OF_CHAIN tells
+        ' callers not to treat scan positions derived from it as real (see
+        ' searchDirectory's free-slot suppression).
         case buf_type
           BUF_DIR:
             bytefill(@dir_buf, 0, SECTOR_SIZE)
+            dir_sec_in_buf := -1
           BUF_FAT:
             bytefill(@fat_buf, 0, SECTOR_SIZE)
+            fat_sec_in_buf := -1
           other:
             bytefill(@buf, 0, SECTOR_SIZE)
+            sec_in_buf := -1
+        status := END_OF_CHAIN
       else
         n_sec := clus2sec(contents)                                             '   convert next cluster number into sector number
         if readSector(n_sec, buf_type) < 0
@@ -6416,21 +6696,17 @@ PRI invalidateAllCaches()
   fat_sec_in_buf := -1
   sec_in_buf := -1
 
-PRI isFileOpenAny(dir_sector, dir_offset) : bOpen | handle
+PRI isFileOpenAny(dir_sector, dir_offset) : bOpen
 ' Check if a file is open in any mode (read, write, or directory).
 ' Used by compactFile() to reject compaction on open files.
 '
 ' @param dir_sector - Directory sector containing the file entry
 ' @param dir_offset - Offset within sector of the file entry
 ' @returns bOpen - TRUE if file is open in any mode, FALSE otherwise
-' @local handle - Loop variable for handle search
 
-  bOpen := FALSE
-  repeat handle from 0 TO MAX_OPEN_FILES - 1
-    if h_flags[handle] <> HF_FREE
-      if h_dir_sector[handle] == dir_sector AND h_dir_offset[handle] == dir_offset
-        bOpen := TRUE
-        quit
+  ' $FF admits every mode including HF_DIR -- pre-existing semantics for the
+  ' compaction guard; see handleReferencesEntry for the stale-coordinate caveat.
+  bOpen := handleReferencesEntry(dir_sector, dir_offset, $FF)
 
 #endif                                                  ' SD_INCLUDE_DEFRAG
 
@@ -7176,7 +7452,24 @@ PRI readSector(sector, buf_type) : status | _sck, _miso, data, loop_ctr, timeout
 
   if sector <> LONG[p_cache]                                                    '  cache miss - must read from card
     ' debug[CH_SECTOR]("  [readSector] Reading sector ", udec_(sector), " type=", udec_(buf_type), " p_buf=", uhex_(p_buf))
-    LONG[p_cache] := sector
+    ' The buffer is about to hold transfer-in-progress bytes; the tag commits
+    ' only at the end, after every accept check has passed. Committing here
+    ' meant any exit that missed an explicit invalidate left a VALID tag on
+    ' garbage -- and a CRC-retry success left the sector uncached (the retry
+    ' path invalidated, nothing recommitted).
+    LONG[p_cache] := -1
+
+#ifdef SD_INCLUDE_TEST_HOOKS
+    ' TEST HOOK: fail the nth card read (cache misses only -- a cache hit never
+    ' reaches this point). Short-circuits before CMD17 with the tag already
+    ' invalid, so the observable outcome matches an exhausted-retries read:
+    ' E_CRC_ERROR, nothing cached, buffer contents indeterminate.
+    test_read_call_count++
+    if test_fail_read_after > 0 AND test_read_call_count == test_fail_read_after
+      test_fail_read_after := 0                                                 '  one-shot
+      test_error_count++
+      return E_CRC_ERROR
+#endif
 
     ' Pre-compute streamer constants (invariant across retries)
     _sck := sck
@@ -7206,7 +7499,6 @@ PRI readSector(sector, buf_type) : status | _sck, _miso, data, loop_ctr, timeout
       if diag_cmd_r1_ms < 0
         DEBUG[CH_SECTOR]("  [readSector] CMD17 R1 NEVER ARRIVED (cmd() timed out) attempt ", udec_(attempt))
         pinh(cs)
-        LONG[p_cache] := -1
         status := E_TIMEOUT
         quit                                                                  ' break retry loop
 
@@ -7229,14 +7521,12 @@ PRI readSector(sector, buf_type) : status | _sck, _miso, data, loop_ctr, timeout
             ' The card is telling us exactly why it could not deliver data.
             DEBUG[CH_SECTOR]("  [readSector] DATA ERROR TOKEN $", uhex_byte_(data), " - error=", udec_(data & 1), " ccErr=", udec_((data >> 1) & 1), " eccFail=", udec_((data >> 2) & 1), " outOfRange=", udec_((data >> 3) & 1))
           pinh(cs)
-          LONG[p_cache] := -1
           status := E_BAD_RESPONSE
           quit
         if GETMS() - timeout > 0
           diag_last_token := data                                               '  card stayed silent ($FF); record it rather than leaving it stale
           DEBUG[CH_SECTOR]("  [readSector] TIMEOUT waiting for start token")
           pinh(cs)
-          LONG[p_cache] := -1
           status := E_TIMEOUT
           quit
       if status < 0                                                             '  token error or timeout
@@ -7334,17 +7624,20 @@ PRI readSector(sector, buf_type) : status | _sck, _miso, data, loop_ctr, timeout
         if attempt < MAX_READ_CRC_RETRIES
           diag_crc_retries++
           DEBUG[CH_SECTOR]("  [readSector] CRC MISMATCH attempt ", udec_(attempt), "/", udec_(MAX_READ_CRC_RETRIES), " recv=$", uhex_(diag_recv_crc), " calc=$", uhex_(diag_calc_crc), " - retrying")
-          LONG[p_cache] := -1                                                   ' Invalidate cache before retry
         else
           DEBUG[CH_SECTOR]("  [readSector] CRC FAILED after ", udec_(MAX_READ_CRC_RETRIES), " attempts recv=$", uhex_(diag_recv_crc), " calc=$", uhex_(diag_calc_crc))
-          LONG[p_cache] := -1                                                   ' Invalidate cache on failure
           status := E_CRC_ERROR
 
     ' CMD13: Verify card internal state after read
     ' CRC validates wire integrity; CMD13 validates card-internal state (ECC, address, etc.)
     if status == 0 AND checkCardStatus(@"readSector") < 0
-      LONG[p_cache] := -1                                                       ' Invalidate cache on card error
       status := E_IO_ERROR
+
+    ' The ONLY tag commit. Every accept check (CRC or its sanctioned skip, then
+    ' CMD13) has passed; no failure exit can reach here, so no exit can leave a
+    ' valid tag on a buffer the card never filled.
+    if status == 0
+      LONG[p_cache] := sector
   ' else: cache hit - status stays 0 (success)
 
 PRI readSectors(start_sector, count, p_buffer) : sectors_read | _sck, _miso, p_buf, stream_mode, clk_count, xfrq, init_phase, align_delay, resp
@@ -7502,6 +7795,35 @@ PRI readSectors(start_sector, count, p_buffer) : sectors_read | _sck, _miso, p_b
             DEBUG[CH_SECTOR]("  [readSectors] CMD13 status check FAILED")
             sectors_read := 0                                                   ' Card reports error - data can't be trusted
 
+PRI invalidateCacheRange(first_sector, last_sector) | idx
+' Cross-tier cache coherence for a written or erased LBA range: clear every
+' dir/FAT/data tag inside [first_sector, last_sector], and every CLEAN
+' per-handle buffer tag in the range.
+'
+' DIRTY handle buffers are deliberately EXEMPT. Every handle-flush path copies
+' the handle buffer into buf and calls writeSector() while HF_DIRTY is still
+' set (the flag clears only after the call returns), so the exemption is what
+' stops a handle's own flush from discarding the very buffer it is flushing.
+' For any OTHER dirty overlap the handle's pending flush is the newest copy of
+' that sector and wins -- last-writer semantics; single-writer policy makes a
+' second dirty holder of the same sector impossible, and invalidating a dirty
+' tag would orphan the user's unflushed bytes and hand the later sync a -1
+' sector to write.
+'
+' @param first_sector - First LBA of the invalidated range
+' @param last_sector - Last LBA of the invalidated range (== first_sector for one sector)
+' @local idx - Handle index
+
+  if dir_sec_in_buf >= first_sector AND dir_sec_in_buf <= last_sector
+    dir_sec_in_buf := -1
+  if fat_sec_in_buf >= first_sector AND fat_sec_in_buf <= last_sector
+    fat_sec_in_buf := -1
+  if sec_in_buf >= first_sector AND sec_in_buf <= last_sector
+    sec_in_buf := -1
+  repeat idx from 0 TO MAX_OPEN_FILES - 1
+    if h_buf_sector[idx] >= first_sector AND h_buf_sector[idx] <= last_sector AND NOT (h_flags[idx] & HF_DIRTY)
+      h_buf_sector[idx] := -1
+
 PRI writeSector(sector, buf_type) : status | _sck, _mosi, p_buf, stream_mode, clk_count, xfrq, resp, p_cache, inject_fail
 ' Write buffer into a sector using P2 streamer - hardware DMA for bulk 512-byte transfer.
 ' Reference: flash_loader.spin2 pattern for SPI writes
@@ -7548,14 +7870,14 @@ PRI writeSector(sector, buf_type) : status | _sck, _mosi, p_buf, stream_mode, cl
   ' Invalidate cache for this buffer type after write
   LONG[p_cache] := -1
 
-  ' Cross-buffer cache coherence: if another buffer type has this
-  ' sector cached, its copy is now stale after our write
-  if dir_sec_in_buf == sector
-    dir_sec_in_buf := -1
-  if fat_sec_in_buf == sector
-    fat_sec_in_buf := -1
-  if sec_in_buf == sector
-    sec_in_buf := -1
+  ' Cross-tier cache coherence: any other cache holding this sector -- the two
+  ' other DAT tiers AND any clean per-handle buffer -- is stale the moment this
+  ' write lands. (The old sweep here checked only the three DAT tags; a handle
+  ' holding the sector kept serving pre-write bytes.) Runs before the transfer
+  ' so a failed/partial write can never leave a cache claiming to describe the
+  ' sector; see invalidateCacheRange for the dirty-handle exemption that
+  ' protects the flush-own-buffer path.
+  invalidateCacheRange(sector, sector)
 
   ' Capture sector for diagnostics
   diag_write_sector := sector
@@ -7744,6 +8066,13 @@ PRI writeSectors(start_sector, count, p_buffer) : sectors_written | _sck, _mosi,
 ' @local postloop_sectors - sectors_written captured before recovery zero-out
 
   if count > 0
+    ' Every cache tag inside the written range -- all three DAT tiers and any
+    ' clean per-handle buffer -- is stale once blocks start landing. Invalidated
+    ' up front (conservatively covering the FULL range even if a per-block
+    ' failure stops the burst early) so no failure path can leave a cache
+    ' describing pre-write bytes.
+    invalidateCacheRange(start_sector, start_sector + count - 1)
+
     ' Setup variables for streamer
     _sck := sck
     _mosi := mosi
@@ -7860,6 +8189,15 @@ PRI writeSectors(start_sector, count, p_buffer) : sectors_written | _sck, _mosi,
             postloop_sectors := sectors_written
             sectors_written := 0                                                ' Card reports error - writes can't be trusted
 
+      ' Path 2: clean per-block rejection - $FD sent, card went idle, but nothing
+      ' counts as written from the rejected block on; 0 tells the caller the batch
+      ' failed. (This check previously sat AFTER the consolidated debug emit below,
+      ' where the emit block's outdent left it nested under `if postloop_msg_ptr <> 0`
+      ' -- unreachable for path 2, which sets failure_msg_ptr. A rejected CMD25
+      ' therefore returned a partial count that read as success.)
+      if failure_path == 2
+        sectors_written := 0                                                    ' caller treats 0 as failure
+
   ' Consolidated debug emit: one record for per-block/CMD25 failure family,
   ' one for post-loop ($FD/CMD13) failure family. Silent on full success.
   ' Saves 6 compiled records vs the original 8 per-branch DEBUG calls.
@@ -7867,11 +8205,6 @@ PRI writeSectors(start_sector, count, p_buffer) : sectors_written | _sck, _mosi,
     DEBUG[CH_SECTOR]("  [writeSectors] ", zstr_(failure_msg_ptr), " sector=", udec_(failure_sector), " R1=$", uhex_byte_(failure_r1), " resp=$", uhex_byte_(failure_resp))
   if postloop_msg_ptr <> 0
     DEBUG[CH_SECTOR]("  [writeSectors] post-loop: ", zstr_(postloop_msg_ptr), " sectors_written=", udec_(postloop_sectors))
-
-        ' Path 2: clean per-block rejection - $FD sent, card went idle,
-        ' but no sectors were successfully written from the rejected block on.
-        if failure_path == 2
-          sectors_written := 0                                                  ' caller treats 0 as failure
 
 PRI waitDataToken() : status | timeout, resp
 ' Wait for data start token ($FE) - polls for data token before sector data.
@@ -8936,6 +9269,10 @@ PRI do_erase_block(start_sector) : status | resp, end_sector, timeout, failed_cm
   failed_cmd := 0
   failed_r1 := 0
   failed_msg_ptr := 0
+
+  ' An erase rewrites on-card contents exactly as a write does: every cache tag
+  ' inside the erased range (all tiers + clean handle buffers) is stale.
+  invalidateCacheRange(start_sector, end_sector)
 
 ' CMD32: ERASE_WR_BLK_START_ADDR
 

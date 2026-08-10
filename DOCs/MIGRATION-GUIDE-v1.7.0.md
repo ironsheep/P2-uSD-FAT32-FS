@@ -62,7 +62,6 @@ around the old encoding, remove it.
 |---|---|---|
 | `stop()` | returned nothing | returns the final unmount's status |
 | `closeDirectoryHandle()` | returned nothing | returns `SUCCESS` or a negative code |
-| `sync()` | documented a failure code it could never produce | actually reports failure |
 
 Spin2 allows calling a value-returning method as a bare statement, so **existing calls
 compile and behave exactly as before**. Adopt the return values where the outcome matters.
@@ -73,7 +72,28 @@ can report what happened.
 
 ---
 
-## 4. `freeSpace()` returns 0 instead of a partial count
+## 4. `sync()` now does what its name says
+
+**Before:** `sync()` flushed one narrow piece of internal state — a pending directory
+entry that only a mid-flight move operation could stage — and nothing else. Buffered file
+data was untouched. The documentation said "flush all pending writes"; the code did not.
+
+**Now:** `sync()` flushes **everything**: every open write handle's buffered data and
+directory entry, then the FSInfo free-space sector. It is the same persistence pass
+`unmount()` runs, without unmounting — call it before power-down or card removal.
+
+Two consequences for existing code:
+
+- **It takes real time now.** With dirty handles open, `sync()` performs card writes
+  where it used to return immediately. Keep it out of tight loops; use `syncHandle()`
+  to checkpoint a single file.
+- **It can fail now.** It reports the first error encountered (it still attempts every
+  handle). Failed handles stay dirty, so a later `sync()` retries them. The old method
+  documented failure codes it could never actually produce.
+
+---
+
+## 5. `freeSpace()` returns 0 instead of a partial count
 
 **Before:** if the FAT scan hit a read error part-way, the count accumulated so far was
 returned as though it were the answer — a number that is simply too low, delivered as fact.
@@ -85,7 +105,7 @@ An application sizing a write against it got a wrong answer with no indication.
 
 ---
 
-## 5. New error codes
+## 6. New error codes
 
 All additive except where noted.
 
@@ -94,6 +114,8 @@ All additive except where noted.
 | -24 | `E_BAD_FSINFO` | FSInfo signatures invalid; the free-space hint cannot be updated |
 | -25 | `E_BAD_CHAIN` | a cluster chain that disagrees with the directory entry |
 | -26 | `E_STACK_OVERFLOW` | the worker cog wrote past its stack |
+| -44 | `E_DIR_NOT_EMPTY` | `deleteFile()` on a directory that still contains entries |
+| -47 | `E_FILE_OPEN` | `deleteFile()` on a file that still has an open handle |
 | -65 | `E_NO_COG` | `start()` when no cog is free |
 
 **One changed return:** `unmount()` on a card with a corrupt FSInfo sector now reports
@@ -107,9 +129,55 @@ cog free. Different condition, different remedy.
 any code path; a closed handle reports `E_INVALID_HANDLE`. The constant stays defined so
 existing references still compile.
 
+### `deleteFile()` now refuses two cases it used to accept
+
+These two are **not** additive, and they are the only behavior changes in this section.
+Code that relied on either old behavior will see a new negative return.
+
+**A non-empty directory is refused (`E_DIR_NOT_EMPTY`, -44).** `deleteFile()` previously
+deleted a populated directory: it marked the entry deleted and freed the directory's own
+cluster chain, but every child's chain was left allocated and unreachable. The space was
+gone until the next format. The delete now walks the directory to its terminator, ignoring
+`.`, `..` and deleted entries, and refuses if anything remains.
+
+Migration — empty it first, children before parents:
+
+```spin2
+    ' Old: one call, silent space leak on a populated directory
+    sd.deleteFile(@"LOGS")
+
+    ' New: remove the contents, then the directory
+    if sd.changeDirectory(@"LOGS") == sd.SUCCESS
+        sd.deleteFile(@"DATALOG.CSV")
+        sd.changeDirectory(@"..")
+    result := sd.deleteFile(@"LOGS")            ' E_DIR_NOT_EMPTY if anything is left
+```
+
+There is deliberately **no recursive delete**. A force/recursive variant is a separate,
+explicitly named API and is not part of this release.
+
+**A file with an open handle is refused (`E_FILE_OPEN`, -47).** Deleting a file that a
+handle still held used to succeed, after which the driver's idle flush could write that
+handle's stale buffer into a cluster that had been freed and possibly reallocated to
+another file. The delete now scans the handle table and refuses.
+
+Migration — close, then delete:
+
+```spin2
+    ' Old: delete while the handle was still open
+    sd.deleteFile(@"WORK.TXT")
+
+    ' New
+    sd.closeFileHandle(handle)
+    result := sd.deleteFile(@"WORK.TXT")        ' E_FILE_OPEN if any handle is still open
+```
+
+If you are deleting a file you may have open elsewhere, treat `E_FILE_OPEN` as "close it
+and retry", not as a hard failure.
+
 ---
 
-## 6. New accessors
+## 7. New accessors
 
 | Method | Answers |
 |---|---|
@@ -126,7 +194,7 @@ as a complete file. See the guide for the checked form of the loop.
 
 ---
 
-## 7. Async is enforced as single-cog
+## 8. Async is enforced as single-cog
 
 `getResult()` and `cancelAsync()` now return `E_NO_ASYNC_OP` when called from a cog that
 did not start the operation, and `isComplete()` reports `FALSE` there.
@@ -137,7 +205,7 @@ held, freeing the driver out from under the cog that did. No correct consumer is
 
 ---
 
-## 8. A read or write that transferred nothing returns its error, not `0`
+## 9. A read or write that transferred nothing returns its error, not `0`
 
 **This is the one item in this release that can change the behavior of a working loop.**
 
@@ -179,7 +247,7 @@ Our own `SD_example_multicog.spin2` had the `== 0` form and was corrected in thi
 
 ---
 
-## 9. `SD_INCLUDE_TEST_HOOKS`
+## 10. `SD_INCLUDE_TEST_HOOKS`
 
 Fault injection — making a named sector's read or write fail on purpose — lives behind its
 own feature flag. It is enabled by `SD_INCLUDE_ALL` and deliberately **not** by
@@ -199,13 +267,16 @@ If you build with `SD_INCLUDE_ALL` and ship the result, move to the specific
 
 Almost nothing. In order of likelihood:
 
-1. A read loop that stops **only** on `n == 0` (§8) — it will no longer terminate on a
+1. A read loop that stops **only** on `n == 0` (§9) — it will no longer terminate on a
    persistent read failure. This is the one change that can hang a working program, and it
    is a one-character fix to `n <= 0`.
 2. Using `ERROR()` as a sticky "did anything fail" flag — it is now overwritten by success.
-3. Matching `unmount()`'s exact error code on a corrupt-FSInfo card.
-4. Treating `freeSpace() == 0` as "card full" rather than checking `ERROR()`.
-5. A negative test on `eofHandle()` or `isFileContiguous()` written to work around the old
+3. `sync()` in a timing-sensitive path (§4) — it now performs real card writes where it
+   used to return immediately. The result is what the documentation always promised, but
+   the latency is new.
+4. Matching `unmount()`'s exact error code on a corrupt-FSInfo card.
+5. Treating `freeSpace() == 0` as "card full" rather than checking `ERROR()`.
+6. A negative test on `eofHandle()` or `isFileContiguous()` written to work around the old
    mixed encoding.
 
 Everything else in this release is additive.

@@ -104,8 +104,9 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize, secPerClus, c
 
     ' Mount the card first
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if result < 0
+    ifnot utils.requireSetup(result == 0, @"SETUP: mount SD card")
         debug("ERROR: Could not mount SD card!")
+        utils.ShowTestEndCounts()
         debug("END_SESSION")
         return
 
@@ -165,12 +166,16 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize, secPerClus, c
         utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
         repeat idx from 0 to 9
             utils.evaluateSubValue(readBuffer[idx], @"byte value", idx + 1)
+    else
+        utils.evaluateBool(false, @"byte values (file would not open)", true)
 
     utils.startTest(@"Verify file size")
     if handle >= 0
         fileSize := sd.fileSizeHandle(handle)
         utils.evaluateSingleValue(fileSize, @"fileSizeHandle()", 10)
         sd.closeFileHandle(handle)
+    else
+        utils.evaluateBool(false, @"fileSizeHandle() (file would not open)", true)
 
     ' ----------------------------------
     ' TEST GROUP: String writes (as raw bytes)
@@ -212,6 +217,8 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize, secPerClus, c
     if handle >= 0
         utils.evaluateSingleValue(sd.fileSizeHandle(handle), @"fileSizeHandle()", fileSize)
         sd.closeFileHandle(handle)
+    else
+        utils.evaluateBool(false, @"fileSizeHandle() (file would not open)", true)
 
     ' ----------------------------------
     ' TEST GROUP: Buffer writes
@@ -240,6 +247,8 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize, secPerClus, c
         bytesRead := sd.readHandle(handle, @readBuffer, 256)
         utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
         utils.evaluateSingleValue(bytesRead, @"bytes read", 256)
+    else
+        utils.evaluateBool(false, @"bytes read (file would not open)", true)
 
     utils.startTest(@"Verify buffer content")
     result := utils.verifyBufferPattern(@readBuffer, 256, $A0)
@@ -326,10 +335,18 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize, secPerClus, c
         sd.writeHandle(handle, @writeBuffer, 100)
         debug("  Wrote 100 bytes of $11")
 
-        utils.startTest(@"Call syncHandle() to flush without close")
+    ' The startTest below used to sit INSIDE the guard above. That is worse than a
+    ' vanishing test: an unopened file meant startTest never ran, so the syncHandle
+    ' test was not even COUNTED -- it disappeared from the total with nothing to
+    ' reconcile against. Un-nested, it is always counted and always scored.
+    utils.startTest(@"Call syncHandle() to flush without close")
+    if handle >= 0
         result := sd.syncHandle(handle)
         utils.evaluateSingleValue(result, @"syncHandle()", 0)
+    else
+        utils.evaluateBool(false, @"syncHandle() (file would not open)", true)
 
+    if handle >= 0
         utils.fillBufferWithValue(@writeBuffer, 100, $22)
         sd.writeHandle(handle, @writeBuffer, 100)
         debug("  Wrote 100 bytes of $22")
@@ -343,6 +360,8 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize, secPerClus, c
         fileSize := sd.fileSizeHandle(handle)
         utils.evaluateSingleValue(fileSize, @"fileSizeHandle()", 200)
         sd.closeFileHandle(handle)
+    else
+        utils.evaluateBool(false, @"fileSizeHandle() (file would not open)", true)
 
     ' ----------------------------------
     ' TEST GROUP: Edge cases
@@ -357,6 +376,8 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize, secPerClus, c
         utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
         utils.evaluateSingleValue(bytesRead, @"readHandle(0)", 0)
         sd.closeFileHandle(handle)
+    else
+        utils.evaluateBool(false, @"readHandle(0) (file would not open)", true)
 
     utils.startTest(@"Read more than file size")
     handle := sd.openFileRead(@testBytes)  ' 10 byte file
@@ -366,6 +387,8 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize, secPerClus, c
         utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
         utils.evaluateSingleValue(bytesRead, @"readHandle() at EOF", 10)  ' Should get 10
         sd.closeFileHandle(handle)
+    else
+        utils.evaluateBool(false, @"readHandle() at EOF (file would not open)", true)
 
     utils.startTest(@"tellHandle() tracks write position")
     utils.setCheckCountPerTest(3)
@@ -382,6 +405,8 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize, secPerClus, c
         result := sd.tellHandle(handle)
         utils.evaluateSubValue(result, @"tell after write 512", sd.SECTOR_SIZE)
         sd.closeFileHandle(handle)
+    else
+        utils.evaluateBool(false, @"tellHandle write position (file would not open)", true)
     utils.showSubTestResults()
     utils.setCheckCountPerTest(1)
 
@@ -395,6 +420,8 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize, secPerClus, c
         result := sd.tellHandle(handle)
         utils.evaluateSubValue(result, @"tell after read 100", 100)
         sd.closeFileHandle(handle)
+    else
+        utils.evaluateBool(false, @"tellHandle read position (file would not open)", true)
     utils.showSubTestResults()
     utils.setCheckCountPerTest(1)
 
@@ -409,6 +436,8 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize, secPerClus, c
         bytesRead := sd.readHandle(handle, @readBuffer, 1)
         utils.evaluateSubValue(bytesRead, @"read past EOF", 0)
         sd.closeFileHandle(handle)
+    else
+        utils.evaluateBool(false, @"read at exact EOF (file would not open)", true)
     utils.showSubTestResults()
     utils.setCheckCountPerTest(1)
 
@@ -418,6 +447,8 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize, secPerClus, c
         result := sd.eofHandle(handle)
         utils.evaluateBool(result == 0, @"eofHandle before read", true)
         sd.closeFileHandle(handle)
+    else
+        utils.evaluateBool(false, @"eofHandle before read (file would not open)", true)
 
     utils.startTest(@"Partial read returns remaining bytes")
     handle := sd.openFileRead(@testBoundary)
@@ -428,6 +459,8 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize, secPerClus, c
         utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
         utils.evaluateSingleValue(bytesRead, @"partial read", 12)
         sd.closeFileHandle(handle)
+    else
+        utils.evaluateBool(false, @"partial read (file would not open)", true)
     sd.deleteFile(@testBoundary)
 
     ' ----------------------------------

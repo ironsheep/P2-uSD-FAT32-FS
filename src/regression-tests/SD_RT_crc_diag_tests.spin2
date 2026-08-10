@@ -62,13 +62,14 @@ DAT
 ' Test filenames
 crcTestFile     BYTE    "CRCTEST1.BIN", 0
 crcTestFile2    BYTE    "CRCTEST2.BIN", 0
+crcTestFile3    BYTE    "CRCTEST3.BIN", 0
 
 ' Buffers
 writeBuffer     BYTE    0[BUFFER_SIZE]
 readBuffer      BYTE    0[BUFFER_SIZE]
 readBuffer_guard BYTE   0[16]
 
-PUB go() | result, handle, bytesRead, matchCount, mismatchCount, retryCount, lastRecvCRC, lastCalcCRC, lastSentCRC, matchBefore, matchAfter, cmd13val, cmd13err, dummyCRC
+PUB go() | result, handle, bytesRead, matchCount, mismatchCount, retryCount, lastRecvCRC, lastCalcCRC, lastSentCRC, matchBefore, matchAfter, cmd13val, cmd13err, dummyCRC, bRemounted
 '' Main entry point for CRC diagnostic regression tests
 
     debug(" ")
@@ -78,8 +79,9 @@ PUB go() | result, handle, bytesRead, matchCount, mismatchCount, retryCount, las
 
     ' Mount the card first
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if result < 0
+    ifnot utils.requireSetup(result == 0, @"SETUP: mount SD card")
         debug("ERROR: Could not mount SD card!")
+        utils.ShowTestEndCounts()
         debug("END_SESSION")
         return
 
@@ -101,6 +103,7 @@ PUB go() | result, handle, bytesRead, matchCount, mismatchCount, retryCount, las
     ' Clean up any existing test files
     sd.deleteFile(@crcTestFile)
     sd.deleteFile(@crcTestFile2)
+    sd.deleteFile(@crcTestFile3)
 
     ' ======================================================================
     ' TEST GROUP: CRC Counter Initial State
@@ -158,6 +161,7 @@ PUB go() | result, handle, bytesRead, matchCount, mismatchCount, retryCount, las
     if handle >= 0
         sd.writeHandle(handle, @writeBuffer, BUFFER_SIZE)
         sd.closeFileHandle(handle)
+    bytefill(@readBuffer, 0, BUFFER_SIZE)                                       ' Never let a prior read's bytes stand in for this one
     handle := sd.openFileRead(@crcTestFile)
     if handle >= 0
         utils.initGuard(@readBuffer_guard)
@@ -189,6 +193,7 @@ PUB go() | result, handle, bytesRead, matchCount, mismatchCount, retryCount, las
     utils.startTest(@"CRC counters reset after unmount/remount")
     sd.unmount()
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    bRemounted := (result == sd.SUCCESS)                                        ' Captured at the point of truth, not re-read 13 lines later
     utils.evaluateSubValue(result, @"remount succeeds", sd.SUCCESS)
     matchCount := sd.getCRCMatchCount()
     debug("   Match count after remount: ", udec(matchCount))
@@ -199,6 +204,14 @@ PUB go() | result, handle, bytesRead, matchCount, mismatchCount, retryCount, las
     else
         utils.evaluateSubBool(matchCount > 0, @"match count > 0 after remount", true)
 
+    ' Every test below this point needs a mounted card. Un-gated, a failed remount
+    ' left the remaining six tests running unmounted: every open fails, the toggle
+    ' tests measure nothing, and one root cause read as a spray of failures.
+    ifnot utils.requireSetup(bRemounted, @"SETUP: card remounted for toggle tests")
+        utils.ShowTestEndCounts()
+        debug("END_SESSION")
+        return
+
     ' ======================================================================
     ' TEST GROUP: setCRCValidation Toggle
     ' ======================================================================
@@ -208,6 +221,7 @@ PUB go() | result, handle, bytesRead, matchCount, mismatchCount, retryCount, las
     utils.startTest(@"CRC enabled: count increases on read")
     sd.setCRCValidation(true)
     matchBefore := sd.getCRCMatchCount()
+    bytefill(@readBuffer, 0, BUFFER_SIZE)                                       ' Never let a prior read's bytes stand in for this one
     handle := sd.openFileRead(@crcTestFile)
     if handle >= 0
         utils.initGuard(@readBuffer_guard)
@@ -225,6 +239,7 @@ PUB go() | result, handle, bytesRead, matchCount, mismatchCount, retryCount, las
     utils.startTest(@"CRC disabled: count unchanged on read")
     sd.setCRCValidation(false)
     matchBefore := sd.getCRCMatchCount()
+    bytefill(@readBuffer, 0, BUFFER_SIZE)                                       ' Never let a prior read's bytes stand in for this one
     handle := sd.openFileRead(@crcTestFile)
     if handle >= 0
         utils.initGuard(@readBuffer_guard)
@@ -236,27 +251,52 @@ PUB go() | result, handle, bytesRead, matchCount, mismatchCount, retryCount, las
     utils.evaluateSingleValue(matchAfter, @"disabled: count unchanged", matchBefore)
 
     ' Test: Reads work correctly with CRC disabled
+    ' Writes and reads its OWN file with its own pattern. It used to re-read
+    ' CRCTEST1.BIN, written six tests and a remount earlier, so a failure here was
+    ' an echo of that write rather than evidence about reading with CRC off.
     utils.startTest(@"Reads work with CRC disabled")
-    handle := sd.openFileRead(@crcTestFile)
+    utils.setCheckCountPerTest(2)
+    utils.fillBufferWithPattern(@writeBuffer, BUFFER_SIZE, $5A)
+    sd.deleteFile(@crcTestFile2)
+    handle := sd.createFileNew(@crcTestFile2)
+    if handle >= 0
+        sd.writeHandle(handle, @writeBuffer, BUFFER_SIZE)
+        sd.closeFileHandle(handle)
+    utils.evaluateSubBool(handle >= 0, @"createFileNew() with CRC off", true)
+    bytefill(@readBuffer, 0, BUFFER_SIZE)                                       ' A missing file must not pass on the previous read's bytes
+    handle := sd.openFileRead(@crcTestFile2)
     if handle >= 0
         utils.initGuard(@readBuffer_guard)
         bytesRead := sd.readHandle(handle, @readBuffer, BUFFER_SIZE)
         utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
         sd.closeFileHandle(handle)
-    result := utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $30)
-    utils.evaluateBool(result, @"data correct with CRC off", true)
+    result := utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $5A)
+    utils.evaluateSubBool(result, @"data correct with CRC off", true)
+    utils.showSubTestResults()
 
     ' Test: Reads work after re-enabling CRC
+    ' Own file again, for the same reason -- and written AFTER the re-enable, so the
+    ' test exercises the CRC-on path end to end rather than reading CRC-off data.
     utils.startTest(@"Reads work after CRC re-enabled")
+    utils.setCheckCountPerTest(2)
     sd.setCRCValidation(true)
-    handle := sd.openFileRead(@crcTestFile)
+    utils.fillBufferWithPattern(@writeBuffer, BUFFER_SIZE, $3C)
+    sd.deleteFile(@crcTestFile3)
+    handle := sd.createFileNew(@crcTestFile3)
+    if handle >= 0
+        sd.writeHandle(handle, @writeBuffer, BUFFER_SIZE)
+        sd.closeFileHandle(handle)
+    utils.evaluateSubBool(handle >= 0, @"createFileNew() with CRC on", true)
+    bytefill(@readBuffer, 0, BUFFER_SIZE)                                       ' A missing file must not pass on the previous read's bytes
+    handle := sd.openFileRead(@crcTestFile3)
     if handle >= 0
         utils.initGuard(@readBuffer_guard)
         bytesRead := sd.readHandle(handle, @readBuffer, BUFFER_SIZE)
         utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
         sd.closeFileHandle(handle)
-    result := utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $30)
-    utils.evaluateBool(result, @"data correct with CRC on", true)
+    result := utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $3C)
+    utils.evaluateSubBool(result, @"data correct with CRC on", true)
+    utils.showSubTestResults()
 
     ' ======================================================================
     ' TEST GROUP: CMD13 Diagnostic
@@ -286,6 +326,7 @@ PUB go() | result, handle, bytesRead, matchCount, mismatchCount, retryCount, las
 
     sd.deleteFile(@crcTestFile)
     sd.deleteFile(@crcTestFile2)
+    sd.deleteFile(@crcTestFile3)
 
     sd.unmount()
 

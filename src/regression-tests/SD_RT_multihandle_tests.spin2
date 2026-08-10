@@ -61,7 +61,11 @@ content4        BYTE    "Content for file FOUR - fourth test file", 0
 readBuffer      BYTE    0[256]
 readBuffer_guard BYTE   0[16]
 
-PUB go() | result, handle, h1, h2, h3, h4, h5, h6, hDir, hDir2, bytesRead, bytesWritten, size
+' Cross-handle cache-coherence test: file + full-sector source buffer
+cohFile         BYTE    "MHCOHER.TXT", 0
+cohBuffer       BYTE    0[512]
+
+PUB go() | result, handle, h1, h2, h3, h4, h5, h6, hDir, hDir2, bytesRead, bytesWritten, size, nonce
 '' Main entry point for multi-handle regression tests
 ''
 '' Tests handle-based file API with multiple simultaneous file handles
@@ -73,8 +77,9 @@ PUB go() | result, handle, h1, h2, h3, h4, h5, h6, hDir, hDir2, bytesRead, bytes
 
     ' Mount the card first
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if result < 0
+    ifnot utils.requireSetup(result == 0, @"SETUP: mount SD card")
         debug("ERROR: Could not mount SD card!")
+        utils.ShowTestEndCounts()
         debug("END_SESSION")
         return
 
@@ -87,8 +92,14 @@ PUB go() | result, handle, h1, h2, h3, h4, h5, h6, hDir, hDir2, bytesRead, bytes
     ' Clean up any existing test files
     cleanupTestFiles()
 
-    ' Create test files with known content
-    createTestFiles()
+    ' Create test files with known content. Gated: one named, scored setup
+    ' failure instead of fanning into most of the suite's open/read tests.
+    ifnot utils.requireSetup(createTestFiles(), @"SETUP: create multihandle test files")
+        cleanupTestFiles()
+        sd.unmount()
+        utils.ShowTestEndCounts()
+        debug("END_SESSION")
+        return
 
     ' ======================================================================
     ' TEST GROUP: Multiple Read Handles
@@ -232,6 +243,8 @@ PUB go() | result, handle, h1, h2, h3, h4, h5, h6, hDir, hDir2, bytesRead, bytes
 
     result := sd.openFileRead(@testfile2)
     utils.evaluateSubValue(result, @"7th open error", sd.E_TOO_MANY_FILES)
+    if result >= 0                              ' Must fail. An unexpected 7th handle would
+        sd.closeFileHandle(result)              '  leak and resurface in the recycling test
 
     sd.closeFileHandle(h1)
     sd.closeFileHandle(h2)
@@ -354,6 +367,61 @@ PUB go() | result, handle, h1, h2, h3, h4, h5, h6, hDir, hDir2, bytesRead, bytes
     sd.closeFileHandle(h1)
 
     ' ======================================================================
+    ' TEST GROUP: Cross-Handle Cache Coherence
+    ' ======================================================================
+    utils.startTestGroup(@"Cross-Handle Cache Coherence")
+
+    ' Test: a write handle's flush must invalidate another handle's CLEAN cached
+    ' copy of the same sector. The read handle primes its buffer with the file's
+    ' first sector, the write handle overwrites that sector on the card, and the
+    ' read handle must then serve the NEW bytes. CAN-FAIL: against a driver whose
+    ' writeSector coherence sweep skips the per-handle tier, the read handle's
+    ' buffer stays tagged valid and serves the PRE-overwrite pattern, failing the
+    ' final pattern check.
+    utils.startTest(@"Read handle sees another handle's flushed overwrite")
+
+    nonce := utils.perRunNonce()
+    sd.deleteFile(@cohFile)
+    h1 := sd.createFileNew(@cohFile)
+    utils.evaluateSubBool(h1 >= 0, @"Create file", true)
+    utils.fillBufferWithPattern(@cohBuffer, 512, nonce)
+    bytesWritten := sd.writeHandle(h1, @cohBuffer, 512)
+    utils.evaluateSubValue(bytesWritten, @"Write full pattern-A sector", 512)
+    result := sd.closeFileHandle(h1)
+    utils.evaluateSubValue(result, @"Close writer", 0)
+
+    ' Prime the read handle's buffer with the file's (only) data sector -- clean
+    h1 := sd.openFileRead(@cohFile)
+    utils.evaluateSubBool(h1 >= 0, @"Open read handle", true)
+    bytesRead := sd.readHandle(h1, @readBuffer, 16)
+    utils.evaluateSubValue(bytesRead, @"Prime read-handle buffer", 16)
+
+    ' Second handle overwrites the same sector on the card
+    h2 := sd.openFileWrite(@cohFile)
+    utils.evaluateSubBool(h2 >= 0, @"Open write handle", true)
+    result := sd.seekHandle(h2, 0)
+    utils.evaluateSubValue(result, @"Seek writer to 0", 0)
+    utils.fillBufferWithPattern(@cohBuffer, 512, nonce + $55)
+    bytesWritten := sd.writeHandle(h2, @cohBuffer, 512)
+    utils.evaluateSubValue(bytesWritten, @"Overwrite with pattern B", 512)
+    result := sd.syncHandle(h2)
+    utils.evaluateSubValue(result, @"Sync writer (flush to card)", 0)
+
+    ' The read handle must now serve the post-overwrite bytes
+    result := sd.seekHandle(h1, 0)
+    utils.evaluateSubValue(result, @"Seek reader to 0", 0)
+    bytefill(@readBuffer, 0, 256)
+    utils.initGuard(@readBuffer_guard)
+    bytesRead := sd.readHandle(h1, @readBuffer, 64)
+    utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+    utils.evaluateSubValue(bytesRead, @"Re-read after overwrite", 64)
+    utils.evaluateSubBool(utils.verifyBufferPattern(@readBuffer, 64, nonce + $55), @"Reader serves post-overwrite bytes", true)
+
+    sd.closeFileHandle(h2)
+    sd.closeFileHandle(h1)
+    sd.deleteFile(@cohFile)
+
+    ' ======================================================================
     ' TEST GROUP: EOF Detection
     ' ======================================================================
     utils.startTestGroup(@"EOF Detection")
@@ -399,11 +467,22 @@ PUB go() | result, handle, h1, h2, h3, h4, h5, h6, hDir, hDir2, bytesRead, bytes
     utils.evaluateSingleValue(result, @"readHandle(99)", sd.E_INVALID_HANDLE)
 
     ' Test: writeHandle on closed handle returns E_INVALID_HANDLE
+    ' THIS TEST HAD NEVER ONCE EXECUTED ITS INTENDED SCENARIO. Earlier groups leave
+    ' MHTEST5.TXT on the card, so createFileNew returned E_FILE_EXISTS -- a negative
+    ' number -- and h1 was an ERROR CODE, not a closed handle. closeFileHandle() on
+    ' it did nothing and writeHandle() then returned E_INVALID_HANDLE because the
+    ' argument was garbage, not because the slot had been closed. Right answer,
+    ' wrong question, every single run. The delete makes the create succeed so a
+    ' genuinely closed handle is what gets written to.
     utils.startTest(@"writeHandle on closed handle returns E_INVALID_HANDLE")
+    utils.setCheckCountPerTest(2)
+    sd.deleteFile(@testfile5)
     h1 := sd.createFileNew(@testfile5)
+    utils.evaluateSubBool(h1 >= 0, @"file created (so the handle is real)", true)
     sd.closeFileHandle(h1)
     result := sd.writeHandle(h1, @"test", 4)
-    utils.evaluateSingleValue(result, @"writeHandle(closed)", sd.E_INVALID_HANDLE)
+    utils.evaluateSubValue(result, @"writeHandle(closed)", sd.E_INVALID_HANDLE)
+    utils.showSubTestResults()
 
     ' Test: seekHandle with invalid handle returns E_INVALID_HANDLE
     utils.startTest(@"seekHandle(-1) returns E_INVALID_HANDLE")
@@ -547,53 +626,45 @@ PRI cleanupTestFiles()
     sd.deleteFile(@testfile3)
     sd.deleteFile(@testfile4)
     sd.deleteFile(@testfile5)
+    sd.deleteFile(@cohFile)
 
-PRI createTestFiles() | handle
-' Create test files with known content
+PRI createTestFiles() : bOk
+' Create the four test files with known content
 '
-' @local handle - File handle from createFileNew()
+' @returns bOk - TRUE only when all four files were created and fully written
+'
+' Every test in this suite opens some subset of these files, so the caller
+' gates on the result -- one failed seed used to fan into most of the suite.
 
     debug(" ")
     debug("* Creating test files...")
 
-    ' File 1
-    handle := sd.createFileNew(@testfile1)
-    if handle >= 0
-        sd.writeHandle(handle, @content1, strsize(@content1))
-        sd.closeFileHandle(handle)
-        debug("  Created: ", zstr_(@testfile1))
-    else
-        debug("  ERROR creating ", zstr_(@testfile1))
+    bOk := seedFile(@testfile1, @content1)
+    bOk := seedFile(@testfile2, @content2) and bOk
+    bOk := seedFile(@testfile3, @content3) and bOk
+    bOk := seedFile(@testfile4, @content4) and bOk
 
-    ' File 2
-    handle := sd.createFileNew(@testfile2)
-    if handle >= 0
-        sd.writeHandle(handle, @content2, strsize(@content2))
-        sd.closeFileHandle(handle)
-        debug("  Created: ", zstr_(@testfile2))
-    else
-        debug("  ERROR creating ", zstr_(@testfile2))
-
-    ' File 3
-    handle := sd.createFileNew(@testfile3)
-    if handle >= 0
-        sd.writeHandle(handle, @content3, strsize(@content3))
-        sd.closeFileHandle(handle)
-        debug("  Created: ", zstr_(@testfile3))
-    else
-        debug("  ERROR creating ", zstr_(@testfile3))
-
-    ' File 4
-    handle := sd.createFileNew(@testfile4)
-    if handle >= 0
-        sd.writeHandle(handle, @content4, strsize(@content4))
-        sd.closeFileHandle(handle)
-        debug("  Created: ", zstr_(@testfile4))
-    else
-        debug("  ERROR creating ", zstr_(@testfile4))
-
-    debug("* Test files created")
+    if bOk
+        debug("* Test files created")
     debug(" ")
+
+PRI seedFile(pFile, pContent) : bOk | handle, expected
+' Create one seed file holding the full content string
+'
+' @param pFile - Pointer to filename string
+' @param pContent - Pointer to content the file must hold in full
+' @returns bOk - TRUE only when created, fully written, and closed
+
+    bOk := false
+    handle := sd.createFileNew(pFile)
+    if handle >= 0
+        expected := strsize(pContent)
+        bOk := (sd.writeHandle(handle, pContent, expected) == expected)
+        if sd.closeFileHandle(handle) < 0
+            bOk := false
+        debug("  Created: ", zstr_(pFile))
+    ifnot bOk
+        debug("  ERROR creating ", zstr_(pFile))
 
 PRI strncmp(p1, p2, maxLen) : match | idx
 ' Compare first maxLen bytes of two strings

@@ -68,13 +68,14 @@ DAT
 ' Test filenames
 spTestFile      BYTE    "SPTEST1.BIN", 0
 spTestFile2     BYTE    "SPTEST2.BIN", 0
+spTestFile3     BYTE    "SPTEST3.BIN", 0
 
 ' Buffers
 writeBuffer     BYTE    0[BUFFER_SIZE]
 readBuffer      BYTE    0[BUFFER_SIZE]
 readBuffer_guard BYTE   0[16]
 
-PUB go() | result, handle, spiFreq, maxSpeed, hsActive, cmd6Sup, hsCap, hsResult, bytesRead, bytesWritten, readTimeout, writeTimeout, computedSpeed
+PUB go() | result, handle, spiFreq, maxSpeed, hsActive, cmd6Sup, hsCap, hsResult, bytesRead, bytesWritten, readTimeout, writeTimeout, computedSpeed, errCode
 '' Main entry point for speed API regression tests
 
     debug(" ")
@@ -84,8 +85,9 @@ PUB go() | result, handle, spiFreq, maxSpeed, hsActive, cmd6Sup, hsCap, hsResult
 
     ' Mount the card first
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if result < 0
+    ifnot utils.requireSetup(result == 0, @"SETUP: mount SD card")
         debug("ERROR: Could not mount SD card!")
+        utils.ShowTestEndCounts()
         debug("END_SESSION")
         return
 
@@ -106,6 +108,7 @@ PUB go() | result, handle, spiFreq, maxSpeed, hsActive, cmd6Sup, hsCap, hsResult
     ' Clean up any existing test files
     sd.deleteFile(@spTestFile)
     sd.deleteFile(@spTestFile2)
+    sd.deleteFile(@spTestFile3)
 
     ' ======================================================================
     ' TEST GROUP: Always-Available Speed
@@ -165,31 +168,50 @@ PUB go() | result, handle, spiFreq, maxSpeed, hsActive, cmd6Sup, hsCap, hsResult
     ' ======================================================================
     utils.startTestGroup(@"CMD6 / High-Speed")
 
-    ' Test: checkCMD6Support() returns boolean
-    utils.startTest(@"checkCMD6Support() returns boolean")
+    ' Test: checkCMD6Support() answer pairs with ERROR()
+    ' The old form asserted only "result is TRUE or FALSE", which cannot fail and so
+    ' proved nothing. The real contract (driver checkCMD6Support): FALSE means EITHER
+    ' "card is SD 1.x" OR "the SCR could not be read", and ERROR() is the only thing
+    ' that tells them apart. So the answer is checked against the error slot.
+    utils.startTest(@"checkCMD6Support() answer pairs with ERROR()")
+    utils.setCheckCountPerTest(2)
     cmd6Sup := sd.checkCMD6Support()
-    debug("   CMD6 support: ", sdec_(cmd6Sup))
-    ' Result must be TRUE or FALSE (not negative error)
-    utils.evaluateSubBool(cmd6Sup == true or cmd6Sup == false, @"CMD6 result is boolean", true)
+    errCode := sd.ERROR()
+    debug("   CMD6 support: ", sdec_(cmd6Sup), "  ERROR(): ", sdec_(errCode))
+    utils.evaluateSubBool(cmd6Sup == true or cmd6Sup == false, @"clean boolean, not an error code", true)
+    utils.evaluateSubValue(errCode, @"card answered (SCR readable)", sd.SUCCESS)
+    utils.showSubTestResults()
 
-    ' Test: checkHighSpeedCapability() returns boolean
-    utils.startTest(@"checkHighSpeedCapability() returns boolean")
+    ' Test: checkHighSpeedCapability() answer pairs with ERROR()
+    ' Same contract, same reason the shape-only check was replaced: FALSE means EITHER
+    ' "no high-speed function offered" OR "the question could not be put to the card".
+    utils.startTest(@"checkHighSpeedCapability() answer pairs with ERROR()")
+    utils.setCheckCountPerTest(2)
     hsCap := sd.checkHighSpeedCapability()
-    debug("   HS capability: ", sdec_(hsCap))
-    utils.evaluateSubBool(hsCap == true or hsCap == false, @"HS cap is boolean", true)
+    errCode := sd.ERROR()
+    debug("   HS capability: ", sdec_(hsCap), "  ERROR(): ", sdec_(errCode))
+    utils.evaluateSubBool(hsCap == true or hsCap == false, @"clean boolean, not an error code", true)
+    utils.evaluateSubValue(errCode, @"card answered (CMD6 query completed)", sd.SUCCESS)
+    utils.showSubTestResults()
 
     ' Test: attemptHighSpeed() consistency with isHighSpeedActive()
     utils.startTest(@"attemptHighSpeed() consistent with isHighSpeedActive()")
     spiFreq := sd.getSPIFrequency()                                             ' Record pre-HS frequency
     hsResult := sd.attemptHighSpeed()
+    errCode := sd.ERROR()                                                       ' Capture before anything else can move the slot
     hsActive := sd.isHighSpeedActive()
-    debug("   attemptHighSpeed: ", sdec_(hsResult), " isHSActive: ", sdec_(hsActive))
+    debug("   attemptHighSpeed: ", sdec_(hsResult), " isHSActive: ", sdec_(hsActive), " ERROR(): ", sdec_(errCode))
     debug("   SPI freq before: ", udec_(spiFreq), " Hz, after: ", udec(sd.getSPIFrequency()), " Hz")
     ' If attemptHighSpeed failed, isHighSpeedActive must be false
     ' If attemptHighSpeed succeeded, frequency should have increased
     ' Note: isHighSpeedActive() requires spi_freq >= 50 MHz which needs _CLKFREQ >= 200 MHz
     if hsResult == false
+      ' FALSE alone is ambiguous by the driver's own contract: "the card declined" and
+      ' "the card could not be asked" both return FALSE, and only ERROR() separates them.
+      ' Without the second check a broken query passes as a polite decline.
+      utils.setCheckCountPerTest(2)
       utils.evaluateSubBool(hsActive == false, @"HS inactive after failure", true)
+      utils.evaluateSubValue(errCode, @"card declined, query did not fail", sd.SUCCESS)
     else
       utils.evaluateSubBool(sd.getSPIFrequency() > spiFreq, @"freq increased after HS", true)
 
@@ -247,18 +269,35 @@ PUB go() | result, handle, spiFreq, maxSpeed, hsActive, cmd6Sup, hsCap, hsResult
     utils.evaluateRange(spiFreq, @"init speed Hz", 300_000, 500_000)
     sd.setSPISpeed(computedSpeed)                                               ' Restore driver-chosen safe speed before filesystem ops
 
-    ' Verify data works after speed restore (read existing file)
+    ' Verify data works after the speed restore. This test writes and reads its OWN
+    ' file. It used to re-read SPTEST1.BIN, written seven tests and a high-speed
+    ' excursion earlier -- so a failure here was an echo of the 20 MHz integrity test
+    ' rather than independent evidence about the restore. Self-contained, a failure
+    ' here means the restore itself is broken.
     utils.startTest(@"Data integrity after speed restore")
-    handle := sd.openFileRead(@spTestFile)
+    utils.setCheckCountPerTest(4)
+    bytefill(@readBuffer, 0, BUFFER_SIZE)                                       ' Stale bytes must not be able to satisfy the verify
+    utils.fillBufferWithPattern(@writeBuffer, BUFFER_SIZE, $A5)
+    sd.deleteFile(@spTestFile3)
+    handle := sd.createFileNew(@spTestFile3)
+    utils.evaluateSubBool(handle >= 0, @"createFileNew() after restore", true)
+    bytesWritten := 0
+    if handle >= 0
+        bytesWritten := sd.writeHandle(handle, @writeBuffer, BUFFER_SIZE)
+        sd.closeFileHandle(handle)
+    utils.evaluateSubValue(bytesWritten, @"writeHandle() byte count", BUFFER_SIZE)
+    bytesRead := 0
+    handle := sd.openFileRead(@spTestFile3)
     if handle >= 0
         utils.initGuard(@readBuffer_guard)
         bytesRead := sd.readHandle(handle, @readBuffer, BUFFER_SIZE)
         utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
-        utils.evaluateBool(bytesRead == BUFFER_SIZE, @"read after speed restore", true)
         sd.closeFileHandle(handle)
     else
         debug("   openFileRead after restore failed: ", sdec_(handle))
-        utils.evaluateBool(handle >= 0, @"read after speed restore", true)
+    utils.evaluateSubValue(bytesRead, @"readHandle() byte count", BUFFER_SIZE)
+    utils.evaluateSubBool(utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $A5), @"content matches after restore", true)
+    utils.showSubTestResults()
 
     ' Test: setSPISpeed(25_000_000) standard speed
     utils.startTest(@"setSPISpeed(25_000_000) standard speed")
@@ -289,6 +328,7 @@ PUB go() | result, handle, spiFreq, maxSpeed, hsActive, cmd6Sup, hsCap, hsResult
 
     sd.deleteFile(@spTestFile)
     sd.deleteFile(@spTestFile2)
+    sd.deleteFile(@spTestFile3)
 
     sd.unmount()
 

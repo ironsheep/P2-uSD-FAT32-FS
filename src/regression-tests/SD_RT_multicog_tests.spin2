@@ -31,6 +31,10 @@ CON
 #endif
      ' Multi-cog test configuration
      NUM_WORKER_COGS = 3             ' Number of concurrent test workers
+
+     ' Hang-proofing budget: bounded wait gives up, records, and reaps instead
+     ' of hanging the harness (see waitForWorkers)
+     WORKER_TIMEOUT_POLLS = 3000     ' x 10ms polls = 30s generous worker-completion budget
      STACK_SIZE      = 128           ' Stack size per worker cog (longs)
      ITERATIONS      = 10            ' Number of iterations per stress test
 
@@ -115,11 +119,21 @@ PUB go() | result, idx, firstCogId, allSame, totalErrors
 
     if result < 0
         debug("ERROR: Could not mount SD card - aborting multi-cog tests!")
+        utils.ShowTestEndCounts()                       ' 4 results are already recorded -- score them
         debug("END_SESSION")
         return
 
-    ' Create test files for worker cogs to read
-    createTestFiles()
+    ' Create the worker-cog fixture. Gated: every worker test reads this file,
+    ' so a failed seed is one named, scored setup failure -- previously it
+    ' debug-printed and fanned into every worker assertion, and ALSO turned
+    ' the stress-completion test vacuous (workers complete fine while 100%
+    ' of their operations fail against the missing file).
+    ifnot utils.requireSetup(createTestFiles(), @"SETUP: create worker fixture MCOG1.TXT")
+        cleanupTestFiles()
+        sd.unmount()
+        utils.ShowTestEndCounts()
+        debug("END_SESSION")
+        return
 
     ' ----------------------------------
     ' TEST GROUP: Multi-Cog Singleton Verification
@@ -251,13 +265,20 @@ PUB go() | result, idx, firstCogId, allSame, totalErrors
     ' limitation, some operations fail when interleaved, but this proves the
     ' lock prevents crashes and operations complete safely.
     utils.startTest(@"Stress test completed (no crashes, lock works under load)")
+    utils.setCheckCountPerTest(1 + NUM_WORKER_COGS)
     totalErrors := 0
     repeat idx from 0 to NUM_WORKER_COGS - 1
         debug("  Worker ", udec_(idx), ": ", udec_(worker_result[idx]), " iterations, ", udec_(worker_errors[idx]), " errors")
         if worker_result[idx] < ITERATIONS
             totalErrors++   ' Worker didn't complete all iterations
     ' All workers should complete all iterations (even if some ops fail)
-    utils.evaluateSingleValue(totalErrors, @"Workers that didn't complete", 0)
+    utils.evaluateSubValue(totalErrors, @"Workers that didn't complete", 0)
+    ' ... but "completed" alone is vacuous: a worker whose every open/read
+    ' failed still finishes its loop on time. Bound the failures per worker so
+    ' total operational failure cannot score as a pass.
+    repeat idx from 0 to NUM_WORKER_COGS - 1
+        utils.evaluateSubBool(worker_errors[idx] < ITERATIONS, @"worker had at least one clean iteration", true)
+    utils.showSubTestResults()
 
     ' Stop worker cogs
     stopWorkerCogs()
@@ -295,6 +316,9 @@ PUB go() | result, idx, firstCogId, allSame, totalErrors
     worker_status[0] := STATUS_RUNNING
     sync_barrier := 0
     launched_cogs[0] := cogspin(NEWCOG, worker_error_slot_test(0), @worker_stacks[0])
+    if launched_cogs[0] == -1
+        debug("  FAIL: Could not launch worker cog 0")
+        worker_status[0] := STATUS_FAIL
     sync_barrier := 1
     waitForWorkers()
 
@@ -437,11 +461,16 @@ PRI worker_stress_test(worker_id) | iter, handle, bytesRead, expectedLen
 ' ═══════════════════════════════════════════════════════════════════════════
 
 PRI waitForWorkers() | idx, allDone
-    ' Wait for all worker cogs to complete
-    ' No internal timeout - if workers hang, that's a driver bug to expose.
-    ' External test runner provides CI safety timeout.
+    ' Wait for all worker cogs to complete.
+    '
+    ' Bounded by a deliberately GENEROUS timeout (30s against a <1s typical
+    ' completion) so the design intent survives: a worker that never finishes
+    ' is a driver bug this suite exists to EXPOSE. The timeout exposes it
+    ' loudly -- hung workers are marked STATUS_FAIL (their result checks then
+    ' fail by name) and reaped -- instead of silently, by hanging the harness
+    ' and costing the run its totals line.
 
-    repeat
+    repeat WORKER_TIMEOUT_POLLS
         allDone := true
         repeat idx from 0 to NUM_WORKER_COGS - 1
             if worker_status[idx] == STATUS_RUNNING
@@ -449,9 +478,17 @@ PRI waitForWorkers() | idx, allDone
                 quit
 
         if allDone
-            quit
+            return
 
         waitms(10)
+
+    debug("  *** waitForWorkers TIMEOUT (30s): reaping hung worker cog(s) ***")
+    repeat idx from 0 to NUM_WORKER_COGS - 1
+        if worker_status[idx] == STATUS_RUNNING
+            worker_status[idx] := STATUS_FAIL
+            if launched_cogs[idx] <> -1
+                cogstop(launched_cogs[idx])
+                launched_cogs[idx] := -1
 
 
 PRI stopWorkerCogs() | idx
@@ -481,34 +518,36 @@ PRI readFileToBuffer(worker_id, handle) : bytesRead | fileSize, toRead
         worker_errors[worker_id]++
 
 
-PRI createTestFiles() | idx, pFile, handle
-    ' Create test files for multi-cog read tests
+PRI createTestFiles() : bOk | handle, expected
+    ' Create the one fixture the worker cogs actually consume.
     '
-    ' @local idx - Loop index (0..2) for the three test files
-    ' @local pFile - Pointer to current test filename string
+    ' Only MCOG1.TXT is ever READ: every worker deliberately hammers the same
+    ' file (single-file contention is what the stress test measures). MCOG2.TXT
+    ' was created here for years and never touched by anyone; MCOG3.TXT's only
+    ' use is as a scratch NAME whose test deletes it before creating a directory
+    ' over it. Neither is a fixture, so neither is created -- the cleanup still
+    ' deletes all three names to clear residue from older runs.
+    '
+    ' @returns bOk - TRUE only when the file was created, fully written, and closed
     ' @local handle - File handle from createFileNew()
+    ' @local expected - Content length the write must land in full
 
-    debug("  Creating test files for worker cogs...")
+    debug("  Creating test file for worker cogs...")
 
-    ' Delete any existing test files first
+    bOk := false
     sd.deleteFile(@testfile1)
     sd.deleteFile(@testfile2)
     sd.deleteFile(@testfile3)
 
-    ' Create test files with known content
-    repeat idx from 0 to 2
-        case idx
-            0: pFile := @testfile1
-            1: pFile := @testfile2
-            2: pFile := @testfile3
-
-        handle := sd.createFileNew(pFile)
-        if handle >= 0
-            sd.writeHandle(handle, @testContent, strsize(@testContent))
-            sd.closeFileHandle(handle)
-            debug("    Created: ", zstr_(pFile))
-        else
-            debug("    FAILED to create: ", zstr_(pFile))
+    handle := sd.createFileNew(@testfile1)
+    if handle >= 0
+        expected := strsize(@testContent)
+        bOk := (sd.writeHandle(handle, @testContent, expected) == expected)
+        if sd.closeFileHandle(handle) < 0
+            bOk := false
+        debug("    Created: ", zstr_(@testfile1))
+    ifnot bOk
+        debug("    FAILED to create: ", zstr_(@testfile1))
 
 
 PRI cleanupTestFiles()

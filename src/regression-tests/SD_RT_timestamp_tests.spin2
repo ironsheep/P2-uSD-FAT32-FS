@@ -64,8 +64,9 @@ PUB go() | result
 
     ' Mount the filesystem
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if result < 0
+    ifnot utils.requireSetup(result == 0, @"SETUP: mount SD card")
         debug("ERROR: Could not mount SD card - aborting timestamp tests!")
+        utils.ShowTestEndCounts()
         debug("END_SESSION")
         return
 
@@ -107,8 +108,10 @@ PRI runTest1_SetDateCreation() | handle, pEntry, hDir, wrtTime, wrtDate, expTime
 ' Verify setDate produces correct creation timestamp in the directory entry.
 '
 
-    utils.startTest(@"setDate creates correct timestamp")
-    utils.setCheckCountPerTest(3)
+    ' Named for the fields it actually reads. It checks the WRITE (modification)
+    ' date/time the driver stamps at close -- not a separate creation timestamp.
+    utils.startTest(@"setDate sets the correct write date and time")
+    utils.setCheckCountPerTest(4)
 
     sd.setDate(2026, 3, 15, 14, 30, 0)
 
@@ -142,8 +145,14 @@ PRI runTest1_SetDateCreation() | handle, pEntry, hDir, wrtTime, wrtDate, expTime
     utils.evaluateSubBool(found, @"entry found", true)
     if found
         utils.evaluateSubValueHex(wrtDate, @"wrtDate", expDate)
+        ' expTime was computed and then never used, so half the timestamp went
+        ' unchecked. FAT stores seconds in 2-second units, so a stamp taken a moment
+        ' after setDate() can legitimately land one unit later -- hence the tolerance
+        ' rather than an exact compare.
+        utils.evaluateSubBool(wrtTime >= expTime and wrtTime <= expTime + 1, @"wrtTime (2-second FAT granularity)", true)
     else
         utils.evaluateSubBool(false, @"wrtDate", true)
+        utils.evaluateSubBool(false, @"wrtTime (2-second FAT granularity)", true)
     utils.showSubTestResults()
 
 
@@ -152,7 +161,7 @@ PRI runTest2_ModTimestampOnClose() | handle, pEntry, hDir, wrtTime, wrtDate, fou
 '
 
     utils.startTest(@"Mod timestamp updated on close")
-    utils.setCheckCountPerTest(2)
+    utils.setCheckCountPerTest(3)                                               ' found + wrtDate + wrtTime
 
     sd.setDate(2026, 3, 15, 16, 45, 0)
 
@@ -161,6 +170,14 @@ PRI runTest2_ModTimestampOnClose() | handle, pEntry, hDir, wrtTime, wrtDate, fou
     if handle >= 0
         sd.writeHandle(handle, @tsContent, strsize(@tsContent))
         sd.closeFileHandle(handle)
+
+    ' wrtDate/wrtTime MUST be zeroed here. They are Spin2 locals, so before the scan
+    ' writes them they hold whatever was on the stack -- and the two checks below only
+    ' ask whether they are non-zero. Stack garbage is almost always non-zero, so this
+    ' test passed when the create failed, when the scan found nothing, and when there
+    ' was no file on the card at all. Zeroed, "non-zero" means the scan really wrote them.
+    wrtDate := 0
+    wrtTime := 0
 
     ' Verify WrtTime and WrtDate are non-zero
     found := false
@@ -177,6 +194,7 @@ PRI runTest2_ModTimestampOnClose() | handle, pEntry, hDir, wrtTime, wrtDate, fou
                 quit
         sd.closeDirectoryHandle(hDir)
 
+    utils.evaluateSubBool(found, @"entry found on card", true)
     utils.evaluateSubBool(wrtDate > 0, @"wrtDate non-zero", true)
     utils.evaluateSubBool(wrtTime > 0, @"wrtTime non-zero", true)
     utils.showSubTestResults()
@@ -230,14 +248,28 @@ PRI runTest3_TimestampsAdvance() | handle, pEntry, hDir, stampA, stampB
     debug("  stampA=$", uhex_(stampA), " stampB=$", uhex_(stampB))
 
 
-PRI runTest4_DefaultTimestamp() | pEntry, hDir, wrtDate, month, day, year, found
+PRI runTest4_DefaultTimestamp() | pEntry, hDir, wrtDate, month, day, year, found, handle
 ' Verify timestamp date fields (year, month, day) are in valid FAT32 ranges.
 '
+' @local handle - write handle for this test's OWN fixture (see below)
 
     utils.startTest(@"Timestamp fields are valid ranges")
-    utils.setCheckCountPerTest(3)
+    utils.setCheckCountPerTest(4)
 
-    ' Read any file's timestamp and verify fields are in range
+    ' Write this test's OWN fixture rather than inheriting whatever T3 left behind.
+    ' Inherited, this test read a file whose timestamp another test had set, so a
+    ' failure here pointed at T3 and a T3 failure produced a second failure here.
+    ' Self-contained, a failure means the DATE FIELDS themselves are out of range.
+    sd.setDate(2026, 3, 15, 14, 30, 0)
+    sd.deleteFile(@tsTestFile1)
+    handle := sd.createFileNew(@tsTestFile1)
+    utils.evaluateSubBool(handle >= 0, @"create this test's own fixture", true)
+    if handle >= 0
+        sd.writeHandle(handle, @tsContent, strsize(@tsContent))
+        sd.closeFileHandle(handle)
+
+    ' Read the timestamp back and verify fields are in range
+    wrtDate := 0
     found := false
     hDir := sd.openDirectory(@".")
     if hDir >= 0

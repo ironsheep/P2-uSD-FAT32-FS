@@ -75,6 +75,7 @@ DAT
                   BYTE    $01, "Panasonic", 0
                   BYTE    $02, "Toshiba", 0
                   BYTE    $03, "SanDisk", 0
+                  BYTE    $12, "Gigastone OEM", 0     ' was missing here while SD_card_characterize knew it
                   BYTE    $1B, "Samsung", 0
                   BYTE    $1D, "AData", 0
                   BYTE    $27, "Phison", 0

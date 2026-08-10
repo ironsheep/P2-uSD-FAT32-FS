@@ -411,7 +411,7 @@ PUB do_format() | p_label, pStr, ok, label_ok
         if (confirmYN(@"Mount card"))
           do_mount()
 
-PUB do_stats() | total_sectors, total_mb, free_sectors, free_mb
+PUB do_stats() | total_sectors, total_mb, free_sectors, free_mb, free_err
 '' Display filesystem statistics including total/free space and volume label.
 '' For card hardware info, use the 'card' command instead.
 ''
@@ -419,6 +419,7 @@ PUB do_stats() | total_sectors, total_mb, free_sectors, free_mb
 ' @local total_mb - Total capacity in megabytes
 ' @local free_sectors - Free sectors available
 ' @local free_mb - Free space in megabytes
+' @local free_err - ERROR() after freeSpace(), to tell a full card from a failed query
 
   if (ntokens <> 1)
     bad_syntax()
@@ -428,10 +429,17 @@ PUB do_stats() | total_sectors, total_mb, free_sectors, free_mb
     total_sectors := sd.cardSizeSectors()
     total_mb := total_sectors / SECTORS_PER_MB
     free_sectors := sd.freeSpace()
+    free_err := sd.ERROR()
     free_mb := free_sectors / SECTORS_PER_MB
 
     serial.fstr2(@"Total:  %d sectors (%d MB)\r\n", total_sectors, total_mb)
-    serial.fstr2(@"Free:   %d sectors (%d MB)\r\n", free_sectors, free_mb)
+    ' freeSpace() returning 0 is ambiguous: a genuinely full card and a failed
+    ' query look identical. Printing "Free: 0 sectors" as fact reported a query
+    ' failure as a disk-full condition. ERROR() is what separates them.
+    if (free_sectors == 0 and free_err <> 0)
+      serial.fstr1(@"Free:   unknown (query failed, error %d)\r\n", free_err)
+    ELSE
+      serial.fstr2(@"Free:   %d sectors (%d MB)\r\n", free_sectors, free_mb)
     serial.fstr1(@"Label:  %s\r\n", sd.volumeLabel())
 
 PUB do_dir() | dh, count, total_size, attrib, size, p_name, p_path, p_entry, wrt_date, wrt_time, yr, mo, dy, hr, mn
@@ -642,7 +650,14 @@ PUB do_type() | p_name, p_leaf, has_path, handle, bytes_read, total, ch, idx
           total += bytes_read
 
         sd.closeFileHandle(handle)
-        serial.fstr1(@"\r\n\r\n[%d bytes]\r\n", total)
+        ' The loop exits on bytes_read <= 0, which folds two very different
+        ' outcomes together: 0 is a clean end of file, negative is a read failure.
+        ' Reporting only the byte count made a file truncated by a dying card look
+        ' like a complete one.
+        if (bytes_read < 0)
+          serial.fstr2(@"\r\n\r\n[%d bytes, then READ FAILED: %d]\r\n", total, bytes_read)
+        ELSE
+          serial.fstr1(@"\r\n\r\n[%d bytes]\r\n", total)
 
       if has_path
         nav_back(p_name)
@@ -714,7 +729,12 @@ PUB do_hexdump() | p_name, p_leaf, has_path, handle, bytes_read, offset, idx, ch
 
         fileSize := sd.fileSizeHandle(handle)
         sd.closeFileHandle(handle)
-        serial.fstr1(@"\r\n[%d bytes total]\r\n", fileSize > 0 ? fileSize : offset)
+        ' Same swallow as do_type: the loop exits on bytes_read <= 0, so a read
+        ' FAILURE printed a normal-looking total. Say so instead.
+        if (bytes_read < 0)
+          serial.fstr1(@"\r\n[READ FAILED: %d]\r\n", bytes_read)
+        ELSE
+          serial.fstr1(@"\r\n[%d bytes total]\r\n", fileSize > 0 ? fileSize : offset)
 
       if has_path
         nav_back(p_name)
@@ -797,7 +817,7 @@ PUB do_move() | p_src, p_dst, p_src_leaf, has_path, dh, result
       if has_path
         nav_back(p_src)
 
-PUB do_copy() | p_src, p_dst, p_src_leaf, p_dst_leaf, src_has_path, dst_has_path, dst_is_dir, dh, h_src, h_dst, bytes_read, total, src_open, dst_open, ok
+PUB do_copy() | p_src, p_dst, p_src_leaf, p_dst_leaf, src_has_path, dst_has_path, dst_is_dir, dh, h_src, h_dst, bytes_read, bytes_written, total, src_open, dst_open, ok
 '' Copy a file. Supports paths and "copy file dir" (keeps source name).
 '' Examples: copy a.txt b.txt, copy a.txt work, copy work/a.txt backup/b.txt
 ''
@@ -887,13 +907,20 @@ PUB do_copy() | p_src, p_dst, p_src_leaf, p_dst_leaf, src_has_path, dst_has_path
 
     if (ok)
       ' Copy data (both handles are open and CWD-independent)
+      ' The write return was discarded and "Copied %d bytes" reported the READ
+      ' total, so a copy whose writes were refused or short still announced
+      ' success with the full source size. Every write is now checked, and the
+      ' count reported is what actually LANDED.
       total := 0
+      bytes_written := 0
       repeat
         bytes_read := sd.readHandle(h_src, @buffer, BUFFER_SIZE)
         if (bytes_read <= 0)
           quit
-        sd.writeHandle(h_dst, @buffer, bytes_read)
-        total += bytes_read
+        bytes_written := sd.writeHandle(h_dst, @buffer, bytes_read)
+        if (bytes_written <> bytes_read)
+          quit
+        total += bytes_written
 
     ' Always close any open handles
     if (src_open)
@@ -902,7 +929,14 @@ PUB do_copy() | p_src, p_dst, p_src_leaf, p_dst_leaf, src_has_path, dst_has_path
       sd.closeFileHandle(h_dst)
 
     if (ok)
-      serial.fstr2(@"Copied %d bytes to %s\r\n", total, p_dst_leaf)
+      if (bytes_read < 0)
+        serial.fstr2(@"Copy INCOMPLETE: read failed after %d bytes (error %d)\r\n", total, bytes_read)
+      elseif (bytes_written < 0)
+        serial.fstr2(@"Copy INCOMPLETE: write failed after %d bytes (error %d)\r\n", total, bytes_written)
+      elseif (bytes_written <> 0 and bytes_written <> bytes_read)
+        serial.fstr1(@"Copy INCOMPLETE: short write, only %d bytes landed\r\n", total)
+      ELSE
+        serial.fstr2(@"Copied %d bytes to %s\r\n", total, p_dst_leaf)
 
 PUB do_delete() | p_name, p_leaf, has_path, result
 '' Delete a file. Supports paths like "work/test.txt".

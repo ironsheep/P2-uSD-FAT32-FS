@@ -52,7 +52,7 @@ VAR
 
     byte  msg[80]
 
-PUB go() | handle, idx
+PUB go() | handle, idx, result, entries_written
 '' Main entry point -- creates a LOGS directory and writes MAX_ENTRIES CSV log entries with periodic sync.
 ' @local handle - File handle for the log file
 ' @local idx - Loop index for writing log entries
@@ -81,17 +81,39 @@ PUB go() | handle, idx
             debug("Log file open, writing ", udec(MAX_ENTRIES), " entries...")
 
             ' Write log entries
+            entries_written := 0
             repeat idx from 1 to MAX_ENTRIES
                 ' Format a simple CSV line: "N,reading"
-                writeLogEntry(handle, idx, getReading())
+                result := writeLogEntry(handle, idx, getReading())
+                if result < 0
+                    debug("  Write FAILED at entry ", udec(idx), ", error: ", sdec(result))
+                    quit
+                entries_written++
 
                 ' Periodic sync -- ensures data survives power loss
                 if idx // SYNC_INTERVAL == 0
-                    sd.syncHandle(handle)
+                    result := sd.syncHandle(handle)
+                    if result < 0
+                        debug("  Sync FAILED at entry ", udec(idx), ", error: ", sdec(result))
+                        quit
                     debug("  Synced at entry ", udec(idx))
 
-            sd.closeFileHandle(handle)
-            debug("Log file closed")
+                ' A long-running logger should also watch the BACKGROUND flush.
+                ' The driver flushes a dirty handle on its own during idle windows,
+                ' and if one of those writes fails there is no call for it to
+                ' return through -- lastFlushError() is where that outcome lands.
+                ' Polling it is what turns a silent card failure into a noticed one.
+                result := sd.lastFlushError()
+                if result < 0
+                    debug("  Background flush FAILED before entry ", udec(idx), ", error: ", sdec(result))
+                    quit
+
+            ' closeFileHandle() flushes; its status says whether the tail landed.
+            result := sd.closeFileHandle(handle)
+            if result < 0
+                debug("Close FAILED, error: ", sdec(result), " -- final entries may not be on the card")
+            else
+                debug("Log file closed -- ", udec(entries_written), " entries on the card")
         else
             debug("Cannot create log file, error: ", sdec(handle))
 
@@ -103,11 +125,12 @@ PUB go() | handle, idx
     else
         debug("Mount FAILED")
 
-PRI writeLogEntry(handle, entry_num, value) | len
+PRI writeLogEntry(handle, entry_num, value) : status | len
 ' Format one CSV line "entry_num,value\r\n" and write it to the log file.
 ' @param handle - File handle for the open log file
 ' @param entry_num - Entry sequence number to write
 ' @param value - Sensor reading value to log
+' @returns status - bytes written, or a negative error code from writeHandle()
 ' @local len - Running byte count for the formatted message
     len := 0
     len += formatDec(@msg + len, entry_num)
@@ -115,7 +138,9 @@ PRI writeLogEntry(handle, entry_num, value) | len
     len += formatDec(@msg + len, value)
     msg[len++] := CHAR_CR
     msg[len++] := CHAR_LF
-    sd.writeHandle(handle, @msg, len)
+    status := sd.writeHandle(handle, @msg, len)
+    if status <> len
+        debug("    short write: ", sdec(status), " of ", udec(len), " bytes")
 
 PRI getReading() : value
 ' Simulate a sensor reading -- returns a random value 0-1023.

@@ -817,8 +817,10 @@ All structs are packed (Spin2 default) with offsets matching their respective ha
 | `E_FILE_EXISTS` | -41 | File already exists |
 | `E_NOT_A_FILE` | -42 | Expected file, found directory |
 | `E_NOT_A_DIR` | -43 | Expected directory, found file |
+| `E_DIR_NOT_EMPTY` | -44 | Directory still contains entries; `deleteFile()` refused. Empty it first |
 | `E_FILE_NOT_OPEN` | -45 | RESERVED -- never produced; a closed handle reports `E_INVALID_HANDLE` |
 | `E_END_OF_FILE` | -46 | Read past end of file |
+| `E_FILE_OPEN` | -47 | File has an open handle; `deleteFile()` refused. Close it first |
 | `E_DISK_FULL` | -60 | No free clusters available |
 | `E_NO_CONTIGUOUS_SPACE` | -61 | No contiguous run of sufficient length (defrag) |
 | `E_FILE_OPEN_FOR_COMPACT` | -62 | File is open, cannot compact (defrag) |
@@ -941,9 +943,24 @@ All structs are packed (Spin2 default) with offsets matching their respective ha
 
 | Method | Description |
 |--------|-------------|
-| `attemptHighSpeed() : bool` | Switch to 50 MHz with verification |
+| `attemptHighSpeed() : bool` | Switch to 50 MHz, verified READ-ONLY (see below) |
 | `checkCMD6Support() : bool` | Check if card supports CMD6 |
 | `checkHighSpeedCapability() : bool` | Query high-speed capability |
+
+**How the 50 MHz switch is verified.** `attemptHighSpeed()` captures a baseline
+sector at the current known-good speed, performs the CMD6 switch, then re-reads
+that same sector at 50 MHz and compares. **Nothing is written to the card at the
+unverified speed.** An earlier implementation wrote a sector at 50 MHz and
+compared the result against itself, which cannot detect the failure the check
+exists to catch; it also risked a bad write to the root sector on a card that
+could not sustain the higher rate. On any mismatch the driver falls back.
+
+All three of these return an **honest boolean**, and `FALSE` is ambiguous on its
+own: "the card does not offer high speed" and "the card could not be asked" are
+both `FALSE`. `ERROR()` separates them — `SUCCESS` when the card simply declined,
+a negative code when the query or the verification failed. Without that split a
+card with SPI trouble reports as "high speed not supported" and sends you
+diagnosing the wrong thing.
 
 ### SD_INCLUDE_DEBUG
 

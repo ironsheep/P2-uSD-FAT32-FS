@@ -29,6 +29,9 @@ VAR { test stats vars }
 
   LONG    varSignature      ' Sentinel value for detecting uninitialized state
 
+  LONG    nonceCaptured     ' 0 = per-run nonce not yet captured
+  LONG    nonceValue        ' Per-run nonce byte (see perRunNonce())
+
 VAR { card profile cache - populated by cacheCardProfile() }
 
   LONG    profileCachedFlag             ' 0 = not yet cached
@@ -39,6 +42,13 @@ VAR { card profile cache - populated by cacheCardProfile() }
   LONG    profileMaxSpiHz               ' Card-reported max SPI speed (Hz)
   LONG    profileMfrId                  ' Card manufacturer ID byte
   LONG    profileCardClass              ' 0=SDSC, 1=SDHC/SDXC (from OCR.CCS)
+
+#ifdef SD_INCLUDE_STACK_REPORT
+OBJ ' measurement builds only (-D SD_INCLUDE_STACK_REPORT): reach the driver for the
+    ' worker-stack watermark. The driver keeps all state in DAT (singleton), so this
+    ' instance shares the mailbox, lock, and worker with the suite's own instance.
+    sd : "micro_sd_fat32_fs"
+#endif
 
 PUB null()
 '' This is not an application
@@ -65,6 +75,7 @@ PUB startTest(pDescription)
 
     initIfNotAlready()
     showSubTestResults()
+    subTestPer := 1     ' reset AFTER the flush so the prior test scores with its own divisor
 
     numberTests++
     '  now show new test info
@@ -72,31 +83,42 @@ PUB startTest(pDescription)
     debug("* Test #", udec_(numberTests), ": ", zstr_(pDescription))
 
 
-PUB showSubTestResults() | passScaled, failScaled, total, pPassFail
+PUB showSubTestResults() | passScaled, failScaled, total, executed
 '' Display accumulated sub-test results and reset counters
+''
+'' A test whose executed sub-check count is not a whole multiple of the declared
+'' subTestPer FAILS -- a partial record means declared checks never ran, which
+'' previously scored as a full pass.
 
-    if failCountSub <> 0 or passCountSub <> 0
-        total := (passCountSub + failCountSub) / subTestPer
+    executed := passCountSub + failCountSub
+    if executed == 0
+        return
+    if executed // subTestPer <> 0
+        debug("  SUB-CHECK SHORTFALL: ", udec_(executed), " executed, ", udec_(subTestPer), " declared per record")
+        recordFail()
+    else
+        total := executed / subTestPer
         passScaled := passCountSub / subTestPer
         failScaled := total - passScaled
         debug("  Sub-Test Results: count=", udec_(total), ", Pass: ", udec_(passScaled), ", Fail: ", udec_(failScaled))
-        if failScaled < 0
-          debug("  Sub-Test (", udec(passCountSub, failCountSub), ")")
-
         if failCountSub <> 0
-            failCount++
+            recordFail()
         else
-            passCount++
-        pPassFail := failCountSub <> 0 ? @"FAIL" : @"pass"
-        debug("   -> ", zstr_(pPassFail))
-        passCountSub := 0
-        failCountSub := 0
+            recordPass()
+    passCountSub := 0
+    failCountSub := 0
 
 
 PUB ShowTestEndCounts() | pMsg
 '' Display final summary of all tests with pass/fail counts
 
     showSubTestResults()  ' flush any pending sub-tests
+
+#ifdef SD_INCLUDE_STACK_REPORT
+    ' Measurement builds: watermark line lands beside the totals, and fires BEFORE
+    ' the totals are computed so a full/overflowed stack still scores as a failure.
+    reportStackWatermark()
+#endif
 
     debug(" ")  ' blank line
     debug(" ============================================================")
@@ -122,6 +144,7 @@ PUB ShowTestEndCounts() | pMsg
     ' 500 ms at 2 Mbaud is far more than the buffered text needs, and it is paid once per
     ' suite, not per test.
     waitms(500)
+
 
 
 PUB setCheckCountPerTest(countTests)
@@ -219,6 +242,39 @@ PUB recordFail()
     initIfNotAlready()
     failCount++
     debug("   -> FAIL")
+
+
+PUB requireSetup(condition, pLabel) : bOk
+'' Precondition gate: verify a setup step succeeded before dependent tests run
+''
+'' @param condition - boolean setup result (FALSE means setup failed)
+'' @param pLabel - pointer to name of the setup step for failure reporting
+'' @returns bOk - TRUE when setup succeeded; FALSE tells the caller to skip dependent work
+''
+'' On FALSE this records one named failing test, so a broken precondition is
+'' scored and visible -- the dependent tests the caller skips never run against
+'' broken state, and the failure cannot vanish unscored.
+
+    bOk := condition <> 0
+    ifnot bOk
+        startTest(pLabel)
+        debug("  SETUP FAILED - skipping dependent tests")
+        recordFail()
+
+
+PUB perRunNonce() : nonce
+'' Per-run nonce for suites that write deterministic data patterns
+''
+'' @returns nonce - byte value (0-255) captured from CNT at first call, stable for the rest of the run
+''
+'' Mixing this into written patterns makes each run's data distinguishable from
+'' stale data a prior run left on the card -- a read-back match proves THIS
+'' run's write landed, not a leftover.
+
+    if nonceCaptured == 0
+        nonceValue := getct() & $FF
+        nonceCaptured := 1
+    nonce := nonceValue
 
 
 PUB evaluateSingleValue(result, pMessage, expectedResult) | bPassed, pPassFail
@@ -459,7 +515,7 @@ PUB checkGuard(pGuardStart, pMessage) : bIntact | idx
 '' @returns bIntact - true if all guard bytes are $CC
 ''
 '' Call AFTER driver operation. Reports offset and corrupt value on failure.
-'' Silent on pass - does NOT affect test counters.
+'' Silent on pass. A violation scores one test failure.
 
     bIntact := true
     repeat idx from 0 to GUARD_SIZE - 1
@@ -468,6 +524,8 @@ PUB checkGuard(pGuardStart, pMessage) : bIntact | idx
             debug("  GUARD VIOLATION: ", zstr_(pMessage), " at offset ", udec_(idx), ": $", uhex_byte_(BYTE[pGuardStart][idx]), " (expected $CC)")
             quit
     ifnot bIntact
+        initIfNotAlready()
+        failCount++
         debug("   -> GUARD FAIL")
 
 PUB initAndCheckGuard(pGuardStart, pMessage) : bIntact
@@ -632,6 +690,25 @@ PUB assertFreeSpace(freeClusters, needClusters) : bOk
     bOk := freeClusters >= needClusters
 
 CON ' ---- Private helpers ----
+
+#ifdef SD_INCLUDE_STACK_REPORT
+PRI reportStackWatermark() | depth
+' Measurement builds only: print the worker-cog stack high-water mark (retained
+' across worker sessions by the driver) as a standard line parsed by
+' run_regression.sh --stack-report -- keep the format and that parser in lockstep.
+' A watermark that reaches STACK_SIZE is a saturated measurement (possible
+' overflow) and scores as a named failing test rather than a quiet number.
+
+    depth := sd.reportStackDepth()
+    if depth < 0
+        debug("* STACK WATERMARK: n/a of ", udec_(sd.STACK_SIZE), " longs (worker never ran)")
+    else
+        debug("* STACK WATERMARK: ", udec_(depth), " of ", udec_(sd.STACK_SIZE), " longs")
+        if depth >= sd.STACK_SIZE
+            startTest(@"worker stack watermark within bounds")
+            debug("  STACK FULL/OVERFLOW: watermark reached configured STACK_SIZE")
+            recordFail()
+#endif
 
 PRI initIfNotAlready()
 ' Initialize test counters if not already done

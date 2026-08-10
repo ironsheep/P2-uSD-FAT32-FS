@@ -20,7 +20,9 @@
 ''
 ''   Compare the reported peak against the shipped value of 160.
 ''
-''   REQUIRES: STACK_SIZE temporarily raised in micro_sd_fat32_fs.spin2. Revert afterward.
+''   REQUIRES: an enlarged worker stack. No hand-edit needed anymore: compile with
+''   -D SD_INCLUDE_STACK_REPORT (run_test.sh --stack-report), which raises STACK_SIZE
+''   for the build. Companion: RT_stack_watermark_probe.spin2 proves the meter moves.
 ''
 '' =================================================================================================
 

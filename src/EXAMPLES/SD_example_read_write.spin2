@@ -71,9 +71,17 @@ PUB go() | handle, bytes_read, bytes_written
                 debug("File size: ", udec(sd.fileSizeHandle(handle)), " bytes")
 
                 ' --- Step 4: Read the data back ---
+                ' readHandle() returns a NEGATIVE error code on failure, so the
+                ' result must be checked before it is used as an index. Writing
+                ' buffer[bytes_read] with a negative bytes_read stores a byte
+                ' BEFORE the buffer, corrupting whatever variable happens to live
+                ' there -- a memory-corruption bug in a teaching example.
                 bytes_read := sd.readHandle(handle, @buffer, sd.SECTOR_SIZE)
-                buffer[bytes_read] := 0                 ' Null-terminate for display
-                debug("Read ", udec(bytes_read), " bytes: ", zstr(@buffer))
+                if bytes_read < 0
+                    debug("Read FAILED, error: ", sdec(bytes_read))
+                else
+                    buffer[bytes_read] := 0             ' Null-terminate for display
+                    debug("Read ", udec(bytes_read), " bytes: ", zstr(@buffer))
                 sd.closeFileHandle(handle)
             else
                 debug("Open FAILED, error: ", sdec(handle))

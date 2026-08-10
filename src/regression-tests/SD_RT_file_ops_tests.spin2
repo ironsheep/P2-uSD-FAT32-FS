@@ -65,10 +65,14 @@ testfile1       BYTE    "RTFILE1.TXT", 0
 testfile2       BYTE    "RTFILE2.BIN", 0
 testfile3       BYTE    "RTFILE3.DAT", 0
 renamedFile     BYTE    "RENAMED.TXT", 0
+twelveCharFile  BYTE    "DATALOG1.TXT", 0
 testContent1    BYTE    "Hello, SD Card!", 0
 testContent2    BYTE    "This is test content for file operations.", 0
 testdir1        BYTE    "RTDIR1", 0
 nonexistent     BYTE    "NOEXIST.TXT", 0
+delOpenFile     BYTE    "DELOPEN.TXT", 0         ' -47 contract test: delete refused while a handle is open
+delDirName      BYTE    "DELDIR", 0              ' -44 contract test: delete refused while directory is populated
+delDirChild     BYTE    "DELDIR/INSIDE.TXT", 0   ' the child that keeps DELDIR populated (path stays in sync with delDirName)
 
 readBuffer      BYTE    0[128]
 readBuffer_guard BYTE   0[16]
@@ -88,8 +92,9 @@ PUB go() | result, handle, h1, h2, h3, fileSize, bytesWritten, bytesRead, root_s
 
     ' Mount the card first
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if result < 0
+    ifnot utils.requireSetup(result == 0, @"SETUP: mount SD card")
         debug("ERROR: Could not mount SD card!")
+        utils.ShowTestEndCounts()
         debug("END_SESSION")
         return
 
@@ -153,6 +158,16 @@ PUB go() | result, handle, h1, h2, h3, fileSize, bytesWritten, bytesRead, root_s
     sd.deleteFile(@testfile2)
     sd.deleteFile(@testfile3)
     sd.deleteFile(@renamedFile)
+    sd.deleteFile(@twelveCharFile)
+    sd.deleteFile(@delOpenFile)
+    sd.deleteFile(@delDirChild)                 ' empty-then-delete: populated dirs refuse (E_DIR_NOT_EMPTY)
+    sd.deleteFile(@delDirName)
+    ' Names this suite asserts must NOT exist. They are never created here, so they
+    ' were never cleaned -- but debris under any of them turns a negative test into
+    ' a false failure (or worse, a false pass for the rename).
+    sd.deleteFile(@nonexistent)                 ' NOEXIST.TXT
+    sd.deleteFile(@"NOFILE.TXT")                ' rename() source that must not exist
+    sd.deleteFile(@"OTHER.TXT")                 ' rename() destination that must not exist
 
     utils.startTest(@"createFileNew() returns valid handle")
     debug("  DEBUG: Creating file [", zstr_(@testfile1), "]")
@@ -226,6 +241,14 @@ PUB go() | result, handle, h1, h2, h3, fileSize, bytesWritten, bytesRead, root_s
     handle := sd.createFileNew(@testfile1)
     debug("  DEBUG: Second createFileNew returned handle=", sdec_(handle))
     utils.evaluateSingleValue(handle, @"createFileNew() on existing", sd.E_FILE_EXISTS)
+    ' This create MUST fail. If it ever succeeds, it has handed back an open WRITE
+    ' handle that nothing closes -- the slot leaks for the rest of the suite and
+    ' surfaces much later as a spurious "too many open files". Close it here.
+    ' Deliberately NOT deleting the file: the tests immediately below read
+    ' testfile1's content, so deleting it would turn one failure into six.
+    if handle >= 0
+        debug("  fixture may be compromised: the duplicate create SUCCEEDED")
+        sd.closeFileHandle(handle)
 
     ' ----------------------------------
     ' TEST GROUP: File open/close with handles
@@ -236,10 +259,15 @@ PUB go() | result, handle, h1, h2, h3, fileSize, bytesWritten, bytesRead, root_s
     handle := sd.openFileRead(@testfile1)
     utils.evaluateSubBool(handle >= 0, @"openFileRead()", true)
 
+    ' The next three tests are gated on the open above. Each was counted by
+    ' startTest and, with no else, scored nothing when the open failed -- three
+    ' tests vanishing into BAD TEST COUNTS instead of failing.
     utils.startTest(@"fileSizeHandle() returns correct size")
     if handle >= 0
         fileSize := sd.fileSizeHandle(handle)
         utils.evaluateSingleValue(fileSize, @"fileSizeHandle()", strsize(@testContent1))
+    else
+        utils.evaluateBool(false, @"fileSizeHandle() (no open handle)", true)
 
     utils.startTest(@"readHandle() returns correct content")
     if handle >= 0
@@ -249,15 +277,21 @@ PUB go() | result, handle, h1, h2, h3, fileSize, bytesWritten, bytesRead, root_s
         utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
         utils.evaluateSubValue(bytesRead, @"bytesRead", strsize(@testContent1))
         utils.evaluateSubBool(strcomp(@readBuffer, @testContent1), @"content matches", true)
+    else
+        utils.evaluateBool(false, @"readHandle() (no open handle)", true)
 
     utils.startTest(@"closeFileHandle() on open handle")
     if handle >= 0
         result := sd.closeFileHandle(handle)
         utils.evaluateSingleValue(result, @"closeFileHandle()", 0)
+    else
+        utils.evaluateBool(false, @"closeFileHandle() (no open handle)", true)
 
     utils.startTest(@"openFileRead() fails for non-existent file")
     handle := sd.openFileRead(@"NOEXIST.TXT")
     utils.evaluateSingleValue(handle, @"openFileRead() non-existent", sd.E_FILE_NOT_FOUND)
+    if handle >= 0                                                              ' Must fail; never leak the slot if it does not
+        sd.closeFileHandle(handle)
 
     ' ----------------------------------
     ' TEST GROUP: File deletion
@@ -283,6 +317,52 @@ PUB go() | result, handle, h1, h2, h3, fileSize, bytesWritten, bytesRead, root_s
     utils.startTest(@"deleteFile() fails for non-existent file")
     result := sd.deleteFile(@testfile2)
     utils.evaluateSingleValue(result, @"deleteFile() non-existent", sd.E_FILE_NOT_FOUND)
+
+    ' CAN-FAIL (v1.7.0 -47 contract): the unfixed driver deletes a file while a
+    ' handle still references it and returns SUCCESS, so the first sub-check
+    ' goes red against it. Delete-while-open is the corruption path where a
+    ' later sync/idle flush writes the handle's dirty buffer into freed clusters.
+    utils.startTest(@"deleteFile() on open file returns E_FILE_OPEN")
+    utils.setCheckCountPerTest(4)
+    sd.deleteFile(@delOpenFile)                         ' standalone armor: suite pre-clean already ran; kept so the test survives reordering
+    handle := sd.createFileNew(@delOpenFile)
+    utils.evaluateSubBool(handle >= 0, @"create file", true)
+    sd.writeHandle(handle, @"held open", 9)
+    result := sd.deleteFile(@delOpenFile)
+    utils.evaluateSubValue(result, @"delete while open", sd.E_FILE_OPEN)
+    result := sd.closeFileHandle(handle)
+    utils.evaluateSubValue(result, @"close survivor", sd.SUCCESS)
+    result := sd.deleteFile(@delOpenFile)
+    utils.evaluateSubValue(result, @"close-then-delete", sd.SUCCESS)
+    utils.showSubTestResults()
+    utils.setCheckCountPerTest(1)
+
+    ' CAN-FAIL (v1.7.0 -44 contract): the unfixed driver deletes a populated
+    ' directory, freeing only the directory's OWN chain and orphaning every
+    ' child's clusters as lost chains -- and returns SUCCESS, so the refusal
+    ' sub-check goes red against it.
+    utils.startTest(@"deleteFile() on populated directory returns E_DIR_NOT_EMPTY")
+    utils.setCheckCountPerTest(5)
+    sd.deleteFile(@delDirChild)                         ' standalone armor (suite pre-clean already ran): empty residue first...
+    sd.deleteFile(@delDirName)                          ' ...then remove it -- populated dirs refuse delete
+    result := sd.newDirectory(@delDirName)
+    utils.evaluateSubValue(result, @"create directory", sd.SUCCESS)
+    handle := sd.createFileNew(@delDirChild)
+    utils.evaluateSubBool(handle >= 0, @"create child file", true)
+    if handle >= 0
+        sd.writeHandle(handle, @"child", 5)
+        sd.closeFileHandle(handle)
+    result := sd.deleteFile(@delDirName)
+    utils.evaluateSubValue(result, @"delete populated dir", sd.E_DIR_NOT_EMPTY)
+    handle := sd.openFileRead(@delDirChild)     ' the refusal must leave the directory INTACT
+    utils.evaluateSubBool(handle >= 0, @"dir left intact (child opens)", true)
+    if handle >= 0
+        sd.closeFileHandle(handle)
+    sd.deleteFile(@delDirChild)
+    result := sd.deleteFile(@delDirName)
+    utils.evaluateSubValue(result, @"empty-then-delete succeeds", sd.SUCCESS)
+    utils.showSubTestResults()
+    utils.setCheckCountPerTest(1)
 
     ' ----------------------------------
     ' TEST GROUP: File rename
@@ -314,6 +394,24 @@ PUB go() | result, handle, h1, h2, h3, fileSize, bytesWritten, bytesRead, root_s
     result := sd.rename(@"NOFILE.TXT", @"OTHER.TXT")
     utils.evaluateSingleValue(result, @"rename() non-existent", sd.E_FILE_NOT_FOUND)
 
+    ' A 12-character 8.3 name exercises the full name field. The in-place
+    ' conversion this guards against wrote the 12th character onto DE_ATTR
+    ' (byte 11), setting DIRECTORY|SYSTEM bits -- the name field still read
+    ' correctly, but the file could no longer be opened or listed.
+    utils.startTest(@"rename() to 12-char 8.3 name leaves entry intact")
+    utils.setCheckCountPerTest(3)
+    result := sd.rename(@renamedFile, @twelveCharFile)
+    utils.evaluateSubValue(result, @"rename() to DATALOG1.TXT", sd.SUCCESS)
+    handle := sd.openFileRead(@twelveCharFile)
+    utils.evaluateSubBool(handle >= 0, @"reopen under 12-char name", true)
+    if handle >= 0
+        fileSize := sd.fileSizeHandle(handle)
+        utils.evaluateSubValue(fileSize, @"size preserved", strsize(@testContent1))
+        sd.closeFileHandle(handle)
+    else
+        utils.evaluateSubValue(-1, @"size preserved (file unreadable)", strsize(@testContent1))
+    sd.deleteFile(@twelveCharFile)
+
     ' ----------------------------------
     ' TEST GROUP: Multiple file creation
     ' ----------------------------------
@@ -321,6 +419,15 @@ PUB go() | result, handle, h1, h2, h3, fileSize, bytesWritten, bytesRead, root_s
 
     ' Sync directory cache before multiple file operations
     sd.syncDirCache()
+
+    ' Break the inheritance from the earlier groups. testfile1 survives the
+    ' creation group and testfile2/3 may survive the deletion and rename groups
+    ' depending on which of those failed -- and createFileNew on a survivor
+    ' returns E_FILE_EXISTS, so an earlier failure reappeared here as three more.
+    ' Unconditional deletes make this group self-establishing.
+    sd.deleteFile(@testfile1)
+    sd.deleteFile(@testfile2)
+    sd.deleteFile(@testfile3)
 
     ' Create multiple files
     utils.startTest(@"Create multiple test files")
@@ -535,6 +642,13 @@ PUB go() | result, handle, h1, h2, h3, fileSize, bytesWritten, bytesRead, root_s
     sd.deleteFile(@testfile2)
     sd.deleteFile(@testfile3)
     sd.deleteFile(@renamedFile)
+    sd.deleteFile(@twelveCharFile)
+    sd.deleteFile(@delOpenFile)
+    sd.deleteFile(@delDirChild)                 ' empty-then-delete: populated dirs refuse (E_DIR_NOT_EMPTY)
+    sd.deleteFile(@delDirName)
+    sd.deleteFile(@nonexistent)                 ' same negative-test names as the pre-clean,
+    sd.deleteFile(@"NOFILE.TXT")                '  so this suite leaves none behind for the next
+    sd.deleteFile(@"OTHER.TXT")
 
     ' Report stack depth while worker cog is still running
 #ifdef SD_INCLUDE_STACK_CHECK

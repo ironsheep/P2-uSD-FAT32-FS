@@ -48,7 +48,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # --- Functions ---
 
 usage() {
-    echo "Usage: $0 <test-file> [-t timeout] [--external]"
+    echo "Usage: $0 <test-file> [-t timeout] [--external] [--stack-report]"
     echo ""
     echo "Examples:"
     echo "  $0 ../src/regression-tests/SD_RT_mount_tests.spin2"
@@ -60,6 +60,9 @@ usage() {
     echo "  -t <sec>   - Timeout in seconds (default: 60)"
     echo "  --external - Compile with -D SD_PINS_EXTERNAL (external SD header, base pin 16)"
     echo "               Default (no flag): P2 Edge onboard SD slot."
+    echo "  --stack-report - Compile with -D SD_INCLUDE_STACK_REPORT (measurement build:"
+    echo "               enlarged worker stack + per-suite watermark line; see the"
+    echo "               STACK_SIZE CON in the driver)"
     echo ""
     echo "Exit codes:"
     echo "  0 - Test passed (END_SESSION found)"
@@ -81,6 +84,7 @@ shift
 
 TIMEOUT_SECS="60"
 PIN_DEFINE_FLAG=""
+STACK_DEFINE_FLAG=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -94,6 +98,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --external)
             PIN_DEFINE_FLAG="-D SD_PINS_EXTERNAL"
+            shift
+            ;;
+        --stack-report)
+            STACK_DEFINE_FLAG="-D SD_INCLUDE_STACK_REPORT"
             shift
             ;;
         -h|--help) usage ;;
@@ -138,6 +146,9 @@ if [[ -n "$PIN_DEFINE_FLAG" ]]; then
 else
     echo -e "${CYAN}SD pins: P2 Edge onboard slot${NC}"
 fi
+if [[ -n "$STACK_DEFINE_FLAG" ]]; then
+    echo -e "${CYAN}Build: STACK MEASUREMENT (SD_INCLUDE_STACK_REPORT, enlarged worker stack)${NC}"
+fi
 echo ""
 
 # --- Setup log directory ---
@@ -168,7 +179,7 @@ if [[ "$USE_CACHE" == "0" ]]; then
 else
     CACHE_FLAGS="--cache --cache-dir $CACHE_DIR"
 fi
-COMPILE_CMD="pnut-ts -d $CACHE_FLAGS $PIN_DEFINE_FLAG -I $SRC_PATH -I $UTILS_PATH -I $DEMO_PATH -I $REGTEST_PATH $BASENAME.spin2"
+COMPILE_CMD="pnut-ts -d $CACHE_FLAGS $PIN_DEFINE_FLAG $STACK_DEFINE_FLAG -I $SRC_PATH -I $UTILS_PATH -I $DEMO_PATH -I $REGTEST_PATH $BASENAME.spin2"
 echo "  Command: $COMPILE_CMD"
 
 if ! $COMPILE_CMD; then

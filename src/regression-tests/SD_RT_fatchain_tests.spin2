@@ -81,7 +81,7 @@ fcFileB         BYTE    "FCHAINB.BIN", 0                ' Group B: mid-sector ap
 wBuf            BYTE    0[sd.SECTOR_SIZE]
 rBuf            BYTE    0[sd.SECTOR_SIZE]
 
-PUB go() | result, handle, secPerClus, cBytes, freeSec, freeClus, needClus, totalSec, secIdx, clusIdx, bytesRW, bytesTotal, expectVal, fullReadOk, headOk, tailOk, leadingOk, appendOk
+PUB go() | result, handle, secPerClus, cBytes, freeSec, freeClus, needClus, totalSec, secIdx, clusIdx, bytesRW, bytesTotal, expectVal, fullReadOk, headOk, tailOk, leadingOk, appendOk, setupOk
 
     debug(" ")
     debug("==============================================")
@@ -91,8 +91,9 @@ PUB go() | result, handle, secPerClus, cBytes, freeSec, freeClus, needClus, tota
 
     ' Mount the card first
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if result < 0
+    ifnot utils.requireSetup(result == 0, @"SETUP: mount SD card")
         debug("ERROR: Could not mount SD card!")
+        utils.ShowTestEndCounts()
         debug("END_SESSION")
         return
 
@@ -111,7 +112,10 @@ PUB go() | result, handle, secPerClus, cBytes, freeSec, freeClus, needClus, tota
 
     debug("* Geometry: ", udec(secPerClus), " sec/clus, ", udec(cBytes), " bytes/clus, ", udec(freeClus), " free clusters")
 
-    if cBytes == 0 or not utils.assertFreeSpace(freeClus, needClus)
+    ' Scored gate. The bare-message form printed a SETUP NOT MET line and then a
+    ' 0-test summary, which the runner reads as a clean green suite -- the loudest
+    ' possible finding rendered as the quietest possible result.
+    ifnot utils.requireSetup(cBytes <> 0 and utils.assertFreeSpace(freeClus, needClus), @"SETUP: free clusters for FAT-chain fixtures")
         debug("  *** SETUP NOT MET: need ", udec_(needClus), " free clusters, have ", udec_(freeClus), " (cBytes=", udec_(cBytes), ") -- fatchain groups NOT run ***")
     else
         ' ==============================================================
@@ -121,13 +125,20 @@ PUB go() | result, handle, secPerClus, cBytes, freeSec, freeClus, needClus, tota
 
         ' Build a 3-cluster file: each cluster filled with its own value.
         sd.deleteFile(@fcFileA)
+        ' setupOk tracks the FIXTURE build. Unchecked, a short or failed setup write
+        ' produced a file that was simply not the 3-cluster shape the test describes,
+        ' and the verification below then reported it as the FAT-chain bug under
+        ' investigation. Setup failures must be attributed to setup.
+        setupOk := false
         handle := sd.createFileNew(@fcFileA)
         if handle >= 0
+            setupOk := true
             repeat clusIdx from 0 to 2
                 expectVal := clusterValue(clusIdx, A_ORIG_C0, A_ORIG_C1, A_ORIG_C2)
                 repeat secIdx from 0 to secPerClus - 1
                     utils.fillBufferWithValue(@wBuf, sd.SECTOR_SIZE, expectVal)
-                    sd.writeHandle(handle, @wBuf, sd.SECTOR_SIZE)
+                    if sd.writeHandle(handle, @wBuf, sd.SECTOR_SIZE) <> sd.SECTOR_SIZE
+                        setupOk := false
             sd.closeFileHandle(handle)
 
         ' Overwrite ONLY the first two clusters IN PLACE (crosses the c0->c1 boundary).
@@ -139,14 +150,21 @@ PUB go() | result, handle, secPerClus, cBytes, freeSec, freeClus, needClus, tota
                 expectVal := clusterValue(clusIdx, A_NEW_C0, A_NEW_C1, A_NEW_C1)
                 repeat secIdx from 0 to secPerClus - 1
                     utils.fillBufferWithValue(@wBuf, sd.SECTOR_SIZE, expectVal)
-                    sd.writeHandle(handle, @wBuf, sd.SECTOR_SIZE)
+                    if sd.writeHandle(handle, @wBuf, sd.SECTOR_SIZE) <> sd.SECTOR_SIZE
+                        setupOk := false
             sd.closeFileHandle(handle)
+        else
+            setupOk := false
 
         ' Read the whole file back and verify.  The decisive check is that the untouched
         ' 3rd cluster still holds A_ORIG_C2 and the read reaches the full 3*cBytes (no
         ' premature end-of-chain).
         utils.startTest(@"3-cluster overwrite-first-2 preserves tail")
-        utils.setCheckCountPerTest(3)
+        utils.setCheckCountPerTest(4)
+        ' Setup is scored FIRST and separately. Without it a fixture that was never
+        ' built correctly produced tail/head mismatches indistinguishable from the
+        ' FAT-chain defect this test exists to detect.
+        utils.evaluateSubBool(setupOk, @"SETUP: 3-cluster fixture built and overwritten", true)
         totalSec   := 3 * secPerClus
         bytesTotal := 0
         fullReadOk := true
@@ -184,23 +202,27 @@ PUB go() | result, handle, secPerClus, cBytes, freeSec, freeClus, needClus, tota
         utils.startTestGroup(@"Bug B: mid-sector append preserves leading bytes")
 
         utils.startTest(@"append at position==size keeps leading bytes")
-        utils.setCheckCountPerTest(2)
+        utils.setCheckCountPerTest(3)                                           ' setup + leading + appended
         leadingOk := false
         appendOk  := false
 
         sd.deleteFile(@fcFileB)
+        setupOk := false
         handle := sd.createFileNew(@fcFileB)
         if handle >= 0
             utils.fillBufferWithValue(@wBuf, 100, B_LEAD)
-            sd.writeHandle(handle, @wBuf, 100)
+            setupOk := (sd.writeHandle(handle, @wBuf, 100) == 100)
             sd.closeFileHandle(handle)
 
         ' openFileWrite positions at end-of-file == size == 100 (mid-sector); append 50.
         handle := sd.openFileWrite(@fcFileB)
         if handle >= 0
             utils.fillBufferWithValue(@wBuf, 50, B_APPEND)
-            sd.writeHandle(handle, @wBuf, 50)
+            if sd.writeHandle(handle, @wBuf, 50) <> 50
+                setupOk := false
             sd.closeFileHandle(handle)
+        else
+            setupOk := false
 
         handle := sd.openFileRead(@fcFileB)
         if handle >= 0
@@ -209,6 +231,7 @@ PUB go() | result, handle, secPerClus, cBytes, freeSec, freeClus, needClus, tota
             appendOk  := utils.verifyBufferValue(@rBuf + 100, 50, B_APPEND)
             sd.closeFileHandle(handle)
 
+        utils.evaluateSubBool(setupOk, @"SETUP: lead-plus-append fixture written", true)
         utils.evaluateSubBool(leadingOk, @"leading 100 bytes intact (not zero-filled)", true)
         utils.evaluateSubBool(appendOk, @"appended 50 bytes correct", true)
         utils.showSubTestResults()

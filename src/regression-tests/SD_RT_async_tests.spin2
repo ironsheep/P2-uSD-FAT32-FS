@@ -33,6 +33,12 @@ CON
      STACK_SIZE      = 128           ' Stack size for helper cog (longs)
      BUF_SIZE        = 64            ' Test buffer size (bytes)
 
+     ' Hang-proofing budget: bounded wait gives up and lets the caller's named
+     ' checks record the failure (see waitHelperDone). Shorter than the 30s
+     ' worker budget elsewhere -- the helper does ONE blocking read, not a
+     ' multi-iteration workload.
+     HELPER_TIMEOUT_POLLS = 500      ' x 10ms polls = 5s helper-completion budget
+
      ' Worker status codes
      STATUS_IDLE      = 0
      STATUS_RUNNING   = 1
@@ -82,13 +88,21 @@ PUB go() | result
     debug(" ")
 
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if result < 0
+    ifnot utils.requireSetup(result == 0, @"SETUP: mount SD card")
         debug("ERROR: Could not mount SD card - aborting async tests!")
+        utils.ShowTestEndCounts()
         debug("END_SESSION")
         return
 
-    ' Create test file with known content
-    createTestFile()
+    ' Create test file with known content. Gated: every test below depends on
+    ' this seed, so a failure is one named, scored setup failure -- not seven
+    ' obscure downstream ones.
+    ifnot utils.requireSetup(createTestFile(), @"SETUP: create async test file")
+        sd.deleteFile(@asyncTestFile)
+        sd.unmount()
+        utils.ShowTestEndCounts()
+        debug("END_SESSION")
+        return
 
     ' ----------------------------------
     ' TEST GROUP: Async Read
@@ -249,6 +263,7 @@ PRI runTest3_IsCompleteTransition() | handle, status, wasFalse, contentLen
     utils.setCheckCountPerTest(3)
 
     contentLen := strsize(@asyncContent)
+    wasFalse := false                                   ' read after the ifs -- must hold on every path
 
     handle := sd.openFileRead(@asyncTestFile)
     utils.evaluateSubBool(handle >= 0, @"open file", true)
@@ -256,21 +271,26 @@ PRI runTest3_IsCompleteTransition() | handle, status, wasFalse, contentLen
         status := sd.startReadHandle(handle, @asyncBuf, contentLen)
         utils.evaluateSubValue(status, @"startReadHandle returns PENDING", sd.PENDING)
 
-        ' Poll until complete - record if we ever see FALSE
-        wasFalse := false
-        if not sd.isComplete()
-            wasFalse := true
+        ' The poll below is entered ONLY with an operation in flight. By driver
+        ' semantics isComplete() is FALSE forever when nothing is pending
+        ' (driver do_is_complete), so polling after a failed start would hang
+        ' this suite, not fail it.
+        if status == sd.PENDING
+            ' Record if we ever see FALSE before completion
+            wasFalse := not sd.isComplete()
 
-        ' Wait for completion
-        repeat until sd.isComplete()
+            ' Wait for completion -- an in-flight op always completes
+            repeat until sd.isComplete()
 
-        ' For fast SD cards, isComplete may already be TRUE on first check.
-        ' Either we saw FALSE (transition observed) or TRUE immediately (fast card).
-        ' Both are valid - the key invariant is that getResult succeeds.
-        sd.getResult()
+            ' For fast SD cards, isComplete may already be TRUE on first check.
+            ' Either we saw FALSE (transition observed) or TRUE immediately (fast card).
+            ' Both are valid - the key invariant is that getResult succeeds.
+            sd.getResult()
 
-        ' isComplete followed by getResult must succeed (no hang)
-        utils.evaluateSubBool(true, @"isComplete+getResult completed", true)
+            ' isComplete followed by getResult must succeed (no hang)
+            utils.evaluateSubBool(true, @"isComplete+getResult completed", true)
+        else
+            utils.evaluateSubBool(false, @"isComplete+getResult completed", true)
         sd.closeFileHandle(handle)
     else
         utils.evaluateSubBool(false, @"startReadHandle returns PENDING", true)
@@ -340,24 +360,25 @@ PRI runTest5_AsyncInterleave() | hMain, hHelper, status, bytesMain, contentLen
         helper_result := 0
         sync_barrier := 0
         helper_cogid := cogspin(NEWCOG, helper_blocking_read(hHelper), @helper_stack)
+        if helper_cogid == -1
+            ' No cog free: a named failure, not a hang -- the wait below would
+            ' spin forever on a status no cog will ever set.
+            utils.evaluateSubBool(false, @"both cogs read OK", true)
+        else
+            ' Start async read on main cog (acquires lock)
+            status := sd.startReadHandle(hMain, @asyncBuf, contentLen)
 
-        ' Start async read on main cog (acquires lock)
-        status := sd.startReadHandle(hMain, @asyncBuf, contentLen)
+            ' Release helper - it will try blocking read (will spin on locktry)
+            sync_barrier := 1
 
-        ' Release helper - it will try blocking read (will spin on locktry)
-        sync_barrier := 1
+            ' Complete our async op (releases lock - helper can proceed)
+            bytesMain := sd.getResult()
 
-        ' Complete our async op (releases lock - helper can proceed)
-        bytesMain := sd.getResult()
+            waitHelperDone()
 
-        ' Wait for helper to finish
-        repeat until helper_status <> STATUS_RUNNING
-            waitms(10)
+            ' Both operations should succeed
+            utils.evaluateSubBool(bytesMain == contentLen and helper_status == STATUS_PASS, @"both cogs read OK", true)
 
-        ' Both operations should succeed
-        utils.evaluateSubBool(bytesMain == contentLen and helper_status == STATUS_PASS, @"both cogs read OK", true)
-
-        if helper_cogid <> -1
             cogstop(helper_cogid)
             helper_cogid := -1
 
@@ -431,27 +452,33 @@ PRI runTest7_ForeignCogRejected() | handle, status, bytesMain, contentLen
         foreign_result := 0
         foreign_cancel := 0
         helper_cogid := cogspin(NEWCOG, helper_foreign_collect(), @helper_stack)
+        if helper_cogid == -1
+            ' No cog free: named failures, not a hang -- the wait below would
+            ' spin forever on a status no cog will ever set.
+            utils.evaluateSubBool(false, @"owning cog starts the operation", true)
+            utils.evaluateSubBool(false, @"foreign isComplete reports FALSE", true)
+            utils.evaluateSubBool(false, @"foreign getResult refused", true)
+            utils.evaluateSubBool(false, @"foreign cancelAsync refused", true)
+            utils.evaluateSubBool(false, @"owning cog still collects its own result", true)
+        else
+            status := sd.startReadHandle(handle, @asyncBuf, contentLen)
+            utils.evaluateSubValue(status, @"owning cog starts the operation", sd.PENDING)
 
-        status := sd.startReadHandle(handle, @asyncBuf, contentLen)
-        utils.evaluateSubValue(status, @"owning cog starts the operation", sd.PENDING)
+            ' Turn the helper loose while the operation is in flight and OURS.
+            sync_barrier := 1
+            waitHelperDone()
 
-        ' Turn the helper loose while the operation is in flight and OURS.
-        sync_barrier := 1
-        repeat until helper_status <> STATUS_RUNNING
-            waitms(10)
+            ' A cog with no operation of its own has none that is complete.
+            utils.evaluateSubValue(foreign_complete, @"foreign isComplete reports FALSE", 0)
+            utils.evaluateSubValue(foreign_result, @"foreign getResult refused", sd.E_NO_ASYNC_OP)
+            utils.evaluateSubValue(foreign_cancel, @"foreign cancelAsync refused", sd.E_NO_ASYNC_OP)
 
-        ' A cog with no operation of its own has none that is complete.
-        utils.evaluateSubValue(foreign_complete, @"foreign isComplete reports FALSE", 0)
-        utils.evaluateSubValue(foreign_result, @"foreign getResult refused", sd.E_NO_ASYNC_OP)
-        utils.evaluateSubValue(foreign_cancel, @"foreign cancelAsync refused", sd.E_NO_ASYNC_OP)
+            ' The decisive check: the operation and the lock are still ours, so our own
+            ' collection returns the real data. Had the helper's LOCKREL() gone through,
+            ' the lock would be free and this result would be gone.
+            bytesMain := sd.getResult()
+            utils.evaluateSubValue(bytesMain, @"owning cog still collects its own result", contentLen)
 
-        ' The decisive check: the operation and the lock are still ours, so our own
-        ' collection returns the real data. Had the helper's LOCKREL() gone through,
-        ' the lock would be free and this result would be gone.
-        bytesMain := sd.getResult()
-        utils.evaluateSubValue(bytesMain, @"owning cog still collects its own result", contentLen)
-
-        if helper_cogid <> -1
             cogstop(helper_cogid)
             helper_cogid := -1
 
@@ -464,6 +491,18 @@ PRI runTest7_ForeignCogRejected() | handle, status, bytesMain, contentLen
         utils.evaluateSubBool(false, @"owning cog still collects its own result", true)
     utils.showSubTestResults()
 
+
+PRI waitHelperDone()
+' Bounded wait for the helper cog to report. A helper that never reports
+' (launch raced, driver hang) makes this return after ~5s instead of hanging
+' the suite; the caller's checks against helper_status / the foreign_* slots
+' then fail by name, and the caller's unconditional cogstop reaps the cog.
+
+    repeat HELPER_TIMEOUT_POLLS
+        if helper_status <> STATUS_RUNNING
+            return
+        waitms(10)
+    debug("  *** waitHelperDone TIMEOUT (5s): helper cog never reported ***")
 
 ' ═══════════════════════════════════════════════════════════════════════════
 ' HELPER COG METHODS
@@ -505,17 +544,24 @@ PRI helper_blocking_read(handle) | bytesRead, contentLen
 ' HELPER METHODS
 ' ═══════════════════════════════════════════════════════════════════════════
 
-PRI createTestFile() | handle
+PRI createTestFile() : bOk | handle, expected
 ' Create (or recreate) the test file with known content for async tests.
 '
+' @returns bOk - TRUE only when the file was created, fully written, and closed
+'
+' Every test in this suite reads or rewrites this file, so the caller gates on
+' the result -- an unreported seed failure here would fan into all 7 tests.
 
+    bOk := false
     sd.deleteFile(@asyncTestFile)
     handle := sd.createFileNew(@asyncTestFile)
     if handle >= 0
-        sd.writeHandle(handle, @asyncContent, strsize(@asyncContent))
-        sd.closeFileHandle(handle)
+        expected := strsize(@asyncContent)
+        bOk := (sd.writeHandle(handle, @asyncContent, expected) == expected)
+        if sd.closeFileHandle(handle) < 0
+            bOk := false
         debug("  Created test file: ", zstr_(@asyncTestFile))
-    else
+    ifnot bOk
         debug("  FAILED to create test file!")
 
 con { license }

@@ -83,9 +83,9 @@ WATCHED='writeSector|readSector|allocateCluster|searchDirectory'
 # ---------------------------------------------------------------------------
 # ALLOWLIST — legitimate predicates, exempt from rule 4.
 #
-# These nine answer a yes/no question about state and cannot meaningfully fail, so a
+# These eleven answer a yes/no question about state and cannot meaningfully fail, so a
 # boolean IS the right return type for them (audit §F2, plan §14.1). Without this
-# list the boolean-XOR-status rule flags all nine on every run, and sooner or later
+# list the boolean-XOR-status rule flags them all on every run, and sooner or later
 # somebody "fixes" a method that was never broken. The reason is recorded per entry
 # so it survives without the plan document:
 #
@@ -93,6 +93,8 @@ WATCHED='writeSector|readSector|allocateCluster|searchDirectory'
 #   validateHandle       — range + in-use check on an index; no I/O
 #   isFileOpenForWrite   — scans the in-memory handle table; no I/O
 #   isFileOpenAny        — same, for the compaction open-file check
+#   isFileOpen           — same, for do_delete's open-handle refusal (v1.7.0)
+#   handleReferencesEntry — the shared core the three isFileOpen* wrappers call
 #   isComplete           — reads two in-memory async fields; no I/O
 #   isHighSpeedActive    — compares the cached spi_freq against a constant
 #   getLastCMD23Used     — returns a recorded flag from the last transfer
@@ -101,7 +103,7 @@ WATCHED='writeSector|readSector|allocateCluster|searchDirectory'
 #                          Audit §A7 is about escalating what the CALLER does with
 #                          the result, NOT about changing this return type.
 # ---------------------------------------------------------------------------
-PREDICATE_ALLOWLIST='isLeapYear validateHandle isFileOpenForWrite isFileOpenAny isComplete isHighSpeedActive getLastCMD23Used getCmd23Supported checkStackGuard'
+PREDICATE_ALLOWLIST='isLeapYear validateHandle isFileOpenForWrite isFileOpenAny isFileOpen handleReferencesEntry isComplete isHighSpeedActive getLastCMD23Used getCmd23Supported checkStackGuard'
 
 mapfile -t SRCS < <(git -C "$ROOT" ls-files --full-name 'src/*.spin2' 'src/**/*.spin2' 2>/dev/null | sort)
 

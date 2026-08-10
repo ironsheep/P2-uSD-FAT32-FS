@@ -18,6 +18,8 @@
 ''   - setTestFailSector(sector, mode) - fail one named LBA, read and/or write,
 ''     one-shot or sticky
 ''   - setTestFailWriteAfter(n) - fail the nth subsequent writeSector() call
+''   - setTestFailReadAfter(n) - fail the nth subsequent card read (cache misses)
+''   - getTestReadCallCount() - card reads counted since the read hook last reset
 ''   - getTestWriteCallCount() - how many writes an operation actually made
 ''   - clearTestErrors() - disarm everything, leaving no residue
 ''
@@ -45,6 +47,16 @@
 '' SAFETY: every raw write in this suite writes a sector's own contents back to it,
 '' read moments earlier. If an injection fails to fire - the very defect these tests
 '' would be catching - the card is rewritten with the bytes it already held.
+''
+'' KNOWN RESIDUE (by design): Test 13 fails a FAT read mid-delete, and the correct
+'' on-disk outcome it asserts is the recoverable one - directory entry already marked
+'' deleted, cluster chain still allocated. The recovery pass cannot reattach that
+'' chain (the entry is gone), so each run strands the test file's ~2 clusters as a
+'' lost chain. This is intentional: repairing it here would mean a FAT edit under the
+'' very cache the injection just poisoned. SEQUENCING: the regression runner's
+'' sweep-start fsck reclaims lost chains, so the leak never accumulates across sweeps.
+'' A standalone run of this suite leaves the ~2 clusters stranded until the next
+'' fsck or reformat - harmless residue, invisible to every other suite.
 ''
 '' =================================================================================================
 
@@ -99,6 +111,10 @@ DAT
 
 ' Test filenames
 injFile         BYTE    "INJECT1.BIN", 0
+injMvSrc        BYTE    "INJMVSRC.TXT", 0        ' Test 34: source file for the aborted-move ghost test
+injMvDir        BYTE    "INJMVD", 0              ' Test 34: destination directory
+injMvChild      BYTE    "INJMVD/INJMVSRC.TXT", 0 ' Test 34: where the ghost entry would appear
+mvDestChild     BYTE    "TIER1MV/MOVESRC.BIN", 0 ' Test 20: where a regressed moveFile leaves the copy
 crossA          BYTE    "CROSSA.BIN", 0
 crossB          BYTE    "CROSSB.BIN", 0
 renFile         BYTE    "RENSRC.BIN", 0
@@ -138,8 +154,9 @@ PUB go() | result, handle, bytesRead, bytesWritten, errCount, testSector, mismat
 
     ' Mount the card first
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if result < 0
+    ifnot utils.requireSetup(result == 0, @"SETUP: mount SD card")
         debug("ERROR: Could not mount SD card!")
+        utils.ShowTestEndCounts()
         debug("END_SESSION")
         return
 
@@ -149,8 +166,10 @@ PUB go() | result, handle, bytesRead, bytesWritten, errCount, testSector, mismat
     debug("   Test sector (mid-card): ", udec(testSector))
     debug("   Dummy-CRC card: ", udec((sd.cardWarnings() & sd.CW_NO_DATA_CRC) <> 0))
 
-    ' Start from a known-disarmed state
+    ' Start from a known-disarmed state, with no fixture residue from an
+    ' aborted prior run (an interrupted suite never reaches its teardown).
     sd.clearTestErrors()
+    cleanupTestItems()
 
     ' ======================================================================
     ' TEST GROUP: Disarmed Behavior
@@ -288,8 +307,10 @@ PUB go() | result, handle, bytesRead, bytesWritten, errCount, testSector, mismat
     utils.startTest(@"setTestFailWriteAfter fails the nth write, not the first")
     utils.setCheckCountPerTest(4)
     sd.clearTestErrors()
-    ' Flush first: the worker auto-flushes dirty handles and FSInfo after an idle
-    ' period, and such a write would be counted against the arming below.
+    ' Flush first: sync() synchronously writes out every dirty handle and FSInfo
+    ' (the same pass unmount runs), so nothing is left for the idle auto-flush to
+    ' write mid-test and be counted against the arming below. Every bare sd.sync()
+    ' before an arming in this suite is this same barrier.
     sd.sync()
     sd.setTestFailWriteAfter(2)
     result := sd.writeSectorRaw(testSector, @sectorBuffer)
@@ -472,6 +493,8 @@ PUB go() | result, handle, bytesRead, bytesWritten, errCount, testSector, mismat
     sd.clearTestErrors()
     sd.deleteFile(@crossA)
     sd.deleteFile(@crossB)
+    sd.deleteFile(@injFile)                             ' Test 14 leaves INJECT1.BIN; without this the armed
+                                                        ' createFileNew bails E_FILE_EXISTS BEFORE the FAT write
     sd.sync()
     sd.setTestFailSector(sd.debugGetFatSec(), sd.TF_WRITE)
     result := sd.createFileNew(@injFile)
@@ -574,6 +597,9 @@ PUB go() | result, handle, bytesRead, bytesWritten, errCount, testSector, mismat
     ' which is the second-to-last write of the operation.
     utils.startTest(@"Failed ./.. write leaves no parent entry for the directory")
     utils.setCheckCountPerTest(3)
+    ' TIER1GD/TIER1BD are fresh names here: cleanupTestItems() at suite start
+    ' removed any prior run's residue (a leftover TIER1GD would make this
+    ' newDirectory return E_FILE_EXISTS with ZERO writes -- 3 sub-fails).
     sd.sync()                                           ' Flush first so no pending write is counted
     sd.clearTestErrors()                                ' Zeroes the write counter
     sd.newDirectory(@dirGood)
@@ -682,9 +708,12 @@ PUB go() | result, handle, bytesRead, bytesWritten, errCount, testSector, mismat
         sd.closeFileHandle(handle)
     sd.sync()
 
-    ' Remount so the directory read is a cache MISS, then make it fail for good.
+    ' Remount, then DROP the directory cache so the armed read is a cache MISS.
+    ' The remount alone is not enough: mount's volume-label walk primes dir_buf
+    ' with root_sec, so without the invalidation the injection never fires.
     sd.unmount()
     sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    sd.syncDirCache()
     sd.setTestFailSector(sd.debugGetRootSec(), sd.TF_READ | sd.TF_STICKY)
     result := sd.createFileNew(@injFile)
     errCount := sd.getTestErrorCount()
@@ -1019,27 +1048,34 @@ PUB go() | result, handle, bytesRead, bytesWritten, errCount, testSector, mismat
     ' discarded the final unmount status and then halted the worker, making the failure
     ' permanently unobservable.
 
-    ' Test 32: a failed sync must SAY so, and must keep the pending entry so a later
-    ' sync can still land it. Clearing the pending flag on failure would discard the
-    ' only copy of a directory entry the card never received.
-    utils.startTest(@"A failed sync reports the error instead of a hardcoded SUCCESS")
+    ' Test 32: a failed handle sync must SAY so, and must keep the dirty data so a
+    ' later sync can still land it. (RETARGETED 2026-08-09, v1.7.0 task #50: the old
+    ' form armed the injection against sd.sync() after createFileNew, on the premise
+    ' that the create leaves a directory entry pending for sync -- it does not:
+    ' do_create writes the entry inline and never sets F_NEWDIR, so the armed write
+    ' never fired, the "injection fired" check failed on every hardware run ever,
+    ' and the retry check passed vacuously against a no-op sync. The reachable
+    ' equivalent contract is syncHandle over a dirty handle buffer: do_sync_h
+    ' performs a real data write and retains the data on failure.)
+    utils.startTest(@"A failed syncHandle reports the error and retains the data")
     utils.setCheckCountPerTest(4)
     sd.clearTestErrors()
     sd.clearFlushError()
     sd.changeDirectory(@rootPath)
     sd.deleteFile(@injFile)
-    handle := sd.createFileNew(@injFile)                ' Leaves a directory entry pending
-    utils.evaluateSubBool(handle >= 0, @"file created, entry pending", true)
-    sd.setTestFailWriteAfter(1)
-    result := sd.sync()
+    handle := sd.createFileNew(@injFile)
+    utils.evaluateSubBool(handle >= 0, @"file created", true)
+    sd.writeHandle(handle, @writeBuffer, BUFFER_SIZE/2) ' Dirty the handle buffer -- THIS is what sync must land
+    sd.setTestFailWriteAfter(1)                         ' The flush's data write is the next writeSector
+    result := sd.syncHandle(handle)
     errCount := sd.getTestErrorCount()
     sd.clearTestErrors()
 
     utils.evaluateSubBool(errCount > 0, @"sync injection actually fired", true)
-    utils.evaluateSubBool(result < 0, @"sync reports the failure", true)
-    ' The entry is still pending, so an unimpeded retry has something to write.
-    result := sd.sync()
-    utils.evaluateSubValue(result, @"retry sync succeeds -- the entry was retained", 0)
+    utils.evaluateSubBool(result < 0, @"syncHandle reports the failure", true)
+    ' HF_DIRTY survives the failed flush, so an unimpeded retry lands the data.
+    result := sd.syncHandle(handle)
+    utils.evaluateSubValue(result, @"retry syncHandle succeeds -- the data was retained", 0)
     utils.showSubTestResults()
     sd.closeFileHandle(handle)
 
@@ -1067,7 +1103,56 @@ PUB go() | result, handle, bytesRead, bytesWritten, errCount, testSector, mismat
     utils.evaluateSubBool(freeAfter == 0 AND result < 0, @"failed scan returns 0 AND reports why", true)
     utils.showSubTestResults()
 
-    ' Test 34: stop() is the last chance buffered data has to reach the card, and it
+    ' Test 34 (v1.7.0 task #50): an aborted move must STAY aborted. moveFile stages the
+    ' destination entry (F_NEWDIR) before deleting the source; if the re-read of the
+    ' source entry's sector then fails, the unfixed driver returned with the staged
+    ' entry still pending, and the NEXT operation's do_close() wrote it -- one file
+    ' live in two directories. The fix abandons the move exactly as the source-delete
+    ' WRITE failure path always did. CAN-FAIL: against the unfixed driver the ghost
+    ' check below finds INJMVD/INJMVSRC.TXT.
+    '
+    ' Arming: setTestFailReadAfter(3) counts CARD reads (cache misses) from here --
+    ' (1) do_open's root-sector search read (the create/close invalidated the dir
+    ' cache), (2) do_newfile's read of the empty destination directory (do_chdir's
+    ' root search is a cache hit), (3) moveFile's re-read of the source sector: the
+    ' read under test. Layout assumption (holds on the sweep's reformatted card):
+    ' root entries fit in the first root sector. If residue ever pushes the source
+    ' entry to a later sector the injection fires during the search instead -- the
+    ' move still fails, F_NEWDIR is never set, and every assertion still holds; only
+    ' the exact path exercised degrades, which the hardware shakedown would show as
+    ' this comment's read ordering no longer matching the debug log.
+    utils.startTest(@"An aborted move stays aborted -- no ghost destination entry")
+    utils.setCheckCountPerTest(5)
+    sd.clearTestErrors()
+    sd.changeDirectory(@rootPath)
+    sd.deleteFile(@injMvChild)                          ' pre-clean, child first (populated dirs refuse delete)
+    sd.deleteFile(@injMvDir)
+    sd.deleteFile(@injMvSrc)
+    result := sd.newDirectory(@injMvDir)
+    utils.evaluateSubValue(result, @"destination directory created", 0)
+    handle := sd.createFileNew(@injMvSrc)
+    utils.evaluateSubBool(handle >= 0, @"source file created", true)
+    sd.writeHandle(handle, @"move me", 7)
+    sd.closeFileHandle(handle)
+
+    sd.setTestFailReadAfter(3)                          ' The source-sector re-read inside moveFile (see header)
+    result := sd.moveFile(@injMvSrc, @injMvDir)
+    errCount := sd.getTestErrorCount()
+    sd.clearTestErrors()                                ' also disarms/zeroes the read hook
+    utils.evaluateSubBool(errCount > 0, @"read injection actually fired", true)
+    utils.evaluateSubBool(result < 0, @"moveFile reports the failure", true)
+
+    ' Provoke the ghost: do_delete runs do_close() first, which is exactly the call
+    ' that wrote a leaked pending entry on the unfixed driver.
+    sd.deleteFile(@"NOGHOST.XYZ")                       ' harmless -- the name does not exist
+    handle := sd.openFileRead(@injMvChild)
+    utils.evaluateSubBool(handle < 0, @"no ghost destination entry", true)
+    if handle >= 0
+        sd.closeFileHandle(handle)
+    utils.showSubTestResults()
+    ' Teardown rides the suite-end cleanup block, per suite convention.
+
+    ' Test 35: stop() is the last chance buffered data has to reach the card, and it
     ' halts the worker immediately afterward. Its return value is the only place the
     ' outcome can still be seen.
     utils.startTest(@"stop() returns the outcome of its final unmount")
@@ -1088,13 +1173,7 @@ PUB go() | result, handle, bytesRead, bytesWritten, errCount, testSector, mismat
     ' ======================================================================
     sd.clearFlushError()
     sd.clearTestErrors()
-    sd.changeDirectory(@rootPath)
-    sd.deleteFile(@injFile)
-    sd.deleteFile(@crossA)
-    sd.deleteFile(@crossB)
-    sd.deleteFile(@renFile)
-    sd.deleteFile(@renNewName)
-    sd.deleteFile(@mvSrcFile)
+    cleanupTestItems()
 
     sd.unmount()
 
@@ -1102,6 +1181,31 @@ PUB go() | result, handle, bytesRead, bytesWritten, errCount, testSector, mismat
 
     debug(" ")
     debug("END_SESSION")
+
+PRI cleanupTestItems()
+' Delete every fixture this suite creates -- or could leak on a regressed driver.
+' Called twice per sibling-suite convention: right after mount, so residue from
+' an aborted prior run cannot poison this one (a leftover TIER1GD, for example,
+' turns test 18's healthy newDirectory into E_FILE_EXISTS with zero writes),
+' and again as suite teardown. Every delete is defensive: a missing name costs
+' one failed directory search. Children go before their directories -- populated
+' directories refuse delete.
+
+  sd.changeDirectory(@rootPath)
+  sd.deleteFile(@injFile)
+  sd.deleteFile(@crossA)
+  sd.deleteFile(@crossB)
+  sd.deleteFile(@renFile)
+  sd.deleteFile(@renNewName)
+  sd.deleteFile(@mvSrcFile)
+  sd.deleteFile(@injMvSrc)
+  sd.deleteFile(@injMvChild)                            ' Test 34's ghost entry, child first
+  sd.deleteFile(@injMvDir)
+  sd.deleteFile(@mvDestChild)                           ' Test 20: a regressed moveFile leaves the copy inside
+  sd.deleteFile(@dirMoveDest)
+  sd.deleteFile(@dirGood)
+  sd.deleteFile(@dirBad)                                ' Its creation is DESIGNED to fail (test 18)
+  sd.deleteFile(@dirFull)                               ' Its creation is DESIGNED to fail (test 16)
 
 PRI discoverDataSector(fileOffset) : sector | handle
 ' Find the LBA of the data sector holding a given offset of the test file.

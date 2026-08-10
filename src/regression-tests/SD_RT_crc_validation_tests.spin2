@@ -70,7 +70,7 @@ writeBuffer     BYTE    0[BUFFER_SIZE]
 readBuffer      BYTE    0[BUFFER_SIZE]
 readBuffer_guard BYTE   0[16]
 
-PUB go() | result, handle, bytesRead, bytesWritten, retryBefore, retryAfter, mismatchBefore, mismatchAfter, errCount, dummyCRC
+PUB go() | result, handle, bytesRead, bytesWritten, seedOk, retryBefore, retryAfter, mismatchBefore, mismatchAfter, errCount, dummyCRC
 '' Main entry point for CRC validation regression tests
 
     debug(" ")
@@ -80,8 +80,9 @@ PUB go() | result, handle, bytesRead, bytesWritten, retryBefore, retryAfter, mis
 
     ' Mount the card first
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if result < 0
+    ifnot utils.requireSetup(result == 0, @"SETUP: mount SD card")
         debug("ERROR: Could not mount SD card!")
+        utils.ShowTestEndCounts()
         debug("END_SESSION")
         return
 
@@ -101,12 +102,21 @@ PUB go() | result, handle, bytesRead, bytesWritten, retryBefore, retryAfter, mis
     sd.deleteFile(@crcFile1)
     sd.deleteFile(@crcFile2)
 
-    ' Create test file with known pattern
+    ' Create test file with known pattern. GATED: every test below reads this file,
+    ' so an unchecked seed failure meant every one of them measured nothing while
+    ' reporting its own individual failure.
     utils.fillBufferWithPattern(@writeBuffer, BUFFER_SIZE, $42)
     handle := sd.createFileNew(@crcFile1)
+    seedOk := false
     if handle >= 0
-        sd.writeHandle(handle, @writeBuffer, BUFFER_SIZE)
+        seedOk := (sd.writeHandle(handle, @writeBuffer, BUFFER_SIZE) == BUFFER_SIZE)
         sd.closeFileHandle(handle)
+    ifnot utils.requireSetup(seedOk, @"SETUP: create CRC validation test file")
+        sd.deleteFile(@crcFile1)
+        sd.unmount()
+        utils.ShowTestEndCounts()
+        debug("END_SESSION")
+        return
 
     ' Ensure test hooks are clean
     sd.clearTestErrors()
@@ -121,6 +131,7 @@ PUB go() | result, handle, bytesRead, bytesWritten, retryBefore, retryAfter, mis
     utils.startTest(@"Single forced CRC error triggers retry, read succeeds")
     utils.setCheckCountPerTest(3)
     retryBefore := sd.getCRCRetryCount()
+    bytesRead := 0                                                              ' Never evaluate an uninitialized local on the skip path
     handle := sd.openFileRead(@crcFile1)
     if handle >= 0
         sd.setTestForceReadError(1)
@@ -149,6 +160,7 @@ PUB go() | result, handle, bytesRead, bytesWritten, retryBefore, retryAfter, mis
     utils.setCheckCountPerTest(2)
     sd.clearTestErrors()
     mismatchBefore := sd.getCRCMismatchCount()
+    bytesRead := 0                                                              ' Zeroed: the checks below run on the skip path too
     handle := sd.openFileRead(@crcFile1)
     if handle >= 0
         sd.setTestForceReadError(MAX_READ_CRC_RETRIES)
@@ -172,6 +184,7 @@ PUB go() | result, handle, bytesRead, bytesWritten, retryBefore, retryAfter, mis
     ' Test 3: Normal read after forced error succeeds
     utils.startTest(@"Normal read after forced error succeeds")
     sd.clearTestErrors()
+    bytesRead := 0                                                              ' Zeroed: the checks below run on the skip path too
     handle := sd.openFileRead(@crcFile1)
     if handle >= 0
         bytefill(@readBuffer, 0, BUFFER_SIZE)
@@ -192,6 +205,7 @@ PUB go() | result, handle, bytesRead, bytesWritten, retryBefore, retryAfter, mis
     ' NOTE: Hook must be armed AFTER createFileNew to avoid corrupting directory write
     utils.startTest(@"Forced write CRC error causes card rejection")
     sd.clearTestErrors()
+    bytesWritten := 0                                                           ' Zeroed: the checks below run on the skip path too
     handle := sd.createFileNew(@crcFile2)
     if handle >= 0
         utils.fillBufferWithPattern(@writeBuffer, BUFFER_SIZE, $55)
@@ -217,6 +231,8 @@ PUB go() | result, handle, bytesRead, bytesWritten, retryBefore, retryAfter, mis
     utils.startTest(@"Normal write after forced error succeeds")
     sd.clearTestErrors()
     sd.deleteFile(@crcFile2)
+    bytesRead := 0                                                              ' Zeroed: the checks below run on the skip path too
+    bytesWritten := 0                                                           ' Zeroed: the checks below run on the skip path too
     handle := sd.createFileNew(@crcFile2)
     if handle >= 0
         utils.fillBufferWithPattern(@writeBuffer, BUFFER_SIZE, $77)
@@ -224,6 +240,7 @@ PUB go() | result, handle, bytesRead, bytesWritten, retryBefore, retryAfter, mis
         sd.closeFileHandle(handle)
     debug("  bytesWritten=", sdec_(bytesWritten))
     ' Verify data was written correctly by reading back
+    bytesRead := 0                                                              ' Zeroed: the checks below run on the skip path too
     handle := sd.openFileRead(@crcFile2)
     if handle >= 0
         bytefill(@readBuffer, 0, BUFFER_SIZE)
@@ -250,6 +267,7 @@ PUB go() | result, handle, bytesRead, bytesWritten, retryBefore, retryAfter, mis
     errCount := sd.getTestErrorCount()
     utils.evaluateSubValue(errCount, @"error count == 0", 0)
     ' Verify read works normally
+    bytesRead := 0                                                              ' Zeroed: the checks below run on the skip path too
     handle := sd.openFileRead(@crcFile1)
     if handle >= 0
         bytefill(@readBuffer, 0, BUFFER_SIZE)

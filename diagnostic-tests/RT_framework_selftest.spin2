@@ -1,0 +1,68 @@
+{{ =================================================================================================
+   File....... RT_framework_selftest.spin2
+   Purpose.... Prove the isp_rt_utilities false-green hardening CAN fail (v1.7.0 §2).
+               Runs the framework alone (no SD card needed) and deliberately trips each
+               new failure path:
+                 - Test B declares 4 sub-checks but executes 2 -> SUB-CHECK SHORTFALL fail
+                 - Test C pokes a guard byte -> checkGuard scores a failure
+                 - requireSetup(FALSE) -> exactly one named failing test, no vanish
+                 - Test E confirms startTest reset subTestPer after B's declaration of 4
+                 - Test F scores perRunNonce stability across calls
+   EXPECTED... "* 6 Tests - Pass: 3, Fail: 3" and NO "BAD TEST COUNTS" line.
+               Any other totals mean the framework hardening has regressed.
+   Author..... Stephen M Moraco
+   Started.... 09 AUG 2026
+================================================================================================= }}
+
+CON
+    _CLKFREQ        = 350_000_000
+    DEBUG_BAUD      = 2_000_000
+
+OBJ
+    utils : "isp_rt_utilities"
+
+DAT
+    guardZone       BYTE    0[utils.GUARD_SIZE]
+
+PUB go() | nonce1, nonce2
+
+    utils.startTestGroup(@"Framework hardening selftest (3 pass / 3 fail EXPECTED)")
+
+    ' Test A (control): declared 2, executed 2 -> pass
+    utils.startTest(@"A: declared 2, executed 2 (expect pass)")
+    utils.setCheckCountPerTest(2)
+    utils.evaluateSubValue(1, @"control check 1", 1)
+    utils.evaluateSubValue(2, @"control check 2", 2)
+
+    ' Test B (shortfall): declared 4, executed 2 -> MUST fail with SUB-CHECK SHORTFALL
+    utils.startTest(@"B: declared 4, executed 2 (expect FAIL)")
+    utils.setCheckCountPerTest(4)
+    utils.evaluateSubValue(1, @"shortfall check 1", 1)
+    utils.evaluateSubValue(2, @"shortfall check 2", 2)
+
+    ' Test C (guard poke): a guard violation MUST score a failure
+    ' (startTest here also resets B's declared 4 back to 1)
+    utils.startTest(@"C: deliberate guard poke (expect GUARD FAIL)")
+    utils.initGuard(@guardZone)
+    guardZone[3] := $5A
+    utils.checkGuard(@guardZone, @"deliberate poke")
+
+    ' requireSetup gates: TRUE is silent, FALSE records exactly one named failing test
+    if utils.requireSetup(true, @"passing setup (no output expected)")
+        debug("  (passing setup correctly returned TRUE, no test recorded)")
+    if not utils.requireSetup(false, @"deliberate failing setup")
+        debug("  (dependent tests correctly skipped)")
+
+    ' Test E (post-shortfall reset): default divisor 1 again -> 2 records, pass
+    utils.startTest(@"E: subTestPer auto-reset after B (expect pass)")
+    utils.evaluateSubValue(1, @"reset check 1", 1)
+    utils.evaluateSubValue(2, @"reset check 2", 2)
+
+    ' Test F (nonce): stable within a run -> pass
+    utils.startTest(@"F: perRunNonce stable across calls (expect pass)")
+    nonce1 := utils.perRunNonce()
+    nonce2 := utils.perRunNonce()
+    utils.evaluateSingleValue(nonce2, @"nonce matches first capture", nonce1)
+
+    utils.ShowTestEndCounts()
+    debug("END_SESSION")

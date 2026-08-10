@@ -45,6 +45,10 @@ CON
      NUM_WORKER_COGS = 1
      STACK_SIZE      = 128
 
+     ' Hang-proofing budget: bounded wait gives up, records, and reaps instead
+     ' of hanging the harness (see waitForWorkers)
+     WORKER_TIMEOUT_POLLS = 3000     ' x 10ms polls = 30s generous worker-completion budget
+
      ' Worker status codes
      STATUS_IDLE      = 0
      STATUS_RUNNING   = 1
@@ -113,8 +117,9 @@ PUB go() | result, secPerClus, cBytes, freeSec, freeClus, needClus
 
     ' Mount the filesystem
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if result < 0
+    ifnot utils.requireSetup(result == 0, @"SETUP: mount SD card")
         debug("ERROR: Could not mount SD card - aborting stress tests!")
+        utils.ShowTestEndCounts()
         debug("END_SESSION")
         return
 
@@ -133,7 +138,10 @@ PUB go() | result, secPerClus, cBytes, freeSec, freeClus, needClus
 
     debug("* Geometry: ", udec(secPerClus), " sec/clus, ", udec(cBytes), " bytes/clus, ", udec(freeClus), " free clusters")
 
-    if cBytes == 0 or not utils.assertFreeSpace(freeClus, needClus)
+    ' Scored, not just printed: on the dedicated regression card (freshly
+    ' formatted, ample space) a failed space check means something real broke,
+    ' so it must not read as a green 0-fail run.
+    ifnot utils.requireSetup(cBytes <> 0 and utils.assertFreeSpace(freeClus, needClus), @"SETUP: free space for stress fixtures")
         debug("  *** SETUP NOT MET: need ", udec_(needClus), " free clusters, have ", udec_(freeClus), " (cBytes=", udec_(cBytes), ") -- stress tests NOT run ***")
         sd.unmount()
         utils.ShowTestEndCounts()
@@ -142,7 +150,7 @@ PUB go() | result, secPerClus, cBytes, freeSec, freeClus, needClus
 
     ' Create test files -- a setup failure here must be reported as a setup
     ' failure, not left to cascade into four opaque test failures below.
-    if not createStressFiles()
+    ifnot utils.requireSetup(createStressFiles(), @"SETUP: create stress fixtures")
         debug("  *** SETUP NOT MET: could not create stress fixtures -- stress tests NOT run ***")
         cleanupStressFiles()
         sd.unmount()
@@ -198,7 +206,7 @@ PRI runTest6_ReaderIntegrity() | handle_r, bytesRead, iter, sector_idx, expected
     test_phase := 6
     sync_barrier := 0
     resetWorker()
-    launched_cogs[0] := cogspin(NEWCOG, workerDispatch(0), @worker_stacks[0])
+    launchWorker0()
 
     ' Main cog: open read file
     handle_r := sd.openFileRead(@stressReadFile)
@@ -299,7 +307,7 @@ PRI runTest8_DualReaderSameFile() | handle_m, iter, sector_idx, seekPos, bytesRe
     test_phase := 8
     sync_barrier := 0
     resetWorker()
-    launched_cogs[0] := cogspin(NEWCOG, workerDispatch(0), @worker_stacks[0])
+    launchWorker0()
 
     ' Main cog: open STRESS_R.TXT for read
     handle_m := sd.openFileRead(@stressReadFile)
@@ -360,7 +368,7 @@ PRI runTest9_RapidOpenClose() | iter, handle, bytesRead, mainErrors, expected_fi
     test_phase := 9
     sync_barrier := 0
     resetWorker()
-    launched_cogs[0] := cogspin(NEWCOG, workerDispatch(0), @worker_stacks[0])
+    launchWorker0()
 
     ' Release barrier
     sync_barrier := 1
@@ -517,13 +525,35 @@ PRI resetWorker()
     worker_errors[0] := 0
 
 
+PRI launchWorker0()
+    ' Launch the single worker cog, converting a launch failure into loud named
+    ' state: STATUS_FAIL makes the caller's worker checks fail by name, and
+    ' every bounded wait gives up promptly instead of spinning on a status no
+    ' cog will ever set.
+
+    launched_cogs[0] := cogspin(NEWCOG, workerDispatch(0), @worker_stacks[0])
+    if launched_cogs[0] == -1
+        debug("  FAIL: Could not launch worker cog")
+        worker_status[0] := STATUS_FAIL
+
 PRI waitForWorkers()
     ' Wait for worker cog to complete.
+    '
+    ' Bounded by a generous timeout (30s against seconds-typical completion):
+    ' a hung worker is recorded as a named failure (STATUS_FAIL fails the
+    ' caller's worker checks) and reaped, instead of hanging the harness and
+    ' costing the run its totals line.
 
-    repeat
+    repeat WORKER_TIMEOUT_POLLS
         if worker_status[0] <> STATUS_RUNNING
-            quit
+            return
         waitms(10)
+
+    debug("  *** waitForWorkers TIMEOUT (30s): reaping hung worker cog ***")
+    worker_status[0] := STATUS_FAIL
+    if launched_cogs[0] <> -1
+        cogstop(launched_cogs[0])
+        launched_cogs[0] := -1
 
 
 PRI stopWorkerCogs()

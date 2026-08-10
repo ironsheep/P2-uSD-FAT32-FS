@@ -64,7 +64,7 @@ DAT
 csdBuf          BYTE    0[16]
 csdBuf_guard    BYTE    0[16]
 
-PUB go() | result, csdVer, tranSpeed, capacity, cardSectors, readTimeout, writeTimeout, maxSpeed
+PUB go() | result, csdVer, tranSpeed, capacity, cardSectors, readTimeout, writeTimeout, maxSpeed, bCsdOk
 '' Main entry point for register access regression tests
 
     debug(" ")
@@ -74,8 +74,9 @@ PUB go() | result, csdVer, tranSpeed, capacity, cardSectors, readTimeout, writeT
 
     ' Mount the card first
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if result < 0
+    ifnot utils.requireSetup(result == 0, @"SETUP: mount SD card")
         debug("ERROR: Could not mount SD card!")
+        utils.ShowTestEndCounts()
         debug("END_SESSION")
         return
 
@@ -96,20 +97,33 @@ PUB go() | result, csdVer, tranSpeed, capacity, cardSectors, readTimeout, writeT
     utils.initGuard(@csdBuf_guard)
     result := sd.readCSDRaw(@csdBuf)
     utils.checkGuard(@csdBuf_guard, @"csdBuf guard")
+    bCsdOk := (result == sd.SUCCESS)
     utils.evaluateSingleValue(result, @"readCSDRaw()", sd.SUCCESS)
+
+    ' WHY bCsdOk EXISTS. csdBuf is zeroed before the read, so when readCSDRaw fails
+    ' every field below reads as 0 -- and csdVer == 0 means "SDSC", which routes the
+    ' capacity test into a branch that only asserts cardSectors > 0. That is true on
+    ' any working card, so a total failure to read the CSD scored a PASS on the test
+    ' whose whole job is to check the CSD. The derived tests now fail explicitly.
 
     ' Test: CSD version is valid (0 for SDSC, 1 for SDHC/SDXC)
     utils.startTest(@"CSD version is valid (0 or 1)")
-    csdVer := (csdBuf[0] >> 6) & $03
-    debug("   CSD version: ", udec_(csdVer))
-    utils.evaluateRange(csdVer, @"CSD_STRUCTURE", 0, 1)
+    if bCsdOk
+        csdVer := (csdBuf[0] >> 6) & $03
+        debug("   CSD version: ", udec_(csdVer))
+        utils.evaluateRange(csdVer, @"CSD_STRUCTURE", 0, 1)
+    else
+        utils.evaluateBool(false, @"CSD_STRUCTURE (CSD was never read)", true)
 
     ' Test: TRAN_SPEED is valid (byte 3 of CSD)
     utils.startTest(@"TRAN_SPEED is valid ($32-$5A)")
-    tranSpeed := csdBuf[3]
-    debug("   TRAN_SPEED: $", uhex_(tranSpeed))
-    ' $32 = 25 MHz, $5A = 50 MHz - standard values for SD cards
-    utils.evaluateRange(tranSpeed, @"TRAN_SPEED byte", $32, $5A)
+    if bCsdOk
+        tranSpeed := csdBuf[3]
+        debug("   TRAN_SPEED: $", uhex_(tranSpeed))
+        ' $32 = 25 MHz, $5A = 50 MHz - standard values for SD cards
+        utils.evaluateRange(tranSpeed, @"TRAN_SPEED byte", $32, $5A)
+    else
+        utils.evaluateBool(false, @"TRAN_SPEED byte (CSD was never read)", true)
 
     ' Test: Capacity > 0
     utils.startTest(@"Card capacity > 0 sectors")
@@ -120,7 +134,9 @@ PUB go() | result, csdVer, tranSpeed, capacity, cardSectors, readTimeout, writeT
     ' Test: Capacity matches cardSizeSectors()
     utils.startTest(@"CSD capacity consistent with cardSizeSectors()")
     ' For CSD v1 (SDHC/SDXC), capacity = (C_SIZE + 1) * 1024 sectors
-    if csdVer == 1
+    ifnot bCsdOk
+        utils.evaluateBool(false, @"CSD vs cardSizeSectors (CSD was never read)", true)
+    elseif csdVer == 1
         ' C_SIZE is in CSD bytes 7-9 (bits 69:48)
         capacity := ((csdBuf[7] & $3F) << 16) | (csdBuf[8] << 8) | csdBuf[9]
         capacity := (capacity + 1) * 1024
@@ -146,9 +162,10 @@ PUB go() | result, csdVer, tranSpeed, capacity, cardSectors, readTimeout, writeT
     utils.evaluateSubValue(result, @"CSD version matches", csdVer)
     sd.stop()
 
-    ' Remount for timeout tests
+    ' Remount for timeout tests. Scored: without the named failure, an abort
+    ' here would print all-green partial totals and read as a passing run.
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if result < 0
+    ifnot utils.requireSetup(result == 0, @"SETUP: remount for timeout tests")
         debug("ERROR: Could not remount!")
         utils.ShowTestEndCounts()
         debug("END_SESSION")

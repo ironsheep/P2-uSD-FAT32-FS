@@ -84,7 +84,7 @@ staleBuf        BYTE    0[512]
 staleBuf_guard  BYTE    0[16]
 staleGenName    BYTE    0[16]
 
-PUB go() | result, pEntry, pFilename, attrs, fileCount, idx, handle, bytesRead, secPerClus, cBytes, freeSec, freeClus, needClus
+PUB go() | result, pEntry, pFilename, attrs, fileCount, idx, handle, bytesRead, secPerClus, cBytes, freeSec, freeClus, needClus, bCwdOk
 '' Main entry point for directory regression tests
 ''
 '' Tests directory creation, navigation, listing, and nested directories
@@ -96,8 +96,9 @@ PUB go() | result, pEntry, pFilename, attrs, fileCount, idx, handle, bytesRead, 
 
     ' Mount the card first
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if result < 0
+    ifnot utils.requireSetup(result == 0, @"SETUP: mount SD card")
         debug("ERROR: Could not mount SD card!")
+        utils.ShowTestEndCounts()
         debug("END_SESSION")
         return
 
@@ -125,7 +126,10 @@ PUB go() | result, pEntry, pFilename, attrs, fileCount, idx, handle, bytesRead, 
 
     debug("* Geometry: ", udec(secPerClus), " sec/clus, ", udec(cBytes), " bytes/clus, ", udec(freeClus), " free clusters")
 
-    if cBytes == 0 or not utils.assertFreeSpace(freeClus, needClus)
+    ' Scored gate: the bare-counts form printed a 0-test summary that the runner
+    ' read as green. requireSetup records one named failing test so a declined run
+    ' is unmistakably RED.
+    ifnot utils.requireSetup(cBytes <> 0 and utils.assertFreeSpace(freeClus, needClus), @"SETUP: free clusters for directory fixtures")
         debug("  *** SETUP NOT MET: need ", udec_(needClus), " free clusters, have ", udec_(freeClus), " (cBytes=", udec_(cBytes), ") -- directory tests NOT run ***")
         sd.unmount()
         utils.ShowTestEndCounts()
@@ -156,13 +160,22 @@ PUB go() | result, pEntry, pFilename, attrs, fileCount, idx, handle, bytesRead, 
 
     utils.startTest(@"changeDirectory() to new directory")
     result := sd.changeDirectory(@testDir1)
+    bCwdOk := (result == sd.SUCCESS)
     utils.evaluateSingleValue(result, @"changeDirectory()", sd.SUCCESS)
 
+    ' Gated on the cd above. Un-gated, a failed cd created FILE1.TXT in ROOT while
+    ' the test name claimed the subdirectory -- and the debris outlived the run,
+    ' because the teardown only ever looked inside RTDIR1.
     utils.startTest(@"Create file in subdirectory")
-    handle := sd.createFileNew(@testFile1)
-    utils.evaluateBool(handle >= 0, @"createFileNew() in subdir", true)
-    sd.writeHandle(handle, @testContent, strsize(@testContent))
-    sd.closeFileHandle(handle)
+    if bCwdOk
+        handle := sd.createFileNew(@testFile1)
+        utils.evaluateBool(handle >= 0, @"createFileNew() in subdir", true)
+        if handle >= 0
+            sd.writeHandle(handle, @testContent, strsize(@testContent))
+            sd.closeFileHandle(handle)
+    else
+        debug("  CWD is not the test subdirectory -- refusing to create in the wrong place")
+        utils.evaluateBool(false, @"createFileNew() in subdir", true)
 
     utils.startTest(@"changeDirectory() back to parent with ..")
     result := sd.changeDirectory(@"..")
@@ -176,10 +189,20 @@ PUB go() | result, pEntry, pFilename, attrs, fileCount, idx, handle, bytesRead, 
     result := sd.changeDirectory(@"NOEXIST")
     utils.evaluateSingleValue(result, @"changeDirectory() non-existent", sd.E_NOT_A_DIR)
 
+    ' do_chdir returns E_NOT_A_DIR for a MISSING name as well as for a file, so this
+    ' test passed for the wrong reason whenever FILE1.TXT was absent -- which is
+    ' exactly what happens if the create above landed elsewhere. Prove the file is
+    ' really there first; only then does E_NOT_A_DIR mean "not a directory".
     utils.startTest(@"changeDirectory() fails on a file (not a directory)")
+    utils.setCheckCountPerTest(2)
     sd.changeDirectory(@testDir1)                                               ' Go to RTDIR1 where FILE1.TXT exists
+    handle := sd.openFileRead(@testFile1)
+    utils.evaluateSubBool(handle >= 0, @"the file under test exists", true)
+    if handle >= 0
+        sd.closeFileHandle(handle)
     result := sd.changeDirectory(@testFile1)                                    ' Should fail - FILE1.TXT is not a directory
-    utils.evaluateSingleValue(result, @"changeDirectory() on file", sd.E_NOT_A_DIR)
+    utils.evaluateSubValue(result, @"changeDirectory() on file", sd.E_NOT_A_DIR)
+    utils.showSubTestResults()
     sd.changeDirectory(@"/")                                                    ' Return to root
 
     ' ----------------------------------
@@ -189,21 +212,34 @@ PUB go() | result, pEntry, pFilename, attrs, fileCount, idx, handle, bytesRead, 
 
     utils.startTest(@"Change to first directory")
     result := sd.changeDirectory(@testDir1)
+    bCwdOk := (result == sd.SUCCESS)
     utils.evaluateSingleValue(result, @"changeDirectory()", sd.SUCCESS)
 
+    ' Gated: an un-gated nested mkdir after a failed cd creates SUBDIR1 in ROOT.
     utils.startTest(@"Create subdirectory")
-    result := sd.newDirectory(@subDir1)
-    utils.evaluateSingleValue(result, @"newDirectory() nested", sd.SUCCESS)
+    if bCwdOk
+        result := sd.newDirectory(@subDir1)
+        utils.evaluateSingleValue(result, @"newDirectory() nested", sd.SUCCESS)
+    else
+        debug("  CWD is not the first directory -- refusing to nest in the wrong place")
+        utils.evaluateBool(false, @"newDirectory() nested", true)
 
     utils.startTest(@"Change to nested subdirectory")
     result := sd.changeDirectory(@subDir1)
+    bCwdOk := (result == sd.SUCCESS)
     utils.evaluateSingleValue(result, @"changeDirectory() nested", sd.SUCCESS)
 
+    ' Gated for the same reason: FILE2.TXT belongs in SUBDIR1, nowhere else.
     utils.startTest(@"Create file in nested directory")
-    handle := sd.createFileNew(@testFile2)
-    utils.evaluateBool(handle >= 0, @"createFileNew() nested", true)
-    sd.writeHandle(handle, @"Nested file content", 19)
-    sd.closeFileHandle(handle)
+    if bCwdOk
+        handle := sd.createFileNew(@testFile2)
+        utils.evaluateBool(handle >= 0, @"createFileNew() nested", true)
+        if handle >= 0
+            sd.writeHandle(handle, @"Nested file content", 19)
+            sd.closeFileHandle(handle)
+    else
+        debug("  CWD is not the nested subdirectory -- refusing to create in the wrong place")
+        utils.evaluateBool(false, @"createFileNew() nested", true)
 
     utils.startTest(@"Navigate back to root")
     sd.changeDirectory(@"/")
@@ -248,8 +284,12 @@ PUB go() | result, pEntry, pFilename, attrs, fileCount, idx, handle, bytesRead, 
         idx++
     utils.evaluateRange(fileCount, @"directory entries found", 2, 100)  ' At least our 2 test dirs
 
+    ' The cd was unasserted: a failure listed ROOT and the >= 2 range passed on
+    ' root's own entries, so "subdir entries" was measuring the wrong directory.
     utils.startTest(@"List subdirectory contents")
-    sd.changeDirectory(@testDir1)
+    utils.setCheckCountPerTest(2)
+    result := sd.changeDirectory(@testDir1)
+    utils.evaluateSubValue(result, @"cd to the subdirectory being listed", sd.SUCCESS)
     fileCount := 0
     idx := 0
     repeat
@@ -262,7 +302,8 @@ PUB go() | result, pEntry, pFilename, attrs, fileCount, idx, handle, bytesRead, 
         fileCount++
         idx++
     ' Should have FILE1.TXT and SUBDIR1
-    utils.evaluateRange(fileCount, @"subdir entries", 2, 10)
+    utils.evaluateSubBool(fileCount >= 2 and fileCount <= 10, @"subdir entries", true)
+    utils.showSubTestResults()
     sd.changeDirectory(@"/")
 
     ' ----------------------------------
@@ -274,8 +315,9 @@ PUB go() | result, pEntry, pFilename, attrs, fileCount, idx, handle, bytesRead, 
     utils.startTest(@"Create file in root to move")
     handle := sd.createFileNew(@"MOVEME.TXT")
     utils.evaluateBool(handle >= 0, @"createFileNew()", true)
-    sd.writeHandle(handle, @"File to be moved", 16)
-    sd.closeFileHandle(handle)
+    if handle >= 0
+        sd.writeHandle(handle, @"File to be moved", 16)
+        sd.closeFileHandle(handle)
 
     utils.startTest(@"moveFile() to subdirectory")
     result := sd.moveFile(@"MOVEME.TXT", @testDir2)
@@ -284,12 +326,20 @@ PUB go() | result, pEntry, pFilename, attrs, fileCount, idx, handle, bytesRead, 
     utils.startTest(@"File no longer in root")
     handle := sd.openFileRead(@"MOVEME.TXT")
     utils.evaluateBool(handle >= 0, @"openFileRead() old location", false)
+    if handle >= 0                                                              ' Must fail; if the move left it behind, do not leak the slot
+        sd.closeFileHandle(handle)
 
+    ' The cd was unasserted, so a failed cd looked in ROOT for MOVEME.TXT -- which
+    ' is where it started. The test could report "moved" without a move happening.
     utils.startTest(@"File exists in new location")
-    sd.changeDirectory(@testDir2)
+    utils.setCheckCountPerTest(2)
+    result := sd.changeDirectory(@testDir2)
+    utils.evaluateSubValue(result, @"cd to the move destination", sd.SUCCESS)
     handle := sd.openFileRead(@"MOVEME.TXT")
-    utils.evaluateBool(handle >= 0, @"openFileRead() new location", true)
-    sd.closeFileHandle(handle)
+    utils.evaluateSubBool(handle >= 0, @"openFileRead() new location", true)
+    if handle >= 0
+        sd.closeFileHandle(handle)
+    utils.showSubTestResults()
     sd.changeDirectory(@"/")
 
     ' ----------------------------------
@@ -604,53 +654,70 @@ PRI cleanupTestItems() | idx
 '
 ' @local idx - File number 1..20 for the generated FILEnn.TXT / STRnn.TXT names
 
+' EVERY cd below is guarded. An unguarded chain that hits a missing directory keeps
+' going and deletes the RELATIVE names out of whatever directory it actually landed
+' in -- and since a failed cd during the body is precisely what strands those names
+' in root, the unguarded pre-clean was capable of deleting a same-named file that
+' did not belong to this suite. Guarded, a missing directory just skips its group.
+
     ' Clean nested items under testDir1
     sd.changeDirectory(@"/")
-    sd.changeDirectory(@testDir1)
-    sd.changeDirectory(@subDir1)
-    sd.deleteFile(@testFile2)
-    sd.changeDirectory(@"..")
-    sd.deleteFile(@testFile1)
-    sd.deleteFile(@subDir1)
+    if sd.changeDirectory(@testDir1) == sd.SUCCESS
+        if sd.changeDirectory(@subDir1) == sd.SUCCESS
+            sd.deleteFile(@testFile2)
+            sd.changeDirectory(@"..")
+        sd.deleteFile(@testFile1)
+        sd.deleteFile(@subDir1)
     sd.changeDirectory(@"/")
 
     ' Clean testDir2 contents
-    sd.changeDirectory(@testDir2)
-    sd.deleteFile(@"MOVEME.TXT")
-    sd.changeDirectory(@"/")
+    if sd.changeDirectory(@testDir2) == sd.SUCCESS
+        sd.deleteFile(@"MOVEME.TXT")
+        sd.changeDirectory(@"/")
 
     ' Clean the many-files directory (20 generated files + max-name file)
-    sd.changeDirectory(@manyFilesDir)
-    repeat idx from 1 to 20
-        buildFileName(idx)
-        sd.deleteFile(@genFileName)
-    sd.deleteFile(@maxNameFile)
-    sd.changeDirectory(@"/")
+    if sd.changeDirectory(@manyFilesDir) == sd.SUCCESS
+        repeat idx from 1 to 20
+            buildFileName(idx)
+            sd.deleteFile(@genFileName)
+        sd.deleteFile(@maxNameFile)
+        sd.changeDirectory(@"/")
 
     ' Clean the stale-cluster directory (20 generated files) and its polluter
-    sd.changeDirectory(@staleDir)
-    repeat idx from 1 to 20
-        buildStaleFileName(idx)
-        sd.deleteFile(@staleGenName)
-    sd.changeDirectory(@"/")
+    if sd.changeDirectory(@staleDir) == sd.SUCCESS
+        repeat idx from 1 to 20
+            buildStaleFileName(idx)
+            sd.deleteFile(@staleGenName)
+        sd.changeDirectory(@"/")
     sd.deleteFile(@stalePolluter)
 
     ' Unwind the 5-level deep nesting, deepest first
-    sd.changeDirectory(@deepDir1)
-    sd.changeDirectory(@deepDir2)
-    sd.changeDirectory(@deepDir3)
-    sd.changeDirectory(@deepDir4)
-    sd.changeDirectory(@deepDir5)
-    sd.deleteFile(@"DEEP.TXT")
-    sd.changeDirectory(@"..")
-    sd.deleteFile(@deepDir5)
-    sd.changeDirectory(@"..")
-    sd.deleteFile(@deepDir4)
-    sd.changeDirectory(@"..")
-    sd.deleteFile(@deepDir3)
-    sd.changeDirectory(@"..")
-    sd.deleteFile(@deepDir2)
+    if sd.changeDirectory(@deepDir1) == sd.SUCCESS
+        if sd.changeDirectory(@deepDir2) == sd.SUCCESS
+            if sd.changeDirectory(@deepDir3) == sd.SUCCESS
+                if sd.changeDirectory(@deepDir4) == sd.SUCCESS
+                    if sd.changeDirectory(@deepDir5) == sd.SUCCESS
+                        sd.deleteFile(@"DEEP.TXT")
+                        sd.changeDirectory(@"..")
+                    sd.deleteFile(@deepDir5)
+                    sd.changeDirectory(@"..")
+                sd.deleteFile(@deepDir4)
+                sd.changeDirectory(@"..")
+            sd.deleteFile(@deepDir3)
+            sd.changeDirectory(@"..")
+        sd.deleteFile(@deepDir2)
     sd.changeDirectory(@"/")
+
+    ' Root-level strays. When a cd fails mid-body the dependent creation lands in
+    ' ROOT under its relative name, and nothing above -- which only ever looks
+    ' inside the test directories -- can reach it. Without these, one bad run
+    ' leaves FILE1.TXT and friends in root permanently.
+    sd.deleteFile(@testFile1)
+    sd.deleteFile(@testFile2)
+    sd.deleteFile(@"MOVEME.TXT")
+    sd.deleteFile(@"DEEP.TXT")
+    sd.deleteFile(@maxNameFile)
+    sd.deleteFile(@subDir1)
 
     ' Delete root-level test directories (now empty)
     sd.deleteFile(@deepDir1)

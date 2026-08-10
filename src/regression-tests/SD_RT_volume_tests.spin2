@@ -38,6 +38,13 @@ CON
      SD_SCK  = 61
 #endif
 
+' Simulated cluster cap for the Disk Full Simulation group. Named because the
+' precondition gate, setTestMaxClusters() and the write-count arithmetic all have
+' to agree -- as three separate literal 20s they could drift apart silently.
+CON
+    DF_MAX_CLUSTERS    = 20
+    DF_CLUSTER_MARGIN  = 8      ' headroom so the cap, not the card, is what runs out
+
 ' Enable register access, raw sector access, debug, and the test hooks the
 ' disk-full checks arm (setTestMaxClusters)
 #ifdef __SPINTOOLS__
@@ -102,7 +109,7 @@ writeBuf        BYTE    0[512]
 ' Saved original label
 origLabel       BYTE    0[12]
 
-PUB go() | result, hndl1, hndl2, bytesWritten, pLabel, idx, pEntry, wrtDate, wrtTime, vbrSector, found, baselineFree, filesCreated, dfHandle, maxWrites
+PUB go() | result, hndl1, hndl2, bytesWritten, pLabel, idx, pEntry, wrtDate, wrtTime, vbrSector, found, baselineFree, filesCreated, dfHandle, maxWrites, dfSecPerClus, dfFreeClus
 '' Main entry point for volume operation regression tests
 
     debug(" ")
@@ -112,8 +119,9 @@ PUB go() | result, hndl1, hndl2, bytesWritten, pLabel, idx, pEntry, wrtDate, wrt
 
     ' Mount the card first
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if result < 0
+    ifnot utils.requireSetup(result == 0, @"SETUP: mount SD card")
         debug("ERROR: Could not mount SD card!")
+        utils.ShowTestEndCounts()
         debug("END_SESSION")
         return
 
@@ -159,6 +167,13 @@ PUB go() | result, hndl1, hndl2, bytesWritten, pLabel, idx, pEntry, wrtDate, wrt
     sd.unmount()
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
     utils.evaluateSubValue(result, @"remount succeeds", sd.SUCCESS)
+    ' A failed remount here is unrecoverable for this suite AND leaves the card
+    ' wearing the test label, because the restore below cannot run unmounted.
+    ifnot utils.requireSetup(result == sd.SUCCESS, @"SETUP: remount for the rest of the volume suite")
+        debug("  *** Card did not remount -- volume label may still be the test value")
+        utils.ShowTestEndCounts()
+        debug("END_SESSION")
+        return
     pLabel := sd.volumeLabel()
     debug("   Label after remount: [", zstr_(pLabel), "]")
     result := strncmp(pLabel, @"12345678901", 11)
@@ -558,11 +573,32 @@ PUB go() | result, hndl1, hndl2, bytesWritten, pLabel, idx, pEntry, wrtDate, wrt
     baselineFree := sd.freeSpace()
     debug("   Baseline free space: ", udec_(baselineFree), " sectors")
 
+    ' This whole group depends on the SIMULATED cap (setTestMaxClusters) being the
+    ' thing that runs out first. If the card itself has fewer free clusters than the
+    ' cap, the E_DISK_FULL these tests observe is real exhaustion, not the simulation
+    ' -- and whether that happens depends on how many clusters the PRECEDING groups
+    ' happened to leave free. That is an arbitrary pass/fail with no relation to the
+    ' code under test, and it is the sharpest landmine the 2026-08-09 audit found.
+    dfSecPerClus := sd.sectorsPerCluster()
+    dfFreeClus := 0
+    if dfSecPerClus > 0
+        dfFreeClus := baselineFree / dfSecPerClus
+    debug("   Free clusters: ", udec_(dfFreeClus), " (simulated cap is ", udec_(DF_MAX_CLUSTERS), ")")
+    ifnot utils.requireSetup(dfSecPerClus > 0 and dfFreeClus > DF_MAX_CLUSTERS + DF_CLUSTER_MARGIN, @"SETUP: card has more free clusters than the simulated cap")
+        debug("  *** SETUP NOT MET: need > ", udec_(DF_MAX_CLUSTERS + DF_CLUSTER_MARGIN), " free clusters so the SIMULATED limit is what trips")
+        debug("  *** Disk Full Simulation group SKIPPED (a real out-of-space would prove nothing here)")
+        cleanupTestFiles()
+        sd.setVolumeLabel(@origLabel)
+        sd.unmount()
+        utils.ShowTestEndCounts()
+        debug("END_SESSION")
+        return
+
     ' Test A: E_DISK_FULL on createFileNew with cluster limit
     ' Use limit of 20 to allow root dir cluster + a few data clusters before exhaustion
     utils.startTest(@"E_DISK_FULL on createFileNew with cluster limit")
     utils.setCheckCountPerTest(3)
-    sd.setTestMaxClusters(20)
+    sd.setTestMaxClusters(DF_MAX_CLUSTERS)
     filesCreated := 0
     result := 0
     repeat idx from 0 to 29
@@ -578,7 +614,11 @@ PUB go() | result, hndl1, hndl2, bytesWritten, pLabel, idx, pEntry, wrtDate, wrt
     debug("   Files created before full: ", udec_(filesCreated), " result=", sdec_(result))
     utils.evaluateSubBool(filesCreated >= 1, @"at least 1 created", true)
     utils.evaluateSubValue(result, @"error is E_DISK_FULL", sd.E_DISK_FULL)
-    utils.evaluateSubBool(true, @"guard", true)
+    ' Was `evaluateSubBool(true, @"guard", true)` -- a check that cannot fail, present
+    ' only to make the count reach 3. The real property it should have asserted: the
+    ' SIMULATED limit stopped us, not the physical card, so the run must have halted
+    ' short of the 30 files the loop would otherwise have made.
+    utils.evaluateSubBool(filesCreated < 30, @"stopped before the loop ran out", true)
     utils.showSubTestResults()
     utils.setCheckCountPerTest(1)
 
@@ -608,11 +648,11 @@ PUB go() | result, hndl1, hndl2, bytesWritten, pLabel, idx, pEntry, wrtDate, wrt
         dfNameBuf[3] := $30 + idx // 10
         sd.deleteFile(@dfNameBuf)
     sd.deleteFile(@dfTestFile)
-    sd.setTestMaxClusters(20)
+    sd.setTestMaxClusters(DF_MAX_CLUSTERS)
     ' Compute writes needed to exhaust all possible clusters at any cluster size.
     ' (test_max_clusters - 2) covers clusters 2..19 - the maximum the allocator
     ' can hand out.  Multiply by sec_per_clus to get sector count, then add margin.
-    maxWrites := (20 - 2) * sd.sectorsPerCluster() + 1
+    maxWrites := (DF_MAX_CLUSTERS - 2) * sd.sectorsPerCluster() + 1
     debug("   maxWrites=", udec_(maxWrites), " secPerClus=", udec_(sd.sectorsPerCluster()))
     dfHandle := sd.createFileNew(@dfTestFile)
     utils.evaluateSubBool(dfHandle >= 0, @"create for write test", true)
@@ -626,8 +666,13 @@ PUB go() | result, hndl1, hndl2, bytesWritten, pLabel, idx, pEntry, wrtDate, wrt
             bytesWritten += result
         debug("   Bytes written before full: ", udec_(bytesWritten), " last result=", sdec_(result))
         utils.evaluateSubBool(bytesWritten > 0, @"wrote some data", true)
-        utils.evaluateSubBool(result <= 0, @"write eventually stops", true)
+        ' `result <= 0` accepted ANY failure, including a real I/O error or a
+        ' zero-byte short write, as proof of the disk-full path. Name the code.
+        utils.evaluateSubValue(result, @"write stops with E_DISK_FULL", sd.E_DISK_FULL)
         sd.closeFileHandle(dfHandle)
+    else
+        utils.evaluateSubBool(false, @"wrote some data", true)
+        utils.evaluateSubBool(false, @"write stops with E_DISK_FULL", true)
     utils.showSubTestResults()
     utils.setCheckCountPerTest(1)
 
@@ -649,8 +694,11 @@ PUB go() | result, hndl1, hndl2, bytesWritten, pLabel, idx, pEntry, wrtDate, wrt
     result := sd.freeSpace()
     debug("   Free space after cleanup: ", udec_(result), " baseline: ", udec_(baselineFree))
     utils.evaluateSubBool(result > 0, @"freeSpace positive", true)
+    ' Was `evaluateSubBool(true, @"cleanup done", true)` -- unfailable filler. The
+    ' property worth asserting is that the cleanup actually returned the free space
+    ' the group borrowed, so a leak here is caught instead of carried forward.
     sd.deleteFile(@dfVerifyFile)
-    utils.evaluateSubBool(true, @"cleanup done", true)
+    utils.evaluateSubBool(sd.freeSpace() >= baselineFree, @"free space restored to baseline", true)
     utils.showSubTestResults()
     utils.setCheckCountPerTest(1)
 
@@ -658,6 +706,12 @@ PUB go() | result, hndl1, hndl2, bytesWritten, pLabel, idx, pEntry, wrtDate, wrt
     ' Cleanup and Summary
     ' ======================================================================
     cleanupTestFiles()
+
+    ' Restore the label unconditionally. The inline restore earlier in the suite is
+    ' the one that is SUPPOSED to do this, but it only runs if the remount before it
+    ' succeeded -- and when that remount failed, the card was left carrying the test
+    ' label "12345678901" for every later run and every human who inserted it.
+    sd.setVolumeLabel(@origLabel)
 
     sd.unmount()
 

@@ -33,6 +33,11 @@ CON
      NUM_WORKER_COGS = 1             ' Only 1 worker needed (main + worker = 2 cogs)
      STACK_SIZE      = 128           ' Stack size per worker cog (longs)
 
+     ' Hang-proofing budgets: bounded waits give up, record, and reap instead
+     ' of hanging the harness (see waitBarrier2 / waitForWorkers)
+     WORKER_TIMEOUT_POLLS  = 3000    ' x 10ms polls = 30s generous worker-completion budget
+     BARRIER_TIMEOUT_POLLS = 3000    ' x 1ms polls = 3s mid-test barrier budget
+
      ' Worker status codes
      STATUS_IDLE      = 0
      STATUS_RUNNING   = 1
@@ -115,13 +120,21 @@ PUB go() | result
 
     ' Mount the filesystem
     result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if result < 0
+    ifnot utils.requireSetup(result == 0, @"SETUP: mount SD card")
         debug("ERROR: Could not mount SD card - aborting CWD tests!")
+        utils.ShowTestEndCounts()
         debug("END_SESSION")
         return
 
-    ' Create test directories and seed files
-    createTestDirectories()
+    ' Create test directories and seed files. Gated: every CWD test depends on
+    ' both directory trees existing, so a failed seed is one named, scored
+    ' setup failure -- previously it fanned into ~5 obscure test failures.
+    ifnot utils.requireSetup(createTestDirectories(), @"SETUP: create CWD test directories")
+        cleanupTestDirectories()
+        sd.unmount()
+        utils.ShowTestEndCounts()
+        debug("END_SESSION")
+        return
 
     ' ----------------------------------
     ' TEST GROUP 1: Basic CWD Independence
@@ -173,7 +186,7 @@ PRI runTest1_TwoCogsDifferentDirs() | handle, bytesRead
     sync_barrier := 0
     sync_barrier2 := 0
     resetWorker()
-    launched_cogs[0] := cogspin(NEWCOG, workerTestDispatch(0), @worker_stacks[0])
+    launchWorker0()
 
     ' Main cog: cd to CWDTEST1
     sd.changeDirectory(@dirName1)
@@ -182,7 +195,7 @@ PRI runTest1_TwoCogsDifferentDirs() | handle, bytesRead
     sync_barrier := 1
 
     ' Wait for worker to finish cd (barrier2)
-    repeat until sync_barrier2 <> 0
+    waitBarrier2()
 
     ' Main cog: open and read FILE_A.TXT
     handle := sd.openFileRead(@fileNameA)
@@ -223,7 +236,7 @@ PRI runTest2_CdNoAffectOtherCog() | handle
     test_phase := 2
     sync_barrier := 0
     resetWorker()
-    launched_cogs[0] := cogspin(NEWCOG, workerTestDispatch(0), @worker_stacks[0])
+    launchWorker0()
     sync_barrier := 1
 
     ' Wait for worker to complete its cd
@@ -255,7 +268,7 @@ PRI runTest3_BothCogsCreateFiles() | handle, bytesRead
     sync_barrier := 0
     sync_barrier2 := 0
     resetWorker()
-    launched_cogs[0] := cogspin(NEWCOG, workerTestDispatch(0), @worker_stacks[0])
+    launchWorker0()
 
     ' Main cog: cd to CWDTEST1
     sd.changeDirectory(@dirName1)
@@ -264,7 +277,7 @@ PRI runTest3_BothCogsCreateFiles() | handle, bytesRead
     sync_barrier := 1
 
     ' Wait for worker to finish its cd
-    repeat until sync_barrier2 <> 0
+    waitBarrier2()
 
     ' Main cog: create COG0.TXT
     handle := sd.createFileNew(@cogFile0)
@@ -338,7 +351,7 @@ PRI runTest4_CwdSurvivesRepeatOps() | handle, iter
     sync_barrier := 0
     sync_barrier2 := 0
     resetWorker()
-    launched_cogs[0] := cogspin(NEWCOG, workerTestDispatch(0), @worker_stacks[0])
+    launchWorker0()
 
     ' Main cog: cd to CWDTEST1
     sd.changeDirectory(@dirName1)
@@ -347,7 +360,7 @@ PRI runTest4_CwdSurvivesRepeatOps() | handle, iter
     sync_barrier := 1
 
     ' Wait for worker cd
-    repeat until sync_barrier2 <> 0
+    waitBarrier2()
 
     ' Main cog: 10 iterations of create/write/close/delete
     repeat iter from 0 to 9
@@ -394,11 +407,11 @@ PRI runTest5_CwdIsolationOnReset() | handle
     sync_barrier := 0
     sync_barrier2 := 0
     resetWorker()
-    launched_cogs[0] := cogspin(NEWCOG, workerTestDispatch(0), @worker_stacks[0])
+    launchWorker0()
     sync_barrier := 1
 
     ' Wait for worker cd to CWDTEST2
-    repeat until sync_barrier2 <> 0
+    waitBarrier2()
 
     ' Release second barrier so worker resets to root
     sync_barrier := 2
@@ -543,19 +556,46 @@ PRI resetWorker()
     worker_errors[0] := 0
 
 
-PRI waitForWorkers() | allDone
+PRI launchWorker0()
+    ' Launch the single worker cog, converting a launch failure into loud named
+    ' state: STATUS_FAIL makes the caller's worker checks fail by name, and
+    ' every bounded wait gives up promptly instead of spinning on a status no
+    ' cog will ever set.
+
+    launched_cogs[0] := cogspin(NEWCOG, workerTestDispatch(0), @worker_stacks[0])
+    if launched_cogs[0] == -1
+        debug("  FAIL: Could not launch worker cog")
+        worker_status[0] := STATUS_FAIL
+
+PRI waitBarrier2()
+    ' Bounded wait for the worker's mid-test barrier. A worker that never
+    ' reaches it (launch failed, worker died mid-step) makes this return after
+    ' ~3s instead of hanging the suite; the caller's worker-result checks then
+    ' fail by name, and waitForWorkers()/stopWorkerCogs() reap the cog.
+
+    repeat BARRIER_TIMEOUT_POLLS
+        if sync_barrier2 <> 0
+            return
+        waitms(1)
+
+PRI waitForWorkers()
     ' Wait for all worker cogs to complete.
-    ' No internal timeout -- external test runner provides safety timeout.
+    '
+    ' Bounded by a generous timeout (30s against sub-second typical
+    ' completion): a hung worker is recorded (STATUS_FAIL fails the caller's
+    ' worker checks by name) and reaped, instead of hanging the harness and
+    ' costing the run its totals line.
 
-    repeat
-        allDone := true
-        if worker_status[0] == STATUS_RUNNING
-            allDone := false
-
-        if allDone
-            quit
-
+    repeat WORKER_TIMEOUT_POLLS
+        if worker_status[0] <> STATUS_RUNNING
+            return
         waitms(10)
+
+    debug("  *** waitForWorkers TIMEOUT (30s): reaping hung worker cog ***")
+    worker_status[0] := STATUS_FAIL
+    if launched_cogs[0] <> -1
+        cogstop(launched_cogs[0])
+        launched_cogs[0] := -1
 
 
 PRI stopWorkerCogs()
@@ -566,43 +606,59 @@ PRI stopWorkerCogs()
         launched_cogs[0] := -1
 
 
-PRI createTestDirectories() | handle
+PRI createTestDirectories() : bOk
     ' Create test directories and seed files on the card.
     ' Creates /CWDTEST1/FILE_A.TXT and /CWDTEST2/FILE_B.TXT
+    '
+    ' @returns bOk - TRUE only when both directories and both seed files landed
+    '
+    ' Every step is checked: an unchecked changeDirectory here used to leave the
+    ' seed file in the WRONG directory (root), and the per-cog CWD tests then
+    ' failed five different ways with no hint the seed was the cause.
 
     debug("  Creating test directories...")
 
     ' Clean up any leftovers from a previous failed run
     cleanupTestDirectories()
 
-    ' Create CWDTEST1 and seed file
-    sd.newDirectory(@dirName1)
-    sd.changeDirectory(@dirName1)
-    handle := sd.createFileNew(@fileNameA)
-    if handle >= 0
-        sd.writeHandle(handle, @contentA, strsize(@contentA))
-        sd.closeFileHandle(handle)
-        debug("    Created /CWDTEST1/FILE_A.TXT")
-    else
-        debug("    FAILED to create FILE_A.TXT")
+    ' Attempt both seeds even if the first fails, so the debug log names every
+    ' failing fixture (safe: seedDirWithFile leaves CWD at root on every exit).
+    bOk := seedDirWithFile(@dirName1, @fileNameA, @contentA)
+    bOk := seedDirWithFile(@dirName2, @fileNameB, @contentB) and bOk
+    if bOk
+        debug("  Test directories created")
 
-    ' Return to root
+PRI seedDirWithFile(pDir, pFile, pContent) : bOk | handle, expected
+    ' Create one directory, cd into it, and land one fully written seed file.
+    '
+    ' Postcondition: CWD is root on EVERY exit path, success or failure.
+    '
+    ' @param pDir - Pointer to directory name string
+    ' @param pFile - Pointer to seed filename string
+    ' @param pContent - Pointer to content string the file must hold in full
+    ' @returns bOk - TRUE only when every step succeeded
+
+    bOk := false
+    if sd.newDirectory(pDir) < 0
+        debug("    FAILED to create dir ", zstr_(pDir))
+        return
+    if sd.changeDirectory(pDir) < 0
+        debug("    FAILED to enter dir ", zstr_(pDir))
+        return
+    handle := sd.createFileNew(pFile)
+    if handle < 0
+        debug("    FAILED to create ", zstr_(pFile))
+        sd.changeDirectory(@rootPath)
+        return
+    expected := strsize(pContent)
+    bOk := (sd.writeHandle(handle, pContent, expected) == expected)
+    if sd.closeFileHandle(handle) < 0
+        bOk := false
     sd.changeDirectory(@rootPath)
-
-    ' Create CWDTEST2 and seed file
-    sd.newDirectory(@dirName2)
-    sd.changeDirectory(@dirName2)
-    handle := sd.createFileNew(@fileNameB)
-    if handle >= 0
-        sd.writeHandle(handle, @contentB, strsize(@contentB))
-        sd.closeFileHandle(handle)
-        debug("    Created /CWDTEST2/FILE_B.TXT")
+    if bOk
+        debug("    Created ", zstr_(pDir), "/", zstr_(pFile))
     else
-        debug("    FAILED to create FILE_B.TXT")
-
-    ' Return to root
-    sd.changeDirectory(@rootPath)
-    debug("  Test directories created")
+        debug("    FAILED to write ", zstr_(pFile))
 
 
 PRI cleanupTestDirectories()
