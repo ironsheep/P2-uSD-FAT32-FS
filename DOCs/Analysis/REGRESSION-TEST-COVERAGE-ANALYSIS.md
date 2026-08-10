@@ -1,5 +1,8 @@
 # Regression Test Suite: Coverage Analysis and Strengthening Opportunities
 
+> **SUPERSEDED** by [REGRESSION-COVERAGE-ANALYSIS-2026-08-10.md](REGRESSION-COVERAGE-ANALYSIS-2026-08-10.md)
+> (v1.7.0-pre tree). All tiers below were implemented; see that document's Section 2 scorecard.
+
 An analysis of the P2-uSD-FAT32-FS regression test suite against the principles in [REGRESSION-TESTING-BEST-PRACTICES.md](../Decisions/REGRESSION-TESTING-BEST-PRACTICES.md).
 
 **Date:** 2026-04-01

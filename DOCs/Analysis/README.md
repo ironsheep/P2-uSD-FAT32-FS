@@ -10,7 +10,8 @@ Technical deep-dives into driver design decisions, predecessor driver analysis, 
 | [CMD13-ROOT-CAUSE-ANALYSIS.md](CMD13-ROOT-CAUSE-ANALYSIS.md) | R1 response parsing fix — the actual root cause of CMD13 failures across all cards |
 | [ERROR-REPORTING-AUDIT-2026-07-31.md](ERROR-REPORTING-AUDIT-2026-07-31.md) | Public API error flow audit — 19 findings on dropped, misreported, and unreachable errors |
 | [AUDIT-SEVERITY-ANALYSIS.md](AUDIT-SEVERITY-ANALYSIS.md) | Audit test severity classification and downgrade rationale |
-| [REGRESSION-TEST-COVERAGE-ANALYSIS.md](REGRESSION-TEST-COVERAGE-ANALYSIS.md) | Gap analysis of regression test coverage with tiered strengthening plan |
+| [REGRESSION-COVERAGE-ANALYSIS-2026-08-10.md](REGRESSION-COVERAGE-ANALYSIS-2026-08-10.md) | Full coverage analysis of the v1.7.0-pre suite vs the driver — API/error/structure/mode/concurrency matrices, ranked gap list for a coverage-hardening mini-sprint |
+| [REGRESSION-TEST-COVERAGE-ANALYSIS.md](REGRESSION-TEST-COVERAGE-ANALYSIS.md) | Gap analysis of regression test coverage with tiered strengthening plan (2026-04-01; superseded by the 2026-08-10 analysis) |
 | [DESIGN-EXPLORATION-FILE-HANDLES.md](DESIGN-EXPLORATION-FILE-HANDLES.md) | Design exploration for multi-file handle support |
 | [MULTI-COG-INTERFACE-PATTERN.md](MULTI-COG-INTERFACE-PATTERN.md) | Multi-cog interface pattern for P2 drivers |
 | [OB4269-FAT32-COMPLIANCE-ANALYSIS.md](OB4269-FAT32-COMPLIANCE-ANALYSIS.md) | OB4269 FAT32 driver specification compliance analysis |
