@@ -328,6 +328,11 @@ PRI runTest3_BothCogsCreateFiles() | handle, bytesRead
     if handle >= 0
         sd.closeFileHandle(handle)
 
+    ' The worker's own verdict on its create-in-CWD sequence; the error count
+    ' guards against a future worker path that fails without setting status
+    utils.evaluateSubBool(worker_status[0] == STATUS_PASS, @"worker created COG1 in its CWD", true)
+    utils.evaluateSubValue(worker_errors[0], @"worker error count", 0)
+
     ' No need for separate showSubTestResults -- evaluateSubBool tracks it
     utils.showSubTestResults()
 

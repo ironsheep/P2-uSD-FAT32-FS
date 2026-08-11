@@ -125,6 +125,8 @@ dirBad          BYTE    "TIER1BD", 0
 dirFull         BYTE    "TIER1FL", 0
 dirMoveDest     BYTE    "TIER1MV", 0
 rootPath        BYTE    "/", 0
+extDirName      BYTE    "EXTDIR", 0              ' Test 36: subdirectory driven to a cluster boundary
+extFileName     BYTE    "EXT000.TMP", 0          ' Test 36: fill-file name template (digits patched per index)
 
 ' Buffers
 writeBuffer     BYTE    0[BUFFER_SIZE]
@@ -144,7 +146,7 @@ spanBuffer_guard BYTE   0[16]
 diagLastSector  LONG    0
 diagScratch     LONG    0[7]
 
-PUB go() | result, handle, bytesRead, bytesWritten, errCount, testSector, mismatchBefore, mismatchAfter, retryBefore, retryAfter, diagResult, diagR1, diagResp, diagSector, writeCalls, freeBefore, freeAfter, nameMatches, handleB, dataSector
+PUB go() | result, handle, bytesRead, bytesWritten, errCount, testSector, mismatchBefore, mismatchAfter, retryBefore, retryAfter, diagResult, diagR1, diagResp, diagSector, writeCalls, freeBefore, freeAfter, nameMatches, handleB, dataSector, secPerClus, entriesN, extTotal
 '' Main entry point for fault-injection facility regression tests
 
     debug(" ")
@@ -1169,6 +1171,100 @@ PUB go() | result, handle, bytesRead, bytesWritten, errCount, testSector, mismat
     utils.showSubTestResults()
 
     ' ======================================================================
+    ' TEST GROUP: Directory Extend Reports The True Code (S11)
+    ' ======================================================================
+    ' When a create must grow the directory by a cluster, do_create used to
+    ' flatten ANY allocateCluster failure to E_DISK_FULL -- a failed FAT write
+    ' reported as a full disk. The fix propagates the allocator's true code;
+    ' this group witnesses both codes through the same extension path.
+    utils.startTestGroup(@"Directory Extend Reports The True Code")
+
+    secPerClus := sd.sectorsPerCluster()
+    entriesN := secPerClus * 16                          ' 32-byte entries, 16 per sector -- NEVER a constant
+    ' Past 256 entries/cluster (>16 sec/clus) the fill runtime is impractical.
+    ' requireSetup records a SCORED FAILURE, not a skip -- on a card outside
+    ' this bound (32-64 sec/clus SDXC defaults) the suite goes red and forces
+    ' the question rather than silently losing the witness. Bench card: 8.
+    if utils.requireSetup(entriesN > 2 AND entriesN <= 256, @"SETUP: dir-extend fill practical at this geometry (<=16 sec/clus)")
+
+        ' Test 36: genuine disk-full via setTestMaxClusters -> E_DISK_FULL;
+        ' armed FAT write -> E_IO_ERROR; disarmed retry -> success
+        utils.startTest(@"Directory extend reports the allocator's true code")
+        utils.setCheckCountPerTest(5)
+
+        ' Leftover-tolerant preflight: a prior aborted run may have stranded
+        ' EXTDIR (possibly already extended, which would defeat the last-slot
+        ' geometry below) -- clear and delete it before building fresh
+        if sd.changeDirectory(@extDirName) == 0
+            cleanupExtDir(entriesN)
+            sd.changeDirectory(@rootPath)
+            sd.deleteFile(@extDirName)
+
+        result := sd.newDirectory(@extDirName)
+        if result == 0
+            result := sd.changeDirectory(@extDirName)
+        utils.evaluateSubValue(result, @"EXTDIR created and entered", 0)
+        if result == 0
+            ' The subdirectory's FAT sector, derived at runtime: first sector
+            ' from the CWD getter, cluster from the root-relative offset.
+            ' (Assumes root at cluster 2 and 128 FAT entries/sector -- true
+            ' for this driver's format; a debugFatSectorForCluster() getter
+            ' would make this exact. Backlogged.)
+            testSector := sd.debugGetDirSec()
+            testSector := (testSector - sd.debugGetRootSec()) / secPerClus + 2  ' subdir's cluster number
+            testSector := sd.debugGetFatSec() + (testSector >> 7)               ' FAT sector holding its entry
+
+            ' Fill slots 2..N-2 ('.' and '..' hold 0-1): exactly the cluster's
+            ' last slot remains, so the NEXT create triggers the extension.
+            ' All three witnesses below run at THIS one boundary: the capped
+            ' create fails inside allocateCluster before any directory write,
+            ' so the boundary survives for the armed and retry cases.
+            extTotal := entriesN - 3
+            utils.evaluateSubBool(fillExtDir(0, extTotal), @"filled to last-slot boundary", true)
+
+            ' Genuine disk-full: cap the FAT at 3 clusters (only root's
+            ' cluster 2 lies below the cap, and it is in use) -- the extend
+            ' finds no free cluster and reports E_DISK_FULL, touching nothing
+            sd.setTestMaxClusters(3)
+            result := sd.createFileNew(makeExtName(extTotal))
+            utils.evaluateSubValue(result, @"genuine disk-full extend reports E_DISK_FULL", sd.E_DISK_FULL)
+            if result >= 0
+                sd.closeFileHandle(result)
+            sd.clearTestErrors()
+
+            ' Armed one-shot: the extension's chain-link write to the subdir's
+            ' FAT entry fails whichever FAT sector the new cluster lands in.
+            ' allocateCluster maps the failed write to E_IO_ERROR -- the code
+            ' that used to be swallowed by the E_DISK_FULL flattening. (A
+            ' failed extension may leak 1 cluster by doctrine -- reclaimed by
+            ' the sweep-preflight fsck, same as the S3/S5 bounded leaks.)
+            sd.setTestFailSector(testSector, sd.TF_WRITE)
+            result := sd.createFileNew(makeExtName(extTotal))
+            utils.evaluateSubValue(result, @"armed extend returns E_IO_ERROR", sd.E_IO_ERROR)
+            if result >= 0
+                sd.closeFileHandle(result)
+
+            ' Disarmed retry: same create now lands the entry and extends
+            sd.clearTestErrors()
+            result := sd.createFileNew(makeExtName(extTotal))
+            utils.evaluateSubBool(result >= 0, @"disarmed retry succeeds", true)
+            if result >= 0
+                sd.closeFileHandle(result)
+        else
+            utils.evaluateSubBool(false, @"filled to last-slot boundary", true)
+            utils.evaluateSubBool(false, @"genuine disk-full extend reports E_DISK_FULL", true)
+            utils.evaluateSubBool(false, @"armed extend returns E_IO_ERROR", true)
+            utils.evaluateSubBool(false, @"disarmed retry succeeds", true)
+        utils.showSubTestResults()
+
+        ' Child-first cleanup on every path -- same worst-case bound as the
+        ' preflight; misses are free
+        sd.clearTestErrors()
+        cleanupExtDir(entriesN)
+        sd.changeDirectory(@rootPath)
+        sd.deleteFile(@extDirName)
+
+    ' ======================================================================
     ' Cleanup and Summary
     ' ======================================================================
     sd.clearFlushError()
@@ -1181,6 +1277,44 @@ PUB go() | result, handle, bytesRead, bytesWritten, errCount, testSector, mismat
 
     debug(" ")
     debug("END_SESSION")
+
+PRI makeExtName(idx) : pName
+' Patch a 3-digit index into the EXTnnn.TMP template (Test 36 fill files).
+'
+' @param idx - File index 0..999
+' @returns pName - Pointer to the patched name (shared template buffer)
+
+    extFileName[3] := "0" + (idx / 100)
+    extFileName[4] := "0" + ((idx / 10) // 10)
+    extFileName[5] := "0" + (idx // 10)
+    pName := @extFileName
+
+PRI fillExtDir(startIdx, count) : bOk | idx, handle
+' Create `count` empty files (indices startIdx..startIdx+count-1) in the CWD.
+' Test 36 uses this to drive a subdirectory cluster to its last free slot.
+'
+' @param startIdx - First file index
+' @param count - Number of files to create
+' @returns bOk - TRUE only if every create+close succeeded
+
+    bOk := true
+    repeat idx from startIdx to startIdx + count - 1
+        handle := sd.createFileNew(makeExtName(idx))
+        if handle < 0
+            debug("  fillExtDir: create #", udec_(idx), " failed: ", sdec_(handle))
+            bOk := false
+            quit
+        if sd.closeFileHandle(handle) < 0
+            debug("  fillExtDir: close #", udec_(idx), " failed")
+            bOk := false
+            quit
+
+PRI cleanupExtDir(total) | idx
+' Delete Test 36 fill files by regenerated name, indices 0..total-1, in the
+' CWD. Misses are expected and ignored (child-first cleanup convention).
+
+    repeat idx from 0 to total - 1
+        sd.deleteFile(makeExtName(idx))
 
 PRI cleanupTestItems()
 ' Delete every fixture this suite creates -- or could leak on a regressed driver.

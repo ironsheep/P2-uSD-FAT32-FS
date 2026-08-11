@@ -10,51 +10,54 @@ Automated regression test suite for the P2 SD Card Driver. All tests execute on 
 
 | Test Suite | Description | Tests |
 |------------|-------------|-------|
-| **Mount Tests** | Card initialization, mounting, unmounting, pre/post-mount errors, double-mount | 31 |
-| **File Operations** | Create, open, close, delete, rename, filename edge cases (V3 handle API) | 26 |
+| **Mount Tests** | Card initialization, mounting, unmounting, pre/post-mount errors, double-mount, structural corruption (raw-patched MBR/VBR/FSInfo), RAW-mode gate | 43 |
+| **File Operations** | Create, open, close, delete, rename, filename edge cases, cluster-0 lazy-allocation fixtures (V3 handle API) | 35 |
 | **Read/Write Tests** | Data integrity, sector/cluster boundaries, constant patterns, tellHandle/EOF, multi-cluster, large files | 49 |
-| **Directory Tests** | Directory listing, navigation, deep nesting, boundaries, many-file stress, stale cluster | 30 |
-| **Seek Tests** | Random access, cross-sector seeks, seek boundaries | 37 |
+| **Directory Tests** | Directory listing, navigation, deep nesting, boundaries, many-file stress, stale cluster, cluster-0 chdir rejection | 33 |
+| **Seek Tests** | Random access, cross-sector seeks, seek boundaries | 38 |
 | **Multicog Tests** | Singleton pattern, concurrent access, lock serialization | 15 |
-| **Multihandle Tests** | Multiple simultaneous file handles, use-after-close, pool recycling | 21 |
-| **Multiblock Tests** | Multi-sector streamer DMA transfers (CMD18/CMD25) | 6 |
-| **Raw Sector Tests** | Direct sector read/write, large LBA addressing | 15 |
-| **Format Tests** | FAT32 structure validation, cross-OS compatibility | 47 |
+| **Multihandle Tests** | Multiple simultaneous file handles, use-after-close, pool recycling | 22 |
+| **Multiblock Tests** | Multi-sector streamer DMA transfers (CMD18/CMD25) | 7 |
+| **Raw Sector Tests** | Direct sector read/write, large LBA addressing | 14 |
+| **Format Tests** | FAT32 structure validation, cross-OS compatibility | 57 |
 | **Subdirectory Ops Tests** | Cross-buffer cache coherence, empty files, subdir operations | 18 |
-| **Core Total** | | **295** |
+| **Core Total** | | **331** |
 
 ### Additional Test Suites
 
 | Test Suite | Description | Tests |
 |------------|-------------|-------|
 | **Directory Handle Tests** | V3 directory handle enumeration, pool interaction, E_NOT_A_DIR_HANDLE | 25 |
-| **Volume Tests** | Volume label, VBR access, syncAll, sync, setDate, disk full, auto-flush | 31 |
-| **Register Tests** | CSD register access, timeout values, capacity cross-check | 10 |
+| **Volume Tests** | Volume label, label protection from file operations, VBR access, syncAll, sync, setDate, disk full, auto-flush | 38 |
+| **Register Tests** | CSD, CID, SCR, SD Status and OCR register access, timeout values, capacity cross-check, RAW-mode repeat | 17 |
 | **Speed Tests** | SPI frequency, CMD6, high-speed mode, speed boundaries | 15 |
 | **CRC Diagnostic Tests** | CRC counters, validation toggle, CMD13 diagnostics | 14 |
 | **Error Handling Tests** | Error conditions, invalid handles, dir handle type mismatch, rename edge cases | 19 |
-| **Error Injection Tests** | Targeted fault injection: named-LBA read/write failure, nth-write failure, one-shot vs sticky, clean disarm; failure paths turned back on the driver (primitive reporting, Tier-1 corruption, search failure, short counts); background flush reporting (slow: waits out idle windows); sync/freeSpace/stop status propagation | 34 |
+| **Error Injection Tests** | Targeted fault injection: named-LBA read/write failure, nth-write failure, one-shot vs sticky, clean disarm; failure paths turned back on the driver (primitive reporting, Tier-1 corruption, search failure, short counts); background flush reporting (slow: waits out idle windows); sync/freeSpace/stop status propagation; directory-extend true error codes | 36 |
 | **CRC Validation Tests** | CRC error injection hooks, forced read/write CRC errors, hook state management | 6 |
 | **Recovery Tests** | Recovery after read/write errors, CRC counter verification, remount recovery, handle isolation | 7 |
 | **FIFO Tests** | String FIFO (isp_string_fifo) inter-cog communication | 21 |
 | **Cog CWD Tests** | Per-cog working directory isolation, multi-cog CWD independence | 5 |
 | **Stress Tests** | Concurrent reader/writer integrity, rapid open/close under contention | 4 |
-| **Timestamp Tests** | setDate/getDate round-trip, live clock advance, creation/modification stamps | 6 |
-| **Async I/O Tests** | Non-blocking read/write, isComplete polling, cancelAsync, multi-cog interleave, per-cog ownership of the in-flight operation | 7 |
-| **Defrag Tests** | fileFragments, isFileContiguous, compactFile, createFileContiguous, next-fit allocation | 12 |
+| **Timestamp Tests** | setDate/getDate round-trip, parameter validation bounds, live clock advance, creation/modification stamps | 8 |
+| **Async I/O Tests** | Non-blocking read/write, isComplete polling, cancelAsync, multi-cog interleave, per-cog ownership, same-cog busy guard, failure paths (injected read failure, partial count, collect-time errors) | 13 |
+| **Defrag Tests** | fileFragments, isFileContiguous, compactFile, createFileContiguous, duplicate-create leak witness, next-fit allocation | 13 |
 | **FAT Chain Tests** | Cross-boundary overwrite follows the FAT chain; mid-sector append preserves leading bytes | 2 |
-| | **Additional Total** | **218** |
-| | **Grand Total (27 suites)** | **513** |
+| | **Additional Total** | **243** |
+| | **Grand Total (27 suites)** | **574** |
 
-**How a test is counted.** One test is one `utils.startTest()` call — the same unit the
-framework prints as `* Test #N`. `SD_RT_multiblock_tests` and `SD_RT_raw_sector_tests`
-predate the shared framework and count their own passes, so for those two a test is one
-`recordPass()` call. Sub-tests within a test (`evaluateSubValue()` and friends) are not
-counted separately. The numbers above are reproducible from source:
+**How a test is counted.** One test is one *executed* `utils.startTest()` call — the same
+unit the framework prints as `* Test #N`. Every suite, including `SD_RT_multiblock_tests`
+and `SD_RT_raw_sector_tests` (converted to the framework in v1.7.0), scores through
+`utils.ShowTestEndCounts()`. Sub-tests within a test (`evaluateSubValue()` and friends)
+are not counted separately. The numbers above are reproducible from source:
 
 ```bash
 cd src/regression-tests && grep -c "utils.startTest(" SD_RT_<suite>_tests.spin2
 ```
+
+One correction applies: a `startTest()` inside a helper executes once per call — the mount
+suite's `corruptCase()` helper runs 4 times, so its grep count of 40 executes as 43.
 
 `tools/check_doc_counts.sh` compares documents to each other and cannot see drift between
 a document and the suites on disk, so these counts are verified by the command above, not

@@ -122,10 +122,14 @@ PUB ShowTestEndCounts() | pMsg
 
     debug(" ")  ' blank line
     debug(" ============================================================")
-    debug("* ", udec_(numberTests), " Tests - Pass: ", udec_(passCount), ", Fail: ", udec_(failCount))
     if numberTests <> passCount + failCount
       pMsg := (numberTests > passCount + failCount) ? @"missing" : @"extra"
       debug("*  BAD TEST COUNTS: ", udec_(numberTests), " <> ", udec_(passCount + failCount), " (", zstr_(pMsg), " ", udec_(abs(numberTests - (passCount + failCount))), " tests)")
+      ' A startTest() whose body recorded nothing used to vanish GREEN: the only
+      ' trace was the warning line above, and the harness parses ONLY the totals
+      ' line below. Score the discrepancy as failures so the parsed line carries it.
+      failCount += abs(numberTests - (passCount + failCount))
+    debug("* ", udec_(numberTests), " Tests - Pass: ", udec_(passCount), ", Fail: ", udec_(failCount))
     debug(" ============================================================")
 
     ' DRAIN THE DEBUG STREAM BEFORE THE CALLER EMITS END_SESSION.

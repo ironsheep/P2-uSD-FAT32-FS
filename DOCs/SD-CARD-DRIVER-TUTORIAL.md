@@ -942,6 +942,9 @@ While an async operation is in flight, the **API lock is held**. No other cog ca
 - Don't start an async op and forget about it — other cogs will block
 - Call `getResult()` as soon as you're ready for the data
 - If you need to bail out, call `cancelAsync()` (it still waits for the SPI transfer to finish safely)
+- Your own cog's **blocking** calls (`readHandle()`, `closeFileHandle()`, `unmount()`, ...)
+  return `E_ASYNC_BUSY` while your async op is in flight — collect or cancel first. The
+  lock is not re-entrant, so without this guard such a call could never return.
 
 ### Important: One Async Operation, and It Belongs to One Cog
 

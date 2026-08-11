@@ -150,6 +150,10 @@ PUB go() | result, handle, handle0, handle1, handle2, bytesRead, bytesRead2, crc
 
     ' Test 2: Seek and retry after exhaustive error
     ' open file -> arm(3) -> read fails -> clear -> seek(0) -> read succeeds
+    ' NOTE: the read hooks fire only on a cache MISS, and test #1 just read both
+    ' of recFile1's sectors into the data cache -- whether the armed read below
+    ' misses would otherwise depend on which sector the cache happens to hold.
+    ' Dropping the cache tags makes the miss (and the injection) deterministic.
     utils.startTest(@"Seek and retry after exhaustive CRC error")
     utils.setCheckCountPerTest(4)
     sd.clearTestErrors()
@@ -157,6 +161,7 @@ PUB go() | result, handle, handle0, handle1, handle2, bytesRead, bytesRead2, crc
     handle := sd.openFileRead(@recFile1)
     if handle >= 0
         crcBaseline := sd.getCRCMismatchCount()
+        sd.setTestInvalidateCaches()
         sd.setTestForceReadError(MAX_READ_CRC_RETRIES)
         bytefill(@readBuffer, 0, BUFFER_SIZE)
         bytesRead := sd.readHandle(handle, @readBuffer, BUFFER_SIZE)
@@ -201,10 +206,16 @@ PUB go() | result, handle, handle0, handle1, handle2, bytesRead, bytesRead2, crc
         sd.writeHandle(handle, @beforeContent, strsize(@beforeContent))
         sd.closeFileHandle(handle)
 
-    ' Reopen for write, arm error, attempt write
+    ' Reopen for write, arm the failure, attempt write.
+    ' setTestFailWriteAfter, NOT setTestForceWriteError: the legacy hook only
+    ' corrupts the wire CRC, and a card that does not enforce write CRC accepts
+    ' the "rejected" append -- the data lands and this test fails. The counted
+    ' hook rejects before CMD24, deterministically, on any card. The 5-byte
+    ' append stays in the handle buffer, so the next writeSector() is the
+    ' close's flush -- exactly the write that must fail.
     handle := sd.openFileWrite(@recWriteFile)
     if handle >= 0
-        sd.setTestForceWriteError(1)
+        sd.setTestFailWriteAfter(1)
         sd.writeHandle(handle, @afterContent, strsize(@afterContent))
         sd.closeFileHandle(handle)
 

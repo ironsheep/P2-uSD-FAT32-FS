@@ -364,12 +364,38 @@ PUB go() | result, handle, h2, frags, bytesWritten, bytesRead, idx, secPerClus, 
         sd.deleteFile(@fileContig)
     sd.clearTestErrors()                                                         ' Reset test_max_clusters
 
+    ' --- Test 12: duplicate name allocates nothing (leak witness) ---
+    ' createFileContiguous checks the name BEFORE reserving the chain, so a
+    ' duplicate-name reject must leave free space untouched. Before the
+    ' check-then-allocate reorder, every duplicate call leaked the whole
+    ' pre-allocated chain into the FAT (recoverable only by fsck).
+    utils.startTest(@"createFileContiguous() duplicate name leaks no clusters")
+    utils.setCheckCountPerTest(4)
+    handle := sd.createFileContiguous(@fileContig, 4096)
+    utils.evaluateSubBool(handle >= 0, @"initial create", true)
+    if handle >= 0
+        sd.closeFileHandle(handle)
+    freeSec := sd.freeSpace()                                                    ' baseline with CONTIG.TXT on card
+    h2 := sd.createFileContiguous(@fileContig, 4096)
+    utils.evaluateSubValue(h2, @"duplicate create", sd.E_FILE_EXISTS)
+    if h2 >= 0
+        sd.closeFileHandle(h2)
+    result := sd.freeSpace()
+    utils.evaluateSubValue(result, @"freeSpace unchanged (leak witness)", freeSec)
+    sd.deleteFile(@fileContig)
+    handle := sd.createFileContiguous(@fileContig, 4096)                         ' name must be reusable after delete
+    utils.evaluateSubBool(handle >= 0, @"recreate after delete", true)
+    if handle >= 0
+        sd.closeFileHandle(handle)
+    utils.showSubTestResults()
+    sd.deleteFile(@fileContig)
+
     ' =========================================================================
     ' TEST GROUP 4: Next-Fit Allocation
     ' =========================================================================
     utils.startTestGroup(@"Next-Fit Allocation")
 
-    ' --- Test 12: Sequential creates are contiguous ---
+    ' --- Test 13: Sequential creates are contiguous ---
     utils.startTest(@"Sequential file creates are contiguous")
     utils.setCheckCountPerTest(3)
     ' Create three files in sequence - next-fit should keep them contiguous

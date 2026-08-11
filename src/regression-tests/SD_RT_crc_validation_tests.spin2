@@ -104,12 +104,17 @@ PUB go() | result, handle, bytesRead, bytesWritten, seedOk, retryBefore, retryAf
 
     ' Create test file with known pattern. GATED: every test below reads this file,
     ' so an unchecked seed failure meant every one of them measured nothing while
-    ' reporting its own individual failure.
+    ' reporting its own individual failure. Seeded at 1024 bytes -- two sectors of
+    ' the same $42 pattern -- so test #2 can aim its injection at the SECOND
+    ' sector, which nothing else reads: an armed read that lands on a cached
+    ' sector never reaches the injection site.
     utils.fillBufferWithPattern(@writeBuffer, BUFFER_SIZE, $42)
     handle := sd.createFileNew(@crcFile1)
     seedOk := false
     if handle >= 0
         seedOk := (sd.writeHandle(handle, @writeBuffer, BUFFER_SIZE) == BUFFER_SIZE)
+        if seedOk
+            seedOk := (sd.writeHandle(handle, @writeBuffer, BUFFER_SIZE) == BUFFER_SIZE)
         sd.closeFileHandle(handle)
     ifnot utils.requireSetup(seedOk, @"SETUP: create CRC validation test file")
         sd.deleteFile(@crcFile1)
@@ -155,14 +160,22 @@ PUB go() | result, handle, bytesRead, bytesWritten, seedOk, retryBefore, retryAf
     utils.showSubTestResults()
 
     ' Test 2: Exhaustive forced CRC error (count=3) causes read failure
-    ' NOTE: Hook must be armed AFTER openFileRead to avoid consuming count on directory reads
+    ' NOTE: Hook must be armed AFTER openFileRead and AFTER the seek, so neither
+    ' directory reads nor a seek-time FAT walk can consume the injection count.
+    ' The armed read targets the file's SECOND sector: test #1 left the first
+    ' sector in the data cache (readSector commits the tag on success as of
+    ' v1.7.0), and an injection hook fires only on a cache miss. Nothing reads
+    ' the second sector before this, so the miss -- and the injection -- are
+    ' guaranteed.
     utils.startTest(@"Exhaustive forced CRC error causes read failure")
-    utils.setCheckCountPerTest(2)
+    utils.setCheckCountPerTest(3)
     sd.clearTestErrors()
     mismatchBefore := sd.getCRCMismatchCount()
     bytesRead := 0                                                              ' Zeroed: the checks below run on the skip path too
+    result := -1                                                                ' Preset to fail: the seek check below runs on the skip path too
     handle := sd.openFileRead(@crcFile1)
     if handle >= 0
+        result := sd.seekHandle(handle, BUFFER_SIZE)
         sd.setTestForceReadError(MAX_READ_CRC_RETRIES)
         utils.initGuard(@readBuffer_guard)
         bytesRead := sd.readHandle(handle, @readBuffer, BUFFER_SIZE)
@@ -170,6 +183,7 @@ PUB go() | result, handle, bytesRead, bytesWritten, seedOk, retryBefore, retryAf
         sd.closeFileHandle(handle)
     mismatchAfter := sd.getCRCMismatchCount()
     debug("  bytesRead=", sdec_(bytesRead), " mismatches before=", udec_(mismatchBefore), " after=", udec_(mismatchAfter))
+    utils.evaluateSubValue(result, @"seek to second sector", 0)
     if dummyCRC
         ' Dummy-CRC card: read-side validation is permanently skipped, so even
         ' exhaustive injection cannot cause failure. Read returns 512 bytes and

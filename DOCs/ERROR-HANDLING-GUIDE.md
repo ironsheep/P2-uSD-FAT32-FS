@@ -237,7 +237,20 @@ with `<> SUCCESS`, never with `NOT`.
 ## Async is one operation, owned by one cog
 
 There is a **single in-flight slot for the whole driver**, not one per cog. A second cog
-starting an async operation while one is pending gets `E_ASYNC_BUSY`.
+starting an async operation while one is pending gets `E_ASYNC_BUSY` — promptly, even when
+the two starts race.
+
+The owning cog gets the same answer from its own **blocking** calls: `readHandle()`,
+`closeFileHandle()`, `unmount()`, or any other blocking API called while that cog's async
+operation is in flight returns `E_ASYNC_BUSY` instead of deadlocking on the non-re-entrant
+lock. Collect with `getResult()` or cancel first. Info getters that return a value rather
+than a status (`tellHandle()`, `fileSizeHandle()`) return the code itself; boolean and
+count getters return their safe value (`eofHandle()` TRUE, counts 0) with `ERROR()`
+holding `E_ASYNC_BUSY`.
+
+`getResult()` and `cancelAsync()` also run the worker stack-guard check the blocking path
+runs after every command: a violation reports `E_STACK_OVERFLOW`, overriding even a
+successful result, because nothing a corrupted worker reported can be trusted.
 
 The operation **belongs to the cog that started it**. Only that cog may collect it with
 `getResult()` or drop it with `cancelAsync()`; another cog calling either gets
@@ -295,7 +308,7 @@ the card failed. Treat them as reasons to stop and investigate, not to retry.
 | -45 | `E_FILE_NOT_OPEN` | **Reserved** — never produced; a closed handle reports `E_INVALID_HANDLE` |
 | -46 | `E_END_OF_FILE` | Read past end of file |
 | -47 | `E_FILE_OPEN` | `deleteFile()` on a file that still has an open handle — close it first |
-| -60 | `E_DISK_FULL` | No free clusters |
+| -60 | `E_DISK_FULL` | No free clusters. A create that had to grow its directory reports this only for a genuinely full disk — a physical failure during the extend reports its own code (e.g. `E_IO_ERROR`) |
 | -61 | `E_NO_CONTIGUOUS_SPACE` | No contiguous run of sufficient length |
 | -62 | `E_FILE_OPEN_FOR_COMPACT` | File is open; cannot compact |
 | -63 | `E_VERIFY_FAILED` | Read-back verification failed after compact |
@@ -311,7 +324,7 @@ the card failed. Treat them as reasons to stop and investigate, not to retry.
 | -92 | `E_FILE_ALREADY_OPEN` | File already open for writing (single-writer policy) |
 | -93 | `E_NOT_A_DIR_HANDLE` | Wrong handle type for the operation |
 | -94 | `E_INVALID_PARAM` | Parameter value out of range |
-| -95 | `E_ASYNC_BUSY` | An async operation is already in flight |
+| -95 | `E_ASYNC_BUSY` | An async operation is already in flight — from a second `start*()`, or from any blocking API call by the cog that owns it |
 | -96 | `E_NO_ASYNC_OP` | No async operation, or it belongs to another cog |
 
 ---

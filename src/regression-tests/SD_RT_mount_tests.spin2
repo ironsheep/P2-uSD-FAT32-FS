@@ -63,8 +63,10 @@ DAT
 testfile1       BYTE    "TEST1.TXT", 0
 sectorBuffer    BYTE    0[512]
 sectorBuffer_guard BYTE 0[16]
+saveBuffer      BYTE    0[512]                          ' corruption group: pristine copy for restore
+saveBuffer_guard BYTE   0[16]
 
-PUB go() | result, pLabel, freeSpace, handle, bytesRead
+PUB go() | result, pLabel, freeSpace, handle, bytesRead, vbrSec, fsiSec
 '' Main entry point for mount/unmount regression tests
 ''
 '' Tests SD card mount, unmount, and basic card operations
@@ -349,6 +351,147 @@ PUB go() | result, pLabel, freeSpace, handle, bytesRead
     sd.unmount()
 
     ' ----------------------------------
+    ' TEST GROUP: Structural Corruption Fails The Mount (S9 / G-3)
+    ' ----------------------------------
+    ' Each case captures the target sector raw, patches ONE field, PROVES the
+    ' patch landed with a re-read (a wrong mount code over an unlanded patch is
+    ' a fixture failure, not a driver finding), asserts the SPECIFIC mount
+    ' code, then restores and verifies the restore. A failed mount leaves the
+    ' driver in RAW mode (do_mount assigns driver_mode only on success), so
+    ' the raw fixture survives every armed mount. PRIMARY copies only: the
+    ' driver never reads the backup boot sector or backup FSInfo, so
+    ' corrupting them would witness nothing.
+    utils.startTestGroup(@"Structural Corruption Fails The Mount")
+
+    utils.initGuard(@sectorBuffer_guard)
+    utils.initGuard(@saveBuffer_guard)
+
+    utils.startTest(@"initCardOnly for raw fixture access")
+    result := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    utils.evaluateSingleValue(result, @"initCardOnly()", 0)
+
+    ' The VBR's LBA, parsed from the MBR partition entry (start-LBA bytes
+    ' $1C6-$1C9, little-endian)
+    vbrSec := 0
+    if sd.readSectorRaw(0, @sectorBuffer) == 0
+        vbrSec := rd32(@sectorBuffer, $1C6)
+
+    corruptCase(@"MBR partition type rejects with E_NOT_FAT32", 0, $1C2, $00, sd.E_NOT_FAT32)
+    corruptCase(@"VBR bytes/sector rejects with E_BAD_SECTOR_SIZE", vbrSec, $0C, $04, sd.E_BAD_SECTOR_SIZE)
+    corruptCase(@"VBR FAT count rejects with E_NOT_FAT32", vbrSec, $10, $01, sd.E_NOT_FAT32)
+    ' secPerClus=0 slid through the power-of-two test (0 & -1 == 0) and
+    ' divided by zero in the worker -- a HANG, not a code. Post-fix it must
+    ' reject like any other structural fault. A regression here times the
+    ' suite out rather than scoring -- that red is the finding.
+    corruptCase(@"VBR secPerClus=0 rejects with E_NOT_FAT32 (not a hang)", vbrSec, $0D, $00, sd.E_NOT_FAT32)
+
+    ' FSInfo tolerance contract: bad FSInfo is TOLERATED at mount (free-count
+    ' hint marked unknown); it surfaces as E_BAD_FSINFO only when a free-count
+    ' change forces unmount/sync to write it back and the signatures fail the
+    ' pre-write verify.
+    utils.startTest(@"Corrupt FSInfo: tolerated at mount, E_BAD_FSINFO at unmount")
+    utils.setCheckCountPerTest(6)
+    ' FSInfo LBA parsed from the VBR (WORD at $30, relative to the VBR)
+    fsiSec := 0
+    if vbrSec > 0 AND sd.readSectorRaw(vbrSec, @sectorBuffer) == 0
+        fsiSec := vbrSec + rd16(@sectorBuffer, $30)
+    utils.evaluateSubBool(fsiSec > vbrSec, @"FSInfo sector located", true)
+
+    result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)  ' clean mount reads the VALID free count
+    if fsiSec <= vbrSec
+        result := -1                                     ' bad locate (scored above) -- touch nothing
+    if result == 0
+        result := sd.readSectorRaw(fsiSec, @sectorBuffer)
+    if result == 0
+        bytemove(@saveBuffer, @sectorBuffer, 512)
+        bytefill(@sectorBuffer, 0, 4)                    ' lead signature 'RRaA'
+        bytefill(@sectorBuffer + 484, 0, 4)              ' struct signature 'rrAa'
+        result := sd.writeSectorRaw(fsiSec, @sectorBuffer)
+    if result == 0
+        result := sd.readSectorRaw(fsiSec, @sectorBuffer)  ' prove it landed
+    utils.evaluateSubBool(result == 0 AND sectorBuffer[0] == 0 AND sectorBuffer[484] == 0, @"FSInfo corruption landed while mounted", true)
+
+    ' Force a free-count change so unmount MUST write FSInfo back
+    handle := sd.createFileNew(@testfile1)
+    if handle >= 0
+        sd.writeHandle(handle, @"S9!!", 4)
+        sd.closeFileHandle(handle)
+    sd.deleteFile(@testfile1)
+    result := sd.unmount()
+    utils.evaluateSubValue(result, @"unmount reports E_BAD_FSINFO", sd.E_BAD_FSINFO)
+
+    ' The tolerance IS the contract: a mount over the still-bad FSInfo
+    ' succeeds, and its unmount (no allocation, hint unknown) is clean
+    result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    utils.evaluateSubValue(result, @"mount with bad FSInfo returns SUCCESS", 0)
+    sd.unmount()
+
+    ' Restore FSInfo raw and verify
+    result := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    if result == 0
+        result := sd.writeSectorRaw(fsiSec, @saveBuffer)
+    if result == 0
+        result := sd.readSectorRaw(fsiSec, @sectorBuffer)
+    utils.evaluateSubBool(result == 0 AND sectorBuffer[0] == saveBuffer[0] AND sectorBuffer[484] == saveBuffer[484], @"FSInfo restored", true)
+
+    ' Operational close for the whole group: the card mounts green and
+    ' serves its volume label
+    result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    pLabel := 0
+    if result == 0
+        pLabel := sd.volumeLabel()
+    utils.evaluateSubBool(result == 0 AND pLabel <> 0, @"remount green + volume label readable", true)
+    utils.showSubTestResults()
+    sd.unmount()
+
+    utils.checkGuard(@sectorBuffer_guard, @"sectorBuffer guard")
+    utils.checkGuard(@saveBuffer_guard, @"saveBuffer guard")
+
+    ' ----------------------------------
+    ' TEST GROUP: RAW Mode Gates Filesystem Commands (G-4)
+    ' ----------------------------------
+    ' The worker dispatch rejects filesystem commands while driver_mode is
+    ' MODE_RAW -- a gate that had NEVER been exercised: no test issued a
+    ' filesystem op from RAW mode before this group.
+    utils.startTestGroup(@"RAW Mode Gates Filesystem Commands")
+
+    utils.startTest(@"initCardOnly enters RAW mode")
+    result := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    utils.evaluateSingleValue(result, @"initCardOnly()", 0)
+
+    utils.startTest(@"openFileRead() in RAW mode returns E_NOT_MOUNTED")
+    handle := sd.openFileRead(@testfile1)
+    utils.evaluateSingleValue(handle, @"openFileRead()", sd.E_NOT_MOUNTED)
+
+    utils.startTest(@"createFileNew() in RAW mode returns E_NOT_MOUNTED")
+    handle := sd.createFileNew(@testfile1)
+    utils.evaluateSingleValue(handle, @"createFileNew()", sd.E_NOT_MOUNTED)
+
+    utils.startTest(@"changeDirectory() in RAW mode returns E_NOT_MOUNTED")
+    result := sd.changeDirectory(@"/")
+    utils.evaluateSingleValue(result, @"changeDirectory()", sd.E_NOT_MOUNTED)
+
+    utils.startTest(@"RAW -> FILESYSTEM upgrade serves file ops")
+    utils.setCheckCountPerTest(2)
+    result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    utils.evaluateSubValue(result, @"mount() upgrades from RAW", 0)
+    handle := sd.createFileNew(@testfile1)
+    utils.evaluateSubBool(handle >= 0, @"file op succeeds after upgrade", true)
+    if handle >= 0
+        sd.closeFileHandle(handle)
+    sd.deleteFile(@testfile1)
+    utils.showSubTestResults()
+
+    ' Documented odd-but-deliberate choice: initCardOnly from a mounted
+    ' filesystem refuses with E_NOT_MOUNTED (assert what the code does; the
+    ' docs task verifies the docstring says the same)
+    utils.startTest(@"initCardOnly() while mounted returns E_NOT_MOUNTED")
+    result := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    utils.evaluateSingleValue(result, @"initCardOnly() while mounted", sd.E_NOT_MOUNTED)
+
+    sd.unmount()
+
+    ' ----------------------------------
     ' Summary
     ' ----------------------------------
     utils.ShowTestEndCounts()
@@ -356,6 +499,53 @@ PUB go() | result, pLabel, freeSpace, handle, bytesRead
     debug(" ")
     debug("* Mount/Unmount Tests Complete")
     debug("END_SESSION")
+
+PRI corruptCase(pTitle, lba, offset, newValue, expectedCode) | result
+' One structural-corruption case: capture the sector raw, patch one byte,
+' PROVE the patch landed, assert the specific mount code, restore, verify.
+' Entered in RAW mode; a failed mount leaves RAW mode, so the fixture holds.
+'
+' @param pTitle - Test title
+' @param lba - Sector to corrupt (0 = MBR, or the VBR's LBA)
+' @param offset - Byte offset within the sector
+' @param newValue - Corrupting byte value
+' @param expectedCode - The specific error mount() must return
+
+    utils.startTest(pTitle)
+    utils.setCheckCountPerTest(3)
+
+    result := sd.readSectorRaw(lba, @sectorBuffer)
+    if result == 0
+        bytemove(@saveBuffer, @sectorBuffer, 512)
+        sectorBuffer[offset] := newValue
+        result := sd.writeSectorRaw(lba, @sectorBuffer)
+    if result == 0
+        result := sd.readSectorRaw(lba, @sectorBuffer)   ' prove the patch landed BEFORE judging the mount
+    utils.evaluateSubBool(result == 0 AND sectorBuffer[offset] == newValue, @"corruption landed on card", true)
+
+    result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    utils.evaluateSubValue(result, @"mount returns the specific code", expectedCode)
+    if result == 0
+        ' Regression path: the mount accepted a corrupt volume. Get back to
+        ' RAW mode so the restore below and the following cases still run.
+        sd.unmount()
+        sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+
+    result := sd.writeSectorRaw(lba, @saveBuffer)
+    if result == 0
+        result := sd.readSectorRaw(lba, @sectorBuffer)
+    utils.evaluateSubBool(result == 0 AND sectorBuffer[offset] == saveBuffer[offset], @"restore verified", true)
+    utils.showSubTestResults()
+
+PRI rd32(pBuf, offset) : value
+' Little-endian 32-bit read, byte-assembled (no alignment assumption).
+
+    value := BYTE[pBuf][offset] | BYTE[pBuf][offset+1] << 8 | BYTE[pBuf][offset+2] << 16 | BYTE[pBuf][offset+3] << 24
+
+PRI rd16(pBuf, offset) : value
+' Little-endian 16-bit read, byte-assembled (no alignment assumption).
+
+    value := BYTE[pBuf][offset] | BYTE[pBuf][offset+1] << 8
 
 con { license }
 

@@ -84,6 +84,7 @@ PUB go() | result
     runTest4_DefaultTimestamp()
     runTest5_GetDateRoundTrip()
     runTest6_GetDateAdvances()
+    runTest7_SetDateValidation()
 
     ' Cleanup
     sd.deleteFile(@tsTestFile1)
@@ -339,6 +340,43 @@ PRI runTest6_GetDateAdvances() | year, month, day, hour, minute, second, sec1, s
     utils.showSubTestResults()
 
     debug("  sec1=", udec_(sec1), " sec2=", udec_(sec2), " delta=", udec_(sec2 - sec1))
+
+PRI runTest7_SetDateValidation() | result, year, month, day, hour, minute, second
+' Every out-of-range field must reject with E_INVALID_PARAM and leave the
+' previously-set date active (a reject must not half-apply fields).
+' E_INVALID_PARAM has exactly ONE producer in the driver -- this validation --
+' and no test had ever provoked it.
+
+    utils.startTest(@"setDate rejects each out-of-range field")
+    utils.setCheckCountPerTest(13)
+    sd.setDate(2026, 3, 15, 14, 30, 0)                  ' known-good baseline the rejects must preserve
+    utils.evaluateSubValue(sd.setDate(1979, 3, 15, 14, 30, 0), @"year 1979 rejected", sd.E_INVALID_PARAM)
+    utils.evaluateSubValue(sd.setDate(2108, 3, 15, 14, 30, 0), @"year 2108 rejected", sd.E_INVALID_PARAM)
+    utils.evaluateSubValue(sd.setDate(2026, 0, 15, 14, 30, 0), @"month 0 rejected", sd.E_INVALID_PARAM)
+    utils.evaluateSubValue(sd.setDate(2026, 13, 15, 14, 30, 0), @"month 13 rejected", sd.E_INVALID_PARAM)
+    utils.evaluateSubValue(sd.setDate(2026, 3, 0, 14, 30, 0), @"day 0 rejected", sd.E_INVALID_PARAM)
+    utils.evaluateSubValue(sd.setDate(2026, 3, 32, 14, 30, 0), @"day 32 rejected", sd.E_INVALID_PARAM)
+    utils.evaluateSubValue(sd.setDate(2026, 3, 15, 24, 30, 0), @"hour 24 rejected", sd.E_INVALID_PARAM)
+    utils.evaluateSubValue(sd.setDate(2026, 3, 15, 14, 60, 0), @"minute 60 rejected", sd.E_INVALID_PARAM)
+    utils.evaluateSubValue(sd.setDate(2026, 3, 15, 14, 30, 60), @"second 60 rejected", sd.E_INVALID_PARAM)
+    ' Negative time fields had NO lower bound (signed compares) -- accepted
+    ' and stamped as garbage until the v1.7.0 fix
+    utils.evaluateSubValue(sd.setDate(2026, 3, 15, -1, 30, 0), @"hour -1 rejected", sd.E_INVALID_PARAM)
+    utils.evaluateSubValue(sd.setDate(2026, 3, 15, 14, -1, 0), @"minute -1 rejected", sd.E_INVALID_PARAM)
+    utils.evaluateSubValue(sd.setDate(2026, 3, 15, 14, 30, -1), @"second -1 rejected", sd.E_INVALID_PARAM)
+    ' The baseline survived every reject (seconds may have ticked; the
+    ' coarser fields cannot have)
+    year, month, day, hour, minute, second := sd.getDate()
+    utils.evaluateSubBool(year == 2026 AND month == 3 AND day == 15 AND hour == 14, @"previous date still active", true)
+    utils.showSubTestResults()
+
+    utils.startTest(@"setDate accepts valid boundary values")
+    utils.setCheckCountPerTest(3)
+    utils.evaluateSubValue(sd.setDate(2026, 1, 1, 0, 0, 0), @"month 1 / day 1 / hour 0 accepted", 0)
+    utils.evaluateSubValue(sd.setDate(2026, 12, 31, 23, 59, 59), @"month 12 / day 31 / hour 23 accepted", 0)
+    result := sd.setDate(2026, 3, 15, 14, 30, 0)        ' restore a mid-range date for anything after us
+    utils.evaluateSubValue(result, @"baseline restored", 0)
+    utils.showSubTestResults()
 
 con { license }
 

@@ -68,6 +68,10 @@ The driver operates in three modes:
 
 Filesystem commands are rejected with `E_NOT_MOUNTED` when not in `MODE_FILESYSTEM`.
 
+### Mount Validation
+
+`mount()` validates the volume's structure before accepting it, first failure wins: the MBR partition-type byte must name a FAT32 partition (`E_NOT_FAT32`), the VBR's bytes-per-sector must be 512 (`E_BAD_SECTOR_SIZE`), the FAT count must be 2 (`E_NOT_FAT32`), and sectors-per-cluster must be a power of two and **nonzero** (`E_NOT_FAT32` -- zero is rejected rather than dividing by zero in the worker). A structurally corrupt card therefore fails the mount with a specific code instead of hanging. A bad FSInfo sector is deliberately **tolerated** at mount -- the free-count hint is rebuilt lazily -- and surfaces as `E_BAD_FSINFO` only if a later update to it fails at sync/unmount time.
+
 ## Card Presence Detection
 
 The P2 Edge Module microSD socket has no card-detect pin, and the SD specification defines no software-only detection method for SPI mode. The driver uses a behavioral approach: probe the card with CMD0 and analyze the MISO line response.
@@ -746,13 +750,15 @@ The async API reuses the existing command protocol but skips the `WAITATN` sleep
 
 1. **`startReadHandle()` / `startWriteHandle()`** -- acquires the API lock, writes mailbox parameters, sets `pb_cmd`, then returns immediately with `PENDING` (1). The lock is held throughout the operation.
 2. **`isComplete()`** -- polls `pb_cmd == CMD_NONE` (the worker clears `pb_cmd` when done). Returns TRUE/FALSE without blocking.
-3. **`getResult()`** -- waits if needed, reads the result from `pb_status`/`pb_data0`, releases the lock, and drains any stale `COGATN`. After this call, new commands can be issued.
-4. **`cancelAsync()`** -- waits for the worker to finish (cannot interrupt SPI mid-transfer), discards the result, and releases the lock.
+3. **`getResult()`** -- waits if needed, reads the result from `pb_status`/`pb_data0`, releases the lock, and drains any stale `COGATN`. After this call, new commands can be issued. Runs the same worker stack-guard check as the blocking path: a violation reports `E_STACK_OVERFLOW`, overriding even a successful result.
+4. **`cancelAsync()`** -- waits for the worker to finish (cannot interrupt SPI mid-transfer), discards the result, and releases the lock. Cancel discards the *result*, not the operation: the handle's position has moved by the bytes transferred, and a write's data landed. It runs the same stack-guard check as `getResult()`.
 
 ### Constraints
 
-- Only one async operation can be in flight at a time (`E_ASYNC_BUSY` if a second is attempted)
+- Only one async operation can be in flight at a time, across the whole driver (`E_ASYNC_BUSY` if a second is attempted -- promptly, even when two starts race)
 - The API lock is held for the entire duration, so no other cog can issue commands until `getResult()` or `cancelAsync()` is called
+- A **blocking** API call (`readHandle()`, `closeFileHandle()`, `unmount()`, ...) from the cog that owns the in-flight operation returns `E_ASYNC_BUSY` instead of deadlocking on the non-re-entrant lock; collect or cancel first
+- Only the cog that started the operation may collect or cancel it (`E_NO_ASYNC_OP` for any other cog)
 - The caller must not modify the data buffer while the async write is in progress
 - `SD_INCLUDE_ASYNC` is not part of `SD_INCLUDE_ALL` -- it must be enabled separately
 
@@ -831,7 +837,7 @@ All structs are packed (Spin2 default) with offsets matching their respective ha
 | `E_INVALID_HANDLE` | -91 | Handle out of range or not open |
 | `E_FILE_ALREADY_OPEN` | -92 | File already open for writing |
 | `E_NOT_A_DIR_HANDLE` | -93 | Wrong handle type for operation |
-| `E_ASYNC_BUSY` | -95 | An async operation is already in flight |
+| `E_ASYNC_BUSY` | -95 | An async operation is already in flight -- returned by a second `start*()`, and by ANY blocking API call from the cog that owns the in-flight operation |
 | `E_NO_ASYNC_OP` | -96 | No async operation to get result from |
 
 ## Public API Summary

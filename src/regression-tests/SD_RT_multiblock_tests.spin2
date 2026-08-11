@@ -82,8 +82,6 @@ VAR
     BYTE    large_read_buf[LARGE_COUNT * sd.SECTOR_SIZE]
     BYTE    large_read_buf_guard[16]
 
-    LONG    pass_count
-    LONG    fail_count
     BYTE    cmd12_buf[16]
     BYTE    cmd12_pre_buf[7]
 
@@ -104,9 +102,6 @@ PUB go() | result, cardSectors
     debug("  SD Multi-Block Data Integrity Tests (V2 Driver)")
     debug("============================================================")
     debug(" ")
-
-    pass_count := 0
-    fail_count := 0
 
     ' Mount the card (starts worker cog needed for multi-block operations)
     debug("Mounting SD card (V2 driver)...")
@@ -156,6 +151,8 @@ PUB go() | result, cardSectors
         return
     debug(" ")
 
+    utils.startTestGroup(@"Multi-Block Data Integrity")
+
     ' ========================================
     ' TEST 1: Round-trip multi-block
     ' ========================================
@@ -184,6 +181,7 @@ PUB go() | result, cardSectors
     ' ========================================
     ' TEST 6: CMD25 cache coherence
     ' ========================================
+    utils.startTestGroup(@"CMD25 Cache Coherence")
     testCmd25CacheCoherence()
 
     ' Report stack depth while worker cog is still running
@@ -196,10 +194,9 @@ PUB go() | result, cardSectors
     ' skipped the final cache flush that every other suite performs on teardown.
     sd.unmount()
 
-    debug(" ")
-    debug("============================================================")
-    debug("  Multi-Block Tests - Pass: ", udec_(pass_count), ", Fail: ", udec_(fail_count))
-    debug("============================================================")
+    ' Framework totals, BAD TEST COUNTS cross-check, and (on measurement builds) the stack watermark
+    utils.ShowTestEndCounts()
+
     debug(" ")
     debug("END_SESSION")
 
@@ -213,6 +210,7 @@ PRI testRoundTripMultiBlock() | sector, idx, written, readCt, errors, nonce
 ' @local readCt - Number of sectors read by readSectorsRaw()
 ' @local errors - Count of byte mismatches during verification
 
+    utils.startTest(@"Round-trip multi-block (8 sectors)")
     debug("--- TEST 1: Round-trip Multi-Block (8 sectors) ---")
     sector := TEST_SECTOR_BASE
 
@@ -229,7 +227,7 @@ PRI testRoundTripMultiBlock() | sector, idx, written, readCt, errors, nonce
     written := sd.writeSectorsRaw(sector, SMALL_COUNT, @write_buf)
     if written <> SMALL_COUNT
         debug("  FAIL: writeSectorsRaw returned ", udec_(written), " (expected ", udec_(SMALL_COUNT), ")")
-        recordFail()
+        utils.recordFail()
         return
 
     ' Clear read buffer
@@ -243,7 +241,7 @@ PRI testRoundTripMultiBlock() | sector, idx, written, readCt, errors, nonce
     if readCt <> SMALL_COUNT
         debug("  FAIL: readSectorsRaw returned ", udec_(readCt), " (expected ", udec_(SMALL_COUNT), ")")
         dumpCMD18Diag()
-        recordFail()
+        utils.recordFail()
         return
 
     ' Verify every byte
@@ -259,10 +257,10 @@ PRI testRoundTripMultiBlock() | sector, idx, written, readCt, errors, nonce
         if sd.getLastCMD18FailPath() == 5
             debug("  NOTE: CMD12 error was tolerated (path=5)")
             dumpCMD18Diag()
-        recordPass()
+        utils.recordPass()
     else
         debug("  -> FAIL: ", udec_(errors), " byte mismatches")
-        recordFail()
+        utils.recordFail()
 
 
 PRI testMultiWriteSingleRead() | sector, idx, jdx, written, errors, expected, actual, bufOffset, nonce
@@ -277,6 +275,7 @@ PRI testMultiWriteSingleRead() | sector, idx, jdx, written, errors, expected, ac
 ' @local actual - Actual byte value read from buffer
 ' @local bufOffset - Byte offset into write_buf for current sector
 
+    utils.startTest(@"Multi-write, single-read (8 sectors)")
     debug(" ")
     debug("--- TEST 2: Multi-Write, Single-Read (8 sectors) ---")
     sector := TEST_SECTOR_BASE + 10
@@ -291,7 +290,7 @@ PRI testMultiWriteSingleRead() | sector, idx, jdx, written, errors, expected, ac
     written := sd.writeSectorsRaw(sector, SMALL_COUNT, @write_buf)
     if written <> SMALL_COUNT
         debug("  FAIL: writeSectorsRaw returned ", udec_(written))
-        recordFail()
+        utils.recordFail()
         return
 
     ' Read back with 8 individual reads and verify each
@@ -305,7 +304,7 @@ PRI testMultiWriteSingleRead() | sector, idx, jdx, written, errors, expected, ac
         ' write path rather than at the read that actually failed.
         if sd.readSectorRaw(sector + idx, @read_buf) < 0
             debug("  FAIL: readSectorRaw failed for sector ", udec_(sector + idx), " (not a data mismatch)")
-            recordFail()
+            utils.recordFail()
             return
         utils.initAndCheckGuard(@read_buf_guard, @"read_buf guard")
 
@@ -321,10 +320,10 @@ PRI testMultiWriteSingleRead() | sector, idx, jdx, written, errors, expected, ac
 
     if errors == 0
         debug("  -> PASS: All 8 sectors verified with single reads")
-        recordPass()
+        utils.recordPass()
     else
         debug("  -> FAIL: ", udec_(errors), " byte mismatches")
-        recordFail()
+        utils.recordFail()
 
 
 PRI testSingleWriteMultiRead() | sector, idx, jdx, readCt, errors, expected, actual, bufOffset, nonce
@@ -339,6 +338,7 @@ PRI testSingleWriteMultiRead() | sector, idx, jdx, readCt, errors, expected, act
 ' @local actual - Actual byte value read from buffer
 ' @local bufOffset - Byte offset into write_buf for current sector
 
+    utils.startTest(@"Single-write, multi-read (8 sectors)")
     debug(" ")
     debug("--- TEST 3: Single-Write, Multi-Read (8 sectors) ---")
     sector := TEST_SECTOR_BASE + 20
@@ -355,7 +355,7 @@ PRI testSingleWriteMultiRead() | sector, idx, jdx, readCt, errors, expected, act
         ' Write this sector
         if sd.writeSectorRaw(sector + idx, @write_buf + bufOffset) < 0
             debug("  FAIL: writeSectorRaw failed for sector ", udec_(idx))
-            recordFail()
+            utils.recordFail()
             return
 
     ' Clear read buffer
@@ -369,7 +369,7 @@ PRI testSingleWriteMultiRead() | sector, idx, jdx, readCt, errors, expected, act
     if readCt <> SMALL_COUNT
         debug("  FAIL: readSectorsRaw returned ", udec_(readCt))
         dumpCMD18Diag()
-        recordFail()
+        utils.recordFail()
         return
 
     ' Verify all data
@@ -386,10 +386,10 @@ PRI testSingleWriteMultiRead() | sector, idx, jdx, readCt, errors, expected, act
 
     if errors == 0
         debug("  -> PASS: All 8 sectors verified")
-        recordPass()
+        utils.recordPass()
     else
         debug("  -> FAIL: ", udec_(errors), " byte mismatches")
-        recordFail()
+        utils.recordFail()
 
 
 PRI testEdgeCases() | sector, idx, written, readCt, errors, nonce
@@ -405,6 +405,8 @@ PRI testEdgeCases() | sector, idx, written, readCt, errors, nonce
     debug("--- TEST 4: Edge Cases ---")
 
     ' Test 4a: count=1 (should work as single-sector operation)
+    ' 4a and 4b each record their own result, so each carries its own title
+    utils.startTest(@"Edge case: count=1 single-sector fallback")
     sector := TEST_SECTOR_BASE + 30
     debug("* Test 4a: writeSectorsRaw/readSectorsRaw with count=1")
 
@@ -416,7 +418,7 @@ PRI testEdgeCases() | sector, idx, written, readCt, errors, nonce
     written := sd.writeSectorsRaw(sector, 1, @write_buf)
     if written <> 1
         debug("  FAIL: count=1 write returned ", udec_(written))
-        recordFail()
+        utils.recordFail()
     else
         bytefill(@read_buf, $00, sd.SECTOR_SIZE)
         utils.initGuard(@read_buf_guard)
@@ -426,7 +428,7 @@ PRI testEdgeCases() | sector, idx, written, readCt, errors, nonce
             debug("  FAIL: count=1 read returned ", udec_(readCt))
             debug("  DIAG: R1=$", uhex_byte_(sd.getLastCMD18R1()), " tok=$", uhex_byte_(sd.getLastCMD18Token()), " path=", udec_(sd.getLastCMD18FailPath()), " sread=", udec_(sd.getLastCMD18SectorsRead()))
             debug("  CMD12: R1=$", uhex_byte_(sd.getLastCMD12R1()), " result=", udec_(sd.getLastCMD12Result()))
-            recordFail()
+            utils.recordFail()
         else
             errors := 0
             repeat idx from 0 to sd.SECTOR_SIZE - 1
@@ -434,12 +436,13 @@ PRI testEdgeCases() | sector, idx, written, readCt, errors, nonce
                     errors++
             if errors == 0
                 debug("  -> PASS: count=1 works correctly")
-                recordPass()
+                utils.recordPass()
             else
                 debug("  -> FAIL: count=1 data mismatch (", udec_(errors), " errors)")
-                recordFail()
+                utils.recordFail()
 
     ' Test 4b: count=0 (should return 0 immediately)
+    utils.startTest(@"Edge case: count=0 immediate return")
     debug("* Test 4b: writeSectorsRaw/readSectorsRaw with count=0")
 
     written := sd.writeSectorsRaw(sector, 0, @write_buf)
@@ -447,10 +450,10 @@ PRI testEdgeCases() | sector, idx, written, readCt, errors, nonce
 
     if written == 0 and readCt == 0
         debug("  -> PASS: count=0 returns 0 for both operations")
-        recordPass()
+        utils.recordPass()
     else
         debug("  -> FAIL: count=0 returned write=", udec_(written), " read=", udec_(readCt))
-        recordFail()
+        utils.recordFail()
 
 
 PRI testLargeMultiBlock() | sector, idx, written, readCt, errors, nonce
@@ -462,6 +465,7 @@ PRI testLargeMultiBlock() | sector, idx, written, readCt, errors, nonce
 ' @local readCt - Number of sectors read by readSectorsRaw()
 ' @local errors - Count of byte mismatches during verification
 
+    utils.startTest(@"Large multi-block (64 sectors = 32KB)")
     debug(" ")
     debug("--- TEST 5: Large Multi-Block (64 sectors = 32KB) ---")
     sector := TEST_SECTOR_BASE + 50
@@ -478,7 +482,7 @@ PRI testLargeMultiBlock() | sector, idx, written, readCt, errors, nonce
     written := sd.writeSectorsRaw(sector, LARGE_COUNT, @large_write_buf)
     if written <> LARGE_COUNT
         debug("  FAIL: writeSectorsRaw returned ", udec_(written), " (expected ", udec_(LARGE_COUNT), ")")
-        recordFail()
+        utils.recordFail()
         return
 
     debug("* Write complete, clearing read buffer...")
@@ -492,7 +496,7 @@ PRI testLargeMultiBlock() | sector, idx, written, readCt, errors, nonce
     if readCt <> LARGE_COUNT
         debug("  FAIL: readSectorsRaw returned ", udec_(readCt), " (expected ", udec_(LARGE_COUNT), ")")
         dumpCMD18Diag()
-        recordFail()
+        utils.recordFail()
         return
 
     ' Verify all 32KB
@@ -506,10 +510,10 @@ PRI testLargeMultiBlock() | sector, idx, written, readCt, errors, nonce
 
     if errors == 0
         debug("  -> PASS: All 32KB (", udec_(LARGE_COUNT * sd.SECTOR_SIZE), " bytes) verified")
-        recordPass()
+        utils.recordPass()
     else
         debug("  -> FAIL: ", udec_(errors), " byte mismatches in 32KB")
-        recordFail()
+        utils.recordFail()
 
 
 PRI testCmd25CacheCoherence() | rootSec, secIdx, entryOfs, entrySec, written, hNew, hStale
@@ -531,6 +535,7 @@ PRI testCmd25CacheCoherence() | rootSec, secIdx, entryOfs, entrySec, written, hN
 ' @local hNew - Handle for the post-rewrite (new-name) open
 ' @local hStale - Handle for the post-rewrite (old-name) open
 
+    utils.startTest(@"CMD25 cache coherence (root dir rewrite)")
     debug("--- TEST 6: CMD25 cache coherence (root dir rewrite) ---")
 
     sd.deleteFile(@cohFileA)                            ' self-establishing preconditions
@@ -539,7 +544,7 @@ PRI testCmd25CacheCoherence() | rootSec, secIdx, entryOfs, entrySec, written, hN
     hNew := sd.createFileNew(@cohFileA)
     if hNew < 0
         debug("  FAIL: could not create ", zstr_(@cohFileA), ": ", sdec_(hNew))
-        recordFail()
+        utils.recordFail()
         return
     sd.writeHandle(hNew, @"coherence probe", 15)
     sd.closeFileHandle(hNew)
@@ -558,8 +563,12 @@ PRI testCmd25CacheCoherence() | rootSec, secIdx, entryOfs, entrySec, written, hN
         if entrySec >= 0
             quit
     if entrySec < 0
-        debug("  *** SETUP NOT MET: entry not in first 8 root sectors -- test NOT run ***")
+        ' Scored, not silently skipped: on the rig's regression cards the fresh
+        ' entry always lands in the first root cluster, so failing to find it
+        ' means the wrong card or a broken root walk -- neither may read green
+        debug("  *** SETUP NOT MET: entry not in first 8 root sectors ***")
         sd.deleteFile(@cohFileA)
+        utils.recordFail()
         return
 
     ' Prime the directory cache with the entry's sector (the open's search
@@ -574,7 +583,7 @@ PRI testCmd25CacheCoherence() | rootSec, secIdx, entryOfs, entrySec, written, hN
     if written <> 1
         debug("  FAIL: writeSectorsRaw returned ", udec_(written), " (expected 1)")
         sd.deleteFile(@cohFileA)
-        recordFail()
+        utils.recordFail()
         return
 
     ' The filesystem must see the post-CMD25 directory contents
@@ -587,10 +596,10 @@ PRI testCmd25CacheCoherence() | rootSec, secIdx, entryOfs, entrySec, written, hN
 
     if hNew >= 0 AND hStale < 0
         debug("  -> PASS: new name opens, old name gone (cache re-read after CMD25)")
-        recordPass()
+        utils.recordPass()
     else
         debug("  -> FAIL: openFileRead new=", sdec_(hNew), " old=", sdec_(hStale), " (stale directory cache after CMD25)")
-        recordFail()
+        utils.recordFail()
 
     sd.deleteFile(@cohFileB)                            ' entry's on-disk name is B after the rewrite
     sd.deleteFile(@cohFileA)                            ' harmless when already renamed; covers early-failure residue
@@ -608,17 +617,6 @@ PRI sfnMatches(pEntry, pName) : bMatch | idx
         if BYTE[pEntry + idx] <> BYTE[pName + idx]
             bMatch := false
             quit
-
-PRI recordPass()
-' Record a passing test
-
-    pass_count++
-
-PRI recordFail()
-' Record a failing test
-
-    fail_count++
-
 
 PRI dumpCMD18Diag() | ncr_len
 ' Dump CMD18 diagnostic info: CMD23 status, R1, token, failure path, sectors read, and CMD12 details

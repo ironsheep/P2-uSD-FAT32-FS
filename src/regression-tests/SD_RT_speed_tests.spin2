@@ -45,18 +45,27 @@ CON
 #endif
      BUFFER_SIZE = 512
 
-' Enable speed and register features
+' Enable speed and register features, plus DEBUG getters + RAW reads for the
+' failure-path survey coordinates (printSurveyCoords)
 #ifdef __SPINTOOLS__
 #define SD_INCLUDE_SPEED
 #define SD_INCLUDE_REGISTERS
+#define SD_INCLUDE_DEBUG
+#define SD_INCLUDE_RAW
 #elseifdef __FLEXSPIN__
 #define SD_INCLUDE_SPEED
 #pragma exportdef SD_INCLUDE_SPEED
 #define SD_INCLUDE_REGISTERS
 #pragma exportdef SD_INCLUDE_REGISTERS
+#define SD_INCLUDE_DEBUG
+#pragma exportdef SD_INCLUDE_DEBUG
+#define SD_INCLUDE_RAW
+#pragma exportdef SD_INCLUDE_RAW
 #else
 #pragma exportdef SD_INCLUDE_SPEED
 #pragma exportdef SD_INCLUDE_REGISTERS
+#pragma exportdef SD_INCLUDE_DEBUG
+#pragma exportdef SD_INCLUDE_RAW
 #endif
 
 OBJ
@@ -74,6 +83,7 @@ spTestFile3     BYTE    "SPTEST3.BIN", 0
 writeBuffer     BYTE    0[BUFFER_SIZE]
 readBuffer      BYTE    0[BUFFER_SIZE]
 readBuffer_guard BYTE   0[16]
+surveyBuf       BYTE    0[BUFFER_SIZE]           ' failure-path raw directory read (printSurveyCoords)
 
 PUB go() | result, handle, spiFreq, maxSpeed, hsActive, cmd6Sup, hsCap, hsResult, bytesRead, bytesWritten, readTimeout, writeTimeout, computedSpeed, errCode
 '' Main entry point for speed API regression tests
@@ -233,6 +243,8 @@ PUB go() | result, handle, spiFreq, maxSpeed, hsActive, cmd6Sup, hsCap, hsResult
             utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
             sd.closeFileHandle(handle)
         result := utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $70)
+        ifnot result
+            printSurveyCoords()                         ' failure only -- green transcript unchanged
         utils.evaluateBool(result, @"data integrity post-HS", true)
     else
         debug("  createFileNew failed after HS: ", sdec_(handle))
@@ -296,7 +308,10 @@ PUB go() | result, handle, spiFreq, maxSpeed, hsActive, cmd6Sup, hsCap, hsResult
     else
         debug("   openFileRead after restore failed: ", sdec_(handle))
     utils.evaluateSubValue(bytesRead, @"readHandle() byte count", BUFFER_SIZE)
-    utils.evaluateSubBool(utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $A5), @"content matches after restore", true)
+    result := utils.verifyBufferPattern(@readBuffer, BUFFER_SIZE, $A5)
+    utils.evaluateSubBool(result, @"content matches after restore", true)
+    ifnot (result AND bytesWritten == BUFFER_SIZE AND bytesRead == BUFFER_SIZE)
+        printSurveyCoords()                             ' failure only -- green transcript unchanged
     utils.showSubTestResults()
 
     ' Test: setSPISpeed(25_000_000) standard speed
@@ -336,6 +351,33 @@ PUB go() | result, handle, spiFreq, maxSpeed, hsActive, cmd6Sup, hsCap, hsResult
 
     debug(" ")
     debug("END_SESSION")
+
+PRI printSurveyCoords() | dirSec, rootSec, spc, idx, pEntry, clus, dataLba
+' FAILURE-PATH ONLY: print the raw-survey coordinates the bench investigation
+' (shakedown step 3) starts from -- the directory sector to survey and, for every
+' live entry in it (read RAW, not through the enumeration path), its start
+' cluster and expected first data LBA. The bench then decides
+' write-never-landed vs read-path-lies without recomputing addresses
+' mid-session.
+'
+' HARD-STOP reminder for the bench: if the raw survey contradicts the
+' failure, confirm the measurement with debugReadSectorSlow() (no streamer)
+' before concluding a read-path defect.
+
+    dirSec := sd.debugGetDirSec()
+    rootSec := sd.debugGetRootSec()
+    spc := sd.sectorsPerCluster()
+    debug("  SURVEY: dirSector=", udec_(dirSec), " rootSector=", udec_(rootSec), " secPerClus=", udec_(spc))
+    if sd.readSectorRaw(dirSec, @surveyBuf) < 0
+        debug("  SURVEY: raw read of directory sector FAILED")
+    else
+        repeat idx from 0 to 15
+            pEntry := @surveyBuf + idx * 32
+            ' live short-name entries only: skip end/deleted/label/LFN slots
+            if BYTE[pEntry] <> 0 AND BYTE[pEntry] <> $E5 AND (BYTE[pEntry + 11] & $08) == 0
+                clus := ((BYTE[pEntry + 21] << 8 | BYTE[pEntry + 20]) << 16) | (BYTE[pEntry + 27] << 8 | BYTE[pEntry + 26])
+                dataLba := (clus >= 2) ? rootSec + (clus - 2) * spc : 0
+                debug("  SURVEY: entry ", lstr_(pEntry, 11), " startClus=", udec_(clus), " firstDataLBA=", udec_(dataLba))
 
 con { license }
 

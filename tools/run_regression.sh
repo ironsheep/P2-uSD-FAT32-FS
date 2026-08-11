@@ -597,7 +597,9 @@ SUITES+=(
 # Layer 4: Error handling and recovery
 SUITES+=(
     "SD_RT_error_handling_tests.spin2:120"
-    "SD_RT_error_injection_tests.spin2:120"
+    # Test 36 (dir-extend true-code witness) creates+deletes ~1 cluster of
+    # directory entries (~250 file ops at 8 sec/clus) -- budget raised from 120
+    "SD_RT_error_injection_tests.spin2:180"
     "SD_RT_crc_validation_tests.spin2:120"
     "SD_RT_recovery_tests.spin2:120"
 )

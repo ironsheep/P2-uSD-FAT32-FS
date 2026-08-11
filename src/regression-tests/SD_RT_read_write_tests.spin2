@@ -796,6 +796,7 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize, secPerClus, c
         sd.writeHandle(handle, @largeWriteBuf, 1024)
         sd.closeFileHandle(handle)
     handle := sd.openFileRead(@testZeros)
+    utils.evaluateSubBool(handle >= 0, @"reopen zeros file", true)
     if handle >= 0
         utils.initGuard(@readBuffer_guard)
         bytesRead := sd.readHandle(handle, @readBuffer, sd.SECTOR_SIZE)
@@ -808,6 +809,11 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize, secPerClus, c
         result := utils.verifyBufferValue(@largeReadBuf, 1024, $00)
         utils.evaluateSubBool(result, @"1024-byte zeros match", true)
         sd.closeFileHandle(handle)
+    else
+        ' A failed reopen skips both content checks -- record them as the
+        ' failures they are so every path executes the declared count
+        utils.evaluateSubBool(false, @"512-byte zeros match", true)
+        utils.evaluateSubBool(false, @"1024-byte zeros match", true)
     utils.showSubTestResults()
     utils.setCheckCountPerTest(1)
 
@@ -824,6 +830,7 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize, secPerClus, c
         sd.writeHandle(handle, @largeWriteBuf, 1024)
         sd.closeFileHandle(handle)
     handle := sd.openFileRead(@testOnes)
+    utils.evaluateSubBool(handle >= 0, @"reopen ones file", true)
     if handle >= 0
         utils.initGuard(@readBuffer_guard)
         bytesRead := sd.readHandle(handle, @readBuffer, sd.SECTOR_SIZE)
@@ -836,6 +843,11 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize, secPerClus, c
         result := utils.verifyBufferValue(@largeReadBuf, 1024, $FF)
         utils.evaluateSubBool(result, @"1024-byte $FF match", true)
         sd.closeFileHandle(handle)
+    else
+        ' A failed reopen skips both content checks -- record them as the
+        ' failures they are so every path executes the declared count
+        utils.evaluateSubBool(false, @"512-byte $FF match", true)
+        utils.evaluateSubBool(false, @"1024-byte $FF match", true)
     utils.showSubTestResults()
     utils.setCheckCountPerTest(1)
 
@@ -861,7 +873,7 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize, secPerClus, c
 
     ' Test A: Write and verify bytes straddling cluster boundary
     utils.startTest(@"Write file spanning cluster boundary")
-    utils.setCheckCountPerTest(4)
+    utils.setCheckCountPerTest(5)
     sd.deleteFile(@testCluster)
     handle := sd.createFileNew(@testCluster)
     utils.evaluateSubBool(handle >= 0, @"create cluster file", true)
@@ -874,6 +886,7 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize, secPerClus, c
             chunkIdx++
         sd.closeFileHandle(handle)
     handle := sd.openFileRead(@testCluster)
+    utils.evaluateSubBool(handle >= 0, @"reopen cluster file", true)
     if handle >= 0
         fileSize := sd.fileSizeHandle(handle)
         utils.evaluateSubValue(fileSize, @"file size", writeLen)
@@ -891,6 +904,12 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize, secPerClus, c
         result := utils.verifyBufferPattern(@readBuffer, sd.SECTOR_SIZE, ($37 + clusterBytes) & $FF)
         utils.evaluateSubBool(result, @"first sector cluster 2", true)
         sd.closeFileHandle(handle)
+    else
+        ' A failed reopen skips the three read-phase checks -- record them as
+        ' the failures they are so every path executes the declared count
+        utils.evaluateSubBool(false, @"file size", true)
+        utils.evaluateSubBool(false, @"last sector cluster 1", true)
+        utils.evaluateSubBool(false, @"first sector cluster 2", true)
     utils.showSubTestResults()
     utils.setCheckCountPerTest(1)
 
@@ -905,6 +924,9 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize, secPerClus, c
         utils.initGuard(@readBuffer_guard)
         bytesRead := sd.readHandle(handle, @readBuffer, 8)
         utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+        ' A short read stopping AT the boundary is exactly the failure this
+        ' test exists to catch -- the count must be asserted, not discarded
+        utils.evaluateSubValue(bytesRead, @"read 8 bytes across boundary", 8)
         ' Verify 8 straddling bytes match expected pattern
         result := true
         repeat idx from 0 to 7
@@ -914,6 +936,12 @@ PUB go() | result, handle, bytesRead, bytesWritten, idx, fileSize, secPerClus, c
                 quit
         utils.evaluateSubBool(result, @"8 straddling bytes", true)
         sd.closeFileHandle(handle)
+    else
+        ' A failed open skips every check -- record all three as failures so
+        ' every path executes the declared count
+        utils.evaluateSubBool(false, @"seek near boundary", true)
+        utils.evaluateSubBool(false, @"read 8 bytes across boundary", true)
+        utils.evaluateSubBool(false, @"8 straddling bytes", true)
     utils.showSubTestResults()
     utils.setCheckCountPerTest(1)
 

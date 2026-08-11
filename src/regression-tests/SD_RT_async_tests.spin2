@@ -58,12 +58,19 @@ DAT
 ' Test files
 asyncTestFile   BYTE    "ASYNC1.TXT", 0
 asyncContent    BYTE    "Async test data 1234567890ABCDEF", 0
+bigTestFile     BYTE    "ASYNC2.BIN", 0          ' 2-sector file for the partial-count witness
 
 ' Buffers for async operations
 asyncBuf        BYTE    0[BUF_SIZE]
 asyncBuf_guard  BYTE    0[16]
 blockBuf        BYTE    0[BUF_SIZE]
 blockBuf_guard  BYTE    0[16]
+bigBuf          BYTE    0[1024]                  ' spans two sectors for the partial-count witness
+bigBuf_guard    BYTE    0[16]
+
+' Throwaway receivers for debugGetReadSectorDiag(); only the sector is wanted
+diagLastSector  LONG    0
+diagScratch     LONG    0[7]
 
 ' Helper cog resources
 helper_stack    LONG    0[STACK_SIZE]
@@ -76,6 +83,17 @@ sync_barrier    LONG    0
 foreign_complete LONG   0
 foreign_result   LONG    0
 foreign_cancel   LONG    0
+
+' What the OWNING cog's own blocking calls got back while its async op was in flight
+samecog_start   LONG    0
+samecog_read    LONG    0
+samecog_close   LONG    0
+samecog_collect LONG    0
+
+' TRUE when a deadlocked helper died owning api_lock: any further driver call
+' would hang the suite, so go() skips driver cleanup and goes straight to the
+' score + END_SESSION
+cleanup_unsafe  LONG    0
 
 
 PUB go() | result
@@ -130,13 +148,32 @@ PUB go() | result
     utils.startTestGroup(@"Async Error Cases")
     runTest6_DoubleStartBusy()
     runTest7_ForeignCogRejected()
+    runTest8_SameCogAsyncBusy()
 
-    ' Cleanup
-    sd.deleteFile(@asyncTestFile)
+    ' ----------------------------------
+    ' TEST GROUP: Async Failure Paths
+    ' ----------------------------------
+    ' Error propagation through the async path is correct in code (worker maps
+    ' a negative op result into pb_status; getResult returns it and set_error()s
+    ' it for the collecting cog) but NOTHING witnessed it before this group --
+    ' the error cases above cover only E_ASYNC_BUSY and foreign-cog refusals.
+    utils.startTestGroup(@"Async Failure Paths")
+    runTest9_CollectTimeInvalid()
+    runTest10_InjectedReadFailure()
+    runTest11_PartialCount()
+    runTest12_AsyncWriteAppend()
+    runTest13_ErrorAfterStart()
 
-    result := sd.unmount()
-    if result < 0
-        debug("WARNING: unmount() returned ", sdec_(result))
+    ' Cleanup -- skipped when a deadlocked helper stranded api_lock (Test 8
+    ' timeout path): the named failures are already recorded, and the score +
+    ' END_SESSION must still reach the log instead of hanging here
+    if cleanup_unsafe
+        debug("  *** api_lock stranded by deadlocked helper -- driver cleanup skipped ***")
+    else
+        sd.deleteFile(@asyncTestFile)
+        result := sd.unmount()
+        if result < 0
+            debug("WARNING: unmount() returned ", sdec_(result))
 
     utils.ShowTestEndCounts()
 
@@ -303,12 +340,15 @@ PRI runTest3_IsCompleteTransition() | handle, status, wasFalse, contentLen
         debug("  (isComplete was TRUE immediately - fast card)")
 
 
-PRI runTest4_CancelReleasesLock() | handle, status, bytesRead, contentLen
-' Verify cancelAsync() releases the API lock so a subsequent blocking read succeeds.
+PRI runTest4_CancelReleasesLock() | handle, status, bytesRead, contentLen, position
+' Verify cancelAsync()'s documented semantics: the operation runs to COMPLETION
+' (only the result is discarded), so the position MOVES -- and the lock is
+' released for the next blocking call. The recovery seek must stay AFTER the
+' position assertion; seeking first would mask the movement.
 '
 
-    utils.startTest(@"cancelAsync releases lock for next op")
-    utils.setCheckCountPerTest(3)
+    utils.startTest(@"cancelAsync completes op, moves position, releases lock")
+    utils.setCheckCountPerTest(5)
 
     contentLen := strsize(@asyncContent)
     utils.initGuard(@asyncBuf_guard)
@@ -320,9 +360,15 @@ PRI runTest4_CancelReleasesLock() | handle, status, bytesRead, contentLen
         status := sd.startReadHandle(handle, @asyncBuf, contentLen)
         utils.evaluateSubValue(status, @"startReadHandle PENDING", sd.PENDING)
 
-        sd.cancelAsync()
+        status := sd.cancelAsync()
+        utils.evaluateSubValue(status, @"cancelAsync SUCCESS", 0)
 
-        ' Now do a blocking read - must succeed (proves lock was released)
+        ' tellHandle is itself a blocking command, so a correct answer here also
+        ' proves the lock was released.
+        position := sd.tellHandle(handle)
+        utils.evaluateSubValue(position, @"position moved to contentLen", contentLen)
+
+        ' Explicit recovery from the moved position, then read back the data
         sd.seekHandle(handle, 0)
         bytefill(@asyncBuf, 0, BUF_SIZE)
         bytesRead := sd.readHandle(handle, @asyncBuf, contentLen)
@@ -331,6 +377,8 @@ PRI runTest4_CancelReleasesLock() | handle, status, bytesRead, contentLen
         sd.closeFileHandle(handle)
     else
         utils.evaluateSubBool(false, @"startReadHandle PENDING", true)
+        utils.evaluateSubBool(false, @"cancelAsync SUCCESS", true)
+        utils.evaluateSubBool(false, @"position moved to contentLen", true)
         utils.evaluateSubBool(false, @"blocking read after cancel", true)
     utils.showSubTestResults()
 
@@ -492,6 +540,227 @@ PRI runTest7_ForeignCogRejected() | handle, status, bytesMain, contentLen
     utils.showSubTestResults()
 
 
+PRI runTest8_SameCogAsyncBusy() | handle, contentLen
+' The owning cog's own blocking calls during its in-flight async op must answer
+' E_ASYNC_BUSY promptly -- the api_lock is not re-entrant, and before v1.7.0's
+' send_command same-cog guard every such call deadlocked silently forever.
+' The scenario runs in a helper cog so a regression stays BOUNDED: the main
+' cog's 5s waitHelperDone turns a helper deadlock into named check failures
+' instead of a silently hung suite.
+'
+' S8 note: the collect-time worker stack-guard escalation (getResult/cancelAsync
+' override to E_STACK_OVERFLOW) is asserted STRUCTURALLY -- the guard-intact
+' accessor check below plus code review. Deliberately corrupting the worker
+' stack to provoke E_STACK_OVERFLOW is not regression-safe (nothing the worker
+' reports afterward can be trusted, including its ability to keep running), so
+' no test does it.
+'
+' @local handle - Read handle the helper cog uses for both async and blocking calls
+' @local contentLen - Length of the known test content
+
+    utils.startTest(@"Same-cog blocking calls during own async return E_ASYNC_BUSY")
+    utils.setCheckCountPerTest(6)
+
+    contentLen := strsize(@asyncContent)
+
+    handle := sd.openFileRead(@asyncTestFile)
+    utils.evaluateSubBool(handle >= 0, @"open file", true)
+    if handle >= 0
+        helper_status := STATUS_RUNNING
+        sync_barrier := 0
+        samecog_start := -99
+        samecog_read := -99
+        samecog_close := -99
+        samecog_collect := -99
+        helper_cogid := cogspin(NEWCOG, helper_samecog_busy(handle), @helper_stack)
+        if helper_cogid == -1
+            ' No cog free: named failures, not a hang
+            utils.evaluateSubBool(false, @"own async started PENDING", true)
+            utils.evaluateSubBool(false, @"readHandle answered E_ASYNC_BUSY (no hang)", true)
+            utils.evaluateSubBool(false, @"closeFileHandle answered E_ASYNC_BUSY (no hang)", true)
+            utils.evaluateSubBool(false, @"getResult still collects the op", true)
+            utils.evaluateSubBool(false, @"worker stack guard intact (S8 structural)", true)
+        else
+            sync_barrier := 1
+            waitHelperDone()
+
+            if helper_status == STATUS_RUNNING
+                ' Helper never reported: it is deadlocked INSIDE a driver call
+                ' and died owning api_lock -- driver cleanup would hang go()
+                cleanup_unsafe := true
+
+            utils.evaluateSubValue(samecog_start, @"own async started PENDING", sd.PENDING)
+            utils.evaluateSubValue(samecog_read, @"readHandle answered E_ASYNC_BUSY (no hang)", sd.E_ASYNC_BUSY)
+            utils.evaluateSubValue(samecog_close, @"closeFileHandle answered E_ASYNC_BUSY (no hang)", sd.E_ASYNC_BUSY)
+            utils.evaluateSubValue(samecog_collect, @"getResult still collects the op", contentLen)
+            utils.evaluateSubBool(sd.checkStackGuard(), @"worker stack guard intact (S8 structural)", true)
+
+            cogstop(helper_cogid)
+            helper_cogid := -1
+        ' On the success path the helper already closed the handle; a repeat
+        ' close here would touch a recycled slot. On the timeout path the lock
+        ' may still be held -- a close would hang, so it is skipped either way.
+    else
+        utils.evaluateSubBool(false, @"own async started PENDING", true)
+        utils.evaluateSubBool(false, @"readHandle answered E_ASYNC_BUSY (no hang)", true)
+        utils.evaluateSubBool(false, @"closeFileHandle answered E_ASYNC_BUSY (no hang)", true)
+        utils.evaluateSubBool(false, @"getResult still collects the op", true)
+        utils.evaluateSubBool(false, @"worker stack guard intact (S8 structural)", true)
+    utils.showSubTestResults()
+
+
+PRI runTest9_CollectTimeInvalid() | status, result
+' Start-time validation is deliberately nil -- an invalid handle is accepted
+' at start and the error surfaces at COLLECT time. Assert that contract
+' explicitly at both ends.
+
+    utils.startTest(@"Invalid handle surfaces at collect, not start")
+    utils.setCheckCountPerTest(3)
+    status := sd.startReadHandle(-1, @asyncBuf, 16)
+    utils.evaluateSubValue(status, @"start accepts (validation deferred)", sd.PENDING)
+    result := sd.getResult()
+    utils.evaluateSubValue(result, @"getResult returns E_INVALID_HANDLE", sd.E_INVALID_HANDLE)
+    utils.evaluateSubValue(sd.error(), @"error() reports it for this cog", sd.E_INVALID_HANDLE)
+    utils.showSubTestResults()
+
+PRI runTest10_InjectedReadFailure() | dataSector, handle, status, result, bytesRead, contentLen
+' An armed read failure must come back through getResult() as the negative
+' code, land in this cog's error() slot, and clear on retry once disarmed.
+
+    utils.startTest(@"Injected read failure surfaces through getResult")
+    utils.setCheckCountPerTest(4)
+    contentLen := strsize(@asyncContent)
+    dataSector := discoverFileSector(@asyncTestFile, 0)
+    handle := sd.openFileRead(@asyncTestFile)
+    ' STICKY: the read path runs the real CRC retry loop; a one-shot arm
+    ' would fail once and let the retry succeed
+    sd.setTestFailSector(dataSector, sd.TF_READ | sd.TF_STICKY)
+    sd.setTestInvalidateCaches()                          ' deterministic miss -- armed reads fire only on a miss
+    status := sd.startReadHandle(handle, @asyncBuf, contentLen)
+    utils.evaluateSubValue(status, @"start PENDING", sd.PENDING)
+    ' No isComplete() poll: getResult() blocks until completion itself, and on
+    ' a failed start it returns promptly (E_NO_ASYNC_OP) where a poll would
+    ' hang the suite forever (see test 3's gate)
+    result := sd.getResult()
+    ' do_read_h coerces every data-sector read failure to E_IO_ERROR when
+    ' nothing moved -- assert the exact code
+    utils.evaluateSubValue(result, @"getResult returns E_IO_ERROR", sd.E_IO_ERROR)
+    utils.evaluateSubValue(sd.error(), @"error() reports the same code", result)
+    sd.clearTestErrors()
+    bytesRead := sd.readHandle(handle, @asyncBuf, contentLen)
+    utils.evaluateSubValue(bytesRead, @"disarmed retry reads clean", contentLen)
+    sd.closeFileHandle(handle)
+    utils.showSubTestResults()
+
+PRI runTest11_PartialCount() | secondSector, handle, status, result, herr
+' Blocking-API parity: a failure after bytes have moved returns the PARTIAL
+' COUNT with ERROR()==SUCCESS, and handleError(handle) holds the reason.
+
+    utils.startTest(@"Partial count at second sector, reason in handleError")
+    utils.setCheckCountPerTest(4)
+    ' Build a 2-sector file (1024 bytes) -- GATED: on a failed build nothing
+    ' gets armed (a sticky arm from a bad probe would poison an unrelated
+    ' sector), four named failures instead
+    sd.deleteFile(@bigTestFile)
+    handle := sd.createFileNew(@bigTestFile)
+    if handle >= 0
+        bytefill(@asyncBuf, $5A, BUF_SIZE)
+        repeat 16
+            sd.writeHandle(handle, @asyncBuf, BUF_SIZE)
+        sd.closeFileHandle(handle)
+        secondSector := discoverFileSector(@bigTestFile, 512)
+        handle := sd.openFileRead(@bigTestFile)
+        sd.setTestFailSector(secondSector, sd.TF_READ | sd.TF_STICKY)
+        sd.setTestInvalidateCaches()
+        utils.initGuard(@bigBuf_guard)
+        status := sd.startReadHandle(handle, @bigBuf, 1024)
+        utils.evaluateSubValue(status, @"start PENDING", sd.PENDING)
+        result := sd.getResult()                        ' blocks until complete (see test 10 note)
+        utils.evaluateSubValue(result, @"short count 512", 512)
+        utils.evaluateSubValue(sd.error(), @"ERROR() SUCCESS on a partial (parity)", 0)
+        herr := sd.handleError(handle)
+        utils.evaluateSubBool(herr < 0, @"handleError holds the reason", true)
+        utils.checkGuard(@bigBuf_guard, @"bigBuf guard")
+        sd.clearTestErrors()
+        sd.closeFileHandle(handle)
+    else
+        utils.evaluateSubBool(false, @"start PENDING", true)
+        utils.evaluateSubBool(false, @"short count 512", true)
+        utils.evaluateSubBool(false, @"ERROR() SUCCESS on a partial (parity)", true)
+        utils.evaluateSubBool(false, @"handleError holds the reason", true)
+    sd.deleteFile(@bigTestFile)
+    utils.showSubTestResults()
+
+PRI runTest12_AsyncWriteAppend() | handle, status, bytesWritten, bytesRead, contentLen, matched, idx
+' Second startWriteHandle exercise suite-wide: append asynchronously, then
+' verify BOTH halves of the file with a blocking read-back.
+
+    utils.startTest(@"Async append verified by blocking read-back")
+    utils.setCheckCountPerTest(3)
+    contentLen := strsize(@asyncContent)
+    createTestFile()                                    ' fresh single-copy content
+    handle := sd.openFileWrite(@asyncTestFile)          ' position lands at EOF
+    if handle >= 0
+        status := sd.startWriteHandle(handle, @asyncContent, contentLen)
+        utils.evaluateSubValue(status, @"start PENDING", sd.PENDING)
+        bytesWritten := (status == sd.PENDING) ? sd.getResult() : -1
+        utils.evaluateSubValue(bytesWritten, @"async append full count", contentLen)
+        sd.closeFileHandle(handle)
+    else
+        utils.evaluateSubBool(false, @"start PENDING", true)
+        utils.evaluateSubBool(false, @"async append full count", true)
+    handle := sd.openFileRead(@asyncTestFile)
+    matched := false
+    if handle >= 0
+        bytesRead := sd.readHandle(handle, @bigBuf, contentLen * 2)
+        matched := (bytesRead == contentLen * 2)
+        repeat idx from 0 to contentLen - 1
+            if bigBuf[idx] <> BYTE[@asyncContent][idx] OR bigBuf[contentLen + idx] <> BYTE[@asyncContent][idx]
+                matched := false
+                quit
+        sd.closeFileHandle(handle)
+    utils.evaluateSubBool(matched, @"both halves verified", true)
+    utils.showSubTestResults()
+    createTestFile()                                    ' restore the single-copy seed
+
+PRI runTest13_ErrorAfterStart() | handle, status, result, contentLen
+' The documented start-vs-collect contract: a successful START records
+' SUCCESS in error(); the operation's own outcome is recorded at collect.
+
+    utils.startTest(@"error() is SUCCESS immediately after a good start")
+    utils.setCheckCountPerTest(3)
+    contentLen := strsize(@asyncContent)
+    handle := sd.openFileRead(@asyncTestFile)
+    status := sd.startReadHandle(handle, @asyncBuf, contentLen)
+    utils.evaluateSubValue(status, @"start PENDING", sd.PENDING)
+    utils.evaluateSubValue(sd.error(), @"error() SUCCESS after start", 0)
+    result := sd.getResult()
+    utils.evaluateSubValue(result, @"collect returns the count", contentLen)
+    sd.closeFileHandle(handle)
+    utils.showSubTestResults()
+
+PRI discoverFileSector(pName, fileOffset) : sector | handle
+' Find the LBA of the data sector holding a given offset of a file.
+' No accessor reports where a file's data lives, so this measures it: read
+' that offset on a healthy card, then ask the read diagnostic which sector
+' the read just touched. The cache invalidate makes the probe a genuine card
+' access rather than a cache hit -- same guarantee as error_injection's
+' remount idiom without the 400 kHz re-init; the fresh handle covers the
+' per-handle buffer.
+'
+' @param pName - Pointer to filename
+' @param fileOffset - Byte offset within the file
+' @returns sector - LBA of the sector containing that offset
+
+    sd.setTestInvalidateCaches()
+    handle := sd.openFileRead(pName)
+    if fileOffset > 0
+        sd.seekHandle(handle, fileOffset)
+    sd.readHandle(handle, @blockBuf, BUF_SIZE)
+    sd.debugGetReadSectorDiag(@diagLastSector, @diagScratch[0], @diagScratch[1], @diagScratch[2], @diagScratch[3], @diagScratch[4], @diagScratch[5], @diagScratch[6])
+    sector := diagLastSector
+    sd.closeFileHandle(handle)
+
 PRI waitHelperDone()
 ' Bounded wait for the helper cog to report. A helper that never reports
 ' (launch raced, driver hang) makes this return after ~5s instead of hanging
@@ -518,6 +787,25 @@ PRI helper_foreign_collect()
     foreign_complete := sd.isComplete() ? 1 : 0
     foreign_result := sd.getResult()
     foreign_cancel := sd.cancelAsync()
+    helper_status := STATUS_PASS
+
+PRI helper_samecog_busy(handle) | contentLen
+' Helper cog entry point: start an async read, then -- while it is in flight or
+' uncollected -- call blocking APIs from THIS SAME COG. Each must answer
+' E_ASYNC_BUSY promptly (the api_lock this cog already holds is not re-entrant),
+' and getResult afterward must still collect the undisturbed operation.
+'
+' @param handle - open read handle used for the async op and the blocking calls
+'
+
+    repeat until sync_barrier <> 0
+
+    contentLen := strsize(@asyncContent)
+    samecog_start := sd.startReadHandle(handle, @asyncBuf, contentLen)
+    samecog_read := sd.readHandle(handle, @blockBuf, contentLen)       ' must answer, never hang
+    samecog_close := sd.closeFileHandle(handle)                        ' must answer, never hang
+    samecog_collect := sd.getResult()                                  ' guard must not disturb the op
+    sd.closeFileHandle(handle)                                         ' real close now succeeds
     helper_status := STATUS_PASS
 
 PRI helper_blocking_read(handle) | bytesRead, contentLen

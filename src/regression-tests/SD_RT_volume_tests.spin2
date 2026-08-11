@@ -92,6 +92,11 @@ dfNameBuf       BYTE    "DF00.BIN", 0
 newLabel        BYTE    "TESTLABEL  ", 0
 maxLabel        BYTE    "12345678901", 0
 
+' S1 witness fixtures: rename target, and the label entry's 32 on-disk bytes
+' captured via raw reads before the isolation probes run
+renTarget       BYTE    "RELABEL.TXT", 0
+labelEntryCopy  BYTE    0[32]
+
 ' File content
 testContent     BYTE    "Volume test content data", 0
 syncContent     BYTE    "Sync test data chunk one", 0
@@ -109,7 +114,7 @@ writeBuf        BYTE    0[512]
 ' Saved original label
 origLabel       BYTE    0[12]
 
-PUB go() | result, hndl1, hndl2, bytesWritten, pLabel, idx, pEntry, wrtDate, wrtTime, vbrSector, found, baselineFree, filesCreated, dfHandle, maxWrites, dfSecPerClus, dfFreeClus
+PUB go() | result, hndl1, hndl2, bytesWritten, pLabel, idx, pEntry, wrtDate, wrtTime, vbrSector, found, baselineFree, filesCreated, dfHandle, maxWrites, dfSecPerClus, dfFreeClus, rootSec, lblSec, lblOfs
 '' Main entry point for volume operation regression tests
 
     debug(" ")
@@ -178,6 +183,79 @@ PUB go() | result, hndl1, hndl2, bytesWritten, pLabel, idx, pEntry, wrtDate, wrt
     debug("   Label after remount: [", zstr_(pLabel), "]")
     result := strncmp(pLabel, @"12345678901", 11)
     utils.evaluateSubBool(result, @"label persisted", true)
+
+    ' ======================================================================
+    ' TEST GROUP: Volume Label Isolation (S1 witness)
+    ' The label set above is 11 chars and dot-less -- byte-identical to a
+    ' search key. Without searchDirectory's central match filter the label
+    ' entry was name-addressable: rename() silently relabeled the volume,
+    ' create paths reported E_FILE_EXISTS for a name no enumeration shows,
+    ' and openFileRead opened the label as a 0-byte file. Every probe below
+    ' must see NO entry under the label's name while the on-disk label entry
+    ' stays byte-identical. The entry is captured and re-checked via RAW
+    ' sector reads -- an independent witness, never the search path under test.
+    ' ======================================================================
+    utils.startTestGroup(@"Volume Label Isolation")
+
+    utils.startTest(@"Locate volume label entry via raw read")
+    lblSec := -1
+    lblOfs := 0
+    rootSec := sd.debugGetRootSec()
+    ' Scan the root directory's first cluster; the label entry is written by
+    ' format/setVolumeLabel into the earliest free slot, so it lives here
+    repeat idx from 0 to sd.sectorsPerCluster() - 1
+        if sd.readSectorRaw(rootSec + idx, @vbrBuf) < 0
+            quit
+        repeat lblOfs from 0 to sd.LAST_DIR_ENTRY_OFFSET step sd.DIR_ENTRY_SIZE
+            pEntry := @vbrBuf + lblOfs
+            if BYTE[pEntry] <> sd.DIR_ENTRY_DELETED AND BYTE[pEntry] <> 0 AND BYTE[pEntry + sd.DE_ATTR_OFFSET] == sd.ATTR_VOLUME_ID
+                lblSec := rootSec + idx
+                bytemove(@labelEntryCopy, pEntry, sd.DIR_ENTRY_SIZE)
+                quit
+        if lblSec >= 0
+            quit
+    utils.evaluateBool(lblSec >= 0, @"label entry found in root", true)
+
+    utils.startTest(@"rename() cannot address the volume label")
+    utils.setCheckCountPerTest(2)
+    result := sd.rename(@maxLabel, @renTarget)
+    utils.evaluateSubValue(result, @"rename returns E_FILE_NOT_FOUND", sd.E_FILE_NOT_FOUND)
+    utils.evaluateSubBool(strncmp(sd.volumeLabel(), @maxLabel, 11), @"label unchanged after rename", true)
+    utils.showSubTestResults()
+
+    utils.startTest(@"createFileNew() succeeds alongside the label")
+    utils.setCheckCountPerTest(3)
+    hndl1 := sd.createFileNew(@maxLabel)
+    utils.evaluateSubBool(hndl1 >= 0, @"create with the label's name", true)
+    if hndl1 >= 0
+        sd.closeFileHandle(hndl1)
+    utils.evaluateSubValue(sd.deleteFile(@maxLabel), @"delete the name again", sd.SUCCESS)
+    utils.evaluateSubBool(strncmp(sd.volumeLabel(), @maxLabel, 11), @"label survived create+delete", true)
+    utils.showSubTestResults()
+
+    ' Runs AFTER the create/delete cycle above, witnessing that the label's
+    ' invisibility survives directory churn around its entry
+    utils.startTest(@"openFileRead() cannot open the label")
+    hndl1 := sd.openFileRead(@maxLabel)
+    if hndl1 >= 0
+        sd.closeFileHandle(hndl1)
+    utils.evaluateSingleValue(hndl1, @"open returns E_FILE_NOT_FOUND", sd.E_FILE_NOT_FOUND)
+
+    utils.startTest(@"changeDirectory() cannot enter the label")
+    result := sd.changeDirectory(@maxLabel)
+    utils.evaluateSingleValue(result, @"chdir returns E_FILE_NOT_FOUND", sd.E_FILE_NOT_FOUND)
+
+    utils.startTest(@"Label entry bytes unchanged (raw witness)")
+    result := -1
+    if lblSec >= 0
+        result := sd.readSectorRaw(lblSec, @vbrBuf2)
+    if result == sd.SUCCESS
+        utils.evaluateBufferMatch(@vbrBuf2 + lblOfs, @labelEntryCopy, sd.DIR_ENTRY_SIZE, @"label entry bytes")
+    else
+        utils.evaluateBool(false, @"label entry re-read for witness", true)
+
+    utils.startTest(@"volumeLabel() unchanged across group")
+    utils.evaluateBool(strncmp(sd.volumeLabel(), @maxLabel, 11), @"label still the 11-char test value", true)
 
     ' Test: Restore original label
     utils.startTest(@"Restore original volume label")

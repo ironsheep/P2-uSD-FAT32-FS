@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## v1.7.0 (2026-08-03)
 
-Failures the driver detected but discarded are now reported.
+Failures the driver detected but discarded are now reported, and files a PC wrote behave correctly.
 
 ### New Features
 
@@ -39,6 +39,16 @@ Failures the driver detected but discarded are now reported.
 - `attemptHighSpeed()` verifies the 50 MHz switch by re-reading a sector captured at the known-good speed and comparing. It previously wrote to the card at the unverified speed and compared the result against itself, so the check could not detect the failure it existed to catch. Nothing is written at an unverified speed.
 - `SD_card_identify` names Gigastone OEM cards (manufacturer ID `$12`) instead of reporting `Unknown`. `SD_card_characterize` already named them.
 - The read/write example no longer null-terminates its buffer at a negative index when a read fails. The demo shell reports a read that failed part-way through `type` and `hexdump` instead of printing a byte count as if the file were complete, reports a `copy` whose writes were refused or short instead of reporting the source size as copied, and distinguishes a card with no free space from a free-space query that failed.
+- Appending to an empty file created by a PC works; the first write previously failed `E_BAD_CHAIN` and the file could never be appended.
+- File operations no longer match the volume-label entry. `rename()` on a dot-less label's name silently relabelled the volume; creating that name failed `E_FILE_EXISTS`, and opening it returned an empty file.
+- `changeDirectory()` onto an empty file returns `E_NOT_A_DIR` instead of succeeding and silently changing to the root directory.
+- `createFileContiguous()` on a name that already exists leaves free space unchanged; the rejected call previously stranded its pre-allocated clusters until an fsck.
+- `mount()` on a corrupted card whose boot record claims zero sectors per cluster fails with `E_NOT_FAT32` instead of hanging the worker cog.
+- FAT entries carrying the reserved high bits — legal on volumes written by other systems — no longer send cluster-chain walks and free-space counts to wrong results.
+- A create that grows a directory reports the actual failure; `E_IO_ERROR` from a failed FAT write is no longer reported as `E_DISK_FULL`.
+- A blocking call from the cog that owns an in-flight async operation returns `E_ASYNC_BUSY` — from every API, info getters included — instead of deadlocking; a losing concurrent `start*()` gets the same answer promptly instead of blocking for the winner's operation.
+- `getResult()` and `cancelAsync()` report `E_STACK_OVERFLOW` when the worker's stack guard was violated during the operation, as blocking calls already do.
+- `setDate()` rejects every out-of-range date or time field with `E_INVALID_PARAM`; negative values were previously accepted.
 
 ### Breaking Changes
 

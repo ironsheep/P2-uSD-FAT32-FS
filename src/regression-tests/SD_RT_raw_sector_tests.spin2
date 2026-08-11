@@ -96,8 +96,6 @@ VAR
     BYTE    read_buf[512]
     BYTE    read_buf_guard[16]
     BYTE    cmd13_pre[7]                                                        ' Buffer for getLastCMD13PreCapture (MISO bytes captured during CMD13 transmission)
-    LONG    pass_count
-    LONG    fail_count
 
 PUB go() | result, idx, sector, cardSectors, wroteA, wroteB, wroteC, wroteD, wroteE
 '' Main entry point for raw sector round-trip tests
@@ -109,9 +107,6 @@ PUB go() | result, idx, sector, cardSectors, wroteA, wroteB, wroteC, wroteD, wro
     debug("  SD Raw Sector Round-Trip Test (V2 Driver)")
     debug("============================================================")
     debug(" ")
-
-    pass_count := 0
-    fail_count := 0
 
     ' Initialize card only (no filesystem mount - we're doing raw sector access)
     debug("Initializing SD card (V2 driver with streamer)...")
@@ -156,7 +151,10 @@ PUB go() | result, idx, sector, cardSectors, wroteA, wroteB, wroteC, wroteD, wro
     wroteD := false
     wroteE := false
 
+    utils.startTestGroup(@"Pattern Writes with Immediate Read-Back")
+
     ' Write Pattern A: Sequential bytes
+    utils.startTest(@"Write pattern A (sequential)")
     sector := TEST_SECTOR_A
     debug("* Test: Write Pattern A (sequential) to sector ", udec_(sector))
     repeat idx from 0 to 511
@@ -164,11 +162,12 @@ PUB go() | result, idx, sector, cardSectors, wroteA, wroteB, wroteC, wroteD, wro
     addBoundaryMarkers(sector, $A0)
     wroteA := writeAndVerify(sector, $A0)
     if wroteA
-        recordPass()
+        utils.recordPass()
     else
-        recordFail()
+        utils.recordFail()
 
     ' Write Pattern B: Alternating AA/55
+    utils.startTest(@"Write pattern B (alternating AA/55)")
     sector := TEST_SECTOR_B
     debug("* Test: Write Pattern B (AA/55) to sector ", udec_(sector))
     repeat idx from 0 to 511
@@ -176,33 +175,36 @@ PUB go() | result, idx, sector, cardSectors, wroteA, wroteB, wroteC, wroteD, wro
     addBoundaryMarkers(sector, $B0)
     wroteB := writeAndVerify(sector, $B0)
     if wroteB
-        recordPass()
+        utils.recordPass()
     else
-        recordFail()
+        utils.recordFail()
 
     ' Write Pattern C: All FF (except markers)
+    utils.startTest(@"Write pattern C (all $FF)")
     sector := TEST_SECTOR_C
     debug("* Test: Write Pattern C (all FF) to sector ", udec_(sector))
     bytefill(@write_buf, $FF, 512)
     addBoundaryMarkers(sector, $C0)
     wroteC := writeAndVerify(sector, $C0)
     if wroteC
-        recordPass()
+        utils.recordPass()
     else
-        recordFail()
+        utils.recordFail()
 
     ' Write Pattern D: All 00 (except markers)
+    utils.startTest(@"Write pattern D (all $00)")
     sector := TEST_SECTOR_D
     debug("* Test: Write Pattern D (all 00) to sector ", udec_(sector))
     bytefill(@write_buf, $00, 512)
     addBoundaryMarkers(sector, $D0)
     wroteD := writeAndVerify(sector, $D0)
     if wroteD
-        recordPass()
+        utils.recordPass()
     else
-        recordFail()
+        utils.recordFail()
 
     ' Write Pattern E: Incrementing with sector offset
+    utils.startTest(@"Write pattern E (sequential + $E0 offset)")
     sector := TEST_SECTOR_E
     debug("* Test: Write Pattern E (offset) to sector ", udec_(sector))
     repeat idx from 0 to 511
@@ -210,9 +212,9 @@ PUB go() | result, idx, sector, cardSectors, wroteA, wroteB, wroteC, wroteD, wro
     addBoundaryMarkers(sector, $E0)
     wroteE := writeAndVerify(sector, $E0)
     if wroteE
-        recordPass()
+        utils.recordPass()
     else
-        recordFail()
+        utils.recordFail()
 
     debug(" ")
 
@@ -223,55 +225,71 @@ PUB go() | result, idx, sector, cardSectors, wroteA, wroteB, wroteC, wroteD, wro
     debug("(Tests that correct sectors were written, not just cached)")
     debug(" ")
 
+    utils.startTestGroup(@"Reverse-Order Read-Back")
+
+    ' A SKIPPED dependent check is neither titled nor recorded (see the phase-1
+    ' comment): skipping startTest along with the record keeps the framework's
+    ' title/record counts balanced.
+
     ' Read Pattern E first (was written last)
     sector := TEST_SECTOR_E
     debug("* Test: Read sector ", udec_(sector), " (expect pattern E=$E0)")
     ifnot wroteE
         debug("  -> SKIPPED (pattern E was never written this run)")
-    elseif verifyPattern(sector, $E0)
-        recordPass()
     else
-        recordFail()
+        utils.startTest(@"Read back pattern E (reverse order)")
+        if verifyPattern(sector, $E0)
+            utils.recordPass()
+        else
+            utils.recordFail()
 
     ' Read Pattern D
     sector := TEST_SECTOR_D
     debug("* Test: Read sector ", udec_(sector), " (expect pattern D=$D0)")
     ifnot wroteD
         debug("  -> SKIPPED (pattern D was never written this run)")
-    elseif verifyPattern(sector, $D0)
-        recordPass()
     else
-        recordFail()
+        utils.startTest(@"Read back pattern D (reverse order)")
+        if verifyPattern(sector, $D0)
+            utils.recordPass()
+        else
+            utils.recordFail()
 
     ' Read Pattern C
     sector := TEST_SECTOR_C
     debug("* Test: Read sector ", udec_(sector), " (expect pattern C=$C0)")
     ifnot wroteC
         debug("  -> SKIPPED (pattern C was never written this run)")
-    elseif verifyPattern(sector, $C0)
-        recordPass()
     else
-        recordFail()
+        utils.startTest(@"Read back pattern C (reverse order)")
+        if verifyPattern(sector, $C0)
+            utils.recordPass()
+        else
+            utils.recordFail()
 
     ' Read Pattern B
     sector := TEST_SECTOR_B
     debug("* Test: Read sector ", udec_(sector), " (expect pattern B=$B0)")
     ifnot wroteB
         debug("  -> SKIPPED (pattern B was never written this run)")
-    elseif verifyPattern(sector, $B0)
-        recordPass()
     else
-        recordFail()
+        utils.startTest(@"Read back pattern B (reverse order)")
+        if verifyPattern(sector, $B0)
+            utils.recordPass()
+        else
+            utils.recordFail()
 
     ' Read Pattern A last (was written first)
     sector := TEST_SECTOR_A
     debug("* Test: Read sector ", udec_(sector), " (expect pattern A=$A0)")
     ifnot wroteA
         debug("  -> SKIPPED (pattern A was never written this run)")
-    elseif verifyPattern(sector, $A0)
-        recordPass()
     else
-        recordFail()
+        utils.startTest(@"Read back pattern A (reverse order)")
+        if verifyPattern(sector, $A0)
+            utils.recordPass()
+        else
+            utils.recordFail()
 
     debug(" ")
 
@@ -281,23 +299,29 @@ PUB go() | result, idx, sector, cardSectors, wroteA, wroteB, wroteC, wroteD, wro
     debug("--- PHASE 3: Full 512-byte data verification ---")
     debug(" ")
 
+    utils.startTestGroup(@"Full Data Verification")
+
     ' Verify all 512 bytes of Pattern A (sequential)
     debug("* Test: Full verify Pattern A (512 sequential bytes)")
     ifnot wroteA
         debug("  -> SKIPPED (pattern A was never written this run)")
-    elseif verifyFullPattern(TEST_SECTOR_A, 0)
-        recordPass()
     else
-        recordFail()
+        utils.startTest(@"Full verify pattern A")
+        if verifyFullPattern(TEST_SECTOR_A, 0)
+            utils.recordPass()
+        else
+            utils.recordFail()
 
     ' Verify all 512 bytes of Pattern B (AA/55)
     debug("* Test: Full verify Pattern B (alternating AA/55)")
     ifnot wroteB
         debug("  -> SKIPPED (pattern B was never written this run)")
-    elseif verifyFullPatternAlt(TEST_SECTOR_B)
-        recordPass()
     else
-        recordFail()
+        utils.startTest(@"Full verify pattern B")
+        if verifyFullPatternAlt(TEST_SECTOR_B)
+            utils.recordPass()
+        else
+            utils.recordFail()
 
     debug(" ")
 
@@ -307,7 +331,10 @@ PUB go() | result, idx, sector, cardSectors, wroteA, wroteB, wroteC, wroteD, wro
     debug("--- PHASE 4: Sector Address Boundary Tests ---")
     debug(" ")
 
+    utils.startTestGroup(@"Sector Address Boundaries")
+
     ' Test: Sector 0 (MBR) - verify MBR signature
+    utils.startTest(@"Read sector 0 (MBR signature)")
     debug("* Test: Read sector 0 (MBR) and verify signature $55 $AA")
     utils.initGuard(@read_buf_guard)
     result := sd.readSectorRaw(0, @read_buf)
@@ -316,23 +343,24 @@ PUB go() | result, idx, sector, cardSectors, wroteA, wroteB, wroteC, wroteD, wro
         debug("  READ FAILED! status=", sdec_(result))
         dumpReadFailDiag()
         debug("  -> FAIL")
-        recordFail()
+        utils.recordFail()
     elseif read_buf[510] == $55 and read_buf[511] == $AA
         debug("  MBR signature verified: $55 $AA at bytes 510-511")
         debug("  -> pass")
-        recordPass()
+        utils.recordPass()
     else
         debug("  ERROR: Expected $55 $AA, got $", uhex_byte_(read_buf[510]), " $", uhex_byte_(read_buf[511]))
         dumpReadFailDiag()
         debug("  -> FAIL")
-        recordFail()
+        utils.recordFail()
 
     ' Test: High sector number (1,000,000) - verify large LBA addressing
+    utils.startTest(@"Read high LBA 1,000,000 (answer agrees with card size)")
     debug("* Test: Read high sector number 1,000,000 (large LBA)")
     utils.initGuard(@read_buf_guard)
     result := sd.readSectorRaw(1_000_000, @read_buf)
     utils.checkGuard(@read_buf_guard, @"read_buf guard")
-    ' Both branches used to call recordPass(), which made this test incapable of
+    ' Both branches used to record a pass, which made this test incapable of
     ' failing -- it asserted only that the call returned. The real property is that
     ' the driver's answer AGREES WITH THE CARD: sector 1,000,000 must read
     ' successfully on a card that has it, and must be refused on a card that does
@@ -342,20 +370,20 @@ PUB go() | result, idx, sector, cardSectors, wroteA, wroteB, wroteC, wroteD, wro
             debug("  High sector read completed (result=", sdec_(result), ")")
             debug("  First bytes: $", uhex_byte_(read_buf[0]), " $", uhex_byte_(read_buf[1]), " $", uhex_byte_(read_buf[2]), " $", uhex_byte_(read_buf[3]))
             debug("  -> pass (in-range large LBA read succeeded)")
-            recordPass()
+            utils.recordPass()
         else
             debug("  ERROR: sector 1,000,000 is WITHIN this card (", udec_(cardSectors), " sectors) but read returned ", sdec_(result))
             debug("  -> FAIL")
-            recordFail()
+            utils.recordFail()
     else
         if result == sd.SUCCESS
             debug("  ERROR: sector 1,000,000 is BEYOND this card (", udec_(cardSectors), " sectors) but the read reported success")
             debug("  -> FAIL")
-            recordFail()
+            utils.recordFail()
         else
             debug("  High sector read returned: ", sdec_(result))
             debug("  -> pass (out-of-range sector correctly refused)")
-            recordPass()
+            utils.recordPass()
 
     ' Report stack depth while worker cog is still running
 #ifdef SD_INCLUDE_STACK_CHECK
@@ -363,10 +391,9 @@ PUB go() | result, idx, sector, cardSectors, wroteA, wroteB, wroteC, wroteD, wro
     debug("* Worker cog stack: ", udec_(sd.reportStackDepth()), " of ", udec_(sd.STACK_SIZE), " longs used")
 #endif
 
-    debug(" ")
-    debug("============================================================")
-    debug("  Raw Sector Tests - Pass: ", udec_(pass_count), ", Fail: ", udec_(fail_count))
-    debug("============================================================")
+    ' Framework totals, BAD TEST COUNTS cross-check, and (on measurement builds) the stack watermark
+    utils.ShowTestEndCounts()
+
     debug(" ")
     debug("END_SESSION")
 
@@ -566,16 +593,6 @@ PRI verifyFullPatternAlt(sector) : success | idx, expected, actual, rdStatus
     else
         debug("  -> FAIL (data mismatch, API returned SUCCESS)")
         dumpReadFailDiag()
-
-PRI recordPass()
-' Record a passing test
-
-    pass_count++
-
-PRI recordFail()
-' Record a failing test
-
-    fail_count++
 
 PRI dumpWriteFailDiag() | code, r1, dresp, sec, cmd13, r1_ms, r1_polls, last_op
 ' Print the driver's per-write diagnostic state. Call from any failure path

@@ -64,7 +64,15 @@ DAT
 csdBuf          BYTE    0[16]
 csdBuf_guard    BYTE    0[16]
 
-PUB go() | result, csdVer, tranSpeed, capacity, cardSectors, readTimeout, writeTimeout, maxSpeed, bCsdOk
+' CID (16), SCR (8), SD Status (64) register buffers
+cidBuf          BYTE    0[16]
+cidBuf_guard    BYTE    0[16]
+scrBuf          BYTE    0[8]
+scrBuf_guard    BYTE    0[16]
+sdsBuf          BYTE    0[64]
+sdsBuf_guard    BYTE    0[16]
+
+PUB go() | result, csdVer, tranSpeed, capacity, cardSectors, readTimeout, writeTimeout, maxSpeed, bCsdOk, bCidOk, mid, ocr, idx, bOk, serial, mdtYear, mdtMon, eraseSectors, cmd6
 '' Main entry point for register access regression tests
 
     debug(" ")
@@ -208,8 +216,134 @@ PUB go() | result, csdVer, tranSpeed, capacity, cardSectors, readTimeout, writeT
         utils.evaluateRange(maxSpeed, @"max speed Hz", 25_000_000, 50_000_000)
 
     ' ======================================================================
+    ' TEST GROUP: CID / SCR / SD Status / OCR (G-2)
+    ' ======================================================================
+    ' These registers had ZERO regression coverage -- the worker commands
+    ' behind the read*Raw calls were the only non-debug commands with no
+    ' regression path. The cached getters (getOCR, getManufacturerID,
+    ' eraseBlockSectors) never touch set_error(), so nothing here judges
+    ' them via error() -- returned values only.
+    utils.startTestGroup(@"CID / SCR / SD Status / OCR")
+
+    utils.startTest(@"readCIDRaw() returns valid CID")
+    utils.setCheckCountPerTest(5)
+    bytefill(@cidBuf, 0, 16)
+    utils.initGuard(@cidBuf_guard)
+    result := sd.readCIDRaw(@cidBuf)
+    bCidOk := (result == sd.SUCCESS)
+    utils.evaluateSubValue(result, @"readCIDRaw() status", sd.SUCCESS)
+    utils.evaluateSubBool(bCidOk AND (cidBuf[15] & 1) == 1, @"CRC7 stop bit set", true)
+    mid := sd.getManufacturerID()
+    utils.evaluateSubBool(bCidOk AND cidBuf[0] == mid, @"CID MID == getManufacturerID()", true)
+    ' MDT: bytes 13-14 hold reserved(4) year-since-2000(8) month(4)
+    mdtYear := ((cidBuf[13] & $0F) << 4) | (cidBuf[14] >> 4)
+    mdtMon := cidBuf[14] & $0F
+    utils.evaluateSubBool(bCidOk AND mdtMon >= 1 AND mdtMon <= 12 AND mdtYear >= 1 AND mdtYear <= 45, @"MDT plausible (2001-2045)", true)
+    ' PNM: bytes 3-7, printable ASCII
+    bOk := bCidOk
+    repeat idx from 3 to 7
+        if cidBuf[idx] < $20 OR cidBuf[idx] > $7E
+            bOk := false
+    utils.evaluateSubBool(bOk, @"PNM printable ASCII", true)
+    utils.checkGuard(@cidBuf_guard, @"cidBuf guard")
+    ' Transcript record for cross-checking against DOCs/cards/
+    serial := (cidBuf[9] << 24) | (cidBuf[10] << 16) | (cidBuf[11] << 8) | cidBuf[12]
+    debug("   CID: MID=$", uhex_(mid), " PSN=$", uhex_long_(serial))
+    utils.showSubTestResults()
+
+    utils.startTest(@"readSCRRaw() returns valid SCR")
+    utils.setCheckCountPerTest(4)
+    bytefill(@scrBuf, 0, 8)
+    utils.initGuard(@scrBuf_guard)
+    result := sd.readSCRRaw(@scrBuf)
+    utils.evaluateSubValue(result, @"readSCRRaw() status", sd.SUCCESS)
+    utils.evaluateSubBool((scrBuf[0] >> 4) == 0, @"SCR_STRUCTURE == 0", true)
+    ' checkCMD6Support() is literally SD_SPEC >= 2 read from a fresh SCR --
+    ' the two sources must agree
+    cmd6 := sd.checkCMD6Support()
+    utils.evaluateSubBool(((scrBuf[0] & $0F) >= 2) == (cmd6 <> 0), @"SD_SPEC >= 2 iff checkCMD6Support", true)
+    utils.evaluateSubBool((scrBuf[1] & $01) == 1, @"1-bit bus width supported (mandatory)", true)
+    utils.checkGuard(@scrBuf_guard, @"scrBuf guard")
+    utils.showSubTestResults()
+
+    utils.startTest(@"readSDStatusRaw() returns valid SD Status")
+    utils.setCheckCountPerTest(3)
+    bytefill(@sdsBuf, 0, 64)
+    utils.initGuard(@sdsBuf_guard)
+    result := sd.readSDStatusRaw(@sdsBuf)
+    utils.evaluateSubValue(result, @"readSDStatusRaw() status", sd.SUCCESS)
+    utils.evaluateSubBool((sdsBuf[0] >> 6) == 0, @"DAT_BUS_WIDTH is 1-bit (SPI mode)", true)
+    utils.evaluateSubBool(sdsBuf[8] <= 4, @"SPEED_CLASS in range (0-4)", true)
+    utils.checkGuard(@sdsBuf_guard, @"sdsBuf guard")
+    debug("   SD Status: SPEED_CLASS=", udec_(sdsBuf[8]))
+    utils.showSubTestResults()
+
+    utils.startTest(@"getOCR() cached value is coherent")
+    utils.setCheckCountPerTest(2)
+    ocr := sd.getOCR()
+    debug("   OCR: $", uhex_long_(ocr))
+    utils.evaluateSubBool(((ocr >> 31) & 1) == 1, @"OCR ready bit set", true)
+    ifnot bCsdOk
+        utils.evaluateSubBool(false, @"CCS agrees with CSD version (CSD never read)", true)
+    else
+        ' CCS (bit 30) is 1 exactly for SDHC/SDXC -- the same identity CSD
+        ' version 1 asserts
+        utils.evaluateSubBool(((ocr >> 30) & 1) == csdVer, @"CCS agrees with CSD version", true)
+    utils.showSubTestResults()
+
+    utils.startTest(@"getManufacturerID() is nonzero")
+    utils.evaluateNotZero(mid, @"manufacturer ID")
+
+    utils.startTest(@"eraseBlockSectors() power-of-two, CSD-consistent")
+    utils.setCheckCountPerTest(2)
+    eraseSectors := sd.eraseBlockSectors()
+    debug("   Erase block: ", udec_(eraseSectors), " sectors")
+    utils.evaluateSubBool(eraseSectors > 0 AND (eraseSectors & (eraseSectors - 1)) == 0, @"power of two", true)
+    ifnot bCsdOk
+        utils.evaluateSubBool(false, @"erase block vs CSD (CSD never read)", true)
+    elseif csdVer == 1
+        utils.evaluateSubValue(eraseSectors, @"CSD v2 fixed 64KB erase block", 128)
+    else
+        utils.evaluateSubBool(eraseSectors >= 1 AND eraseSectors <= 128, @"CSD v1 erase block range", true)
+    utils.showSubTestResults()
+
+    ' ======================================================================
+    ' TEST GROUP: Register Reads In RAW Mode (G-2)
+    ' ======================================================================
+    ' Register commands fall outside both worker mode-gate ranges, so they
+    ' must serve in MODE_RAW exactly as mounted -- mirroring the
+    ' CSD-after-initCardOnly test above.
+    utils.startTestGroup(@"Register Reads In RAW Mode")
+
+    utils.startTest(@"CID/SCR/SDStatus readable after initCardOnly")
+    utils.setCheckCountPerTest(5)
+    sd.unmount()
+    result := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    utils.evaluateSubValue(result, @"initCardOnly()", sd.SUCCESS)
+    bytefill(@cidBuf, 0, 16)
+    utils.initGuard(@cidBuf_guard)
+    result := sd.readCIDRaw(@cidBuf)
+    utils.checkGuard(@cidBuf_guard, @"cidBuf guard (RAW)")
+    utils.evaluateSubValue(result, @"readCIDRaw() in RAW", sd.SUCCESS)
+    utils.evaluateSubBool(cidBuf[0] == mid, @"MID matches mounted read", true)
+    bytefill(@scrBuf, 0, 8)
+    utils.initGuard(@scrBuf_guard)
+    result := sd.readSCRRaw(@scrBuf)
+    utils.checkGuard(@scrBuf_guard, @"scrBuf guard (RAW)")
+    utils.evaluateSubValue(result, @"readSCRRaw() in RAW", sd.SUCCESS)
+    bytefill(@sdsBuf, 0, 64)
+    utils.initGuard(@sdsBuf_guard)
+    result := sd.readSDStatusRaw(@sdsBuf)
+    utils.checkGuard(@sdsBuf_guard, @"sdsBuf guard (RAW)")
+    utils.evaluateSubValue(result, @"readSDStatusRaw() in RAW", sd.SUCCESS)
+    utils.showSubTestResults()
+    sd.stop()
+
+    ' ======================================================================
     ' Cleanup and Summary
     ' ======================================================================
+    ' (driver stopped by the RAW-mode group; the unmount below is a
+    ' harmless no-op kept for shape)
     sd.unmount()
 
     utils.ShowTestEndCounts()

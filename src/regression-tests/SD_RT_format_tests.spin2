@@ -298,12 +298,12 @@ PUB go() | result, dataStart, fat1Start, fat2Start, idx, mismatch, cardSectors
     ' ========================================
     utils.startTestGroup(@"Backup VBR Verification")
 
-    utils.startTest(@"Backup VBR matches primary")
     ' Read backup boot sector at partition + 6
     utils.startTest(@"Read backup VBR (partition start + 6)")
     utils.evaluateBool(readVerifySector(partitionStart + 6, @buf2, @buf2_guard), @"readSectorRaw(backup VBR)", true)
 
     ' Compare the two boot sectors
+    utils.startTest(@"Backup VBR matches primary")
     mismatch := false
     repeat idx from 0 to 511
         if buf[idx] <> buf2[idx]
@@ -344,9 +344,10 @@ PUB go() | result, dataStart, fat1Start, fat2Start, idx, mismatch, cardSectors
     utils.evaluateBool(result == 3 OR result == $FFFFFFFF, @"Next free = 3 or unknown", true)
     debug("  Next free hint: ", udec(result))
 
-    utils.startTest(@"Backup FSInfo matches primary")
     utils.startTest(@"Read backup FSInfo (partition start + 7)")
     utils.evaluateBool(readVerifySector(partitionStart + 7, @buf2, @buf2_guard), @"readSectorRaw(backup FSInfo)", true)
+
+    utils.startTest(@"Backup FSInfo matches primary")
     mismatch := false
     repeat idx from 0 to 511
         if buf[idx] <> buf2[idx]
@@ -382,8 +383,10 @@ PUB go() | result, dataStart, fat1Start, fat2Start, idx, mismatch, cardSectors
     result := LONG[@buf + 12]
     utils.evaluateBool(result == 0, @"FAT[3] = 0 (free)", true)
 
-    utils.startTest(@"FAT2 mirrors FAT1 (first sector)")
+    utils.startTest(@"Read FAT2 first sector")
     utils.evaluateBool(readVerifySector(fat2Start, @buf2, @buf2_guard), @"readSectorRaw(FAT2)", true)
+
+    utils.startTest(@"FAT2 mirrors FAT1 (first sector)")
     mismatch := false
     repeat idx from 0 to 511
         if buf[idx] <> buf2[idx]
@@ -392,8 +395,10 @@ PUB go() | result, dataStart, fat1Start, fat2Start, idx, mismatch, cardSectors
             quit
     utils.evaluateBool(mismatch == false, @"FAT1 and FAT2 identical", true)
 
-    utils.startTest(@"FAT1 second sector is zeroed")
+    utils.startTest(@"Read FAT1 second sector")
     utils.evaluateBool(readVerifySector(fat1Start + 1, @buf, @buf_guard), @"readSectorRaw(FAT1 sector 2)", true)
+
+    utils.startTest(@"FAT1 second sector is zeroed")
     mismatch := false
     repeat idx from 0 to 511
         if buf[idx] <> 0
@@ -401,8 +406,10 @@ PUB go() | result, dataStart, fat1Start, fat2Start, idx, mismatch, cardSectors
             quit
     utils.evaluateBool(mismatch == false, @"All zeros", true)
 
-    utils.startTest(@"FAT2 second sector is zeroed")
+    utils.startTest(@"Read FAT2 second sector")
     utils.evaluateBool(readVerifySector(fat2Start + 1, @buf, @buf_guard), @"readSectorRaw(FAT2 sector 2)", true)
+
+    utils.startTest(@"FAT2 second sector is zeroed")
     mismatch := false
     repeat idx from 0 to 511
         if buf[idx] <> 0

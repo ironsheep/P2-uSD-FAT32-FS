@@ -36,9 +36,25 @@ CON
      PEAK_BYTES           = STALE_POLLUTER_BYTES + 32 * 1024
 
 ' Uncomment SD_INCLUDE_STACK_CHECK to measure worker cog stack depth
+' RAW + TEST_HOOKS + DEBUG power the cluster-0 fixture: raw entry patch via
+' readSectorRaw/writeSectorRaw (RAW), setTestInvalidateCaches() so the patched
+' entry is re-read from the card (TEST_HOOKS), debugGetRootSec() to address
+' the scan (DEBUG)
 #ifdef __SPINTOOLS__
+#define SD_INCLUDE_RAW
+#define SD_INCLUDE_TEST_HOOKS
+#define SD_INCLUDE_DEBUG
 #elseifdef __FLEXSPIN__
+#define SD_INCLUDE_RAW
+#define SD_INCLUDE_TEST_HOOKS
+#define SD_INCLUDE_DEBUG
+#pragma exportdef SD_INCLUDE_RAW
+#pragma exportdef SD_INCLUDE_TEST_HOOKS
+#pragma exportdef SD_INCLUDE_DEBUG
 #else
+#pragma exportdef SD_INCLUDE_RAW
+#pragma exportdef SD_INCLUDE_TEST_HOOKS
+#pragma exportdef SD_INCLUDE_DEBUG
 #define SD_INCLUDE_STACK_CHECK
 #pragma exportdef SD_INCLUDE_STACK_CHECK
 #endif
@@ -83,6 +99,18 @@ stalePolluter   BYTE    "STPOLL.TXT", 0
 staleBuf        BYTE    0[512]
 staleBuf_guard  BYTE    0[16]
 staleGenName    BYTE    0[16]
+
+' Cluster-zero fixture (S2 witness): names, the on-disk SFN form for the raw
+' scan, and the raw-patch bookkeeping the restore helper needs. staleBuf above
+' doubles as the raw-sector scratch (the stale group refills it itself).
+czFile          BYTE    "CZERO.TXT", 0
+czPath          BYTE    "/CZERO.TXT", 0
+czWitness       BYTE    "CZWIT.TXT", 0
+sfnCzero        BYTE    "CZERO   TXT"
+czSec           LONG    -1
+czOfs           LONG    0
+czOrigHi        WORD    0
+czOrigLo        WORD    0
 
 PUB go() | result, pEntry, pFilename, attrs, fileCount, idx, handle, bytesRead, secPerClus, cBytes, freeSec, freeClus, needClus, bCwdOk
 '' Main entry point for directory regression tests
@@ -204,6 +232,57 @@ PUB go() | result, pEntry, pFilename, attrs, fileCount, idx, handle, bytesRead, 
     utils.evaluateSubValue(result, @"changeDirectory() on file", sd.E_NOT_A_DIR)
     utils.showSubTestResults()
     sd.changeDirectory(@"/")                                                    ' Return to root
+
+    ' ----------------------------------
+    ' TEST GROUP: Cluster-zero file rejection (S2 witness)
+    ' ----------------------------------
+    ' A PC writes an empty file's entry with first cluster 0 -- the same value
+    ' a root-pointing '..' carries. searchDirectory redirects a cluster-0 match
+    ' to the root sector, and do_chdir's old root-sector OR-arm then accepted
+    ' it: changeDirectory() onto such a file returned SUCCESS and silently set
+    ' the caller's CWD to root. The file-chdir test above uses a real-cluster
+    ' file and could never catch that. The fixture fabricates the cluster-0
+    ' shape raw, and the probe runs from inside RTDIR1 so a silently-changed
+    ' CWD is provable by where a witness file lands.
+    utils.startTestGroup(@"Cluster-Zero File Rejection")
+
+    utils.startTest(@"Fabricate cluster-0 empty file (raw patch)")
+    bCwdOk := makeClusterZeroFile(@czFile)
+    utils.evaluateBool(bCwdOk, @"fixture fabricated", true)
+
+    ' Gated on the fixture: an ungated probe against a missing/unpatched file
+    ' gets E_NOT_A_DIR for ABSENCE -- a pass for the wrong reason, the same
+    ' trap the file-chdir test above defends against
+    utils.startTest(@"changeDirectory() onto cluster-0 file is refused")
+    utils.setCheckCountPerTest(4)
+    if bCwdOk
+        sd.changeDirectory(@testDir1)                                           ' probe from a non-root CWD
+        result := sd.changeDirectory(@czPath)
+        utils.evaluateSubValue(result, @"chdir returns E_NOT_A_DIR", sd.E_NOT_A_DIR)
+        ' CWD provably unchanged: a file created NOW must land in RTDIR1
+        handle := sd.createFileNew(@czWitness)
+        utils.evaluateSubBool(handle >= 0, @"witness file created in CWD", true)
+        if handle >= 0
+            sd.closeFileHandle(handle)
+        sd.changeDirectory(@"/")
+        handle := sd.openFileRead(@"RTDIR1/CZWIT.TXT")
+        utils.evaluateSubBool(handle >= 0, @"witness found under RTDIR1", true)
+        if handle >= 0
+            sd.closeFileHandle(handle)
+        sd.changeDirectory(@testDir1)
+        utils.evaluateSubValue(sd.deleteFile(@czWitness), @"witness cleanup", sd.SUCCESS)
+        sd.changeDirectory(@"/")
+        sd.deleteFile(@czWitness)                                               ' regression-branch residue: witness landed in root
+    else
+        debug("  Fixture missing -- refusing to probe absence and score it as rejection")
+        utils.evaluateSubBool(false, @"chdir returns E_NOT_A_DIR", true)
+        utils.evaluateSubBool(false, @"witness file created in CWD", true)
+        utils.evaluateSubBool(false, @"witness found under RTDIR1", true)
+        utils.evaluateSubBool(false, @"witness cleanup", true)
+    utils.showSubTestResults()
+
+    utils.startTest(@"Cluster-0 fixture teardown (restore + delete)")
+    utils.evaluateBool(restoreClusterZeroFile(@czFile), @"fixture removed", true)
 
     ' ----------------------------------
     ' TEST GROUP: Nested directories
@@ -642,6 +721,106 @@ PRI buildStaleFileName(fileNum) | d10, d1
   BYTE[@staleGenName + 9] := 0
 
 
+PRI makeClusterZeroFile(pName) : bOk | rootSec, secIdx, entryOfs, pEntry, bDone
+' Fabricate what a PC writes for an empty file: a directory entry whose
+' first-cluster words are 0. createFileNew() may allocate a real cluster, so
+' the entry is patched RAW -- readSectorRaw, zero DE_CLUS_HI/LO, writeSectorRaw
+' -- behind the filesystem's back, then setTestInvalidateCaches() forces the
+' driver to re-read the patched entry from the card. The original cluster
+' words are saved so restoreClusterZeroFile() can undo the patch BEFORE the
+' delete, so the file's real chain is freed and nothing leaks.
+'
+' REFERENCE IMPLEMENTATION (decided 2026-08-10): this raw-fabrication idiom
+' cannot live in isp_rt_utilities -- that object deliberately holds no sd
+' reference -- so it lives per-suite, and later suites copy this decided form
+' rather than re-deriving it.
+'
+' @param pName - Pointer to filename to create in the CURRENT directory (root expected)
+' @returns bOk - TRUE when the file exists on disk with cluster words 0
+' @local rootSec - First sector of the root directory
+' @local secIdx - Create handle briefly, then root-sector scan index
+' @local entryOfs - Byte offset of the entry within its sector
+' @local pEntry - Pointer to the entry under inspection in staleBuf
+' @local bDone - TRUE once the end-of-directory terminator was seen
+
+    bOk := false
+    czSec := -1
+    bDone := false
+    secIdx := sd.createFileNew(pName)
+    if secIdx < 0
+        return
+    sd.closeFileHandle(secIdx)
+
+    ' Scan covers the root's FIRST cluster only -- on a root grown past one
+    ' cluster the fresh entry can land further out and the fixture fails
+    ' VISIBLY (never silently probing the wrong thing)
+    rootSec := sd.debugGetRootSec()
+    repeat secIdx from 0 to sd.sectorsPerCluster() - 1
+        if sd.readSectorRaw(rootSec + secIdx, @staleBuf) < 0
+            quit
+        repeat entryOfs from 0 to sd.LAST_DIR_ENTRY_OFFSET step sd.DIR_ENTRY_SIZE
+            pEntry := @staleBuf + entryOfs
+            if BYTE[pEntry] == 0                                                ' end-of-directory: nothing lives beyond
+                bDone := true
+                quit
+            if BYTE[pEntry] <> sd.DIR_ENTRY_DELETED AND sfnMatches(pEntry, @sfnCzero)
+                czSec := rootSec + secIdx
+                czOfs := entryOfs
+                quit
+        if czSec >= 0 OR bDone
+            quit
+    if czSec < 0
+        return
+
+    czOrigHi := WORD[@staleBuf + czOfs + sd.DE_CLUS_HI_OFFSET]                  ' save for the paired restore
+    czOrigLo := WORD[@staleBuf + czOfs + sd.DE_CLUS_LO_OFFSET]
+    WORD[@staleBuf + czOfs + sd.DE_CLUS_HI_OFFSET] := 0
+    WORD[@staleBuf + czOfs + sd.DE_CLUS_LO_OFFSET] := 0
+    if sd.writeSectorRaw(czSec, @staleBuf) < 0
+        czSec := -1                                                             ' patch never landed -- nothing to restore
+        return
+    sd.setTestInvalidateCaches()                                                  ' the patched entry must be re-read from the card
+    bOk := true
+
+PRI restoreClusterZeroFile(pName) : bOk | status
+' Undo the raw cluster-0 patch, then delete the fixture through the normal
+' API. Restoring the saved cluster words FIRST means deleteFile() frees the
+' file's real chain (if create allocated one) -- raw-patch discipline:
+' capture, patch, probe, restore, then clean up through the front door.
+'
+' @param pName - Pointer to the fixture's filename (in the current directory, root expected)
+' @returns bOk - TRUE when restore (if armed) and delete both succeeded
+' @local status - Intermediate API status
+
+    bOk := true
+    if czSec >= 0
+        if sd.readSectorRaw(czSec, @staleBuf) == sd.SUCCESS
+            WORD[@staleBuf + czOfs + sd.DE_CLUS_HI_OFFSET] := czOrigHi
+            WORD[@staleBuf + czOfs + sd.DE_CLUS_LO_OFFSET] := czOrigLo
+            if sd.writeSectorRaw(czSec, @staleBuf) < 0
+                bOk := false
+            sd.setTestInvalidateCaches()
+        else
+            bOk := false
+        czSec := -1
+    status := sd.deleteFile(pName)
+    if status < 0
+        bOk := false
+
+PRI sfnMatches(pEntry, pName) : bMatch | idx
+' Compare a directory entry's 11-byte on-disk SFN field against an expected name
+'
+' @param pEntry - Pointer to the 32-byte directory entry (SFN at offset 0)
+' @param pName - Pointer to the expected 11-byte space-padded SFN
+' @returns bMatch - TRUE when all 11 bytes match
+' @local idx - Byte index
+
+    bMatch := true
+    repeat idx from 0 to 10
+        if BYTE[pEntry + idx] <> BYTE[pName + idx]
+            bMatch := false
+            quit
+
 PRI cleanupTestItems() | idx
 ' Delete every fixture this suite owns, files before directories and nested
 ' items first (a directory can only be removed once it is empty).
@@ -668,7 +847,18 @@ PRI cleanupTestItems() | idx
             sd.changeDirectory(@"..")
         sd.deleteFile(@testFile1)
         sd.deleteFile(@subDir1)
+        sd.deleteFile(@czWitness)                       ' cluster-0 group's witness, if a prior run aborted mid-group
     sd.changeDirectory(@"/")
+
+    ' Cluster-0 fixture residue: deleting a cluster-0 entry is safe --
+    ' freeClusterChain() refuses clusters below ROOT_CLUSTER, so the entry is
+    ' removed and no FAT write happens. If the aborted run left the file with
+    ' its real cluster intact, this frees it normally. KNOWN BOUNDED LEAK: a
+    ' run that aborted between patch and restore hid the create-allocated
+    ' cluster behind the zeroed entry words -- that one cluster stays marked
+    ' used until an fsck/format reclaims it (the regression card gets both).
+    sd.deleteFile(@czFile)
+    sd.deleteFile(@czWitness)                           ' regression-branch residue lands in root (see probe test)
 
     ' Clean testDir2 contents
     if sd.changeDirectory(@testDir2) == sd.SUCCESS
