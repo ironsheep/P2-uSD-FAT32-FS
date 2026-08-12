@@ -52,6 +52,16 @@ Sector writes no longer depend on where the linker put the driver, failures the 
 - `getResult()` and `cancelAsync()` report `E_STACK_OVERFLOW` when the worker's stack guard was violated during the operation, as blocking calls already do.
 - `setDate()` rejects every out-of-range date or time field with `E_INVALID_PARAM`; negative values were previously accepted.
 
+### Upgrade / recovery note
+
+Data written by an earlier release may be wrong on the card. The write-path defect above stored shifted sectors while reporting success, and whether a build was affected depended on where the linker placed the driver's data — a property of the binary, not of the card or your code.
+
+- **`SD_FAT32_audit` and `SD_FAT32_fsck` cannot find this.** The filesystem structures are intact and consistent; only the contents of data sectors are wrong, so there is no footprint to detect. This is the same shape as v1.6.0's mid-sector append defect.
+- Verify files you care about against a known-good copy, or rewrite them with a v1.7.0 build. A rewrite is sufficient — no reformat is needed.
+- Reads were never affected, so a card written by another system and only read by this driver is not at risk.
+
+`DOCs/MIGRATION-GUIDE-v1.7.0.md` §0 covers this in full.
+
 ### Breaking Changes
 
 - **BREAKING**: `eofHandle()` and `isFileContiguous()` return a boolean only. They previously returned `TRUE`, `FALSE`, or a negative error code, and `TRUE` is -1 in Spin2 while `E_TIMEOUT` is also -1 — there was no correct way to call either one. `eofHandle()` reports `TRUE` when the query fails, `isFileContiguous()` reports `FALSE`, and `error()` distinguishes.

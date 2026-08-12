@@ -12,6 +12,44 @@ For the full picture of how error reporting now works, see
 
 ---
 
+## 0. Read this first: data written by an earlier release may be wrong on the card
+
+This needs no code change, but it may need you to look at your data.
+
+v1.7.0 fixes a write-path timing defect in which the outgoing data could be one bit out
+of phase with the clock that latched it, so the card **stored a shifted sector while
+reporting success.** Whether a given build was affected depended on where the linker
+placed the driver's data in hub RAM — so it was a property of the *binary*, not of the
+card, the card slot, or the code you wrote. Enabling `SD_INCLUDE_SPEED` was enough to
+move a build from one side of the boundary to the other. Reads were never affected.
+
+**Why you cannot have noticed.** Two things that look like they should have caught it
+did not:
+
+- The card's data-response token said "accepted." In SPI mode, write-CRC checking is off
+  unless the host turns it on with CMD59, which this driver has never sent — so that
+  token only ever confirmed the packet was well-formed, never that the payload bits were
+  yours.
+- Reading the file back matched. The shifted bytes were genuinely what the card had
+  stored, so a read returned them faithfully and any byte-compare agreed with itself.
+
+**What to do.** If you have written data with any earlier release and its integrity
+matters:
+
+- `SD_FAT32_audit` and `SD_FAT32_fsck` **will not find this.** The filesystem structures
+  are intact and internally consistent; only the *contents* of data sectors are wrong.
+  There is no filesystem footprint to detect, exactly as with the v1.6.0 mid-sector
+  append defect.
+- Verify affected files against a known-good copy, or simply rewrite them with a v1.7.0
+  build. A rewrite is sufficient — nothing about the card needs reformatting.
+- If your data is text or otherwise self-evident, a bit-shifted sector is usually
+  obvious on inspection. If it is binary telemetry, it may not be, and comparison
+  against a backup is the only reliable check.
+
+If you have written nothing you still care about, there is nothing to do here.
+
+---
+
 ## 1. `ERROR()` now describes the last operation, not the last failure
 
 **Before:** the slot held the most recent *failure*, and a successful call left it alone.
@@ -118,9 +156,34 @@ All additive except where noted.
 | -47 | `E_FILE_OPEN` | `deleteFile()` on a file that still has an open handle |
 | -65 | `E_NO_COG` | `start()` when no cog is free |
 
-**One changed return:** `unmount()` on a card with a corrupt FSInfo sector now reports
-`E_BAD_FSINFO` where it previously reported `E_IO_ERROR`. Both are negative, so a
-success/failure test is unaffected; only code matching the exact code needs attention.
+**Two changed returns:**
+
+`unmount()` on a card with a corrupt FSInfo sector now reports `E_BAD_FSINFO` where it
+previously reported `E_IO_ERROR`. Both are negative, so a success/failure test is
+unaffected; only code matching the exact code needs attention.
+
+`changeDirectory()` on a name that has no directory entry now reports
+`E_FILE_NOT_FOUND` (-40) where it previously reported `E_NOT_A_DIR` (-43). The two
+conditions shared one code; `E_NOT_A_DIR` now means specifically *the name exists and
+is not a directory*. Code that branches on `E_NOT_A_DIR` to mean "no such directory"
+needs to test for `E_FILE_NOT_FOUND` instead — or, better, just test for failure:
+
+```spin2
+' Before -- worked by accident, because both conditions arrived as E_NOT_A_DIR
+if sd.changeDirectory(@"LOGS") == sd.E_NOT_A_DIR
+    make_it()
+
+' After -- distinguish, or don't
+case sd.changeDirectory(@"LOGS")
+    sd.SUCCESS          : ' we are there
+    sd.E_FILE_NOT_FOUND : make_it()
+    sd.E_NOT_A_DIR      : debug("LOGS exists and is a file")
+    other               : debug("card error")
+```
+
+The volume label is invisible to file operations everywhere in v1.7.0, so
+`changeDirectory()` on the label's name reports `E_FILE_NOT_FOUND` rather than leaking
+the label's existence through a different error code.
 
 `E_NO_COG` replaces a misuse of `E_NO_LOCK` at `start()`. The lock was fine — there was no
 cog free. Different condition, different remedy.
@@ -265,7 +328,8 @@ If you build with `SD_INCLUDE_ALL` and ship the result, move to the specific
 
 ## Summary: what actually breaks
 
-Almost nothing. In order of likelihood:
+Almost nothing in your *code*. Start with §0, which is about your *data* rather than
+your source, then work down this list in order of likelihood:
 
 1. A read loop that stops **only** on `n == 0` (§9) — it will no longer terminate on a
    persistent read failure. This is the one change that can hang a working program, and it
@@ -274,9 +338,11 @@ Almost nothing. In order of likelihood:
 3. `sync()` in a timing-sensitive path (§4) — it now performs real card writes where it
    used to return immediately. The result is what the documentation always promised, but
    the latency is new.
-4. Matching `unmount()`'s exact error code on a corrupt-FSInfo card.
-5. Treating `freeSpace() == 0` as "card full" rather than checking `ERROR()`.
-6. A negative test on `eofHandle()` or `isFileContiguous()` written to work around the old
+4. Matching `changeDirectory()`'s exact error code (§6) — a missing directory now reports
+   `E_FILE_NOT_FOUND` rather than `E_NOT_A_DIR`.
+5. Matching `unmount()`'s exact error code on a corrupt-FSInfo card.
+6. Treating `freeSpace() == 0` as "card full" rather than checking `ERROR()`.
+7. A negative test on `eofHandle()` or `isFileContiguous()` written to work around the old
    mixed encoding.
 
 Everything else in this release is additive.
