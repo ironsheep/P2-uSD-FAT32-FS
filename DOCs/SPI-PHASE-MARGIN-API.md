@@ -81,6 +81,19 @@ Affects ONLY streamer-driven 512-byte sector transfers (Path B). Does NOT affect
 
 Returns the streamer-DMA `align_delay` value that will be used on the next streamer-driven sector transfer. Computed as `spi_period + align_delay_offset`, clamped to a minimum of 2.
 
+### `debugSetTxAlignDelay(pad)`
+
+Set the `WAITX` phase pad used between the SCK counter reset and `XINIT` at both **write-path** streamer sites (`writeSector` and `writeSectors`). This is the shmoo knob for the layout-invariance fix: with `RDFAST` hoisted out of the phase-critical window, the MOSI-bitstream-to-SCK-edge phase is a build-independent constant, and this pad centers it in the passing window. The characterized default is baked into the driver's DAT (`tx_align_delay`).
+
+- **Floor:** clamped to ≥ 2 at the use site (`WAITX` minimum).
+- **Range:** `[2, 2 + 2*hp]` covers one full SCK period of phase; larger values wrap the same phases.
+
+Affects ONLY write-path streamer bursts. The read path's phase pad remains `align_delay` (see `debugSetAlignDelayOffset`).
+
+### `debugGetTxAlignDelay() : pad`
+
+Returns the configured `tx_align_delay` value (before the use-site floor clamp).
+
 ---
 
 ## Runtime sysclk recompute
@@ -136,7 +149,8 @@ For full per-cell + margin-summary output, see `diagnostic-tests/SD_phase_sweep_
 At default settings (consumer does NOT export `SD_INCLUDE_DEBUG`, or does export it but does not call any `debug*` setters):
 
 - Path A: MISO `WXPIN[5]` auto-by-hp with threshold=5 → on-edge for hp ≥ 6, pre-edge for hp ≤ 5
-- Path B: `align_delay = spi_period` (offset=0)
+- Path B reads: `align_delay = spi_period` (offset=0)
+- Path B writes: `tx_align_delay = 2` (the `WAITX` floor; bench characterization may re-center it)
 
 These defaults reproduce pre-Phase-2/3 byte-on-the-wire behavior at sysclk=350 MHz and are validated against the regression suite. The production driver does not expose any tunable surface for these — the right values are hardcoded internally.
 

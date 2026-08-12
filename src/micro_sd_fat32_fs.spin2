@@ -734,6 +734,17 @@ DAT  ' ---- Singleton Control ----
         ' exactly on the floor; below that the floor clamp engages.
         align_delay_offset                      LONG    0                        ' Signed integer; sweep range [-3, +8]
 
+        ' LAYOUT-INVARIANCE FIX (2026-08-12) -- TX streamer phase pad.
+        ' tx_align_delay is the WAITX value between the SCK counter reset
+        ' (DRVL) and XINIT at both write-path streamer sites. With RDFAST
+        ' hoisted ABOVE the SCK reset, every instruction from DRVL to XINIT
+        ' is a fixed-2-clock cog op, so the MOSI-bitstream-to-SCK-edge phase
+        ' is a compile-time constant -- this pad is how that constant gets
+        ' centered in the passing window (bench shmoo), NOT a per-build
+        ' workaround. See DOCs/Analysis/LAYOUT-SENSITIVITY-ROOTCAUSE-ANALYSIS.md.
+        ' Floor 2 applies at use site (WAITX minimum), same rule as align_delay.
+        tx_align_delay                          LONG    2                        ' Sysclks; sweep range [2, 2+2*hp]
+
         ' FILESYSTEM STATE (moved from VAR)
         fat_sec                                 LONG    0                        ' Starting sector of FAT
         fat2_sec                                LONG    0                        ' Starting sector of FAT2 (mirror)
@@ -2742,6 +2753,32 @@ PUB debugGetEffectiveAlignDelay() : delay
   delay := spi_period + align_delay_offset
   if delay < 2
     delay := 2
+
+PUB debugSetTxAlignDelay(pad)
+'' DIAGNOSTIC ONLY: set the WAITX phase pad used between the SCK counter
+'' reset and XINIT at both write-path streamer sites (writeSector and
+'' writeSectors). This is the bench shmoo knob for the layout-invariance
+'' fix -- with RDFAST hoisted out of the phase window, the data-vs-clock
+'' phase is a build-independent constant and this pad centers it in the
+'' passing window. Production applications must NOT call this; the driver
+'' bakes in the characterized default (DAT tx_align_delay).
+''
+'' Range: [2, 2+2*hp] covers one full SCK period of phase. Values below the
+'' WAITX floor of 2 are clamped at the use site; values above 2+2*hp wrap
+'' the same phases and are accepted but pointless.
+''
+'' @param pad - WAITX value in sysclks
+
+  tx_align_delay := pad
+
+PUB debugGetTxAlignDelay() : pad
+'' DIAGNOSTIC ONLY: return the WAITX phase pad the next write-path streamer
+'' burst will use (before the use-site floor clamp to >= 2).
+'' Production applications must NOT call this.
+''
+'' @returns pad - configured tx_align_delay in sysclks
+
+  pad := tx_align_delay
 
 #endif                                                  ' SD_INCLUDE_DEBUG (Phase 2/3 diagnostic tuning APIs)
 
@@ -7927,15 +7964,20 @@ PRI readSectors(start_sector, count, p_buffer) : sectors_read | _sck, _miso, p_b
         pinclear(_miso)
         pinf(_miso)
 
-        ' Streamer bulk transfer: 512 bytes from MISO to hub
+        ' Streamer bulk transfer: 512 bytes from MISO to hub.
+        ' LAYOUT-INVARIANCE (2026-08-12): SETXFRQ/WRFAST hoisted above the SCK
+        ' reset, matching readSector's Phase 1.5 ordering, so every op from
+        ' DRVL onward is fixed-2-clock and capture phase cannot move with hub
+        ' layout. (WRFAST is near-fixed latency per p2kbArchFifo, unlike the
+        ' write path's RDFAST -- hoisted anyway for one uniform discipline.)
         ORG
+              SETXFRQ   xfrq                            ' Set streamer NCO rate (before SCK reset)
+              WRFAST    #0, p_buf                       ' Setup WRFAST to hub buffer (before SCK reset)
               DIRL      _sck                            ' Reset SCK: counter stops, output LOW, Y=0
               DRVL      _sck                            ' Re-enable: DIR=1 restarts base period counter fresh
-              SETXFRQ   xfrq
-              WRFAST    #0, p_buf
-              WYPIN     clk_count, _sck
-              WAITX     align_delay
-              XINIT     stream_mode, init_phase
+              WYPIN     clk_count, _sck                 ' Y written 2 sysclks after DIR-rise (within first hp)
+              WAITX     align_delay                     ' Align streamer with first SCK rising edge
+              XINIT     stream_mode, init_phase         ' Start streamer with phase offset -- fixed offset from DRVL
               WAITXFI
         END
 
@@ -8032,7 +8074,7 @@ PRI invalidateCacheRange(first_sector, last_sector) | idx
     if h_buf_sector[idx] >= first_sector AND h_buf_sector[idx] <= last_sector AND NOT (h_flags[idx] & HF_DIRTY)
       h_buf_sector[idx] := -1
 
-PRI writeSector(sector, buf_type) : status | _sck, _mosi, p_buf, stream_mode, clk_count, xfrq, resp, p_cache, inject_fail
+PRI writeSector(sector, buf_type) : status | _sck, _mosi, p_buf, stream_mode, clk_count, xfrq, resp, p_cache, inject_fail, tx_pad
 ' Write buffer into a sector using P2 streamer - hardware DMA for bulk 512-byte transfer.
 ' Reference: flash_loader.spin2 pattern for SPI writes
 '
@@ -8057,6 +8099,7 @@ PRI writeSector(sector, buf_type) : status | _sck, _mosi, p_buf, stream_mode, cl
 ' @local resp - Response byte
 ' @local p_cache - Pointer to cache variable
 ' @local inject_fail - Targeted fault injection armed for this write (test hooks only)
+' @local tx_pad - WAITX phase pad between SCK reset and XINIT (from tx_align_delay)
 
 ' Select buffer and cache based on type
 
@@ -8130,11 +8173,14 @@ PRI writeSector(sector, buf_type) : status | _sck, _mosi, p_buf, stream_mode, cl
     sp_transfer_8($FE)                                                          ' Data start token
 
     ' STREAMER BULK TRANSFER: Send 512 bytes from hub buffer to MOSI
-    ' Pattern: SETXFRQ -> RDFAST -> XINIT -> WYPIN(clk) -> WAITXFI
+    ' Pattern: SETXFRQ -> RDFAST -> DIRL/DRVL(SCK) -> WAITX -> XINIT -> WYPIN(clk) -> WAITXFI
     ' Mode word format: base_mode | (pin << 17) | bit_count
     ' For 512 bytes: 512 * 8 = 4096 bits = $1000
     stream_mode := STREAM_TX_BASE | (_mosi << 17) | (SECTOR_SIZE * 8)           ' TX mode + MOSI pin + bit count
     clk_count := SECTOR_SIZE * 8 * 2                                            ' 8192 clock transitions
+    tx_pad := tx_align_delay
+    if tx_pad < 2                                                               '  WAITX floor (cog needs 2 sysclks min)
+      tx_pad := 2
 
     ' Calculate streamer NCO frequency to match SPI clock
     ' Same formula as readSector: one bit per full clock period
@@ -8145,25 +8191,33 @@ PRI writeSector(sector, buf_type) : status | _sck, _mosi, p_buf, stream_mode, cl
     pinclear(_mosi)                                                             ' Clear smart pin mode (WRPIN=0, DIR=0)
     pinl(_mosi)                                                                 ' Drive pin low (DIR=1, output mode)
 
-    ' Streamer TX with deterministic clock alignment:
-    '   1. dirl/drvl on SCK resets the P_TRANSITION base-period counter to a known state
-    '      (DIR=0 resets counter, output, Y without clearing WRPIN/WXPIN config;
-    '       drvl sets DIR=1 with OUT=0 so smart pin is enabled and ready)
-    '   2. xinit starts streamer NCO from phase=0
-    '   3. wypin starts clock - base period counter phase is deterministic from drvl
-    '
-    ' v1.5.2 (2026-05-05): WAITX align_delay removed. The dirl/drvl SCK reset
-    ' (added in commit 797f913) gives the smart-pin counter a deterministic phase
-    ' from wypin onward; combined with smart-pin start latency, the streamer's
-    ' first NCO output naturally settles before the first SCK edge with no explicit
-    ' wait. Verified by freq-sweep on 4 originally-failing cards (200-350 MHz).
+    ' Streamer TX with LAYOUT-INVARIANT clock alignment (2026-08-12):
+    '   1. SETXFRQ and RDFAST execute BEFORE the SCK reset. RDFAST's blocking
+    '      FIFO fill takes 10-17 sysclks (p2kbPasm2Rdfast) -- the spread is the
+    '      hub egg-beater slot wait for p_buf's address slice (p2kbArchHub),
+    '      which MOVES when the binary layout moves. Pre-fix, that variable
+    '      latency sat between DRVL and XINIT, so the MOSI-bitstream-to-SCK
+    '      phase was a function of hub layout: some layouts stored every
+    '      sector shifted one bit late at the card, silently (SPI-mode write
+    '      CRC is not enforced -- CMD59 is never sent).
+    '   2. dirl/drvl on SCK resets the P_TRANSITION base-period counter
+    '      (DIR=0 resets counter, output, Y without clearing WRPIN/WXPIN
+    '       config; drvl sets DIR=1 with OUT=0, enabled and ready)
+    '   3. From DRVL on, every op is a fixed-2-clock cog op: WAITX tx_pad,
+    '      XINIT at a compile-time-constant offset, WYPIN 2 clocks later.
+    '      SCK edges land on the base-period grid anchored at DIR-rise
+    '      (p2kbArchSmartPin00101TransitionOutput), so data-vs-clock phase is
+    '      now a build-independent constant, tuned once via tx_align_delay.
+    ' History: v1.5.2 removed WAITX align_delay here, relying on "natural
+    ' settling" -- that margin was a layout lottery, won until a41c839 lost it.
     ORG
+              SETXFRQ   xfrq                            ' Set streamer bit rate (before SCK reset)
+              RDFAST    #0, p_buf                       ' Prime FIFO -- variable hub-slot wait lands HERE, outside the phase window
               DIRL      _sck                            ' Reset SCK: counter stops, output LOW, Y=0
               DRVL      _sck                            ' Re-enable: DIR=1 restarts base period counter fresh
-              SETXFRQ   xfrq                            ' Set streamer bit rate
-              RDFAST    #0, p_buf                       ' Setup RDFAST from hub buffer
-              XINIT     stream_mode, #0                 ' Start streamer; NCO ramps from zero
-              WYPIN     clk_count, _sck                 ' Start clock - deterministic phase from drvl
+              WAITX     tx_pad                          ' Engineered phase pad (tx_align_delay, floor 2)
+              XINIT     stream_mode, #0                 ' Start streamer; NCO ramps from zero -- fixed offset from DRVL
+              WYPIN     clk_count, _sck                 ' Start clock -- fixed offset from DRVL
               WAITXFI                                   ' Wait for streamer to complete
     END
 
@@ -8241,7 +8295,7 @@ PRI writeSector(sector, buf_type) : status | _sck, _mosi, p_buf, stream_mode, cl
       if checkCardStatus(@"writeSector") < 0
         status := E_IO_ERROR
 
-PRI writeSectors(start_sector, count, p_buffer) : sectors_written | _sck, _mosi, p_buf, stream_mode, clk_count, xfrq, resp, failure_path, failure_msg_ptr, failure_sector, failure_r1, failure_resp, postloop_msg_ptr, postloop_sectors
+PRI writeSectors(start_sector, count, p_buffer) : sectors_written | _sck, _mosi, p_buf, stream_mode, clk_count, xfrq, tx_pad, resp, failure_path, failure_msg_ptr, failure_sector, failure_r1, failure_resp, postloop_msg_ptr, postloop_sectors
 ' Write multiple consecutive sectors using CMD25 (WRITE_MULTIPLE_BLOCK).
 ' More efficient than individual writeSector() calls because:
 ' - Only one CMD25 command instead of N CMD24 commands
@@ -8272,6 +8326,7 @@ PRI writeSectors(start_sector, count, p_buffer) : sectors_written | _sck, _mosi,
 ' @local failure_resp - dresp byte captured on per-block rejection failure
 ' @local postloop_msg_ptr - DAT pointer to post-loop ($FD/CMD13) failure label (0 = no failure)
 ' @local postloop_sectors - sectors_written captured before recovery zero-out
+' @local tx_pad - WAITX phase pad between SCK reset and XINIT (from tx_align_delay)
 
   if count > 0
     ' Every cache tag inside the written range -- all three DAT tiers and any
@@ -8285,6 +8340,9 @@ PRI writeSectors(start_sector, count, p_buffer) : sectors_written | _sck, _mosi,
     _sck := sck
     _mosi := mosi
     stream_mode := STREAM_TX_BASE | (_mosi << 17) | (SECTOR_SIZE * 8)           ' TX mode + MOSI pin + 4096 bits
+    tx_pad := tx_align_delay
+    if tx_pad < 2                                                               '  WAITX floor (cog needs 2 sysclks min)
+      tx_pad := 2
     clk_count := SECTOR_SIZE * 8 * 2                                            ' 8192 clock transitions
     xfrq := $4000_0000 / spi_period                                             ' One output per full clock period
     if ($4000_0000 // spi_period) == 0                                          ' Exact division (power-of-2 hp)?
@@ -8313,16 +8371,19 @@ PRI writeSectors(start_sector, count, p_buffer) : sectors_written | _sck, _mosi,
         pinclear(_mosi)                                                         ' Clear smart pin mode
         pinl(_mosi)                                                             ' Drive pin low (output mode)
 
-        ' Streamer TX with deterministic clock alignment (see writeSector for full rationale)
-        ' dirl/drvl resets SCK base-period counter; wypin then starts clock in known phase.
-        ' v1.5.2: WAITX align_delay removed (see writeSector for verification details).
+        ' Streamer TX with LAYOUT-INVARIANT clock alignment (2026-08-12; see
+        ' writeSector for the full rationale). RDFAST's variable hub-slot wait
+        ' executes BEFORE the SCK reset; everything from DRVL to XINIT/WYPIN
+        ' is fixed-2-clock, so data-vs-clock phase is a build-independent
+        ' constant tuned via tx_align_delay.
         ORG
+              SETXFRQ   xfrq                            ' Set streamer bit rate (before SCK reset)
+              RDFAST    #0, p_buf                       ' Prime FIFO -- variable hub-slot wait outside the phase window
               DIRL      _sck                            ' Reset SCK: counter stops, output LOW, Y=0
               DRVL      _sck                            ' Re-enable: DIR=1 restarts base period counter fresh
-              SETXFRQ   xfrq
-              RDFAST    #0, p_buf
-              XINIT     stream_mode, #0                 ' Start streamer; NCO ramps from zero
-              WYPIN     clk_count, _sck                 ' Start clock - deterministic phase from drvl
+              WAITX     tx_pad                          ' Engineered phase pad (tx_align_delay, floor 2)
+              XINIT     stream_mode, #0                 ' Start streamer; NCO ramps from zero -- fixed offset from DRVL
+              WYPIN     clk_count, _sck                 ' Start clock -- fixed offset from DRVL
               WAITXFI
         END
 
