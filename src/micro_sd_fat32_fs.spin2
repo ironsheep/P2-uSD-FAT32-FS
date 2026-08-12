@@ -8,7 +8,7 @@
 ''               -- see below for terms of use
 ''   E-mail..... stephen@ironsheep.biz
 ''   Started.... 2023
-''   Updated.... MAR 2026
+''   Updated.... 12 AUG 2026
 ''
 '' =================================================================================================
 
@@ -286,13 +286,19 @@ CON ' worker cog stack size
   ' successful hardware sweep with -D SD_INCLUDE_STACK_REPORT) + 32 longs minimum
   ' headroom, rounded UP to a multiple of 16, annotated here with the sweep date and
   ' card serial it was measured on. Applied ONLY after that full sweep passes -- the
-  ' stack-finalization task owns applying it. The current 160 carries a 'measured
-  ' peak 113' annotation that PREDATES f34610f's +1237 lines and is due for
-  ' re-measurement.
+  ' stack-finalization task owns applying it.
+  '
+  ' MEASURED v1.7.0, 2026-08-12: peak 122 of 512 longs, in SD_RT_defrag_tests, IDENTICAL
+  ' on both certifying cards -- SN $0000_0F14 (Gigastone ASTC SDXC 58GB) and SN $0001_B9D5
+  ' (SharedOEM/Gigastone SDHC 7GB), each a full 27-suite / 574-test sweep at 574/574.
+  ' Formula: 122 + 32 = 154, rounded up to a multiple of 16 = 160. The release value is
+  ' therefore unchanged from the pre-f34610f sizing, now re-derived from a current sweep
+  ' rather than inherited: the +1237-line f34610f growth did not deepen the worst-case
+  ' call chain, and 160 carries 38 longs of headroom over the measured peak.
 #ifdef SD_INCLUDE_STACK_REPORT
   STACK_SIZE         = 512                                                    ' MEASUREMENT BUILD: generous headroom so the watermark, not an overflow, is the datum
 #else
-  STACK_SIZE         = 160                                                    ' 160 longs = 640 bytes (measured peak: 113 longs pre-f34610f -- STALE, see formula above)
+  STACK_SIZE         = 160                                                    ' 160 longs = 640 bytes (measured peak 122 longs, 2026-08-12 two-card sweep -- see formula above)
 #endif
   STACK_GUARD_LONGS  = 4                                                      ' 4 longs = 16 bytes guard zone after stack
   STACK_GUARD_BYTE   = $CC                                                    ' Sentinel value (matches isp_rt_utilities convention)
@@ -746,7 +752,7 @@ DAT  ' ---- Singleton Control ----
         ' Characterized 2026-08-11 on Card 2b (SN $0000_0F14), Edge slot, 350 MHz /
         ' 25 MHz (hp=7): pad->phase is a SAWTOOTH with period hp (SCK starts on the
         ' next base-period boundary after WYPIN; streamer start moves continuously),
-        ' so only hp distinct phases exist. Losing phase: pad ≡ 1 (mod 7) — measured
+        ' so only hp distinct phases exist. Losing phase: pad == 1 (mod 7) -- measured
         ' fails at pads 8, 15, 22, 29; all 24 other measured points pass (three shmoo
         ' runs, SD_tx_phase_shmoo). Default 4 = maximal mod-7 distance (3) from the
         ' cliff on both sides; the old floor value 2 sat one sysclk from it.

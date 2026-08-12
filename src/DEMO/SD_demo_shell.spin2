@@ -6,7 +6,7 @@
 ''   Author..... Stephen M Moraco
 ''   E-mail..... stephen@ironsheep.biz
 ''   Started.... FEB 2026
-''   Updated.... 07 FEB 2026
+''   Updated.... 12 AUG 2026
 ''
 '' =========================================================================================
 
@@ -270,7 +270,7 @@ PUB show_help()
     bad_syntax()
   ELSE
     serial.tx(serial.CLS)
-    serial.fstr0(@"  SD Shell v1.6.1\r\n\r\n")
+    serial.fstr0(@"  SD Shell v1.7.0\r\n\r\n")
     serial.fstr0(@"  Navigation                          File Operations\r\n")
     serial.fstr0(@"  mount       Mount SD card           type <f>    Show text (cat)\r\n")
     serial.fstr0(@"  unmount     Unmount (eject)         hexdump <f> Hex dump (hd)\r\n")
