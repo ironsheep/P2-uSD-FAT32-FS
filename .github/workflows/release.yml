@@ -70,6 +70,7 @@ jobs:
           cp DOCs/MIGRATION-GUIDE-v1.7.0.md "${DEST}/DOCs/"
           cp DOCs/ERROR-HANDLING-GUIDE.md "${DEST}/DOCs/"
           cp DOCs/SPI-PHASE-MARGIN-API.md "${DEST}/DOCs/"
+          cp DOCs/DRIVER-EVOLUTION-v1.6.0-to-v1.7.0.md "${DEST}/DOCs/"
 
           # DOCs/images/ - card photos for purchase recommendations
           mkdir -p "${DEST}/DOCs/images"

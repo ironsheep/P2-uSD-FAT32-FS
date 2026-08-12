@@ -38,6 +38,7 @@ This project provides a robust, high-performance SD card driver for the P2 micro
 | **[Driver Theory of Operations](DOCs/SD-CARD-DRIVER-THEORY.md)** | Architecture, handle system, SPI engine, and internals |
 | **[Error Handling Guide](DOCs/ERROR-HANDLING-GUIDE.md)** | Detecting and responding to every error the driver reports |
 | **[Migration Guide v1.7.0](DOCs/MIGRATION-GUIDE-v1.7.0.md)** | Moving from v1.6.x |
+| **[Driver Evolution v1.6.0–v1.7.0](DOCs/DRIVER-EVOLUTION-v1.6.0-to-v1.7.0.md)** | Technical account of the defects fixed across three releases, and why the obvious guards missed them |
 | **[Card Performance](DOCs/SD-CARD-PERFORMANCE.md)** | SD card selection guide and ranked performance comparisons |
 | **[Card Catalog](DOCs/cards/CARD-CATALOG.md)** | All tested cards with register data and throughput |
 | **[FAT32 API Concepts](DOCs/Reference/FAT32-API-CONCEPTS-REFERENCE.md)** | FAT32 background for embedded developers |

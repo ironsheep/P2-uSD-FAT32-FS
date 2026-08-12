@@ -20,6 +20,7 @@ sd-card-driver/
 │   ├── MIGRATION-GUIDE-v1.7.0.md          Upgrading from v1.6.x
 │   ├── MIGRATION-GUIDE-v1.2.0.md          Upgrading from v1.0/v1.1
 │   ├── SPI-PHASE-MARGIN-API.md            Diagnostic timing knobs
+│   ├── DRIVER-EVOLUTION-v1.6.0-to-v1.7.0.md  What was wrong, and what fixed it
 │   └── images/                            Card photos for purchase recommendations
 │
 └── src/                                Driver and application source
@@ -40,7 +41,7 @@ sd-card-driver/
     │   ├── README.md                         Full utility documentation
     │   ├── SD_format_card.spin2              FAT32 card formatter
     │   ├── isp_format_utility.spin2          FAT32 format library
-    │   ├── SD_card_identify.spin2            Two-line card identification
+    │   ├── SD_card_identify.spin2            Three-line card identification
     │   ├── SD_card_characterize.spin2        Card register reader
     │   ├── SD_performance_benchmark.spin2    Throughput measurement
     │   ├── SD_FAT32_audit.spin2              Filesystem validator (read-only)
@@ -85,15 +86,29 @@ CON
 
 PUB main() | handle, buffer[128], bytes_read
     if sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK) < 0
-        debug("Mount failed!")
+        debug("Mount failed: ", sdec_(sd.error()))
     else
         handle := sd.openFileRead(@"CONFIG.TXT")
-        if handle >= 0
-            bytes_read := sd.readHandle(handle, @buffer, 512)
+        if handle < 0
+            debug("Open failed: ", sdec_(handle))
+        else
+            repeat
+                bytes_read := sd.readHandle(handle, @buffer, 512)
+                if bytes_read =< 0
+                    quit                      ' 0 is end of file; negative is a failure
+                process(@buffer, bytes_read)
+
+            if bytes_read < 0
+                debug("Read failed: ", sdec_(sd.handleError(handle)))
+
             sd.closeFileHandle(handle)
 
         sd.unmount()
 ```
+
+Every method that can fail returns `SUCCESS` (0) or a negative error code — never a
+boolean, so compare against 0 rather than testing truthiness. See
+[ERROR-HANDLING-GUIDE.md](DOCs/ERROR-HANDLING-GUIDE.md).
 
 ### Running the Demo Shell
 
@@ -142,6 +157,7 @@ The default configuration uses base pin 56 (P2 Edge Module), giving pins P58-P61
 | [Migration to v1.7.0](DOCs/MIGRATION-GUIDE-v1.7.0.md) | Moving from v1.6.x — read this first when upgrading |
 | [Migration to v1.2.0](DOCs/MIGRATION-GUIDE-v1.2.0.md) | Moving from v1.0/v1.1 error-code patterns |
 | [SPI Phase-Margin API](DOCs/SPI-PHASE-MARGIN-API.md) | Diagnostic timing knobs for unfamiliar boards and sockets |
+| [Driver Evolution v1.6.0–v1.7.0](DOCs/DRIVER-EVOLUTION-v1.6.0-to-v1.7.0.md) | Technical account of the defects fixed across three releases |
 
 ## Regression Tests
 
