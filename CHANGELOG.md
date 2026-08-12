@@ -5,9 +5,9 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## v1.7.0 (2026-08-03)
+## [1.7.0] - 2026-08-12
 
-Failures the driver detected but discarded are now reported, and files a PC wrote behave correctly.
+Sector writes no longer depend on where the linker put the driver, failures the driver detected but discarded are now reported, and files a PC wrote behave correctly.
 
 ### New Features
 
@@ -15,10 +15,12 @@ Failures the driver detected but discarded are now reported, and files a PC wrot
 - The write path reports `E_NO_CONTIGUOUS_SPACE` when a pre-allocated contiguous reservation runs out, and `E_BAD_CHAIN` when a cluster chain walk lands in the metadata region. Both were previously reported as a zero-byte write.
 - `lastFlushError()` and `clearFlushError()` report failures of the automatic idle flush. That flush is started by the worker cog, so a failure had no caller to return to: the data did not reach the card and every later call still reported success.
 - `SD_INCLUDE_TEST_HOOKS` builds in fault injection — `setTestFailSector()`, `setTestFailWriteAfter()`, `getTestWriteCallCount()`, `setTestMaxClusters()`, `clearTestErrors()`. Enabled by `SD_INCLUDE_ALL`, and deliberately not by `SD_INCLUDE_DEBUG`.
+- `debugSetTxAlignDelay()` and `debugGetTxAlignDelay()` tune the padding between the write path's clock setup and its data fetch, for measuring write phase margin on an unfamiliar board or card socket. Diagnostic only, gated behind `SD_INCLUDE_DEBUG`; the shipped default is centered on measured margin and needs no adjustment. Documented in `DOCs/SPI-PHASE-MARGIN-API.md`.
 - `DOCs/ERROR-HANDLING-GUIDE.md` covers detecting and responding to every error the driver reports. `DOCs/MIGRATION-GUIDE-v1.7.0.md` covers moving from v1.6.x.
 
 ### Bug Fixes
 
+- Every sector write lands at the card as the bytes the caller gave, whatever the build's memory layout. The write path could fetch its data inside the window where the clock pin was being set up, which put the data one bit out of phase with the clock and stored a shifted sector while reporting success — and reading it back reported the shifted bytes as correct, because the card had genuinely stored them that way. Which side of the boundary a build fell on depended on where the linker placed the driver's data, so enabling `SD_INCLUDE_SPEED` was enough to change a working build into a silently corrupting one. Reads were never affected.
 - `error()` describes the operation that just completed rather than the last failure since boot. Every method that issues a command records its outcome on both exit paths; the pure accessors are exempt so a diagnostic call cannot erase the error being diagnosed.
 - A metadata write that fails part-way no longer leaves the filesystem in a state that reports success. Cluster allocation, delete, directory creation, rename and move each check every write and leave the recoverable outcome on the card.
 - An unreadable directory is no longer indistinguishable from a name that is not there, so a create no longer writes a second entry for a file that already exists.
@@ -42,7 +44,6 @@ Failures the driver detected but discarded are now reported, and files a PC wrot
 - Appending to an empty file created by a PC works; the first write previously failed `E_BAD_CHAIN` and the file could never be appended.
 - File operations no longer match the volume-label entry. `rename()` on a dot-less label's name silently relabelled the volume; creating that name failed `E_FILE_EXISTS`, and opening it returned an empty file.
 - `changeDirectory()` onto an empty file returns `E_NOT_A_DIR` instead of succeeding and silently changing to the root directory.
-- `changeDirectory()` on a name with no entry returns `E_FILE_NOT_FOUND`; `E_NOT_A_DIR` now means the name exists and is not a directory.
 - `createFileContiguous()` on a name that already exists leaves free space unchanged; the rejected call previously stranded its pre-allocated clusters until an fsck.
 - `mount()` on a corrupted card whose boot record claims zero sectors per cluster fails with `E_NOT_FAT32` instead of hanging the worker cog.
 - FAT entries carrying the reserved high bits — legal on volumes written by other systems — no longer send cluster-chain walks and free-space counts to wrong results.
@@ -55,13 +56,14 @@ Failures the driver detected but discarded are now reported, and files a PC wrot
 
 - **BREAKING**: `eofHandle()` and `isFileContiguous()` return a boolean only. They previously returned `TRUE`, `FALSE`, or a negative error code, and `TRUE` is -1 in Spin2 while `E_TIMEOUT` is also -1 — there was no correct way to call either one. `eofHandle()` reports `TRUE` when the query fails, `isFileContiguous()` reports `FALSE`, and `error()` distinguishes.
 - **BREAKING**: `readHandle()` and `writeHandle()` return their error code when nothing at all was transferred, so a return of 0 from `readHandle()` now means end of file and nothing else. A read that failed on its first sector previously returned 0, and a file on a failing card was processed as a complete file. A failure part-way through still returns the partial count. A read loop that stops on `n =< 0` or `n > 0` needs no change; one that stops only on `n == 0` will not terminate on a persistent failure.
+- **BREAKING**: `changeDirectory()` on a name with no entry returns `E_FILE_NOT_FOUND` (-40). `E_NOT_A_DIR` (-43) now means the name exists and is not a directory — the two conditions previously shared it. Code branching on `E_NOT_A_DIR` to mean "no such directory" must change. The volume label, invisible to file operations everywhere, reports `E_FILE_NOT_FOUND` rather than leaking its existence through the error code.
 - **BREAKING**: `unmount()` on a card with invalid FSInfo signatures reports the new `E_BAD_FSINFO` (-24) rather than `E_IO_ERROR`.
 - New error constants: `E_BAD_FSINFO` (-24), `E_BAD_CHAIN` (-25), `E_STACK_OVERFLOW` (-26), `E_DIR_NOT_EMPTY` (-44), `E_FILE_OPEN` (-47), `E_NO_COG` (-65). `E_NO_COG` replaces `E_NO_LOCK` when `start()` cannot get a cog. `E_FILE_NOT_OPEN` (-45) is documented as reserved; no code path produces it.
 - **BREAKING**: `deleteFile()` on a directory that still contains entries returns the new `E_DIR_NOT_EMPTY` (-44) and deletes nothing. It previously removed the directory and freed only the directory's own cluster chain, leaving every file inside it allocated and unreachable — space that stayed lost until the card was reformatted. Empty a directory before removing it, children before parents. There is no recursive delete.
 - **BREAKING**: `deleteFile()` on a file that any handle still has open returns the new `E_FILE_OPEN` (-47) and deletes nothing. The delete previously succeeded, after which the background flush could write that handle's buffered data into a cluster that had been freed and given to another file. Close the handle first.
 - `stop()` and `closeDirectoryHandle()` return a status where they previously returned nothing. Existing calls compile and behave as before.
 
-## v1.6.1 (2026-07-27)
+## [1.6.1] - 2026-07-27
 
 Utility output and build instructions, and one debug method renamed to match what it does.
 
@@ -246,13 +248,7 @@ For tooling that characterizes cards that misbehave. Production applications mus
 
 ### Improvements
 
-- All 402 `debug()` statements converted to `debug[CH_xxx]()` across 10 named channels
-- `DEBUG_MASK` replaces `DEBUG_DISABLE` as the single debug control knob
-- `DEBUG_MASK = 0` for production; set channel bits to enable selective debug output
-- Channels: INIT, MOUNT, FILE, DIR, SECTOR, STATUS, IDENT, HSPEED, API, RECOVER
-- Version directive upgraded to `{Spin2_v46}` for channel support
-- All preprocessor directives standardized to lowercase (`#ifdef`, `#define`, `#pragma exportdef`)
-- Regression tests consolidated under `src/regression-tests/`
+- Debug output is selectable by subsystem rather than all-or-nothing. `DEBUG_MASK` replaces `DEBUG_DISABLE` as the single control: 0 for production, or set channel bits to see only the traffic you care about — INIT, MOUNT, FILE, DIR, SECTOR, STATUS, IDENT, HSPEED, API, RECOVER. The driver requires `{Spin2_v46}` or later for channel support.
 
 ## [1.3.1] - 2026-03-07
 
@@ -270,11 +266,10 @@ For tooling that characterizes cards that misbehave. Production applications mus
 ### Documentation
 
 - Memory sizing guide updated with current v1.3.x footprint data across all configurations
-- DEBUG_MASK channel plan: 10 selective debug channels mapped for all 402 debug statements
 
 ## [1.3.0] - 2026-03-07
 
-**R1 response parsing fix, CMD12 tolerance, CMD23 probing, 427 regression tests across 20 suites.**
+**R1 response parsing fix, CMD12 tolerance, and CMD23 block-count support.**
 
 ### Bug Fixes
 
@@ -297,13 +292,12 @@ For tooling that characterizes cards that misbehave. Production applications mus
 
 ## [1.2.1] - 2026-03-05
 
-**CMD13 compatibility analysis, audit severity corrections, and regression test strengthening.**
+**Audit severity corrections for conditions that are normal on FAT32 media.**
 
 ### Improvements
 
 - Audit: Partition type $0B (FAT32 CHS) accepted as valid alongside $0C (FAT32 LBA)
 - Audit: Backup FSInfo mismatch downgraded from error to warning (common on FAT32 media)
-- CMD13 compatibility analysis and probe infrastructure for cards with broken SPI-mode status reporting
 
 ## [1.2.0] - 2026-03-03
 
@@ -324,7 +318,6 @@ For tooling that characterizes cards that misbehave. Production applications mus
 
 - Transport layer returns specific error codes (`E_TIMEOUT`, `E_CRC_ERROR`, `E_BAD_RESPONSE`, `E_WRITE_REJECTED`, `E_CARD_BUSY`, `E_IO_ERROR`) instead of bare `-1` across `readSector`, `writeSector`, `allocateCluster`, and all SPI wait/response methods
 - `writeSector()`: Returns 0/negative error codes instead of boolean, with specific failure reasons for timeout, CRC reject, card busy, and programming errors
-- Magic numbers replaced with named constants throughout the driver (sector geometry, FAT32 structures, SPI commands, R1 response masks, card init timing)
 
 ### Documentation
 
@@ -413,6 +406,7 @@ For tooling that characterizes cards that misbehave. Production applications mus
 
 **Packaging-only tag.** Release workflow and user-facing documentation; no driver code.
 
+[1.7.0]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.6.1...v1.7.0
 [1.6.1]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.5.3...v1.6.0
 [1.5.3]: https://github.com/ironsheep/P2-uSD-FAT32-FS/compare/v1.5.2...v1.5.3
