@@ -5489,7 +5489,10 @@ PRI do_chdir(name_ptr) : status
 ' Internal change directory operation - changes current directory.
 '
 ' @param name_ptr - Pointer to null-terminated directory name string
-' @returns status - SUCCESS on success, E_NOT_A_DIR if not a directory
+' @returns status - SUCCESS on success, E_NOT_A_DIR when the name exists but is not
+'                  a directory, E_FILE_NOT_FOUND when no entry carries the name
+'                  (v1.7.0 split these; both were E_NOT_A_DIR before), or the
+'                  propagated search_io_status when the directory could not be read
 
   do_close()
   if BYTE[name_ptr] == "/" AND BYTE[name_ptr + 1] == $00
