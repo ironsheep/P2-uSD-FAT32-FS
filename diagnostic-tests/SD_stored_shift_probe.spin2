@@ -1,0 +1,126 @@
+'' =================================================================================================
+''
+''   File....... SD_stored_shift_probe.spin2
+''   Purpose.... Step 1b of the layout-sensitivity bench verification
+''               (DOCs/Analysis/LAYOUT-SENSITIVITY-ROOTCAUSE-ANALYSIS.md §6.1):
+''               READ-ONLY probe of TEST_SECTOR_A..E (100_000..100_004). Classifies the
+''               stored fill bytes of each sector as CORRECT, ONE-BIT-SHIFTED, or OTHER.
+''               Run AFTER the pre-fix FAIL build of SD_RT_raw_sector_tests wrote its
+''               patterns and the card was power-cycled. A SHIFTED verdict proves the
+''               corruption is ON THE CARD (write-side displacement); a CORRECT verdict
+''               falsifies the mechanism analysis (HARD STOP per plan).
+''   Author..... Iron Sheep Productions, LLC
+''
+'' =================================================================================================
+
+CON
+
+    _CLKFREQ    = 350_000_000
+    DEBUG_BAUD  = 2_000_000
+
+    ' P2 Edge onboard SD slot
+    SD_CS   = 60
+    SD_MOSI = 59
+    SD_MISO = 58
+    SD_SCK  = 61
+
+    FIRST_SECTOR = 100_000
+    NUM_SECTORS  = 5
+
+    ' Fill region: bytes 8..503 hold the pattern fill (0-7 head marker, 504-511 tail
+    ' marker, both nonce-XORed and unknown here). Byte 8's shifted expectation needs
+    ' marker byte 7 (nonce-dependent), so scoring starts at byte 9.
+    FILL_FIRST  = 9
+    FILL_LAST   = 503
+    FILL_COUNT  = FILL_LAST - FILL_FIRST + 1
+
+#pragma exportdef SD_INCLUDE_RAW
+
+OBJ
+    sd : "micro_sd_fat32_fs"
+
+VAR
+    BYTE    read_buf[512]
+
+PUB go() | result, sec_idx, sector, idx, corr, prev, shifted, nCorrect, nShifted, nOther, verdictShifted, verdictCorrect
+
+    debug(" ")
+    debug("============================================================")
+    debug("  Stored-Shift Probe (read-only) - step 1b")
+    debug("============================================================")
+    debug(" ")
+
+    result := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    if result < 0
+        debug("ERROR: initCardOnly failed: ", sdec_(result))
+        waitms(500)
+        debug("END_SESSION")
+        return
+
+    verdictShifted := 0
+    verdictCorrect := 0
+
+    repeat sec_idx from 0 to NUM_SECTORS - 1
+        sector := FIRST_SECTOR + sec_idx
+        result := sd.readSectorRaw(sector, @read_buf)
+        if result < 0
+            debug("* Sector ", udec_(sector), ": READ FAILED ", sdec_(result))
+            next
+
+        nCorrect := 0
+        nShifted := 0
+        nOther := 0
+        repeat idx from FILL_FIRST to FILL_LAST
+            corr := fillByte(sec_idx, idx)
+            prev := fillByte(sec_idx, idx - 1)
+            shifted := ((corr >> 1) | ((prev & 1) << 7)) & $FF
+            if read_buf[idx] == corr and corr <> shifted
+                nCorrect++
+            elseif read_buf[idx] == shifted and corr <> shifted
+                nShifted++
+            elseif read_buf[idx] == corr                    ' degenerate: corr == shifted
+                nCorrect++
+                nShifted++
+            else
+                nOther++
+
+        debug("* Sector ", udec_(sector), " [pattern ", uhex_byte_(patternId(sec_idx)), "]: correct=", udec_(nCorrect), " shifted=", udec_(nShifted), " other=", udec_(nOther), " of ", udec_(FILL_COUNT))
+        debug("    first bytes 9..24: ", uhex_byte_array_(@read_buf[9], 16))
+
+        ' Degenerate patterns C ($FF) and D ($00) match both hypotheses; only score
+        ' a verdict when the two hypotheses actually separate.
+        if nShifted > nCorrect and nShifted >= FILL_COUNT - 8
+            debug("    VERDICT: SHIFTED (stored data is the one-bit-late bitstream)")
+            verdictShifted++
+        elseif nCorrect > nShifted and nCorrect >= FILL_COUNT - 8
+            debug("    VERDICT: CORRECT (stored data matches the intended pattern)")
+            verdictCorrect++
+        elseif nCorrect == nShifted and nCorrect >= FILL_COUNT - 8
+            debug("    VERDICT: DEGENERATE (pattern cannot separate hypotheses)")
+        else
+            debug("    VERDICT: OTHER/MIXED - inspect manually")
+
+    debug(" ")
+    debug("* SUMMARY: shifted=", udec_(verdictShifted), " correct=", udec_(verdictCorrect), " (discriminating sectors: A, B, E)")
+    debug(" ")
+    waitms(500)
+    debug("END_SESSION")
+
+
+PRI fillByte(sec_idx, idx) : b
+' The exact fill formulas of SD_RT_raw_sector_tests PHASE 1 (markers excluded).
+    case sec_idx
+        0: b := idx & $FF                       ' Pattern A: sequential
+        1: b := (idx & 1) ? $55 : $AA           ' Pattern B: alternating AA/55
+        2: b := $FF                             ' Pattern C: all FF
+        3: b := $00                             ' Pattern D: all 00
+        4: b := (idx + $E0) & $FF               ' Pattern E: sequential + $E0
+
+
+PRI patternId(sec_idx) : id
+    case sec_idx
+        0: id := $A0
+        1: id := $B0
+        2: id := $C0
+        3: id := $D0
+        4: id := $E0

@@ -1,0 +1,161 @@
+'' =================================================================================================
+''
+''   File....... SD_tx_phase_shmoo.spin2
+''   Purpose.... Step 3 of the layout-sensitivity bench verification
+''               (DOCs/Analysis/LAYOUT-SENSITIVITY-ROOTCAUSE-ANALYSIS.md §6.3):
+''               walk debugSetTxAlignDelay() over one full SPI bit period and map the
+''               write-path passing window. At each pad value: write pattern A
+''               (sequential) and pattern B (AA/55) to the sanctioned scratch sectors,
+''               read back, classify CORRECT / SHIFTED-LATE / SHIFTED-EARLY / OTHER.
+''               Output: one line per pad + the passing band. The DAT default ships at
+''               the band's center (applied as a follow-up edit, not by this tool).
+''   Author..... Iron Sheep Productions, LLC
+''
+'' =================================================================================================
+
+CON
+
+    _CLKFREQ    = 350_000_000
+    DEBUG_BAUD  = 2_000_000
+
+    ' P2 Edge onboard SD slot
+    SD_CS   = 60
+    SD_MOSI = 59
+    SD_MISO = 58
+    SD_SCK  = 61
+
+    ' Sanctioned scratch LBAs (same as SD_RT_raw_sector_tests)
+    SECTOR_A = 100_000
+    SECTOR_B = 100_001
+
+    ' Pad sweep: extended to two full bit periods. The pad->phase map is a sawtooth
+    ' with period hp (SCK starts on base-period boundaries; streamer start moves
+    ' continuously), so only hp distinct phases exist; the extended range tests the
+    ' model's prediction that failures recur at pad ≡ 1 (mod 7): 8, 15, 22, 29.
+    PAD_MIN  = 2
+    PAD_MAX  = 30
+
+    ' Verdict codes
+    V_CORRECT = 0
+    V_LATE1   = 1
+    V_EARLY1  = 2
+    V_OTHER   = 3
+    V_WRFAIL  = 4
+    V_RDFAIL  = 5
+
+#pragma exportdef SD_INCLUDE_ALL
+
+OBJ
+    sd : "micro_sd_fat32_fs"
+
+VAR
+    BYTE    tx_buf[512]
+    BYTE    rx_buf[512]
+    LONG    verdictA[PAD_MAX + 1]
+    LONG    verdictB[PAD_MAX + 1]
+
+PUB go() | result, pad, bandLo, bandHi, inBand, center
+
+    debug(" ")
+    debug("============================================================")
+    debug("  TX phase shmoo (tx_align_delay walk) - step 3")
+    debug("============================================================")
+    debug("  default tx_align_delay (shipped): ", udec_(sd.debugGetTxAlignDelay()))
+    debug(" ")
+
+    result := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    if result < 0
+        debug("ERROR: initCardOnly failed: ", sdec_(result))
+        waitms(500)
+        debug("END_SESSION")
+        return
+
+    repeat pad from PAD_MIN to PAD_MAX
+        sd.debugSetTxAlignDelay(pad)
+        verdictA[pad] := onePoint(SECTOR_A, 0)
+        verdictB[pad] := onePoint(SECTOR_B, 1)
+        debug("* pad=", udec_(pad), ": A=", zstr_(verdictName(verdictA[pad])), "  B=", zstr_(verdictName(verdictB[pad])))
+
+    ' Find the contiguous passing band (both patterns CORRECT)
+    bandLo := -1
+    bandHi := -1
+    inBand := false
+    repeat pad from PAD_MIN to PAD_MAX
+        if verdictA[pad] == V_CORRECT and verdictB[pad] == V_CORRECT
+            if not inBand
+                bandLo := pad
+                inBand := true
+            bandHi := pad
+        else
+            if inBand and bandHi - bandLo + 1 >= 4     ' keep first band >= 4 wide
+                quit
+            inBand := false
+
+    debug(" ")
+    if bandLo >= 0
+        center := (bandLo + bandHi) / 2
+        debug("* PASSING BAND: pad ", udec_(bandLo), "..", udec_(bandHi), " (width ", udec_(bandHi - bandLo + 1), " sysclks)")
+        debug("* SUGGESTED DAT DEFAULT: ", udec_(center), " (band center)")
+        if bandHi - bandLo + 1 < 4
+            debug("* WARNING: band narrower than 4 sysclks - HARD STOP per plan (margin model wrong)")
+    else
+        debug("* NO PASSING BAND FOUND - HARD STOP per plan")
+    debug(" ")
+    waitms(500)
+    debug("END_SESSION")
+
+
+PRI onePoint(sector, patSel) : verdict | idx, result, corr, prev, nxt, late, early, nCorr, nLate, nEarly
+' Write the selected pattern to sector, read it back, classify.
+    repeat idx from 0 to 511
+        tx_buf[idx] := patByte(patSel, idx)
+
+    result := sd.writeSectorRaw(sector, @tx_buf)
+    if result < 0
+        return V_WRFAIL
+
+    bytefill(@rx_buf, $5A, 512)
+    result := sd.readSectorRaw(sector, @rx_buf)
+    if result < 0
+        return V_RDFAIL
+
+    nCorr := 0
+    nLate := 0
+    nEarly := 0
+    repeat idx from 1 to 510
+        corr := patByte(patSel, idx)
+        prev := patByte(patSel, idx - 1)
+        nxt := patByte(patSel, idx + 1)
+        late := ((corr >> 1) | ((prev & 1) << 7)) & $FF
+        early := ((corr << 1) | ((nxt >> 7) & 1)) & $FF
+        if rx_buf[idx] == corr
+            nCorr++
+        elseif rx_buf[idx] == late
+            nLate++
+        elseif rx_buf[idx] == early
+            nEarly++
+
+    if nCorr == 510
+        return V_CORRECT
+    if nLate >= 500
+        return V_LATE1
+    if nEarly >= 500
+        return V_EARLY1
+    return V_OTHER
+
+
+PRI patByte(patSel, idx) : b
+    if patSel == 0
+        b := idx & $FF                      ' pattern A: sequential
+    else
+        b := (idx & 1) ? $55 : $AA          ' pattern B: alternating
+
+
+PRI verdictName(v) : p_str
+    case v
+        V_CORRECT: p_str := @"CORRECT"
+        V_LATE1:   p_str := @"SHIFTED-LATE"
+        V_EARLY1:  p_str := @"SHIFTED-EARLY"
+        V_OTHER:   p_str := @"OTHER"
+        V_WRFAIL:  p_str := @"WRITE-FAIL"
+        other:     p_str := @"READ-FAIL"

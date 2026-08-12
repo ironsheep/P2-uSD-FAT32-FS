@@ -743,7 +743,14 @@ DAT  ' ---- Singleton Control ----
         ' centered in the passing window (bench shmoo), NOT a per-build
         ' workaround. See DOCs/Analysis/LAYOUT-SENSITIVITY-ROOTCAUSE-ANALYSIS.md.
         ' Floor 2 applies at use site (WAITX minimum), same rule as align_delay.
-        tx_align_delay                          LONG    2                        ' Sysclks; sweep range [2, 2+2*hp]
+        ' Characterized 2026-08-11 on Card 2b (SN $0000_0F14), Edge slot, 350 MHz /
+        ' 25 MHz (hp=7): pad->phase is a SAWTOOTH with period hp (SCK starts on the
+        ' next base-period boundary after WYPIN; streamer start moves continuously),
+        ' so only hp distinct phases exist. Losing phase: pad ≡ 1 (mod 7) — measured
+        ' fails at pads 8, 15, 22, 29; all 24 other measured points pass (three shmoo
+        ' runs, SD_tx_phase_shmoo). Default 4 = maximal mod-7 distance (3) from the
+        ' cliff on both sides; the old floor value 2 sat one sysclk from it.
+        tx_align_delay                          LONG    4                        ' Sysclks; sweep range [2, 2+2*hp]
 
         ' FILESYSTEM STATE (moved from VAR)
         fat_sec                                 LONG    0                        ' Starting sector of FAT
