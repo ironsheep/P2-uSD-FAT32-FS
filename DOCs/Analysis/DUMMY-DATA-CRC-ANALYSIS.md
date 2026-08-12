@@ -24,12 +24,30 @@ The fix: **recognise** such a card at init (a one-sector CRC probe) and stop tre
 | Brand / product | "Cloudisk" 2 GB microSD — counterfeit (CID product name reads `asdfg`) |
 | MID | `$05`  ·  CID CRC7 `$00` |
 | Capacity class | **SDSC** — CSD v1.0, byte addressing (`CCS = 0`) |
-| Init, register reads, writes | All work (sysclk 200–350 MHz) |
+| Init, register reads | Work (sysclk 200–350 MHz) |
+| Writes | **Not reliable.** A single write completes; write #2 of a single-block-write pair always wedges this silicon class. See the correction below. |
 | Slow byte-by-byte read | Works — returns correct, distinct data per sector |
 | Streamer-DMA read | **Failed** (`-7`, buffer untouched) — until this fix |
 | Data-block CRC on reads | **`$0000` — a dummy.** The real CRC of the data is non-zero. |
 
 Bought new to certify the driver against budget/marginal SDSC media. It is a legitimate certification target.
+
+> **Correction, 2026-08-12.** This table previously read "Init, register reads,
+> writes | All work," which was wrong about writes and had been wrong since the
+> document was written. The 2026-05-27 wedge investigation established that on this
+> `asdfg` silicon class — Cloudisk 2 GB and Lerdisk 1 GB alike, both
+> `CW_NO_DATA_CRC` — **write #2 of a single-block-write pair always wedges the
+> card**, with the failure mode varying by LBA (`busyTO` with `dresp=$05` and a
+> ~4 s stuck-busy at LBA 1,001 / 50,001 / 100,000; `drespTO` with `dresp=$FF`
+> never arriving at LBA 100,001). No tested LBA escapes the wedge. What this
+> document establishes is the **read** path: the dummy-CRC detection and the
+> streamer-read fix. Its write claim was never in evidence.
+>
+> The scope of this analysis is unaffected — the fix it describes gates read
+> *validation* only, and `writeSector()` still always sends a real CRC (§ below).
+> The wedge is a separate, unresolved card defect tracked as "Counterfeit
+> asdfg-class" on `DOCs/Plans/PUNCH-LIST.md`, classed as a card-specific
+> investigation.
 
 ---
 
