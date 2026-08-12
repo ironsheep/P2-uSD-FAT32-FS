@@ -28,7 +28,7 @@ This project provides a robust, high-performance SD card driver for the P2 micro
 - **Filesystem Repair**: Two tools sharing one four-pass engine — `audit` (read-only) and `fsck` (repairs)
 - **Multi-Cog Safe**: Dedicated worker cog with hardware lock serialization
 - **Per-Cog Working Directory**: Each cog maintains its own CWD for safe concurrent navigation
-- **Regression Tested**: 471 automated tests across 26 test suites, certified on two cluster geometries
+- **Regression Tested**: 574 automated tests across 27 test suites, certified on two cluster geometries
 
 ## Documentation
 

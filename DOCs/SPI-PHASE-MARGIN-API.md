@@ -1,8 +1,7 @@
 # SPI Phase-Margin Diagnostic API
 
-**Part of:** P2-uSD-FAT32-FS driver, Unreleased version
-**Sprint:** SPI phase-margin improvement (`DOCs/Plans/PLAN-SPI-PHASE-MARGIN-IMPROVEMENT.md`)
-**Audience:** Driver maintainers and authors of diagnostic tools (e.g., `SD_phase_sweep_test.spin2`)
+**Part of:** P2-uSD-FAT32-FS driver, v1.7.0
+**Audience:** Driver maintainers and authors of diagnostic tools
 
 > **All methods documented here are DIAGNOSTIC ONLY**, gated behind `#ifdef SD_INCLUDE_DEBUG`. Production applications must NOT call them. The driver internally computes the right phase-margin tuning based on hp; these knobs exist only to let diagnostic tools walk the parameter grid for marginal-card triage. The runtime knobs are subject to change without notice as the production driver bakes in the right defaults from empirical sweep data.
 
@@ -150,8 +149,18 @@ At default settings (consumer does NOT export `SD_INCLUDE_DEBUG`, or does export
 
 - Path A: MISO `WXPIN[5]` auto-by-hp with threshold=5 → on-edge for hp ≥ 6, pre-edge for hp ≤ 5
 - Path B reads: `align_delay = spi_period` (offset=0)
-- Path B writes: `tx_align_delay = 2` (the `WAITX` floor; bench characterization may re-center it)
+- Path B writes: `tx_align_delay = 4` — **characterized, not a floor value.** See below.
 
 These defaults reproduce pre-Phase-2/3 byte-on-the-wire behavior at sysclk=350 MHz and are validated against the regression suite. The production driver does not expose any tunable surface for these — the right values are hardcoded internally.
 
-If the empirical sweep identifies a different production default (e.g., `align_delay_offset = +5` is universally better), the new value will be baked into the internal logic in a subsequent driver release. The diagnostic surface remains for future investigations of marginal cards but is never the production tuning mechanism.
+### The write-path pad was characterized on the bench (v1.7.0, 2026-08-11)
+
+`tx_align_delay` shipped at 2 — the bare `WAITX` floor — while the layout-sensitivity fix was being proven. It is now **4**, chosen from a measured sweep rather than inherited from the floor.
+
+Measured on Card 2b (SN `$0000_0F14`) in the P2 Edge slot at 350 MHz sysclk / 25 MHz SPI (hp=7), across three `SD_tx_phase_shmoo` runs: pad-to-phase is a **sawtooth of period hp**, because SCK starts on the next base-period boundary after `WYPIN` while the streamer start moves continuously — so only hp distinct phases exist no matter how far the pad is swept. Exactly one of them loses: **pad ≡ 1 (mod 7)**, which failed at pads 8, 15, 22 and 29. All 24 other measured points passed.
+
+4 is the maximal mod-7 distance (3) from the losing phase on both sides. The old floor value of 2 sat one sysclk from the cliff.
+
+**Why the fix matters more than the pad.** With `RDFAST` hoisted out of the phase-critical window, the MOSI-to-SCK phase no longer depends on hub layout at all — that is what makes a *single* correct default possible. The pad centers a window whose position is now a build-independent constant; before the fix, no pad value could have been correct for every build. Alignment invariance was confirmed by re-running with the driver's DAT deliberately displaced by 1, 2, 4, 8, 12, 36 and 60 bytes: all pass.
+
+The read-path pad (`align_delay = spi_period`) remains as characterized previously. If a future sweep identifies a better production default for either path, the new value is baked into the driver's DAT and this section is updated with its measurement. The diagnostic surface exists for investigating marginal cards and sockets; it is never the production tuning mechanism.

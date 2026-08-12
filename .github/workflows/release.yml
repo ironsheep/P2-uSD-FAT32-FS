@@ -69,6 +69,7 @@ jobs:
           cp DOCs/MIGRATION-GUIDE-v1.2.0.md "${DEST}/DOCs/"
           cp DOCs/MIGRATION-GUIDE-v1.7.0.md "${DEST}/DOCs/"
           cp DOCs/ERROR-HANDLING-GUIDE.md "${DEST}/DOCs/"
+          cp DOCs/SPI-PHASE-MARGIN-API.md "${DEST}/DOCs/"
 
           # DOCs/images/ - card photos for purchase recommendations
           mkdir -p "${DEST}/DOCs/images"
@@ -114,7 +115,7 @@ jobs:
           cp src/UTILS/isp_string_fifo.spin2 "${DEST}/src/UTILS/"
           cp src/UTILS/SD_card_identify.spin2 "${DEST}/src/UTILS/"
 
-          # src/regression-tests/ - test suites and framework (26 suites)
+          # src/regression-tests/ - test suites and framework (27 suites)
           mkdir -p "${DEST}/src/regression-tests"
           cp src/regression-tests/README.md "${DEST}/src/regression-tests/"
           cp src/regression-tests/THEORY-OF-OPERATIONS.md "${DEST}/src/regression-tests/"

@@ -33,17 +33,33 @@ CON
     SD_MISO = SD_BASE + 2             ' Master In, Slave Out
 
 PUB main() | handle, buffer[128], bytes_read
-    if not sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-        debug("Mount failed!")
+    if sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK) < 0
+        debug("Mount failed: ", sdec_(sd.error()))
         return
 
     handle := sd.openFileRead(@"CONFIG.TXT")
-    if handle >= 0
-        bytes_read := sd.readHandle(handle, @buffer, 512)
+    if handle < 0
+        debug("Open failed: ", sdec_(handle))
+    else
+        repeat
+            bytes_read := sd.readHandle(handle, @buffer, 512)
+            if bytes_read =< 0
+                quit                          ' 0 is end of file; negative is a failure
+            process(@buffer, bytes_read)
+
+        if bytes_read < 0
+            debug("Read failed: ", sdec_(sd.handleError(handle)))
+
         sd.closeFileHandle(handle)
 
     sd.unmount()
 ```
+
+Every method that can fail returns `SUCCESS` (0) or a negative error code — never a
+boolean. `if not sd.mount(...)` is wrong: a successful mount returns 0, and `not 0`
+is TRUE in Spin2, so that test reports failure on success. Compare against 0 as
+above. `readHandle()` returns a byte count, so `=< 0` ends the loop at both end of
+file and failure, and `handleError()` says which it was.
 
 ### Conditional Compilation
 

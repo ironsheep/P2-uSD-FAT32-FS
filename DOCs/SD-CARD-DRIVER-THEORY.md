@@ -504,23 +504,53 @@ The driver starts at 400 kHz for card initialization (SD specification requireme
 
 ### Streamer DMA
 
-Sector transfers use the P2's streamer engine for hardware-accelerated bulk data movement:
+Sector transfers use the P2's streamer engine for hardware-accelerated bulk data movement. The streamer moves data between hub RAM and the SPI pins at the full SPI clock rate with no per-byte cog intervention, which is where the driver's 4–5x throughput advantage over a byte loop comes from.
 
 **Read (512 bytes from card):**
 ```
-xinit  stream_mode, init_phase   ' Start RX streamer
+wrfast  #1, p_buf                ' Prime FIFO for hub writes (before SCK reset)
+dirl    _sck                     ' Reset SCK base-period counter
+drvl    _sck                     ' Re-enable, counter restarts fresh
+waitx   align_delay              ' Phase pad: sample point vs SCK edge
+xinit   stream_mode, init_phase  ' Start RX streamer
+wypin   clk_count, _sck          ' Start clock
 waitxfi                          ' Wait for 512 bytes received
 ```
 
 **Write (512 bytes to card):**
 ```
-rdfast #0, p_buf                 ' Setup hub read pointer
-xinit  stream_mode, #0           ' Start TX streamer
-wypin  clk_count, sck            ' Generate clock pulses
+setxfrq xfrq                     ' Streamer bit rate (before SCK reset)
+rdfast  #0, p_buf                ' Prime FIFO -- variable hub wait lands HERE
+dirl    _sck                     ' Reset SCK base-period counter
+drvl    _sck                     ' Re-enable, counter restarts fresh
+waitx   tx_align_delay           ' Phase pad: data bitstream vs SCK edge
+xinit   stream_mode, #0          ' Start TX streamer
+wypin   clk_count, _sck          ' Start clock
 waitxfi                          ' Wait for completion
 ```
 
-The streamer transfers data between hub RAM and the SPI pins at the full SPI clock rate, without per-byte cog intervention.
+The ordering of those two blocks is not stylistic. It is the subject of the next section.
+
+### Why the FIFO is primed before the clock is reset
+
+This is the most important invariant in the driver's PASM2, and it was learned the hard way in v1.7.0.
+
+**The mechanism.** `DIRL`/`DRVL` on the SCK pin resets the `P_TRANSITION` smart pin's base-period counter, and every SCK edge thereafter lands on a grid anchored at that DIR-rise. `XINIT` starts the streamer, whose NCO ramps from zero at the instant it executes. So the phase between the outgoing data bitstream and the clock edges that latch it is determined entirely by **how many sysclks elapse between the `DRVL` and the `XINIT`**.
+
+Every instruction in that window must therefore take a *fixed, known* number of clocks. Cog ops like `WAITX`, `XINIT` and `WYPIN` do — two clocks each. **`RDFAST` does not.** It blocks while the FIFO fills, and that takes 10–17 sysclks: the spread is the hub egg-beater slot wait for the buffer address's hub slice. Which slot a given buffer sits on is a function of its hub address — which moves when the binary's layout moves.
+
+**The consequence, before the fix.** With `RDFAST` sitting between the SCK reset and `XINIT`, the data-to-clock phase was a function of where the linker had placed the driver's data. Some layouts landed inside the passing window and some did not, and the ones that did not **stored every sector one bit late at the card** — silently. Enabling `SD_INCLUDE_SPEED` shifted the driver's DAT by 36 bytes, which is four hub slots, and was enough on its own to move a build from one side of that boundary to the other.
+
+**Why nothing caught it.** Two independent mechanisms that look like they should have:
+
+- **The card's data-response token said the write was fine.** In SPI mode, write-CRC checking is off unless the host enables it with CMD59, and this driver never sends CMD59. So `dresp = $05` ("data accepted") only ever proved the *packet framing* was well-formed — never that the payload bits were the ones the caller supplied. A spec-conforming card with CRC enforcement on would have rejected these writes outright.
+- **Reading the sector back matched.** The shifted bytes were genuinely what the card had stored, so a read returned them faithfully and a byte-compare against the card's contents agreed with itself. The comparison was tautological. The read path was hardened in an earlier phase and was never affected, which is exactly why the defect presented as "writes are fine, some builds just fail" rather than as a phase problem.
+
+**The fix.** `SETXFRQ` and `RDFAST` (and `WRFAST` on the read side) are hoisted **above** the SCK reset, so the variable hub-slot latency is spent before the phase-critical window opens. From `DRVL` onward every instruction is a fixed-two-clock cog op, `XINIT` sits at a compile-time-constant offset from the reset, and the phase becomes a build-independent constant.
+
+**Then, and only then, is a single tuned default meaningful.** `tx_align_delay` pads the window to center that constant phase. Its value was measured on the bench: pad-to-phase is a sawtooth of period hp — SCK starts on the next base-period boundary after `WYPIN` while the streamer start moves continuously, so only hp distinct phases exist however far the pad is swept. At hp=7 exactly one loses, `pad ≡ 1 (mod 7)`, and the shipped default of 4 sits at maximal distance from it on both sides. Invariance was then confirmed by deliberately displacing the driver's DAT by 1, 2, 4, 8, 12, 36 and 60 bytes: all pass. See `DOCs/SPI-PHASE-MARGIN-API.md`.
+
+**The general lesson, which outlives this bug.** When a smart pin's timing is anchored by an instruction you execute, every instruction between that anchor and the dependent event is part of the timing contract. A hub-touching instruction in that window silently converts a timing constant into a function of memory layout. The v1.5.2 note in the source reads "removed WAITX, relying on natural settling" — that margin was a lottery the driver kept winning until a change in layout lost it.
 
 ## Card Identification and Adaptive Timing
 

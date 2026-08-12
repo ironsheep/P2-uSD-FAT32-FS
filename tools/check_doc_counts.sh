@@ -68,12 +68,31 @@ report "suite count" "$SUITES_ON_DISK" "$README_SUITES" "src/regression-tests/RE
 report "suites in release.yml" "$SUITES_ON_DISK" "$WORKFLOW_SUITES" ".github/workflows/release.yml"
 
 # Every place the test total is repeated.
+#
+# SCAN SET includes .release/ -- those README variants are what release.yml copies
+# into the shipped bundle, so they are the ones a user actually reads. They were
+# omitted until 2026-08-12 and had drifted to 471/26 while the tracked tree said
+# 574/27.
+#
+# PATTERN allows intervening words ("471 automated tests"), because requiring
+# "NNN tests" adjacency is what let that drift through a green run of this script.
+DOC_SET=(README.md DOCs/*.md src/regression-tests/README.md
+         .release/README.md .release/src/README.md .release/src/*/README.md)
+
 while IFS=: read -r file line _; do
     [[ -z "$file" ]] && continue
-    n=$(sed -n "${line}p" "$file" | grep -oE '[0-9]{3,} tests?' | grep -oE '[0-9]+' | head -1)
+    n=$(sed -n "${line}p" "$file" | grep -oE '[0-9]{3,}( [a-z]+)* tests?' | grep -oE '^[0-9]+' | head -1)
     [[ -z "$n" ]] && continue
     report "test total" "$README_TOTAL" "$n" "$file:$line"
-done < <(grep -rn '[0-9]\{3,\} tests\?' README.md DOCs/*.md src/regression-tests/README.md 2>/dev/null)
+done < <(grep -rnE '[0-9]{3,}( [a-z]+)* tests?' "${DOC_SET[@]}" 2>/dev/null)
+
+# Every place the SUITE count is repeated in prose ("27 test suites", "27 test files").
+while IFS=: read -r file line _; do
+    [[ -z "$file" ]] && continue
+    n=$(sed -n "${line}p" "$file" | grep -oE '[0-9]{1,3} test (suites|files)' | grep -oE '^[0-9]+' | head -1)
+    [[ -z "$n" ]] && continue
+    report "suite count" "$SUITES_ON_DISK" "$n" "$file:$line"
+done < <(grep -rnE '[0-9]{1,3} test (suites|files)' "${DOC_SET[@]}" 2>/dev/null)
 
 report "structural checks" "$AUDIT_CHECKS" \
     "$(grep -oE 'Structural checks: [0-9]+ pass' DOCs/SD-CARD-UTILITIES.md 2>/dev/null | grep -oE '[0-9]+' | head -1)" \

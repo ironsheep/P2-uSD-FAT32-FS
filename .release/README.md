@@ -13,7 +13,13 @@ sd-card-driver/
 │
 ├── DOCs/                               Reference documentation
 │   ├── SD-CARD-DRIVER-THEORY.md           Architecture and driver internals
+│   ├── ERROR-HANDLING-GUIDE.md            Every error the driver reports, and what to do
+│   ├── CONDITIONAL-COMPILATION-GUIDE.md   Feature flags and what each adds
 │   ├── SD-CARD-PERFORMANCE.md             Card selection and performance rankings
+│   ├── SD-CARD-UTILITIES.md               Format, audit, fsck, characterize, benchmark
+│   ├── MIGRATION-GUIDE-v1.7.0.md          Upgrading from v1.6.x
+│   ├── MIGRATION-GUIDE-v1.2.0.md          Upgrading from v1.0/v1.1
+│   ├── SPI-PHASE-MARGIN-API.md            Diagnostic timing knobs
 │   └── images/                            Card photos for purchase recommendations
 │
 └── src/                                Driver and application source
@@ -43,7 +49,7 @@ sd-card-driver/
     │   └── isp_string_fifo.spin2             Lock-free inter-cog string FIFO
     └── regression-tests/                  Regression test suite
         ├── README.md                         Test infrastructure guide
-        ├── SD_RT_*_tests.spin2               26 test suites (471 tests)
+        ├── SD_RT_*_tests.spin2               27 test suites (574 tests)
         └── isp_rt_utilities.spin2            Shared test framework
 ```
 
@@ -129,11 +135,17 @@ The default configuration uses base pin 56 (P2 Edge Module), giving pins P58-P61
 |----------|-------------|
 | [Tutorial](SD-CARD-DRIVER-TUTORIAL.md) | Complete guide with practical examples |
 | [Theory of Operations](DOCs/SD-CARD-DRIVER-THEORY.md) | Architecture, handle system, SPI internals |
+| [Error Handling Guide](DOCs/ERROR-HANDLING-GUIDE.md) | Detecting and responding to every error the driver reports |
+| [Conditional Compilation](DOCs/CONDITIONAL-COMPILATION-GUIDE.md) | Feature flags and what each one adds |
 | [Card Performance](DOCs/SD-CARD-PERFORMANCE.md) | Card selection, identification, and performance rankings |
+| [Utilities](DOCs/SD-CARD-UTILITIES.md) | Format, audit, fsck, characterize, benchmark |
+| [Migration to v1.7.0](DOCs/MIGRATION-GUIDE-v1.7.0.md) | Moving from v1.6.x — read this first when upgrading |
+| [Migration to v1.2.0](DOCs/MIGRATION-GUIDE-v1.2.0.md) | Moving from v1.0/v1.1 error-code patterns |
+| [SPI Phase-Margin API](DOCs/SPI-PHASE-MARGIN-API.md) | Diagnostic timing knobs for unfamiliar boards and sockets |
 
 ## Regression Tests
 
-The regression test suite (471 tests across 26 test files) is included in `src/regression-tests/`. Each test compiles with pnut-ts and runs on P2 hardware, producing pass/fail results via debug output.
+The regression test suite (574 tests across 27 test files) is included in `src/regression-tests/`. Each test compiles with pnut-ts and runs on P2 hardware, producing pass/fail results via debug output.
 
 ## License
 

@@ -19,6 +19,9 @@ Features:
 - Handle-based file API: open, read, write, seek, close
 - Handle-based directory enumeration
 - Directory operations: create, navigate, enumerate, delete, rename
+- Every fallible call reports a specific error code; `handleError()` explains a short
+  read or write, and `lastFlushError()` surfaces failures of the background flush
+- Non-blocking file I/O so the calling cog keeps running during card operations
 - Low-level raw sector and multi-sector (CMD18/CMD25) bulk transfers
 - Hardware-accelerated CRC-16 validation on all data transfers
 
@@ -39,15 +42,30 @@ CON
 
 PUB main() | handle, buffer[128], bytes_read
     if sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK) < 0
-        debug("Mount failed!")
+        debug("Mount failed: ", sdec_(sd.error()))
     else
         handle := sd.openFileRead(@"CONFIG.TXT")
-        if handle >= 0
-            bytes_read := sd.readHandle(handle, @buffer, 512)
+        if handle < 0
+            debug("Open failed: ", sdec_(handle))
+        else
+            repeat
+                bytes_read := sd.readHandle(handle, @buffer, 512)
+                if bytes_read =< 0
+                    quit                      ' 0 is end of file; negative is a failure
+                process(@buffer, bytes_read)
+
+            if bytes_read < 0
+                debug("Read failed: ", sdec_(sd.handleError(handle)))
+
             sd.closeFileHandle(handle)
 
         sd.unmount()
 ```
+
+Every method that can fail returns `SUCCESS` (0) or a negative error code — never a
+boolean, so compare against 0 rather than testing truthiness. `readHandle()` returns a
+byte count: `=< 0` ends the loop at both end of file and failure, and
+`handleError(handle)` says which it was. See `DOCs/ERROR-HANDLING-GUIDE.md`.
 
 ### Conditional Compilation
 
@@ -97,6 +115,7 @@ Standalone utility programs for preparing SD cards for embedded use, diagnosing 
 | **SD_FAT32_audit.spin2** | Filesystem validator (read-only) | No |
 | **SD_FAT32_fsck.spin2** | Filesystem check and repair | Yes |
 | **SD_card_characterize.spin2** | Card register reader (CID/CSD/SCR/OCR) | No |
+| **SD_card_identify.spin2** | One-line card identity: manufacturer, capacity, serial, date code | No |
 | **SD_performance_benchmark.spin2** | Read/write throughput measurement | Yes* |
 
 *Creates temporary test files that are deleted after testing.
