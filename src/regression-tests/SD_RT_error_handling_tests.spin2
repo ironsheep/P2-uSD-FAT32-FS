@@ -179,7 +179,7 @@ PUB go() | result, handle, h1, h2, h3, h4, h5, hDir, bytesRead, bytesWritten
     utils.startTest(@"createFileNew() in non-existent dir behavior")
     ' First try to cd to non-existent directory
     result := sd.changeDirectory(@testdir2)
-    utils.evaluateSingleValue(result, @"cd to non-existent dir", sd.E_NOT_A_DIR)
+    utils.evaluateSingleValue(result, @"cd to non-existent dir", sd.E_FILE_NOT_FOUND)
     ' Defensive: if that cd unexpectedly SUCCEEDED, every remaining test would run
     ' inside NONEXIST while its name claims root. Cost is one no-op call.
     sd.changeDirectory(@rootPath)

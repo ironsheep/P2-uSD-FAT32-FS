@@ -42,6 +42,7 @@ Failures the driver detected but discarded are now reported, and files a PC wrot
 - Appending to an empty file created by a PC works; the first write previously failed `E_BAD_CHAIN` and the file could never be appended.
 - File operations no longer match the volume-label entry. `rename()` on a dot-less label's name silently relabelled the volume; creating that name failed `E_FILE_EXISTS`, and opening it returned an empty file.
 - `changeDirectory()` onto an empty file returns `E_NOT_A_DIR` instead of succeeding and silently changing to the root directory.
+- `changeDirectory()` on a name with no entry returns `E_FILE_NOT_FOUND`; `E_NOT_A_DIR` now means the name exists and is not a directory.
 - `createFileContiguous()` on a name that already exists leaves free space unchanged; the rejected call previously stranded its pre-allocated clusters until an fsck.
 - `mount()` on a corrupted card whose boot record claims zero sectors per cluster fails with `E_NOT_FAT32` instead of hanging the worker cog.
 - FAT entries carrying the reserved high bits — legal on volumes written by other systems — no longer send cluster-chain walks and free-space counts to wrong results.

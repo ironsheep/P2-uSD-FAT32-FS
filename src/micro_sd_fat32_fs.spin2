@@ -1371,6 +1371,11 @@ PUB changeDirectory(name_ptr) : status
 '' caller's working directory unchanged (v1.7.0; previously such a file
 '' silently changed the CWD to root).
 ''
+'' A name with no entry returns E_FILE_NOT_FOUND; E_NOT_A_DIR means the name
+'' exists but is not a directory (v1.7.0; previously both returned
+'' E_NOT_A_DIR). The volume label is invisible here as everywhere: its name
+'' reports E_FILE_NOT_FOUND.
+''
 '' @param name_ptr - Pointer to null-terminated directory name string
 '' @returns status - SUCCESS (0) on success, negative error code on failure
 
@@ -5503,8 +5508,12 @@ PRI do_chdir(name_ptr) : status
     DEBUG[CH_DIR]("  [do_chdir] Directory read FAILED for: ", zstr(name_ptr))
     status := search_io_status                          ' Could not read the directory -- not "not a directory"
   else
+    ' A name with no entry at all is "not found", not "not a directory" -- the
+    ' two used to share E_NOT_A_DIR. The distinction also keeps the volume
+    ' label invisible: the label filter makes the search miss it, and a miss
+    ' must not imply the name exists as a non-directory.
     DEBUG[CH_DIR]("  [do_chdir] searchDirectory FAILED for: ", zstr(name_ptr), " dir_sec=", udec_(cog_dir_sec[pb_caller]))
-    status := E_NOT_A_DIR
+    status := E_FILE_NOT_FOUND
 
 PRI do_freespace() : sectorCount | cluster
 ' Internal free space calculation - returns free sectors on card.

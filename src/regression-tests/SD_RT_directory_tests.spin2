@@ -215,12 +215,11 @@ PUB go() | result, pEntry, pFilename, attrs, fileCount, idx, handle, bytesRead, 
 
     utils.startTest(@"changeDirectory() fails for non-existent")
     result := sd.changeDirectory(@"NOEXIST")
-    utils.evaluateSingleValue(result, @"changeDirectory() non-existent", sd.E_NOT_A_DIR)
+    utils.evaluateSingleValue(result, @"changeDirectory() non-existent", sd.E_FILE_NOT_FOUND)
 
-    ' do_chdir returns E_NOT_A_DIR for a MISSING name as well as for a file, so this
-    ' test passed for the wrong reason whenever FILE1.TXT was absent -- which is
-    ' exactly what happens if the create above landed elsewhere. Prove the file is
-    ' really there first; only then does E_NOT_A_DIR mean "not a directory".
+    ' A missing name now reports E_FILE_NOT_FOUND, so E_NOT_A_DIR below can only
+    ' mean "exists but is not a directory". The existence proof stays anyway: it
+    ' pins the failure to THIS file rather than to a create that landed elsewhere.
     utils.startTest(@"changeDirectory() fails on a file (not a directory)")
     utils.setCheckCountPerTest(2)
     sd.changeDirectory(@testDir1)                                               ' Go to RTDIR1 where FILE1.TXT exists

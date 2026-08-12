@@ -303,7 +303,7 @@ the card failed. Treat them as reasons to stop and investigate, not to retry.
 | -40 | `E_FILE_NOT_FOUND` | File doesn't exist |
 | -41 | `E_FILE_EXISTS` | File already exists |
 | -42 | `E_NOT_A_FILE` | Expected file, found directory |
-| -43 | `E_NOT_A_DIR` | Expected directory, found file |
+| -43 | `E_NOT_A_DIR` | Expected directory, found file. `changeDirectory()` reports this only for a name that exists and is not a directory; a missing name (including the volume label, invisible to file APIs) reports `E_FILE_NOT_FOUND` |
 | -44 | `E_DIR_NOT_EMPTY` | `deleteFile()` on a directory that still has entries — empty it first |
 | -45 | `E_FILE_NOT_OPEN` | **Reserved** — never produced; a closed handle reports `E_INVALID_HANDLE` |
 | -46 | `E_END_OF_FILE` | Read past end of file |
