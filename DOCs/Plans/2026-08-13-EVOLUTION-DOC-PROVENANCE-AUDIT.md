@@ -98,6 +98,22 @@ Combined with the fact that the shipped pad was 2 — one phase step from the fa
 residue — the "sitting next to the cliff" explanation fits the observations better than
 the address hypothesis did. Neither is measured.
 
+### F7 — the withdrawn hypothesis was already on our disproven ledger **[W]**
+
+`DOCs/Analysis/COUNTERFEIT-ASDFG-SDSC-INVESTIGATION.md` logs **H-CodeLayout** — "Hub
+address shifts affect cog timing" — as **Disproven 2026-05-24**, with Stephen's
+correction recorded verbatim: *"Code location should not affect performance."* The
+reasoning given there: *"The P2 egg-beater gives each cog a deterministic slot pattern
+relative to its own clock. Cog instruction timing does not depend on absolute hub
+addresses."* `SDSC-DEEP-ANALYSIS-AND-ROADMAP-2026-05-26.md` repeats the ruling.
+
+The 2026-08-11 root-cause analysis re-adopted that idea as its central mechanism eleven
+weeks later. **The first-order cause of this whole episode is therefore not propagation
+— it is that the project's own disproven-hypothesis ledger was never consulted.**
+Propagation is why it then spread to four documents and the driver source.
+
+Full treatment in the analysis document's own appendix, section 4.
+
 ### F5 — §4.6 pad measurement understated **[V, corrected]**
 
 Stated "all 24 other measured points pass." The longest run measures pads 2–30: four

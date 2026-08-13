@@ -14,7 +14,7 @@ facts cited to `src/micro_sd_fat32_fs.spin2` at the pre-fix tree `a41c839`.
 
 The defect is in the **write path**, not the read path. Both write-side streamer
 blocks (`writeSector`, `writeSectors`) executed `RDFAST` — a hub-FIFO prime whose
-blocking latency is **10–17 sysclks, variable with the hub egg-beater slot of the
+blocking latency is **10–17 sysclks** **[WITHDRAWN 2026-08-13 - see Appendix]**, variable with the hub egg-beater slot of the
 buffer address** — *between* the SCK smart-pin counter reset and the
 `XINIT`/`WYPIN` pair. The MOSI-bitstream-to-SCK-edge phase was therefore a
 function of hub memory layout. `SD_INCLUDE_SPEED` is not the bug; adding its
@@ -53,7 +53,7 @@ constant in the passing window on the bench.
 | Deterministic per build, flips between builds | Both instruction-arrival and `RDFAST` completion are hub-rotation-locked; phase is constant per layout |
 | Signature B: create-then-not-found, timestamps 0, recovery failures | Same shifted write applied to directory/FAT sectors via the same `writeSector` |
 | multiblock failures | `writeSectors` (CMD25) carries the identical defect |
-| Historical: never-executed 42-byte block flipped cogcwd↔subdir | Same lever: 42 ≡ 2 (mod 8) hub slots |
+| Historical: never-executed 42-byte block flipped cogcwd↔subdir | Same lever **[WITHDRAWN 2026-08-13 - see Appendix]**: 42 ≡ 2 (mod 8) hub slots |
 | Same suites passed on `8885fe3` | Different binary size → different (winning) alignment |
 | async #8/10-13 `E_ASYNC_BUSY` cascades | Not explained by this cause — re-verify on bench after the fix (§6, step 6) |
 | register #11, volume #9 | Independent, expectation-level (§7) |
@@ -73,7 +73,7 @@ half-period `hp = spi_period = 7` sysclks, full bit = 14 sysclks.
    Old order: `DIRL, DRVL, SETXFRQ, RDFAST #0,p_buf, XINIT, WYPIN`
    (`micro_sd_fat32_fs.spin2:8160` pre-fix). `RDFAST` in waiting form takes
    **10–17 clocks** (`p2kbPasm2Rdfast` clocks field; `p2kbArchFifo` timing
-   table) — the 8-clock spread is the egg-beater slot wait for the buffer's
+   table) **[WITHDRAWN 2026-08-13 - see Appendix]** — the 8-clock spread is the egg-beater slot wait for the buffer's
    address slice (`p2kbArchHub`, hub_window_slot_wait 0–7 clocks).
 3. **So XINIT/WYPIN timing was layout-dependent.** XINIT completed at
    `T0+14..21`, WYPIN at `T0+16..23`, both quantized by the hub phase of
@@ -130,10 +130,16 @@ the evidence.
 Two compiles of the §4 reproducer (`SD_RT_raw_sector_tests` with the explicit
 flag list, ± `SD_INCLUDE_SPEED`, pnut-ts 1.55.0, same include paths as
 `run_test.sh`): the driver DAT anchor `days_table` sits at binary offset
-`$4A1F` without SPEED and `$4A43` with SPEED — **+36 bytes, ≡ 4 (mod 8) hub
-slots** — and no conditional DAT lies between it and the three sector buffers,
-so `@dir_buf/@fat_buf/@buf` shift identically. Four slots of egg-beater phase
-is 4 sysclks of `RDFAST` completion shift — 57 % of the 7-sysclk half-period.
+`$4A1F` without SPEED and `$4A43` with SPEED — **+36 bytes** — and no conditional DAT
+lies between it and the three sector buffers, so `@dir_buf/@fat_buf/@buf` shift
+identically.
+
+> **[WITHDRAWN 2026-08-13 - see Appendix]** This paragraph originally continued
+> "≡ 4 (mod 8) hub slots … four slots of egg-beater phase is 4 sysclks of `RDFAST`
+> completion shift — 57 % of the 7-sysclk half-period." Both the arithmetic (`36 mod 8`
+> on a byte count; slices are long-granular, so +36 bytes is 9 longs ≡ 1 slice) and the
+> underlying address-to-slot attribution are withdrawn. The **+36-byte measurement
+> stands**; nothing derived from it does.
 Binary sizes: 48213 vs 48805 bytes.
 
 ### 4.4 SPEED regions are code-only
@@ -201,7 +207,7 @@ any anomaly → confirm the measurement before any conclusion.
    pad value: compile the reproducer with deliberate layout perturbations — a
    never-executed `BYTE 0[N]` DAT block in the test top file for
    N ∈ {1, 2, 4, 8, 12, 36, 60} — and run each (~3 min each). **All must
-   pass.** This sweeps buffer alignment across hub slots including both former
+   pass.** (Never run; and the N set reaches only four distinct slice positions **[WITHDRAWN 2026-08-13 - see Appendix]**.) This sweeps buffer alignment across hub slots including both former
    polarities; any failure = fix incomplete, STOP.
 5. **Optional logic-analyzer confirmation:** capture SCK vs MOSI at burst start
    on (a) the pre-fix FAIL build and (b) the fixed build: (a) shows data
@@ -307,3 +313,50 @@ than intended — N ∈ {1,2,4,8,12,36,60} reaches four distinct slice positions
 duplicate; N ∈ {4,8,12,16,20,24,28} walks all eight.
 
 Full account: `DOCs/Plans/2026-08-13-EVOLUTION-DOC-PROVENANCE-AUDIT.md`.
+
+### 4. The same hypothesis was formally disproven in this project on 2026-05-24
+
+This is the most consequential part of the correction, and it was found on 2026-08-13
+by sweeping the repository for residue rather than by re-reasoning.
+
+`DOCs/Analysis/COUNTERFEIT-ASDFG-SDSC-INVESTIGATION.md` carries a hypothesis ledger.
+One entry reads:
+
+| Hypothesis | Verdict |
+|---|---|
+| **H-CodeLayout** — Hub address shifts affect cog timing | **Disproven 2026-05-24** — egg-beater is cog-phase-deterministic, not hub-address-dependent |
+
+And in that document's body, recorded verbatim:
+
+> **"Different code layout shifts hub access timing, perturbing writeSector PASM."**
+> User correction (2026-05-24): *"Code location should not affect performance. Once the
+> cache synchronizes, it synchronizes and does not desynchronize."* The P2 egg-beater
+> gives each cog a deterministic slot pattern relative to its own clock. Cog instruction
+> timing does not depend on absolute hub addresses.
+
+`DOCs/Analysis/SDSC-DEEP-ANALYSIS-AND-ROADMAP-2026-05-26.md` repeats the ruling in its
+own eliminated-causes table.
+
+**So the 2026-08-11 root-cause analysis re-adopted, as its central mechanism, a
+hypothesis this project had already investigated, ruled out, and recorded as ruled out
+eleven weeks earlier — including Stephen's own correction, in his words.** It then
+propagated into the driver's DAT comment, the theory of operations, the evolution
+document and the sprint context.
+
+The two claims are not letter-identical — H-CodeLayout is about *code* layout shifting
+cog instruction timing, and the withdrawn claim was about a *buffer* address setting an
+`RDFAST` slot wait — but they are the same idea in the same subsystem, and the recorded
+reasoning against H-CodeLayout ("cog instruction timing does not depend on absolute hub
+addresses") bears directly on it.
+
+**What this changes about the diagnosis of the failure.** The provenance audit
+originally explained the error as propagation: one inference restated in three artifacts
+and mistaken for corroboration. That stands, but it is now the second-order cause. The
+first-order cause is that **the project's own disproven-hypothesis ledger was never
+consulted.** It existed, it was searchable, it named the hypothesis, and it recorded the
+verdict and the reasoning.
+
+**Practice this argues for:** when a mechanism hypothesis is adopted, grep the analysis
+corpus for it before building on it — we keep hypothesis ledgers precisely so a ruled-out
+idea does not get re-adopted, and the ledger only works if it is read. A one-line search
+would have prevented the entire episode.

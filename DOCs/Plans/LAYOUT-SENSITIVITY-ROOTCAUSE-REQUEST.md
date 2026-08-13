@@ -1,7 +1,9 @@
 # Layout-Sensitivity Root-Cause Request — Container Agent Handoff
 
-**Status:** ANSWERED 2026-08-12 — root cause found (write-path RDFAST inside the
-SCK phase window; layout moves its hub-slot latency), fix applied container-side.
+**Status:** ANSWERED 2026-08-12 — root cause found (write-path RDFAST, a
+variable-latency instruction, sat inside the SCK phase window), fix applied
+container-side. *The original wording here read "layout moves its hub-slot latency";
+that attribution was withdrawn 2026-08-13 — see the analysis document's appendix.*
 See `DOCs/Analysis/LAYOUT-SENSITIVITY-ROOTCAUSE-ANALYSIS.md` for the mechanism,
 the corrected read of §2.4 (write-side, not capture-side; dresp=$05 proves
 framing only), and the bench verification plan. Originally drafted 2026-08-11

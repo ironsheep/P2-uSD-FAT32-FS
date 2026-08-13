@@ -1255,7 +1255,7 @@ The correct optimization is not to make the worker signal earlier, but to let th
 
 The P2 is **eight independent 32-bit processors (COGs) on a single chip**. Not threads sharing a scheduler. Not cores sharing a cache hierarchy. Eight fully independent processors, each with its own pipeline, 2 KB private RAM, LUT RAM, hardware stack, interrupt levels, and streaming DMA engine. There is no shared instruction bus, no time-slicing, and no preemption between COGs.
 
-The only shared contention is hub RAM access via the "egg beater" round-robin (2-9 clocks per access, deterministic). Everything else — COG RAM, LUT RAM, pipeline execution, streamer — is completely private.
+The only point where a COG experiences timing variability is hub access, arbitrated by the "egg beater" round-robin (2-9 clocks per access, deterministic). **This is not contention between COGs.** Each COG has its own hub accessor and its own rotation; no COG can slow another's hub access, and the variability a COG sees is a property of when its own slot comes around, not of what the other seven are doing. Everything else — COG RAM, LUT RAM, pipeline execution, streamer — is completely private.
 
 **Every decision in this document should be evaluated against these truths:**
 

@@ -239,13 +239,13 @@ The initial analysis read the accepted-data token as evidence of correct data at
 
 ### 4.5 Fix
 
-`SETXFRQ` and `RDFAST` are hoisted above the SCK reset at both write sites (`writeSector()`, `writeSectors()`); `WRFAST` likewise on `readSectors()`. The variable hub-slot latency is spent before the phase-critical window opens.
+`SETXFRQ` and `RDFAST` are hoisted above the SCK reset at both write sites (`writeSector()`, `writeSectors()`); `WRFAST` likewise on `readSectors()`. The variable latency is spent before the phase-critical window opens.
 
 Current write sequence, both sites:
 
 ```
 SETXFRQ   xfrq                ' streamer bit rate, before SCK reset
-RDFAST    #0, p_buf           ' prime FIFO -- variable hub-slot wait lands here
+RDFAST    #0, p_buf           ' prime FIFO -- variable-latency op lands here
 DIRL      _sck                ' reset SCK: counter stops, output LOW, Y=0
 DRVL      _sck                ' DIR=1 restarts base-period counter fresh
 WAITX     tx_pad              ' phase pad (tx_align_delay, floor 2)
