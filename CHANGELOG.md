@@ -54,13 +54,13 @@ Sector writes no longer depend on where the linker put the driver, failures the 
 
 ### Upgrade / recovery note
 
-Data written by an earlier release may be wrong on the card. The write-path defect above stored shifted sectors while reporting success, and whether a build was affected depended on where the linker placed the driver's data — a property of the binary, not of the card or your code.
+The write-path defect above was structurally present in every release from v0.9.3 through v1.6.1, so data written by an earlier release *could* be wrong on the card. **The practical risk is low:** no user has reported it, and it never occurred across four months of certification — 27 regression binaries per release, each with its own hub layout, all doing byte-level content verification. A one-bit shift is also not subtle; it makes text unreadable and binary structures obviously malformed.
 
-- **`SD_FAT32_audit` and `SD_FAT32_fsck` cannot find this.** The filesystem structures are intact and consistent; only the contents of data sectors are wrong, so there is no footprint to detect. This is the same shape as v1.6.0's mid-sector append defect.
-- Verify files you care about against a known-good copy, or rewrite them with a v1.7.0 build. A rewrite is sufficient — no reformat is needed.
-- Reads were never affected, so a card written by another system and only read by this driver is not at risk.
+- `SD_FAT32_audit` and `SD_FAT32_fsck` cannot detect it, and a CLEAN result is not evidence either way — the filesystem structures stay intact and only sector *contents* would be wrong. Same shape as v1.6.0's mid-sector append defect.
+- Opening a file and looking at it settles the question for most data. Rewriting an affected file with a v1.7.0 build is sufficient; no reformat is needed.
+- Reads were never affected, so a card written by another system and only read by this driver was never at risk.
 
-`DOCs/MIGRATION-GUIDE-v1.7.0.md` §0 covers this in full.
+`DOCs/MIGRATION-GUIDE-v1.7.0.md` §0 covers this in full, including why the driver's own two checks could not catch it.
 
 ### Breaking Changes
 

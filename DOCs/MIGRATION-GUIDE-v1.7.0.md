@@ -12,41 +12,61 @@ For the full picture of how error reporting now works, see
 
 ---
 
-## 0. Read this first: data written by an earlier release may be wrong on the card
+## 0. A write-path timing defect was fixed — what it means for data you already wrote
 
-This needs no code change, but it may need you to look at your data.
+**Short version: the risk to your existing data is low, and there is very likely nothing
+for you to do.** This section exists because the defect was real and you are entitled to
+know it existed, not because we think your card is corrupt.
+
+### What was wrong
 
 v1.7.0 fixes a write-path timing defect in which the outgoing data could be one bit out
 of phase with the clock that latched it, so the card **stored a shifted sector while
-reporting success.** Whether a given build was affected depended on where the linker
-placed the driver's data in hub RAM — so it was a property of the *binary*, not of the
-card, the card slot, or the code you wrote. Enabling `SD_INCLUDE_SPEED` was enough to
-move a build from one side of the boundary to the other. Reads were never affected.
+reporting success**. Whether a build was affected depended on where the linker placed
+the driver's data in hub RAM — a property of the *binary*, not of the card, the card
+slot, or the code you wrote. Reads were never affected. The structural flaw was present
+in every release from v0.9.3 through v1.6.1.
 
-**Why you cannot have noticed.** Two things that look like they should have caught it
-did not:
+### Why we believe the practical risk is low
+
+- **No user has reported it.** A one-bit shift does not corrupt data subtly — it makes
+  text unreadable and binary structures obviously malformed. Anyone affected while
+  writing ordinary files would have noticed at once.
+- **Our own certification never hit it in four months.** Each release was verified by 27
+  regression binaries, each with its own hub layout, exercising thousands of sector
+  writes with byte-level content verification. Across 18 releases, none landed on the
+  failing side. The defect surfaced only when an unrelated commit shifted the layout
+  during v1.7.0 development.
+- Together those say the failing layout region is small, not that it is impossible.
+
+**The honest caveat:** our test binaries are harnesses. Yours is your application plus
+this driver, which samples a layout we never did. That is why this note exists at all,
+rather than "it never affected anyone."
+
+### Why the driver did not catch it itself
+
+Not because you could not have seen it — you very likely would have. Because the
+driver's *own* two checks were both incapable of it:
 
 - The card's data-response token said "accepted." In SPI mode, write-CRC checking is off
-  unless the host turns it on with CMD59, which this driver has never sent — so that
-  token only ever confirmed the packet was well-formed, never that the payload bits were
-  yours.
-- Reading the file back matched. The shifted bytes were genuinely what the card had
-  stored, so a read returned them faithfully and any byte-compare agreed with itself.
+  unless the host enables it with CMD59, which this driver has never sent — so that token
+  only ever confirmed the packet was well-formed, never that the payload bits were yours.
+- A read-back comparison agreed with itself. The shifted bytes were genuinely what the
+  card had stored, so the card returned them faithfully.
 
-**What to do.** If you have written data with any earlier release and its integrity
-matters:
+### If you want to check anyway
 
-- `SD_FAT32_audit` and `SD_FAT32_fsck` **will not find this.** The filesystem structures
-  are intact and internally consistent; only the *contents* of data sectors are wrong.
-  There is no filesystem footprint to detect, exactly as with the v1.6.0 mid-sector
-  append defect.
-- Verify affected files against a known-good copy, or simply rewrite them with a v1.7.0
-  build. A rewrite is sufficient — nothing about the card needs reformatting.
-- If your data is text or otherwise self-evident, a bit-shifted sector is usually
-  obvious on inspection. If it is binary telemetry, it may not be, and comparison
-  against a backup is the only reliable check.
-
-If you have written nothing you still care about, there is nothing to do here.
+- `SD_FAT32_audit` and `SD_FAT32_fsck` **will not find this**, and their reporting the
+  volume CLEAN is not evidence either way. The filesystem structures are intact and
+  self-consistent; only the *contents* of data sectors would be wrong. Same shape as
+  v1.6.0's mid-sector append defect.
+- **Open a file and look at it.** For text, logs, or anything with recognisable
+  structure, a bit-shifted sector is immediately obvious. That check costs a minute and
+  settles it for most people.
+- Only if you hold data that is *both* opaque — binary telemetry, say — *and*
+  irreplaceable is a comparison against a known-good copy worth the effort. If you find
+  a problem, rewriting the file with a v1.7.0 build is sufficient; nothing about the card
+  needs reformatting.
 
 ---
 
