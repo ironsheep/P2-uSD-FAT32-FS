@@ -8218,13 +8218,20 @@ PRI writeSector(sector, buf_type) : status | _sck, _mosi, p_buf, stream_mode, cl
 
     ' Streamer TX with LAYOUT-INVARIANT clock alignment (2026-08-12):
     '   1. SETXFRQ and RDFAST execute BEFORE the SCK reset. RDFAST's blocking
-    '      FIFO fill takes 10-17 sysclks (p2kbPasm2Rdfast) -- the spread is the
-    '      hub egg-beater slot wait for p_buf's address slice (p2kbArchHub),
-    '      which MOVES when the binary layout moves. Pre-fix, that variable
-    '      latency sat between DRVL and XINIT, so the MOSI-bitstream-to-SCK
-    '      phase was a function of hub layout: some layouts stored every
-    '      sector shifted one bit late at the card, silently (SPI-mode write
-    '      CRC is not enforced -- CMD59 is never sent).
+    '      FIFO fill is documented at 10-17 sysclks (p2kbPasm2Rdfast) -- an
+    '      8-value spread it does not pin to a single cause. Whatever drives
+    '      it, it is NOT a fixed instruction count, and pre-fix it sat between
+    '      DRVL and XINIT, so the MOSI-bitstream-to-SCK phase was not a
+    '      compile-time constant. Losing phases stored every sector shifted
+    '      one bit late at the card, silently (SPI-mode write CRC is not
+    '      enforced -- CMD59 is never sent, so dresp=$05 proves framing only).
+    '      DO NOT re-narrow this to "egg-beater slot wait for p_buf's address
+    '      slice." That attribution was asserted here through 2026-08-12 and
+    '      is NOT established: p2kbArchP2ArchitectureMentalModel states the
+    '      hub slot wait as "depending on when the COG's slot arrives" -- a
+    '      property of issue time, not of the address requested. The fix does
+    '      not depend on which it is; the correctness argument is only that a
+    '      variable-latency instruction must not sit inside the phase window.
     '   2. dirl/drvl on SCK resets the P_TRANSITION base-period counter
     '      (DIR=0 resets counter, output, Y without clearing WRPIN/WXPIN
     '       config; drvl sets DIR=1 with OUT=0, enabled and ready)
@@ -8237,7 +8244,7 @@ PRI writeSector(sector, buf_type) : status | _sck, _mosi, p_buf, stream_mode, cl
     ' settling" -- that margin was a layout lottery, won until a41c839 lost it.
     ORG
               SETXFRQ   xfrq                            ' Set streamer bit rate (before SCK reset)
-              RDFAST    #0, p_buf                       ' Prime FIFO -- variable hub-slot wait lands HERE, outside the phase window
+              RDFAST    #0, p_buf                       ' Prime FIFO -- variable-latency op lands HERE, outside the phase window
               DIRL      _sck                            ' Reset SCK: counter stops, output LOW, Y=0
               DRVL      _sck                            ' Re-enable: DIR=1 restarts base period counter fresh
               WAITX     tx_pad                          ' Engineered phase pad (tx_align_delay, floor 2)
@@ -8397,13 +8404,14 @@ PRI writeSectors(start_sector, count, p_buffer) : sectors_written | _sck, _mosi,
         pinl(_mosi)                                                             ' Drive pin low (output mode)
 
         ' Streamer TX with LAYOUT-INVARIANT clock alignment (2026-08-12; see
-        ' writeSector for the full rationale). RDFAST's variable hub-slot wait
-        ' executes BEFORE the SCK reset; everything from DRVL to XINIT/WYPIN
-        ' is fixed-2-clock, so data-vs-clock phase is a build-independent
+        ' writeSector for the full rationale, including why the cause of
+        ' RDFAST's variable latency is NOT attributed here). RDFAST executes
+        ' BEFORE the SCK reset; everything from DRVL to XINIT/WYPIN is
+        ' fixed-2-clock, so data-vs-clock phase is a build-independent
         ' constant tuned via tx_align_delay.
         ORG
               SETXFRQ   xfrq                            ' Set streamer bit rate (before SCK reset)
-              RDFAST    #0, p_buf                       ' Prime FIFO -- variable hub-slot wait outside the phase window
+              RDFAST    #0, p_buf                       ' Prime FIFO -- variable-latency op outside the phase window
               DIRL      _sck                            ' Reset SCK: counter stops, output LOW, Y=0
               DRVL      _sck                            ' Re-enable: DIR=1 restarts base period counter fresh
               WAITX     tx_pad                          ' Engineered phase pad (tx_align_delay, floor 2)

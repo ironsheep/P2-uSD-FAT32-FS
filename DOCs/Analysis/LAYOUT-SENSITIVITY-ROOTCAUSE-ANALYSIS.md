@@ -7,6 +7,9 @@ facts cited to `src/micro_sd_fat32_fs.spin2` at the pre-fix tree `a41c839`.
 
 ---
 
+> **Three claims in this document are corrected — see Appendix: Corrections (2026-08-13) at the end.** The root cause and the fix are unaffected.
+
+
 ## 1. Executive summary
 
 The defect is in the **write path**, not the read path. Both write-side streamer
@@ -265,3 +268,42 @@ ERROR-HANDLING-GUIDE line. Not implemented pending the decision.
 - **`tx_align_delay` default (2) ships only after step 3 characterizes it.**
   Until the bench runs, the fix guarantees *invariance*, not *correct phase* —
   do not certify from container state.
+
+---
+
+## Appendix: Corrections (2026-08-13)
+
+Two claims in this document are **withdrawn**; a third is a plan that has been cited
+elsewhere as a result. The root cause and the fix are unaffected.
+
+**1. "36 bytes = 4 hub slots" (§4.3, and "42 ≡ 2 (mod 8)" at §2) is wrong arithmetic.**
+`36 mod 8` was computed on a *byte* count. Hub slices are long-granular — P2KB's own
+block-transfer figures ("1 long per clock", "4 bytes per clock") require it — so 36
+bytes is 9 longs ≡ **1** slice. The measured part, DAT symbol `$4A1F` → `$4A43` under
+`SD_INCLUDE_SPEED`, stands.
+
+**2. Attributing RDFAST's 10–17 sysclk spread to "the egg-beater slot wait for the
+buffer's address slice" is not established.**
+`p2kbArchP2ArchitectureMentalModel` states a hub operation completes "in 2-9 clocks
+depending on when the COG's slot arrives" — a property of issue time, not of the
+address requested. `p2kbArchHub`'s slicing section reads the other way; the two are
+unreconciled and neither was measured here. The fix's correctness does not depend on
+resolving it: a variable-latency instruction must not sit inside the phase window,
+whatever drives the variability.
+
+An alternative that fits the evidence at least as well: the shipped `tx_align_delay`
+was **2**, and §6 step 3's sweep later found the failing phase to be `pad ≡ 1 (mod 7)`
+— one step away. A phase sitting next to the cliff flips on any small systematic
+offset. Note also that the failing-suite set *migrated* between sweeps (08-06 `cogcwd`
+failed while `speed`/`crc_diag`/`subdir_ops` passed; 08-07 the reverse), which fits a
+marginal phase better than a phase deterministically fixed by layout.
+
+**3. §6 step 4 — the alignment-invariance proof — has no recorded result.**
+It is written here as the plan ("the actual acceptance test … All must pass"). No
+transcript exists in `tools/logs/` and no displacement vehicle exists in
+`diagnostic-tests/`. It was subsequently cited in three user-facing documents as though
+it had been performed; those have been corrected. As specified the N set is also weaker
+than intended — N ∈ {1,2,4,8,12,36,60} reaches four distinct slice positions with one
+duplicate; N ∈ {4,8,12,16,20,24,28} walks all eight.
+
+Full account: `DOCs/Plans/2026-08-13-EVOLUTION-DOC-PROVENANCE-AUDIT.md`.

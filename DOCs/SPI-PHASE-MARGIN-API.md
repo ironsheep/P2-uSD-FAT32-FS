@@ -161,6 +161,11 @@ Measured on Card 2b (SN `$0000_0F14`) in the P2 Edge slot at 350 MHz sysclk / 25
 
 4 is the maximal mod-7 distance (3) from the losing phase on both sides. The old floor value of 2 sat one sysclk from the cliff.
 
-**Why the fix matters more than the pad.** With `RDFAST` hoisted out of the phase-critical window, the MOSI-to-SCK phase no longer depends on hub layout at all — that is what makes a *single* correct default possible. The pad centers a window whose position is now a build-independent constant; before the fix, no pad value could have been correct for every build. Alignment invariance was confirmed by re-running with the driver's DAT deliberately displaced by 1, 2, 4, 8, 12, 36 and 60 bytes: all pass.
+**Why the fix matters more than the pad.** With `RDFAST` hoisted out of the phase-critical window, every instruction between the SCK reset and `XINIT` is a fixed 2-clock cog operation, so `XINIT` sits at a compile-time-constant offset from the reset. That is what makes a *single* correct default possible; before the fix, the offset included a variable-latency instruction and no pad value could have been correct for every build.
+
+> **Verification status.** Invariance is argued from the instruction sequence above and
+> supported by two full 574-test sweeps at the shipped configuration. The
+> layout-displacement acceptance sweep that would measure it directly has **not been
+> run** — `DOCs/DRIVER-EVOLUTION-v1.6.0-to-v1.7.0.md` §4.7.
 
 The read-path pad (`align_delay = spi_period`) remains as characterized previously. If a future sweep identifies a better production default for either path, the new value is baked into the driver's DAT and this section is updated with its measurement. The diagnostic surface exists for investigating marginal cards and sockets; it is never the production tuning mechanism.

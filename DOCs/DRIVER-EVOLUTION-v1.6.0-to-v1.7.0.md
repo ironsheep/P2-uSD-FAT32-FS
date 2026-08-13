@@ -173,23 +173,27 @@ Listed separately because the mechanism recurs in §4.
 
 ### 4.1 Presentation
 
-Four regression suites failed after a commit that touched no timing code:
+Failures appeared in suites that had been green, after commits that touched no timing code. **The failing set was not stable between sweeps**, which is the most diagnostic feature of the presentation and the reason it resisted attribution as long as it did.
 
-| Suite | Observed |
-|---|---|
-| `subdir_ops` #2/#3 | file created, handle valid → `openFileRead` returns -40, `deleteFile` -40 |
-| `speed` #12 | `Pattern mismatch at 0: got $0`; `openFileRead after restore failed: -40` |
-| `crc_diag` #12 | `Pattern mismatch at 0: got $0 expected $30` |
-| `cogcwd` | written data reads back 0 |
+Per-suite results, read directly from the sweep transcripts on card `$0000_0F14`:
 
-Bounding facts:
+| Sweep | `speed` | `crc_diag` | `subdir_ops` | `cogcwd` |
+|---|---|---|---|---|
+| `sweep_card2b_260806` | 15/0 | 14/0 | 18/0 | **0 pass / 5 fail** |
+| `sweep_card2b_260807_cleaneach` | **13/2** | **11/3** | **6/12** | 5/0 |
+| `sweep_card2b_260807_nogate` | 0/0 (no result) | **11/3** | 0/0 (no result) | 5/0 |
 
-- The same suites were green on the committed tree, same card, days earlier: `subdir_ops` 18/0, `speed` 15/0, `crc_diag` 14/0, `cogcwd` 5/0.
-- Not a general write failure. Same sweep: `read_write` 49/0, `file_ops` 26/0, `directory` 30/0, `seek` 37/0, `volume` 31/0.
+The four suites never failed together in one run. `cogcwd` failed on 08-06 while the other three passed; the other three failed on 08-07 while `cogcwd` passed. Each sweep is a different build.
+
+Symptom signatures where the transcripts record detail: `subdir_ops` — file created and handle valid, then `openFileRead` and `deleteFile` both return -40; `speed` and `crc_diag` — `Pattern mismatch at 0: got $0`; `cogcwd` — written data reads back 0. The shared signature is **data written does not read back, or the file cannot be found afterward**.
+
+**Bounding fact holding across all three sweeps.** Not a general write failure: `read_write` 49/0, `file_ops` 26/0, `directory` 30/0, `seek` 37/0, `volume` 31/0 throughout.
+
+A failing set that migrates between builds is evidence for a marginal phase that some configurations lose. It is *weaker* support for a phase deterministically fixed by a build's layout than a stable per-build failing set would have been — see the unresolved attribution in §4.3.
 
 ### 4.2 Hypotheses refuted
 
-**Stack overflow corrupting SPI pin configuration.** The memory map made this plausible — 20 bytes separate the end of the worker stack from `cs`:
+**Stack overflow corrupting SPI pin configuration.** The memory map made this plausible — 20 bytes separate the end of the worker stack from `cs`. *(Addresses below are quoted from `POST-V161-ROOT-CAUSE-ANALYSIS.md`, which read them from a build map. They have not been re-derived for the v1.7.0 tree, where `cog_stack_end_mark` now sits between the stack and the guard; treat them as the layout at the time of that investigation.)*
 
 | Symbol | Address | Offset past stack end |
 |---|---|---|
@@ -213,13 +217,17 @@ Corrupting `miso`/`spi_rx_mode` produces zero reads; corrupting `spi_period` pro
 
 The phase between the outgoing MOSI bitstream and the clock edges latching it is therefore set entirely by the **sysclk count between `DRVL` and `XINIT`**.
 
-`WAITX`, `XINIT` and `WYPIN` are fixed 2-clock cog operations. `RDFAST` is not: it blocks while the FIFO fills, taking **10–17 sysclks** (`p2kbPasm2Rdfast`). The spread is the hub egg-beater slot wait for the buffer address's hub slice (`p2kbArchHub`), and slot assignment is a function of hub address.
+`WAITX`, `XINIT` and `WYPIN` are fixed 2-clock cog operations. `RDFAST` is not: `p2kbPasm2Rdfast` documents it as `WRFAST finish + 10...17` sysclks.
 
-Pre-fix, `RDFAST` executed between `DRVL` and `XINIT`. Data-to-clock phase was therefore a function of the driver's hub address.
+Pre-fix, `RDFAST` executed between `DRVL` and `XINIT`. The data-to-clock phase was therefore **not a compile-time constant**. That is the whole of the established mechanism, and it is sufficient: a variable-latency instruction inside a phase-critical window breaks the timing contract regardless of what drives the variability.
 
-**Measurement.** `pnut-ts -l` on both reproducer variants: presence of `SD_INCLUDE_SPEED` shifts the driver's DAT by **36 bytes = 4 hub slots**, sufficient to move a build across the boundary.
+**What drives the variability is not established.** `p2kbArchP2ArchitectureMentalModel` states a hub operation completes "in 2-9 clocks depending on when the COG's slot arrives" — a property of issue time. `p2kbArchHub`'s slicing section can be read as making it a property of the address requested. The two are unreconciled and neither was measured. The fix does not depend on resolving it.
 
-**Effect on the losing side.** The card stores every sector one bit late, and reports success.
+**Measurement.** `pnut-ts -l` on both reproducer variants: `SD_INCLUDE_SPEED` shifts the driver's DAT symbol from `$4A1F` to `$4A43`, **+36 bytes**. That the flag correlates with failure is established. The causal path from a DAT shift to a phase change is not.
+
+**Competing explanation, unresolved.** The shipped `tx_align_delay` at the time was **2**, the bare `WAITX` floor. §4.6's sweep later showed the failing phase is `pad ≡ 1 (mod 7)` — one phase step below 2. A nominal phase sitting one step from the cliff would flip on any small systematic offset, which would make the DAT shift a trigger without requiring address-determined latency. This is consistent with the observed instability in §4.1 and has not been discriminated from the address hypothesis by measurement.
+
+**Effect on the losing side.** The card stores every sector one bit late, and reports success. The shmoo transcripts label this failure mode `SHIFTED-LATE`.
 
 ### 4.4 Why existing checks did not detect it
 
@@ -267,21 +275,42 @@ WAITXFI
 
 Tuning is only meaningful once phase is build-independent; a pad chosen while phase still moved with layout would be tuned to one binary.
 
-Measured on SN `$0000_0F14`, P2 Edge slot, 350 MHz sysclk / 25 MHz SPI (hp=7), three runs of `SD_tx_phase_shmoo`:
+Measured on SN `$0000_0F14`, P2 Edge slot, 350 MHz sysclk / 25 MHz SPI (hp=7), three runs of `SD_tx_phase_shmoo`. Transcript data, longest run (`SD_tx_phase_shmoo_260811-213419.log`, pads 2–30):
 
-- Pad-to-phase is a **sawtooth of period hp**. SCK starts on the next base-period boundary after `WYPIN` while streamer start moves continuously, so only hp distinct phases exist regardless of pad magnitude.
-- Exactly one phase fails: **pad ≡ 1 (mod 7)** — observed failing at pads 8, 15, 22, 29. All 24 other measured points pass.
-- Shipped default `tx_align_delay = 4`: maximal mod-7 distance (3) from the failing phase on both sides. The prior value 2 sat one sysclk from it.
+| Pad | Result |
+|---|---|
+| 2–7 | CORRECT |
+| **8** | **SHIFTED-LATE** |
+| 9–14 | CORRECT |
+| **15** | **SHIFTED-LATE** |
+| 16–21 | CORRECT |
+| **22** | **SHIFTED-LATE** |
+| 23–28 | CORRECT |
+| **29** | **SHIFTED-LATE** |
+| 30 | CORRECT |
+
+Four failures at 8, 15, 22, 29; 25 passing points. All three runs agree on the failing pads. Both test patterns (A and B) fail together at every failing pad.
+
+- Pad-to-phase is a **sawtooth of period hp**: only hp distinct phases exist regardless of pad magnitude. The proposed reason — SCK starts on the next base-period boundary after `WYPIN` while streamer start moves continuously — is an interpretation of the periodicity, not an independent measurement.
+- Exactly one phase fails: **pad ≡ 1 (mod 7)**. `8, 15, 22, 29` are all ≡ 1 (mod 7); every other measured pad passes.
+- Shipped default `tx_align_delay = 4`. The tool's own recommendation line reads `SUGGESTED DAT DEFAULT: 4 (band center)`, the centre of the measured contiguous passing band `2..7`. Phase 4 sits 3 steps from the failing phase going down and 4 going up; 3 is the maximum achievable minimum distance with one bad phase in seven (phase 5 ties).
+- The prior default of **2** is one phase step above the failing phase. Pad 1 itself is below the `WAITX` floor and was never measured, so 2 was the lowest reachable pad — but in *phase* terms it sat adjacent to the cliff, which is the sense in which it was marginal.
 
 `debugSetTxAlignDelay()` / `debugGetTxAlignDelay()` expose the knob under `SD_INCLUDE_DEBUG` for characterizing an unfamiliar board or socket. See `DOCs/SPI-PHASE-MARGIN-API.md`.
 
-### 4.7 Invariance verification
+### 4.7 Invariance verification — not measured
 
-The fix claims layout-independence, so it was tested by displacement rather than by re-running the failing suites alone. The driver's DAT was deliberately displaced by **1, 2, 4, 8, 12, 36 and 60 bytes** and the suites re-run at each: all pass.
+The invariance claim rests on the instruction-sequence argument in §4.5, not on measurement across layouts.
 
-Additional confirmation, run first as the decisive fork: a sector written by a failing build was read back by a passing build. The prediction — shifted data present on the card, not a capture artifact — held.
+`LAYOUT-SENSITIVITY-ROOTCAUSE-ANALYSIS.md` §6 step 4 specifies the acceptance test: with the final pad value, compile the reproducer with a never-executed `BYTE 0[N]` DAT block for N ∈ {1, 2, 4, 8, 12, 36, 60}, run each, all must pass. **That sweep has no recorded result** — no transcript in `tools/logs/`, no displacement vehicle in `diagnostic-tests/`.
 
----
+As specified the N set is also narrower than intended. Hub slices are long-granular, so those values reach four distinct slice positions with one duplicate; **N ∈ {4, 8, 12, 16, 20, 24, 28}** walks all eight once each.
+
+What was run, with transcripts:
+
+- The pad shmoo (§4.6), three runs — establishes phase behaviour and the passing band, at one layout.
+- Two full 27-suite sweeps at 574/574 on two cards (§6) — establishes the shipped configuration works. Incidentally spans the layouts of 27 different top-level files and their differing feature flags, but no result is attributed to layout position.
+- The decisive fork: a sector written by a failing build, read back by a passing build. Shifted data was present **on the card**, not introduced by the capture path — which located the defect on the write side.
 
 ## 5. Regression suite defects
 
@@ -377,3 +406,76 @@ A failure appearing on one card and not the other is treated as geometry-depende
 | `DOCs/SPI-PHASE-MARGIN-API.md` | Phase-margin diagnostic surface; sawtooth measurement |
 | `DOCs/MIGRATION-GUIDE-v1.7.0.md` | Consumer-visible changes; §0 data-recovery note |
 | `src/regression-tests/THEORY-OF-OPERATIONS.md` | Per-suite purpose; certification record |
+
+---
+
+## Appendix A — Corrections register
+
+Claims this document previously made and has withdrawn. Kept so a reader who saw an
+earlier revision, or who finds the same claim still repeated elsewhere, can tell what
+changed. **Nothing here describes current driver behaviour** — the body does that.
+
+Full working: `DOCs/Plans/2026-08-13-EVOLUTION-DOC-PROVENANCE-AUDIT.md`.
+
+### A.1 — RDFAST's latency attributed to the buffer's hub address (2026-08-13)
+
+**Was:** "the spread is the hub egg-beater slot wait for the buffer address's hub slice,
+and slot assignment is a function of hub address"; therefore "data-to-clock phase was a
+function of the driver's hub address."
+
+**Withdrawn because:** `p2kbArchP2ArchitectureMentalModel` states the wait as "depending
+on when the COG's slot arrives" — issue time, not requested address. We measured neither.
+The same attribution appeared in `SD-CARD-DRIVER-THEORY.md` and in the driver's DAT
+comment at `writeSector()`; both corrected, and the DAT comment now carries an explicit
+instruction not to re-narrow it.
+
+**Why it survived review:** the claim appeared in three of our own artifacts, but the DAT
+comment and the sprint context note were both written *from*
+`LAYOUT-SENSITIVITY-ROOTCAUSE-ANALYSIS.md`. Agreement was propagation, not corroboration.
+
+**Retained and sufficient:** `RDFAST` has documented variable latency; it sat inside the
+phase window; phase was therefore not a compile-time constant.
+
+### A.2 — "36 bytes = 4 hub slots" (2026-08-13)
+
+**Was:** `SD_INCLUDE_SPEED` shifts the DAT by "36 bytes = 4 hub slots."
+
+**Withdrawn because:** `36 mod 8` was computed on a byte count. Slices are long-granular
+(P2KB's "1 long per clock" / "4 bytes per clock" block-transfer rate requires it), so 36
+bytes is 9 longs ≡ 1 slice. Dropped rather than corrected — the quantity was never
+load-bearing. Origin `LAYOUT-SENSITIVITY-ROOTCAUSE-ANALYSIS.md:130`, which carries the
+same error at line 53 (`42 ≡ 2 (mod 8)`).
+
+**Retained:** the measurement itself — DAT symbol `$4A1F` → `$4A43`, +36 bytes.
+
+### A.3 — Invariance sweep reported as performed (2026-08-13)
+
+**Was:** "The driver's DAT was deliberately displaced by 1, 2, 4, 8, 12, 36 and 60 bytes
+and the suites re-run at each: all pass."
+
+**Withdrawn because:** that is the *plan* at `LAYOUT-SENSITIVITY-ROOTCAUSE-ANALYSIS.md`
+§6 step 4 ("the actual acceptance test … All must pass"), not a result. No transcript
+exists. The same claim had propagated to `SD-CARD-DRIVER-THEORY.md` and
+`SPI-PHASE-MARGIN-API.md`; both corrected. See §4.7 for current status.
+
+### A.4 — Symptom set presented as one observation (2026-08-13)
+
+**Was:** four suites failing together, all four "green on the committed tree, same card,
+days earlier."
+
+**Withdrawn because:** the transcripts show they never failed together. `cogcwd` failed on
+`sweep_card2b_260806` while `speed`/`crc_diag`/`subdir_ops` passed; on
+`sweep_card2b_260807_cleaneach` the reverse. The "all green days earlier" claim is false
+for `cogcwd`. §4.1 now quotes the per-sweep results directly.
+
+**Consequence for A.1:** a failing set that migrates between builds fits a marginal phase
+some configurations lose better than a phase deterministically fixed by layout — which is
+independent reason to have withdrawn A.1.
+
+### A.5 — Pad measurement understated (2026-08-13)
+
+**Was:** "all 24 other measured points pass."
+
+**Corrected to:** the longest run measures pads 2–30 — four failures, **25** passes. §4.6
+now quotes the transcript table and the tool's own
+`SUGGESTED DAT DEFAULT: 4 (band center)` line.
