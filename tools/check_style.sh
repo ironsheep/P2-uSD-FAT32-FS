@@ -11,9 +11,19 @@
 # certifies that source. Conform first, compile, then regression test, then hardware.
 # Reformatting after a green run silently invalidates it.
 #
-# The guide has rules a script cannot judge (naming quality, "describe the data",
-# doc-comment content). Those stay a human read. This covers what is mechanical, so
-# the human read is short enough to actually happen.
+# This script is TIER 1 of a four-tier model (decided 2026-08-13; full model and the
+# rule-by-rule assignment in DOCs/procedures/RELEASE-CHECKLIST.md section 2):
+#
+#   T0  compiler already enforces it        (e.g. 1.6 local/DAT name collision)
+#   T1  script-checkable, gates             <- THIS SCRIPT
+#   T2  agent-auditable: semantic judgement, but repeatable and citable
+#   T3  genuinely Stephen's: architectural intent (5.8, 5.9)
+#
+# What this script does NOT check is mostly T2, NOT "a human read". That distinction
+# was the old model's error -- "a shell script cannot check this" is not "a human
+# must". Roughly 24 of the guide's 53 rules are T2: naming correspondence (does the
+# name describe what is stored / returned), doc-comment SYNC (does it describe what
+# the code does today -- not "is it good"), CON grouping, magic-number judgement.
 #
 # Exit codes: 0 = no FAIL findings (REVIEW items may still be listed), 1 = at least
 # one FAIL. Unlike the doc checks, this one CAN fail a release gate.
@@ -42,7 +52,25 @@ GREEN=$'\033[0;32m'; RED=$'\033[0;31m'; YELLOW=$'\033[1;33m'; CYAN=$'\033[0;36m'
 # to make them gate. RELEASE-CHECKLIST section 2 carries the instruction to run
 # --strict next cycle, clear the debt, and then delete this grace path entirely.
 STRICT=0
-[[ "${1:-}" == "--strict" ]] && STRICT=1
+case "${1:-}" in
+    "")         ;;
+    --strict)   STRICT=1 ;;
+    -h|--help)
+        echo "Usage: $0 [--strict]"
+        echo ""
+        echo "  Tier 1 style audit over every tracked .spin2 file."
+        echo ""
+        echo "  (no flag)  Findings outside src/ report as DEBT and do not gate."
+        echo "             Grace period; ends at the next release (checklist section 2)."
+        echo "  --strict   Every finding gates, wherever the file lives."
+        echo ""
+        echo "  Exit: 0 = no FAIL findings, 1 = at least one FAIL."
+        exit 0 ;;
+    *)
+        echo "Unknown option: $1" >&2
+        echo "Usage: $0 [--strict]   (try --help)" >&2
+        exit 2 ;;
+esac
 
 mapfile -t FILES < <(git -C "$ROOT" ls-files --full-name '*.spin2' 2>/dev/null | sort)
 
@@ -379,10 +407,11 @@ else
     echo -e "${RED}${fails} FAIL finding(s)${NC}, ${YELLOW}${reviews} REVIEW item(s)${NC}."
 fi
 echo ""
-echo "  Rules a script cannot judge stay a human read: naming quality (2.2, 2.3),"
-echo "  consistent base names (2.1.3), same-name-same-description (2.5), CON block"
-echo "  organization (3.5), and doc-comment content (Part 4). See"
-echo "  DOCs/procedures/SPIN2-AUTHORING-GUIDE.md."
+echo "  This is TIER 1 only. What it cannot check is mostly TIER 2 -- agent-auditable,"
+echo "  not \"a human read\": naming correspondence (2.2, 2.3), consistent base names"
+echo "  (2.1.3), same-name-same-description (2.5), CON grouping (3.5), doc-comment SYNC"
+echo "  (Part 4), magic-number judgement (5.7). Tier model and rule assignment:"
+echo "  DOCs/procedures/RELEASE-CHECKLIST.md section 2. Rules: SPIN2-AUTHORING-GUIDE.md."
 echo ""
 
 [[ $fails -gt 0 ]] && exit 1
