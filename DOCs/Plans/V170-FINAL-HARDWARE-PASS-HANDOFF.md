@@ -1,8 +1,17 @@
 # v1.7.0 final hardware pass — handoff to the host-native agent
 
-**Written:** 2026-08-13, container agent (no hardware)
-**For:** the macOS host agent with the P2 Edge rig
-**Status:** container work COMPLETE. Everything below is bench execution.
+**Environment handing off:** `EXEC_ENV_LIMITED` — Linux dev container. Flash/run
+tooling is absent here by design; `pnut-term-ts: command not found` is the expected
+shape, not a fault.
+**Environment receiving:** `EXEC_ENV_CANONICAL` — macOS host with the P2 Edge module
+and microSD attached over USB.
+**Written:** 2026-08-13
+**Procedure:** run this under the `p2-dev-cycle` skill. This document supplies the
+project-specific run order and acceptance criteria; the skill supplies the cycle
+(§0 device check, §1 compile, §3 flash/run, §4–5 inspect/diagnose) and the §8
+hand-back shape. Do not improvise around it.
+**Status:** the limited half is COMPLETE — §1 compiles clean for everything below.
+Everything remaining is §2 onward and requires the canonical environment.
 
 ---
 
@@ -129,13 +138,34 @@ than designed.
 
 ---
 
-## 5. On return
+## 5. On return — hand back per `p2-dev-cycle` §8
 
-Report back:
+**Name the environment first.** Then, for each of the two runs, **lead with the exit
+code** — it is the reliable signal, and it separates "the hardware was never involved"
+from "the hardware ran and the driver failed." That distinction is what cost the most
+time during the post-v1.6.1 red period; do not bury it under a narrative.
 
-1. Step 1 verdict lines and the closing summary line, verbatim.
-2. Step 2 per-suite totals and the closing audit.
+`run_test.sh` exit codes (step 1):
+
+| `$?` | Meaning |
+|---|---|
+| 0 | `END_SESSION` reached — the run completed; read the verdicts |
+| 1 | **Compile failed** — hardware never involved. Should not happen; it compiles clean in the container |
+| 2 | **Download failed** — hardware never involved. Check cable/port/board |
+| 3 | **Timeout**, no `END_SESSION` — ran but did not finish. Suspect a hang; capture the partial log |
+| 4 | Usage error — nothing ran |
+
+Then report:
+
+1. Step 1: exit code, the eight `off=+N` verdict lines, and the closing summary line,
+   verbatim.
+2. Step 2: exit code, per-suite totals, and the closing audit line.
 3. Transcript filenames (by serial).
+4. Anything that contradicted this document — including if the probe itself
+   misbehaved. It has never run on hardware.
+
+**Do not list unreached steps as failures.** If step 1 hard-stops, step 2 was never
+available, not failed.
 
 Then remaining before the tag, all container-side:
 
