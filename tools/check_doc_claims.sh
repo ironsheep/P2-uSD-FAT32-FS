@@ -6,8 +6,8 @@
 # *strings* — the sample transcripts, banners, and status lines that documents
 # quote as tool output.
 #
-# Why this exists: the project has 471 regression tests and every one asserts on
-# behavior. None compares a description to the behavior it describes. So a stale
+# Why this exists: the project's regression suites assert on behavior, and every one
+# of them does. None compares a description to the behavior it describes. So a stale
 # sample transcript has exactly one detection mechanism — someone reading it — and
 # if that reading only happens at the release gate, findings arrive under time
 # pressure. This script makes the comparison mechanical.
