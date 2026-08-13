@@ -1,0 +1,223 @@
+'' =================================================================================================
+''
+''   File....... SD_buffer_alignment_sweep.spin2
+''   Purpose.... Layout-invariance acceptance test for the v1.7.0 write-path phase fix
+''               (DOCs/Analysis/LAYOUT-SENSITIVITY-ROOTCAUSE-ANALYSIS.md section 6 step 4,
+''               restated in DOCs/DRIVER-EVOLUTION-v1.6.0-to-v1.7.0.md section 4.7).
+''
+''               The fix hoisted RDFAST/WRFAST above the SCK reset so that no
+''               variable-latency instruction sits between the reset and XINIT. The claim
+''               is that data-to-clock phase is now independent of where the streamer's
+''               hub buffer lives. This tool tests that claim directly.
+''
+''               HOW IT REACHES THE STREAMER. writeSectorsRaw()/readSectorsRaw() pass the
+''               caller's buffer pointer through to writeSectors()/readSectors(), which
+''               feed it straight to RDFAST #0, p_buf / WRFAST #0, p_buf. So sweeping the
+''               pointer sweeps the streamer's hub address with no recompile. The
+''               single-sector writeSectorRaw() path does NOT do this -- it bytemoves into
+''               the driver's internal buf, whose address is fixed by the DAT layout -- so
+''               that path is out of this tool's reach and is covered only incidentally,
+''               by the regression suites' differing binary layouts.
+''
+''               WHAT IS SWEPT. Byte offsets 0,4,8..28 into an over-allocated buffer: 8
+''               long-aligned positions, one full 32-byte period. Phase 1 varies the WRITE
+''               buffer (read fixed at offset 0) to isolate RDFAST; phase 2 varies the READ
+''               buffer (write fixed at 0) to isolate WRFAST. Two patterns each, classified
+''               CORRECT / SHIFTED-LATE / SHIFTED-EARLY / OTHER by the same bit-shift
+''               classifier SD_tx_phase_shmoo uses.
+''
+''               ACCEPTANCE: every point CORRECT. Any SHIFTED verdict means the fix is
+''               incomplete -- STOP, do not tag.
+''
+''               Multi-block (CMD25/CMD18, count=2) is used because that is the path that
+''               plumbs the caller pointer through. Writes go to the sanctioned scratch
+''               LBAs only.
+''
+''   Author..... Iron Sheep Productions, LLC
+''   Updated.... 13 AUG 2026
+''
+'' =================================================================================================
+
+CON
+
+    _CLKFREQ    = 350_000_000
+    DEBUG_BAUD  = 2_000_000
+
+    ' P2 Edge onboard SD slot
+    SD_CS   = 60
+    SD_MOSI = 59
+    SD_MISO = 58
+    SD_SCK  = 61
+
+    ' Sanctioned scratch LBAs (same as SD_RT_raw_sector_tests and SD_tx_phase_shmoo).
+    ' Two consecutive sectors: multi-block needs count >= 2 to exercise CMD25/CMD18.
+    SECTOR_BASE  = 100_000
+    SECTOR_COUNT = 2
+    XFER_BYTES   = SECTOR_COUNT * 512
+
+    ' Offset sweep: 8 long-aligned positions spanning one 32-byte period.
+    OFF_MIN  = 0
+    OFF_MAX  = 28
+    OFF_STEP = 4
+    OFF_PTS  = 8
+
+    ' Guard bytes after each buffer -- catches an overrun caused by the offset itself.
+    GUARD_SIZE = 16
+    GUARD_BYTE = $CC
+
+    ' Verdict codes (same encoding as SD_tx_phase_shmoo)
+    V_CORRECT = 0
+    V_LATE1   = 1
+    V_EARLY1  = 2
+    V_OTHER   = 3
+    V_WRFAIL  = 4
+    V_RDFAIL  = 5
+
+#pragma exportdef SD_INCLUDE_ALL
+
+OBJ
+    sd : "micro_sd_fat32_fs"
+
+VAR
+    BYTE    tx_buf[OFF_MAX + XFER_BYTES + GUARD_SIZE]
+    BYTE    rx_buf[OFF_MAX + XFER_BYTES + GUARD_SIZE]
+    LONG    verdictA[OFF_PTS]
+    LONG    verdictB[OFF_PTS]
+
+PUB go() | off, slot, nFail, phase, guardBad
+
+    debug(" ")
+    debug("============================================================")
+    debug("  Buffer-alignment sweep - layout-invariance acceptance test")
+    debug("============================================================")
+    debug("  tx_align_delay in effect: ", udec_(sd.debugGetTxAlignDelay()))
+    debug("  tx_buf base address:      $", uhex_long_(@tx_buf))
+    debug("  rx_buf base address:      $", uhex_long_(@rx_buf))
+    debug("  sectors: ", udec_(SECTOR_BASE), "..", udec_(SECTOR_BASE + SECTOR_COUNT - 1), " (multi-block, count=", udec_(SECTOR_COUNT), ")")
+    debug(" ")
+
+    if sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK) < 0
+        debug("ERROR: initCardOnly failed: ", sdec_(sd.error()))
+        waitms(500)
+        debug("END_SESSION")
+        return
+
+    nFail := 0
+
+    repeat phase from 0 to 1
+        debug(" ")
+        if phase == 0
+            debug("--- Phase 1: WRITE buffer offset swept (RDFAST source), read at +0 ---")
+        else
+            debug("--- Phase 2: READ buffer offset swept (WRFAST target), write at +0 ---")
+        debug(" ")
+
+        slot := 0
+        repeat off from OFF_MIN to OFF_MAX step OFF_STEP
+            if phase == 0
+                verdictA[slot] := onePoint(off, 0, 0)
+                verdictB[slot] := onePoint(off, 0, 1)
+            else
+                verdictA[slot] := onePoint(0, off, 0)
+                verdictB[slot] := onePoint(0, off, 1)
+
+            debug("* off=+", udec_(off), " (addr $", uhex_long_(@tx_buf + off), "): A=", zstr_(verdictName(verdictA[slot])), "  B=", zstr_(verdictName(verdictB[slot])))
+
+            if verdictA[slot] <> V_CORRECT
+                nFail++
+            if verdictB[slot] <> V_CORRECT
+                nFail++
+            slot++
+
+    ' Guard check -- an offset that overran its buffer invalidates every verdict above
+    guardBad := 0
+    repeat off from 0 to GUARD_SIZE - 1
+        if tx_buf[OFF_MAX + XFER_BYTES + off] <> GUARD_BYTE
+            guardBad++
+        if rx_buf[OFF_MAX + XFER_BYTES + off] <> GUARD_BYTE
+            guardBad++
+
+    debug(" ")
+    debug("============================================================")
+    if guardBad > 0
+        debug("* GUARD VIOLATED (", udec_(guardBad), " bytes) - RESULTS INVALID, buffer overran")
+    elseif nFail == 0
+        debug("* ALL ", udec_(OFF_PTS * 4), " POINTS CORRECT - layout invariance HOLDS")
+        debug("* Acceptance test PASSES. Streamer phase is independent of hub buffer address")
+        debug("* across all 8 long-aligned positions, on both write and read paths.")
+    else
+        debug("* ", udec_(nFail), " POINT(S) NOT CORRECT - layout invariance DOES NOT HOLD")
+        debug("* HARD STOP: the fix is incomplete. Do not tag. Record which offsets failed")
+        debug("* and whether the verdicts are SHIFTED-LATE (one bit late) or something else.")
+    debug("============================================================")
+    debug(" ")
+    waitms(500)
+    debug("END_SESSION")
+
+
+PRI onePoint(wrOff, rdOff, patSel) : verdict | idx, result
+' Write XFER_BYTES from tx_buf+wrOff, read back into rx_buf+rdOff, classify.
+    bytefill(@tx_buf, 0, OFF_MAX + XFER_BYTES)
+    bytefill(@tx_buf + OFF_MAX + XFER_BYTES, GUARD_BYTE, GUARD_SIZE)
+    repeat idx from 0 to XFER_BYTES - 1
+        tx_buf[wrOff + idx] := patByte(patSel, idx)
+
+    result := sd.writeSectorsRaw(SECTOR_BASE, SECTOR_COUNT, @tx_buf + wrOff)
+    if result <> SECTOR_COUNT
+        return V_WRFAIL
+
+    bytefill(@rx_buf, $5A, OFF_MAX + XFER_BYTES)
+    bytefill(@rx_buf + OFF_MAX + XFER_BYTES, GUARD_BYTE, GUARD_SIZE)
+
+    result := sd.readSectorsRaw(SECTOR_BASE, SECTOR_COUNT, @rx_buf + rdOff)
+    if result <> SECTOR_COUNT
+        return V_RDFAIL
+
+    return classify(rdOff, patSel)
+
+
+PRI classify(rdOff, patSel) : verdict | idx, corr, prev, nxt, late, early, nCorr, nLate, nEarly, nCheck
+' Same bit-shift classifier as SD_tx_phase_shmoo, extended across both sectors.
+' Edges (first and last byte) are skipped -- their neighbour is outside the transfer.
+    nCorr := 0
+    nLate := 0
+    nEarly := 0
+    nCheck := 0
+    repeat idx from 1 to XFER_BYTES - 2
+        corr := patByte(patSel, idx)
+        prev := patByte(patSel, idx - 1)
+        nxt := patByte(patSel, idx + 1)
+        late := ((corr >> 1) | ((prev & 1) << 7)) & $FF
+        early := ((corr << 1) | ((nxt >> 7) & 1)) & $FF
+        nCheck++
+        if rx_buf[rdOff + idx] == corr
+            nCorr++
+        elseif rx_buf[rdOff + idx] == late
+            nLate++
+        elseif rx_buf[rdOff + idx] == early
+            nEarly++
+
+    if nCorr == nCheck
+        return V_CORRECT
+    if nLate * 100 / nCheck >= 98
+        return V_LATE1
+    if nEarly * 100 / nCheck >= 98
+        return V_EARLY1
+    return V_OTHER
+
+
+PRI patByte(patSel, idx) : b
+    if patSel == 0
+        b := idx & $FF                      ' pattern A: sequential
+    else
+        b := (idx & 1) ? $55 : $AA          ' pattern B: alternating
+
+
+PRI verdictName(v) : p_str
+    case v
+        V_CORRECT: p_str := @"CORRECT"
+        V_LATE1:   p_str := @"SHIFTED-LATE"
+        V_EARLY1:  p_str := @"SHIFTED-EARLY"
+        V_OTHER:   p_str := @"OTHER"
+        V_WRFAIL:  p_str := @"WRITE-FAIL"
+        other:     p_str := @"READ-FAIL"
