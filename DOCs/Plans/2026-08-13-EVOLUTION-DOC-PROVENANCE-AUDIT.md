@@ -23,7 +23,13 @@ propagation, not corroboration.
 
 ## Findings requiring action
 
-### F1 — §4.7 invariance acceptance test was never run **[W]**
+### F1 — §4.7 invariance acceptance test was never run **[W — CLOSED 2026-08-13]**
+
+> **RESOLVED.** The acceptance test ran on 2026-08-13 and passed: all 32 points
+> correct, `tools/logs/SD_buffer_alignment_sweep_260813-155251.log`. It was executed
+> by a runtime buffer sweep reaching all eight slice positions rather than the
+> seven-build DAT-displacement approach originally specified. The withdrawal below
+> stands as the record of what was wrongly claimed before the measurement existed.
 
 The document stated: *"The driver's DAT was deliberately displaced by 1, 2, 4, 8, 12, 36
 and 60 bytes and the suites re-run at each: all pass."*

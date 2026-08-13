@@ -1304,6 +1304,19 @@ Worker-stack watermark on both sweeps: **122 of 512 longs**, peaking in
 `SD_RT_defrag_tests` — identical on both cards, which is what sized the shipped
 `STACK_SIZE` of 160.
 
+### Release-configuration confirmation — 2026-08-13
+
+Both sweeps above ran the *measurement* build at `STACK_SIZE = 512`, which is a
+different DAT layout from the build that ships at 160. A third sweep therefore ran the
+release configuration itself, on the Gigastone 64GB (`$0000_0F14`): **574 pass / 0 fail
+across all 27 suites**, closing audit clean, 461 s, zero infrastructure retries.
+Transcript `shakedown_SN0000-0F14_260813-release-stack.txt`.
+
+Paired with it, the write-path layout-invariance acceptance test
+(`diagnostic-tests/SD_buffer_alignment_sweep.spin2`): the streamer's hub buffer swept
+through all eight long-aligned positions on both the write and read paths, **32 of 32
+points correct**.
+
 ---
 
 ## 8. Running the Tests

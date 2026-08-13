@@ -560,7 +560,7 @@ What *drives* that variability is not established. P2KB describes a hub operatio
 
 **Then, and only then, is a single tuned default meaningful.** `tx_align_delay` pads the window to center that constant phase. Its value was measured on the bench: pad-to-phase is a sawtooth of period hp, so only hp distinct phases exist however far the pad is swept. At hp=7 exactly one loses — `pad ≡ 1 (mod 7)`, observed failing at pads 8, 15, 22 and 29 across three runs — and the shipped default of 4 is the centre of the measured passing band `2..7`.
 
-The layout-displacement sweep that would demonstrate invariance directly **has not been run**; the invariance claim rests on the instruction-sequence argument above. See `DOCs/DRIVER-EVOLUTION-v1.6.0-to-v1.7.0.md` §4.7 and `DOCs/SPI-PHASE-MARGIN-API.md`.
+Invariance is not merely argued — it was **measured on 2026-08-13**: sweeping the streamer's hub buffer through all eight long-aligned positions, on both the write and read paths, returned correct data at every point. See `DOCs/DRIVER-EVOLUTION-v1.6.0-to-v1.7.0.md` §4.7 and `DOCs/SPI-PHASE-MARGIN-API.md`.
 
 **The general lesson, which outlives this bug.** When a smart pin's timing is anchored by an instruction you execute, every instruction between that anchor and the dependent event is part of the timing contract. A hub-touching instruction in that window silently converts a timing constant into a function of memory layout. The v1.5.2 note in the source reads "removed WAITX, relying on natural settling" — that margin was a lottery the driver kept winning until a change in layout lost it.
 

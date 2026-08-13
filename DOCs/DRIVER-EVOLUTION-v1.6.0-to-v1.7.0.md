@@ -298,19 +298,21 @@ Four failures at 8, 15, 22, 29; 25 passing points. All three runs agree on the f
 
 `debugSetTxAlignDelay()` / `debugGetTxAlignDelay()` expose the knob under `SD_INCLUDE_DEBUG` for characterizing an unfamiliar board or socket. See `DOCs/SPI-PHASE-MARGIN-API.md`.
 
-### 4.7 Invariance verification — not measured
+### 4.7 Invariance verification
 
-The invariance claim rests on the instruction-sequence argument in §4.5, not on measurement across layouts.
+**Measured 2026-08-13 on the Gigastone 64GB (`$0000_0F14`), release configuration. All 32 points CORRECT — layout invariance holds.**
 
-`LAYOUT-SENSITIVITY-ROOTCAUSE-ANALYSIS.md` §6 step 4 specifies the acceptance test: with the final pad value, compile the reproducer with a never-executed `BYTE 0[N]` DAT block for N ∈ {1, 2, 4, 8, 12, 36, 60}, run each, all must pass. **That sweep has no recorded result** — no transcript in `tools/logs/`, no displacement vehicle in `diagnostic-tests/`.
+`writeSectorsRaw()`/`readSectorsRaw()` pass the caller's buffer pointer through to `RDFAST #0, p_buf` / `WRFAST #0, p_buf`, so the streamer's hub address can be swept at runtime. `diagnostic-tests/SD_buffer_alignment_sweep.spin2` walks byte offsets 0,4,8..28 — eight long-aligned positions, one full 32-byte period, addresses `$0000_93F4` through `$0000_9410` — in two phases: write buffer swept to isolate `RDFAST`, read buffer swept to isolate `WRFAST`. Two patterns at each point, classified by the same bit-shift classifier `SD_tx_phase_shmoo` uses.
 
-As specified the N set is also narrower than intended. Hub slices are long-granular, so those values reach four distinct slice positions with one duplicate; **N ∈ {4, 8, 12, 16, 20, 24, 28}** walks all eight once each.
+Every one of the 32 points returned `CORRECT`. Transcript: `tools/logs/SD_buffer_alignment_sweep_260813-155251.log`.
 
-What was run, with transcripts:
+**What this does and does not establish.** It establishes that, post-fix, the streamer's data-to-clock phase is independent of the buffer's hub address across every long-aligned position — which is exactly what the fix claims. It does **not** retroactively confirm the withdrawn pre-fix attribution in §4.3: with `RDFAST` now outside the phase window, buffer address would not matter under either competing hypothesis, so this result cannot discriminate between them. That question stays open and unmeasured.
 
-- The pad shmoo (§4.6), three runs — establishes phase behaviour and the passing band, at one layout.
-- Two full 27-suite sweeps at 574/574 on two cards (§6) — establishes the shipped configuration works. Incidentally spans the layouts of 27 different top-level files and their differing feature flags, but no result is attributed to layout position.
-- The decisive fork: a sector written by a failing build, read back by a passing build. Shifted data was present **on the card**, not introduced by the capture path — which located the defect on the write side.
+**Coverage this does not reach.** The single-sector path. `writeSectorRaw()` bytemoves the caller's data into the driver's internal `buf` and writes from there, so its streamer source address is fixed by the DAT layout and cannot be varied at runtime. Its layout coverage remains incidental — the regression suites' 27 top-level binaries place `buf` at 27 different addresses, all green — rather than designed.
+
+The original acceptance test in `LAYOUT-SENSITIVITY-ROOTCAUSE-ANALYSIS.md` §6 step 4 specified N ∈ {1, 2, 4, 8, 12, 36, 60} bytes of DAT displacement. That set reaches four distinct slice positions with one duplicate; the runtime sweep above reaches all eight, once each, without recompiling.
+
+**Also confirmed, run first as the decisive fork:** a sector written by a failing build, read back by a passing build. Shifted data was present **on the card**, not introduced by the capture path — which located the defect on the write side.
 
 ## 5. Regression suite defects
 
