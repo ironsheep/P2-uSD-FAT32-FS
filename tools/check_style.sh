@@ -26,25 +26,55 @@ cd "$ROOT"
 
 GREEN=$'\033[0;32m'; RED=$'\033[0;31m'; YELLOW=$'\033[1;33m'; CYAN=$'\033[0;36m'; NC=$'\033[0m'
 
-# Scope: everything under src/ -- driver, utilities, demo, examples, regression
-# suites. diagnostic-tests/ is deliberately excluded: those are throwaway probes we
-# write to answer one question, they never ship, and holding them to the shipped-code
-# bar would discourage writing them.
-mapfile -t FILES < <(git -C "$ROOT" ls-files --full-name 'src/*.spin2' 'src/**/*.spin2' 2>/dev/null | sort)
+# Scope: EVERY tracked .spin2 in the tree, wherever it lives (Stephen, 2026-08-13).
+#
+# It was src/-only until then, on the rationale that diagnostic-tests/ holds throwaway
+# probes that never ship, and holding them to the shipped-code bar would discourage
+# writing them. That rationale did not survive contact: an ungated tree accumulates
+# violations (10 of 41 diagnostic-tests files carry Rule 1.1 non-ASCII), and a new file
+# modelled on an ungated one inherits them -- which is exactly how
+# SD_buffer_alignment_sweep.spin2 was written with two Rule 2.1 violations copied from
+# SD_tx_phase_shmoo.spin2. Style is a property of the language, not of the audience.
+#
+# GRACE PERIOD, ends at the next release's checklist section 2. Findings OUTSIDE src/
+# report as DEBT and do NOT gate, so widening the scope cannot retroactively fail the
+# v1.7.0 tree that was already certified green under the old scope. Run with --strict
+# to make them gate. RELEASE-CHECKLIST section 2 carries the instruction to run
+# --strict next cycle, clear the debt, and then delete this grace path entirely.
+STRICT=0
+[[ "${1:-}" == "--strict" ]] && STRICT=1
+
+mapfile -t FILES < <(git -C "$ROOT" ls-files --full-name '*.spin2' 2>/dev/null | sort)
 
 if [[ ${#FILES[@]} -eq 0 ]]; then
-    echo -e "${RED}No .spin2 files found under src/ -- aborting.${NC}"
+    echo -e "${RED}No tracked .spin2 files found -- aborting.${NC}"
     exit 0
 fi
 
+gated=0
+for f in "${FILES[@]}"; do [[ "$f" == src/* ]] && gated=$((gated + 1)); done
+
 fails=0
 reviews=0
+debt=0
 
-fail()   { printf "  ${RED}FAIL${NC}    %-52s %s\n" "$1" "$2"; fails=$((fails + 1)); }
+# A finding is DEBT (non-gating) only when the grace period is in force AND it names a
+# .spin2 outside src/. Doc-fragment findings carry .md paths and are unaffected -- they
+# gate exactly as before.
+fail() {
+    if [[ $STRICT -eq 0 && "$1" == *.spin2 && "$1" != src/* ]]; then
+        printf "  ${YELLOW}DEBT${NC}    %-52s %s\n" "$1" "$2"; debt=$((debt + 1)); return
+    fi
+    printf "  ${RED}FAIL${NC}    %-52s %s\n" "$1" "$2"; fails=$((fails + 1))
+}
 review() { printf "  ${YELLOW}REVIEW${NC}  %-52s %s\n" "$1" "$2"; reviews=$((reviews + 1)); }
 
 echo ""
-echo -e "${CYAN}Spin2 style audit — ${#FILES[@]} files under src/${NC}"
+if [[ $STRICT -eq 1 ]]; then
+    echo -e "${CYAN}Spin2 style audit — ${#FILES[@]} tracked .spin2 files (STRICT: all gate)${NC}"
+else
+    echo -e "${CYAN}Spin2 style audit — ${#FILES[@]} tracked .spin2 files (${gated} under src/ gate; the rest report as DEBT)${NC}"
+fi
 echo ""
 
 # --- Rule 1.1: ASCII only -------------------------------------------------------
@@ -86,7 +116,7 @@ for f in "${FILES[@]}"; do
         }' "$f" 2>/dev/null | head -3)
     [[ -n "$hits" ]] && fail "$f" "illegal non-ASCII: $(echo "$hits" | tr '\n' ' ')"
 done
-[[ $fails -eq 0 ]] && echo -e "  ${GREEN}ASCII throughout, apart from box-drawing diagrams in comments.${NC}"
+[[ $fails -eq 0 && $debt -eq 0 ]] && echo -e "  ${GREEN}ASCII throughout, apart from box-drawing diagrams in comments.${NC}"
 
 # --- Rule 1.8: @"" is invalid ---------------------------------------------------
 echo ""
@@ -331,8 +361,18 @@ fi
 # --- summary -------------------------------------------------------------------
 
 echo ""
-if [[ $fails -eq 0 && $reviews -eq 0 ]]; then
+if [[ $debt -gt 0 ]]; then
+    echo ""
+    echo -e "${YELLOW}${debt} DEBT finding(s) outside src/${NC} — non-gating this cycle."
+    echo "  Scope widened 2026-08-13; these predate the widening or were written under it."
+    echo "  At the next release's checklist section 2: run ./check_style.sh --strict,"
+    echo "  clear every finding, then delete the grace path from this script."
+fi
+
+if [[ $fails -eq 0 && $reviews -eq 0 && $debt -eq 0 ]]; then
     echo -e "${GREEN}Conformant on every mechanical rule.${NC}"
+elif [[ $fails -eq 0 && $reviews -eq 0 ]]; then
+    echo -e "${GREEN}src/ conformant on every mechanical rule.${NC} ${YELLOW}${debt} finding(s) outside src/ carried as debt.${NC}"
 elif [[ $fails -eq 0 ]]; then
     echo -e "${GREEN}No FAIL findings.${NC} ${YELLOW}${reviews} REVIEW item(s) — a judgement call, see notes above.${NC}"
 else
