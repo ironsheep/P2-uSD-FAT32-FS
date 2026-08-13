@@ -206,15 +206,15 @@ PRI classify(rdOff, patSel) : verdict | idx, corr, prev, nxt, late, early, nCorr
     return V_OTHER
 
 
-PRI patByte(patSel, idx) : b
+PRI patByte(patSel, idx) : patValue
     if patSel == 0
-        b := idx & $FF                      ' pattern A: sequential
+        patValue := idx & $FF                ' pattern A: sequential
     else
-        b := (idx & 1) ? $55 : $AA          ' pattern B: alternating
+        patValue := (idx & 1) ? $55 : $AA    ' pattern B: alternating
 
 
-PRI verdictName(v) : p_str
-    case v
+PRI verdictName(verdictCode) : p_str
+    case verdictCode
         V_CORRECT: p_str := @"CORRECT"
         V_LATE1:   p_str := @"SHIFTED-LATE"
         V_EARLY1:  p_str := @"SHIFTED-EARLY"
