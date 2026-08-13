@@ -506,16 +506,24 @@ The driver starts at 400 kHz for card initialization (SD specification requireme
 
 Sector transfers use the P2's streamer engine for hardware-accelerated bulk data movement. The streamer moves data between hub RAM and the SPI pins at the full SPI clock rate with no per-byte cog intervention, which is where the driver's 4–5x throughput advantage over a byte loop comes from.
 
-**Read (512 bytes from card):**
+**Read (512 bytes from card) — `readSector()`:**
 ```
-wrfast  #1, p_buf                ' Prime FIFO for hub writes (before SCK reset)
-dirl    _sck                     ' Reset SCK base-period counter
-drvl    _sck                     ' Re-enable, counter restarts fresh
+wrfast  #0, p_buf                ' Prime FIFO for hub writes (before DIR-rise)
+setxfrq xfrq                     ' Streamer NCO rate (before DIR-rise)
+fltl    _sck                     ' Reset SCK smart pin
+dirh    _sck                     ' DIR=1 -- base-period counter starts cycling at hp
+wypin   clk_count, _sck          ' Y written 2 sysclks after DIRH, inside the first hp
 waitx   align_delay              ' Phase pad: sample point vs SCK edge
 xinit   stream_mode, init_phase  ' Start RX streamer
-wypin   clk_count, _sck          ' Start clock
 waitxfi                          ' Wait for 512 bytes received
 ```
+
+The read path's ordering constraint is not the same as the write path's. `WYPIN` must
+execute **before the first base-period boundary after DIR-rise**, or the first SCK
+transition slips by a full half-period when hp <= 6 — so `WYPIN` immediately follows
+`DIRH` with no instruction between it and the DIR-rise, and the phase pad is applied
+after. `readSectors()` uses `DIRL`+`DRVL` in place of `FLTL`+`DIRH` but keeps the same
+`WYPIN`-then-`WAITX`-then-`XINIT` order.
 
 **Write (512 bytes to card):**
 ```
