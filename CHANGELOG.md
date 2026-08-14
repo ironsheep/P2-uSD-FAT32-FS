@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.7.0] - 2026-08-13
 
-Sector writes no longer depend on where the linker put the driver, failures the driver detected but discarded are now reported, and files a PC wrote behave correctly.
+Data-losing file operations are fixed, failures the driver detected but discarded are now reported, and files a PC wrote behave correctly.
 
 ### New Features
 
@@ -20,37 +20,37 @@ Sector writes no longer depend on where the linker put the driver, failures the 
 
 ### Bug Fixes
 
-- Every sector write lands at the card as the bytes the caller gave. The write path could fetch its data inside the window where the clock pin was being set up, putting the data one bit out of phase with the clock, so the card stored a shifted sector while reporting success — and reading it back returned the shifted bytes, because the card had genuinely stored them that way. The fetch is now issued before that window opens, so the timing no longer depends on anything outside the instruction sequence. Reads were never affected.
-- `error()` describes the operation that just completed rather than the last failure since boot. Every method that issues a command records its outcome on both exit paths; the pure accessors are exempt so a diagnostic call cannot erase the error being diagnosed.
-- A metadata write that fails part-way no longer leaves the filesystem in a state that reports success. Cluster allocation, delete, directory creation, rename and move each check every write and leave the recoverable outcome on the card.
+- Renaming a file to a full 12-character 8.3 name (`DATALOG1.TXT`) keeps the file usable. The last character of the extension was written over the directory entry's attribute byte, which set the directory and system bits; the file then could not be opened and no longer appeared in listings. Names of 11 characters or fewer were unaffected.
+- File operations no longer match the volume-label entry. `rename()` on a dot-less label's name silently relabelled the volume; creating that name failed `E_FILE_EXISTS`, and opening it returned an empty file.
+- Seeking a write handle to another sector, and reading through a handle that has unwritten data, both flush that data first. Either one previously discarded it, and after a seek every later flush from that handle was addressed to a sector that does not exist.
 - An unreadable directory is no longer indistinguishable from a name that is not there, so a create no longer writes a second entry for a file that already exists.
+- A metadata write that fails part-way no longer leaves the filesystem in a state that reports success. Cluster allocation, delete, directory creation, rename and move each check every write and leave the recoverable outcome on the card.
+- Appending to an empty file created by a PC works; the first write previously failed `E_BAD_CHAIN` and the file could never be appended.
+- `createFileContiguous()` on a name that already exists leaves free space unchanged; the rejected call previously stranded its pre-allocated clusters until an fsck.
+- `changeDirectory()` onto an empty file returns `E_NOT_A_DIR` instead of succeeding and silently changing to the root directory.
+- FAT entries carrying the reserved high bits — legal on volumes written by other systems — no longer send cluster-chain walks and free-space counts to wrong results.
+- Multi-block writes and block erases invalidate the cached copies of the sectors they change, as single-sector writes already did. A later read could return the pre-write contents.
+- A read that fails part-way no longer leaves a valid cache entry over the incomplete data, and reading past the end of a cluster chain no longer leaves the previous sector's identity attached to a zero-filled buffer.
+- `unmount()` clears the cached sectors and cancels the background flush timer. A bare `unmount()` was followed about 200 ms later by the worker reading and writing FSInfo on a card the caller had finished with.
+- Closing a file whose final flush failed no longer records the new size and timestamp in the directory. The entry advertised bytes that never reached the card.
+- `mount()` on a corrupted card whose boot record claims zero sectors per cluster fails with `E_NOT_FAT32` instead of hanging the worker cog.
+- The write path no longer issues a hub fetch inside the window where the clock pin is being set up. Data landing in that window could end up one bit out of phase with the clock, so the card stored a shifted sector and reported success — the acknowledgement it returns proves packet framing, not payload. Reads were never affected. Observed once during development and not in any released build; see the upgrade note below.
+- `error()` describes the operation that just completed rather than the last failure since boot. Every method that issues a command records its outcome on both exit paths; the pure accessors are exempt so a diagnostic call cannot erase the error being diagnosed.
 - `sync()` reports failure, and keeps the pending directory entry so a later sync can still write it. It previously discarded the entry whether or not it reached the card.
 - `freeSpace()` returns 0 with an error rather than the partial count from an interrupted FAT scan.
 - `stop()` returns the status of its final unmount. It halts the worker cog immediately afterward, so nothing else could report it.
 - A worker-cog stack-guard violation reaches `error()` instead of only the debug channel, which the driver ships with disabled.
 - `getResult()` and `cancelAsync()` refuse a cog that did not start the operation. They release the API lock as their last act, so such a call released a lock the caller never held.
 - The card registers, high-speed negotiation and CMD6 paths report the specific failure instead of a single false. A card that lacks high-speed support is reported as lacking it, not as a failed query.
-- `SD_FAT32_fsck` recovers directory entries stranded past a spurious end-of-directory marker, rewriting the marker as a deleted-entry tombstone so a conforming scan reaches them. It previously freed their cluster chains and left the entries in place pointing at them.
-- `SD_FAT32_audit` and `SD_FAT32_fsck` check every sector read. An unchecked read left the previous sector in the buffer, which was then validated as directory entries or FAT data; a run that cannot read the media now says so and never reports `CLEAN`.
-- Renaming a file to a full 12-character 8.3 name (`DATALOG1.TXT`) keeps the file usable. The last character of the extension was written over the directory entry's attribute byte, which set the directory and system bits; the file then could not be opened and no longer appeared in listings. Names of 11 characters or fewer were unaffected.
-- Seeking a write handle to another sector, and reading through a handle that has unwritten data, both flush that data first. Either one previously discarded it, and after a seek every later flush from that handle was addressed to a sector that does not exist.
-- Closing a file whose final flush failed no longer records the new size and timestamp in the directory. The entry advertised bytes that never reached the card.
-- Multi-block writes and block erases invalidate the cached copies of the sectors they change, as single-sector writes already did. A later read could return the pre-write contents.
-- A read that fails part-way no longer leaves a valid cache entry over the incomplete data, and reading past the end of a cluster chain no longer leaves the previous sector's identity attached to a zero-filled buffer.
-- `unmount()` clears the cached sectors and cancels the background flush timer. A bare `unmount()` was followed about 200 ms later by the worker reading and writing FSInfo on a card the caller had finished with.
-- `attemptHighSpeed()` verifies the 50 MHz switch by re-reading a sector captured at the known-good speed and comparing. It previously wrote to the card at the unverified speed and compared the result against itself, so the check could not detect the failure it existed to catch. Nothing is written at an unverified speed.
-- `SD_card_identify` names Gigastone OEM cards (manufacturer ID `$12`) instead of reporting `Unknown`. `SD_card_characterize` already named them.
-- The read/write example no longer null-terminates its buffer at a negative index when a read fails. The demo shell reports a read that failed part-way through `type` and `hexdump` instead of printing a byte count as if the file were complete, reports a `copy` whose writes were refused or short instead of reporting the source size as copied, and distinguishes a card with no free space from a free-space query that failed.
-- Appending to an empty file created by a PC works; the first write previously failed `E_BAD_CHAIN` and the file could never be appended.
-- File operations no longer match the volume-label entry. `rename()` on a dot-less label's name silently relabelled the volume; creating that name failed `E_FILE_EXISTS`, and opening it returned an empty file.
-- `changeDirectory()` onto an empty file returns `E_NOT_A_DIR` instead of succeeding and silently changing to the root directory.
-- `createFileContiguous()` on a name that already exists leaves free space unchanged; the rejected call previously stranded its pre-allocated clusters until an fsck.
-- `mount()` on a corrupted card whose boot record claims zero sectors per cluster fails with `E_NOT_FAT32` instead of hanging the worker cog.
-- FAT entries carrying the reserved high bits — legal on volumes written by other systems — no longer send cluster-chain walks and free-space counts to wrong results.
 - A create that grows a directory reports the actual failure; `E_IO_ERROR` from a failed FAT write is no longer reported as `E_DISK_FULL`.
 - A blocking call from the cog that owns an in-flight async operation returns `E_ASYNC_BUSY` — from every API, info getters included — instead of deadlocking; a losing concurrent `start*()` gets the same answer promptly instead of blocking for the winner's operation.
 - `getResult()` and `cancelAsync()` report `E_STACK_OVERFLOW` when the worker's stack guard was violated during the operation, as blocking calls already do.
 - `setDate()` rejects every out-of-range date or time field with `E_INVALID_PARAM`; negative values were previously accepted.
+- `attemptHighSpeed()` verifies the 50 MHz switch by re-reading a sector captured at the known-good speed and comparing. It previously wrote to the card at the unverified speed and compared the result against itself, so the check could not detect the failure it existed to catch. Nothing is written at an unverified speed.
+- `SD_FAT32_fsck` recovers directory entries stranded past a spurious end-of-directory marker, rewriting the marker as a deleted-entry tombstone so a conforming scan reaches them. It previously freed their cluster chains and left the entries in place pointing at them.
+- `SD_FAT32_audit` and `SD_FAT32_fsck` check every sector read. An unchecked read left the previous sector in the buffer, which was then validated as directory entries or FAT data; a run that cannot read the media now says so and never reports `CLEAN`.
+- `SD_card_identify` names Gigastone OEM cards (manufacturer ID `$12`) instead of reporting `Unknown`. `SD_card_characterize` already named them.
+- The read/write example no longer null-terminates its buffer at a negative index when a read fails. The demo shell reports a read that failed part-way through `type` and `hexdump` instead of printing a byte count as if the file were complete, reports a `copy` whose writes were refused or short instead of reporting the source size as copied, and distinguishes a card with no free space from a free-space query that failed.
 
 ### Upgrade / recovery note
 
