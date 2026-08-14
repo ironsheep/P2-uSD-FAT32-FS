@@ -26,7 +26,14 @@ cd "$SCRIPT_DIR"
 GREEN=$'\033[0;32m'; RED=$'\033[0;31m'; YELLOW=$'\033[1;33m'; CYAN=$'\033[0;36m'; NC=$'\033[0m'
 
 PROBE="../diagnostic-tests/SD_prefix_single_probe.spin2"
-PADS=(BASELINE PAD_4 PAD_8 PAD_12 PAD_16 PAD_20 PAD_24 PAD_28)
+PADS=(BASELINE PAD_4 PAD_8 PAD_12 PAD_16 PAD_20 PAD_24 PAD_28 PAD_32)
+# PAD_32 was added after the first sweep: the baseline landed on long-slice 6, not 0, and
+# PAD_24 duplicated it -- so seven of eight positions were covered and slice 0 was blind.
+
+# Two passes. PRE-FIX answers "were released users exposed on this path". FIXED answers
+# "does the v1.7.0 hoist hold across layouts on the path 41 call sites use" -- which the
+# multi-block alignment sweep never covered, because it can only vary a CALLER buffer.
+DRIVERS=("PREFIX:" "FIXED:USE_FIXED_DRIVER")
 
 echo ""
 echo -e "${CYAN}Pre-fix SINGLE-BLOCK write sweep — driver as tagged at v1.6.1${NC}"
@@ -38,12 +45,14 @@ other=0
 results=()
 addrs=()
 
-for pad in "${PADS[@]}"; do
-    if [[ "$pad" == "BASELINE" ]]; then
-        out=$(./run_test.sh "$PROBE" 2>&1)
-    else
-        out=$(./run_test.sh "$PROBE" -D "$pad" 2>&1)
-    fi
+for drv in "${DRIVERS[@]}"; do
+  drvName="${drv%%:*}"; drvDef="${drv#*:}"
+  echo -e "${CYAN}--- ${drvName} driver ---${NC}"
+  for pad in "${PADS[@]}"; do
+    args=()
+    [[ -n "$drvDef" ]] && args+=(-D "$drvDef")
+    [[ "$pad" != "BASELINE" ]] && args+=(-D "$pad")
+    out=$(./run_test.sh "$PROBE" "${args[@]}" 2>&1)
 
     line=$(echo "$out" | sed 's/\x1b\[[0-9;]*m//g' | grep -oE '\* pad=[^:]+: A=[A-Z-]+  B=[A-Z-]+' | head -1)
     addr=$(echo "$out" | sed 's/\x1b\[[0-9;]*m//g' | grep -oE 'DRIVER INTERNAL BUF: \$?[0-9A-Fa-f_]+' | grep -oE '[0-9A-Fa-f_]+$' | head -1)
@@ -63,7 +72,9 @@ for pad in "${PADS[@]}"; do
     else
         printf "  %-10s ${GREEN}%s${NC}\n" "$pad" "$line"
     fi
-    results+=("$pad: $line")
+    results+=("$drvName $pad: $line")
+  done
+  echo ""
 done
 
 echo ""
@@ -82,20 +93,34 @@ fi
 
 echo ""
 echo "============================================================"
-if [[ $shifted -gt 0 ]]; then
-    echo -e "${RED}${shifted} of ${#PADS[@]} pad positions store SHIFTED data.${NC}"
-    echo "  The SINGLE-BLOCK path is exposed in released code. Ordinary file writes"
-    echo "  could corrupt data on every release from v0.9.3 through v1.6.1."
-    echo "  The v1.7.0 upgrade note must be STRENGTHENED."
+prefixShift=$(printf "%s\n" "${results[@]}" | grep -c "^PREFIX .*SHIFTED" || true)
+fixedShift=$(printf "%s\n" "${results[@]}" | grep -c "^FIXED .*SHIFTED" || true)
+
+if [[ "$fixedShift" -gt 0 ]]; then
+    echo -e "${RED}THE FIX DOES NOT HOLD: ${fixedShift} shifted position(s) on the CURRENT driver.${NC}"
+    echo "  This is a live defect in v1.7.0 on the path every filesystem write uses."
+    echo "  STOP. Do not ship. Report which pads failed."
+elif [[ "$prefixShift" -gt 0 ]]; then
+    echo -e "${RED}${prefixShift} PRE-FIX position(s) store SHIFTED data.${NC}"
+    echo "  Ordinary file writes in released builds could corrupt data, on every release"
+    echo "  from v0.9.3 through v1.6.1. The v1.7.0 upgrade note must be STRENGTHENED."
+    echo "  The current driver is clean at every position tested."
+elif [[ $shifted -gt 0 ]]; then
+    echo -e "${RED}${shifted} shifted position(s) -- see the per-pass lines above.${NC}"
 elif [[ $other -gt 0 ]]; then
     echo -e "${YELLOW}${other} inconclusive position(s).${NC} Not an answer either way — resolve"
     echo "  the instrument before drawing a conclusion."
 else
-    echo -e "${GREEN}All ${#PADS[@]} pad positions store correct data.${NC}"
-    echo "  The single-block path — every filesystem write — is NOT exposed."
-    echo "  Released exposure was confined to raw multi-block users (writeSectorsRaw),"
-    echo "  which SD_prefix_write_probe already confirmed at 1 position in 8."
-    echo "  The v1.7.0 upgrade note should say that specifically, not warn every user."
+    echo -e "${GREEN}All ${#PADS[@]} positions correct on BOTH drivers.${NC}"
+    echo ""
+    echo "  PRE-FIX: the single-block path — every filesystem write — was NOT exposed in"
+    echo "  released code at any long position. Released exposure was confined to raw"
+    echo "  multi-block users (writeSectorsRaw), which SD_prefix_write_probe confirmed"
+    echo "  fails at 1 position in 8. The v1.7.0 upgrade note should say exactly that"
+    echo "  rather than warning every user."
+    echo ""
+    echo "  FIXED: the v1.7.0 hoist holds across every layout position on the path 41"
+    echo "  call sites use — coverage the multi-block alignment sweep could not reach."
 fi
 echo "============================================================"
 echo ""

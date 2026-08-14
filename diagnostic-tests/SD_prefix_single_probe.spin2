@@ -62,7 +62,11 @@ CON
 #pragma exportdef SD_INCLUDE_ALL
 
 OBJ
+#ifdef USE_FIXED_DRIVER
+    sd : "micro_sd_fat32_fs"                        ' CURRENT driver -- verifies the fix
+#else
     sd : "micro_sd_fat32_fs_v161"                   ' PRE-FIX driver, vendored from v1.6.1
+#endif
 
 VAR
     BYTE    txBuf[512]
@@ -93,12 +97,21 @@ DAT
 #ifdef PAD_28
         padBlock        BYTE    0[28]
 #endif
+#ifdef PAD_32
+'' Added after the first sweep. The baseline landed on slice 6, not slice 0, and pad 24
+'' duplicated it -- so seven of eight long positions were covered and slice 0 was blind.
+        padBlock        BYTE    0[32]
+#endif
 
 PUB go() | verdictA, verdictB, initResult, dSec, dType, dTok, dB0, dB1, dB2, dB3, dPbuf
 
     debug(" ")
     debug("============================================================")
-    debug("  PRE-FIX SINGLE-BLOCK probe -- driver as tagged at v1.6.1")
+#ifdef USE_FIXED_DRIVER
+    debug("  SINGLE-BLOCK probe -- CURRENT driver (fix verification)")
+#else
+    debug("  SINGLE-BLOCK probe -- driver as tagged at v1.6.1 (PRE-FIX)")
+#endif
     debug("============================================================")
     debug("  Path under test: writeSectorRaw -> writeSector (41 call sites,")
     debug("                   every filesystem write goes through it)")
@@ -221,6 +234,9 @@ PRI padName() : p_str
 #endif
 #ifdef PAD_28
     p_str := @"28"
+#endif
+#ifdef PAD_32
+    p_str := @"32"
 #endif
 
 
