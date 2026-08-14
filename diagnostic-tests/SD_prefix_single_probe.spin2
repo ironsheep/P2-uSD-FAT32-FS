@@ -1,0 +1,235 @@
+'' =================================================================================================
+''
+''   File....... SD_prefix_single_probe.spin2
+''   Purpose.... The question SD_prefix_write_probe left open: does the SINGLE-BLOCK write
+''               path -- the one every filesystem operation uses -- store shifted data in
+''               released code?
+''
+''               WHY A SECOND PROBE. SD_prefix_write_probe proved that v1.6.1's MULTI-BLOCK
+''               path stores one-bit-late data at one caller-buffer position in eight. But
+''               multi-block has exactly ONE caller in v1.6.1 -- the CMD_WRITE_SECTORS arm,
+''               reachable only from the public writeSectorsRaw(). The single-block
+''               writeSector() has 41 call sites: file data, directory entries, FAT
+''               sectors, FSInfo. That is the path that decides whether ordinary users
+''               were exposed, and the first probe could not reach it.
+''
+''               WHY IT NEEDS SEPARATE BUILDS. writeSectorRaw() bytemoves the caller's
+''               data into the driver's INTERNAL buffer and writes from there, so the
+''               streamer's source address is fixed by the build's DAT layout and cannot be
+''               swept at runtime. The only way to move it is to move the layout -- hence a
+''               never-executed pad block in this top file, one build per size.
+''
+''               PAD_n displaces this object's DAT by n bytes, which shifts the driver
+''               object that follows it. n covers one full 32-byte period in long steps, so
+''               the internal buffer visits all eight long-aligned positions across the
+''               seven builds plus the unpadded baseline.
+''
+''   HOW TO RUN.  tools/run_prefix_single_sweep.sh walks every pad value and collects the
+''               verdicts. Do not read a single build's result as the answer -- the whole
+''               point is the sweep.
+''
+''   READING THE RESULT
+''
+''     ANY SHIFTED  -- ordinary file writes in released builds could corrupt data. The
+''                     v1.7.0 upgrade note must be STRENGTHENED, and the exposure is every
+''                     user of every release from v0.9.3 through v1.6.1.
+''
+''     ALL CORRECT  -- exposure in released code was confined to raw multi-block users
+''                     (writeSectorsRaw), which SD_prefix_write_probe already confirmed.
+''                     File I/O was not affected. The upgrade note should say exactly that
+''                     rather than warning every user.
+''
+''   Author..... Iron Sheep Productions, LLC
+''   Updated.... 14 AUG 2026
+''
+'' =================================================================================================
+
+CON
+    _CLKFREQ = 350_000_000
+    DEBUG_BAUD = 2_000_000
+
+    SD_CS = 60, SD_MOSI = 59, SD_MISO = 58, SD_SCK = 61
+
+    TEST_LBA = 100_000                              ' Sanctioned scratch LBA
+
+    V_CORRECT = 0
+    V_LATE    = 1
+    V_EARLY   = 2
+    V_OTHER   = 3
+    V_WRFAIL  = 4
+    V_RDFAIL  = 5
+
+#pragma exportdef SD_INCLUDE_ALL
+
+OBJ
+    sd : "micro_sd_fat32_fs_v161"                   ' PRE-FIX driver, vendored from v1.6.1
+
+VAR
+    BYTE    txBuf[512]
+    BYTE    rxBuf[512]
+
+DAT
+'' Never executed, never referenced. Its only job is to displace the DAT that follows,
+'' which moves the driver object -- and with it the internal buffer writeSector() streams
+'' from. Exactly one PAD_n is defined per build.
+#ifdef PAD_4
+        padBlock        BYTE    0[4]
+#endif
+#ifdef PAD_8
+        padBlock        BYTE    0[8]
+#endif
+#ifdef PAD_12
+        padBlock        BYTE    0[12]
+#endif
+#ifdef PAD_16
+        padBlock        BYTE    0[16]
+#endif
+#ifdef PAD_20
+        padBlock        BYTE    0[20]
+#endif
+#ifdef PAD_24
+        padBlock        BYTE    0[24]
+#endif
+#ifdef PAD_28
+        padBlock        BYTE    0[28]
+#endif
+
+PUB go() | verdictA, verdictB, initResult, dSec, dType, dTok, dB0, dB1, dB2, dB3, dPbuf
+
+    debug(" ")
+    debug("============================================================")
+    debug("  PRE-FIX SINGLE-BLOCK probe -- driver as tagged at v1.6.1")
+    debug("============================================================")
+    debug("  Path under test: writeSectorRaw -> writeSector (41 call sites,")
+    debug("                   every filesystem write goes through it)")
+    debug("  Source buffer:   the driver's INTERNAL buf -- fixed by DAT layout")
+    debug("  Pad this build:  ", zstr_(padName()))
+    debug(" ")
+
+    initResult := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    if initResult < 0
+        debug("ERROR: initCardOnly failed: ", sdec_(initResult))
+        waitms(500)
+        debug("END_SESSION")
+        return
+
+    ' PROVE THE INDEPENDENT VARIABLE ACTUALLY MOVED.
+    ' A pad that displaces this file's DAT but NOT the driver's would make the whole
+    ' sweep a null experiment that reports all-correct and means nothing. So read the
+    ' driver's own internal buffer pointer and print it: across builds this address MUST
+    ' change, and the sweep script checks that it does.
+    sd.readSectorRaw(TEST_LBA, @rxBuf)
+    sd.debugGetReadSectorDiag(@dSec, @dType, @dTok, @dB0, @dB1, @dB2, @dB3, @dPbuf)
+    debug("  DRIVER INTERNAL BUF: $", uhex_long_(dPbuf), "   <== must differ across pads")
+    debug(" ")
+
+    verdictA := onePoint(0)
+    verdictB := onePoint(1)
+
+    debug("* pad=", zstr_(padName()), ": A=", zstr_(verdictName(verdictA)), "  B=", zstr_(verdictName(verdictB)))
+    debug(" ")
+    if verdictA == V_LATE or verdictA == V_EARLY or verdictB == V_LATE or verdictB == V_EARLY
+        debug("* SHIFTED at this pad -- the SINGLE-BLOCK path can store shifted data.")
+        debug("* Ordinary file writes in released builds were exposed. Report this pad value.")
+    elseif verdictA <> V_CORRECT or verdictB <> V_CORRECT
+        debug("* INCONCLUSIVE at this pad -- transfer failed or content wrong but not a shift.")
+    else
+        debug("* correct at this pad")
+    debug(" ")
+    waitms(500)
+    debug("END_SESSION")
+
+
+PRI onePoint(patSel) : verdict | idx, result
+
+    repeat idx from 0 to 511
+        txBuf[idx] := patByte(patSel, idx)
+
+    result := sd.writeSectorRaw(TEST_LBA, @txBuf)    ' single-block: bytemoves into internal buf
+    if result < 0
+        return V_WRFAIL
+
+    bytefill(@rxBuf, $5A, 512)
+    result := sd.readSectorRaw(TEST_LBA, @rxBuf)
+    if result < 0
+        return V_RDFAIL
+
+    return classify(patSel)
+
+
+'' Compare against an INDEPENDENTLY GENERATED expectation, never against txBuf.
+PRI classify(patSel) : verdict | idx, corr, prev, nxt, late, early, nCorr, nLate, nEarly, nCheck
+
+    nCorr := 0
+    nLate := 0
+    nEarly := 0
+    nCheck := 0
+
+    repeat idx from 1 to 510
+        corr  := patByte(patSel, idx)
+        prev  := patByte(patSel, idx - 1)
+        nxt   := patByte(patSel, idx + 1)
+        late  := ((corr >> 1) | ((prev & 1) << 7)) & $FF
+        early := ((corr << 1) | ((nxt >> 7) & 1)) & $FF
+        nCheck++
+        if rxBuf[idx] == corr
+            nCorr++
+        elseif rxBuf[idx] == late
+            nLate++
+        elseif rxBuf[idx] == early
+            nEarly++
+
+    if nCorr == nCheck
+        return V_CORRECT
+    if (nLate * 100 / nCheck) >= 98
+        return V_LATE
+    if (nEarly * 100 / nCheck) >= 98
+        return V_EARLY
+    return V_OTHER
+
+
+'' Sequential and alternating. Neither is degenerate: an all-$FF or all-$00 fill cannot
+'' separate "stored correctly" from "stored one bit late".
+PRI patByte(patSel, idx) : value
+
+    if patSel == 0
+        value := idx & $FF
+    else
+        value := (idx & 1) ? $55 : $AA
+
+
+PRI padName() : p_str
+
+    p_str := @"0 (baseline)"
+#ifdef PAD_4
+    p_str := @"4"
+#endif
+#ifdef PAD_8
+    p_str := @"8"
+#endif
+#ifdef PAD_12
+    p_str := @"12"
+#endif
+#ifdef PAD_16
+    p_str := @"16"
+#endif
+#ifdef PAD_20
+    p_str := @"20"
+#endif
+#ifdef PAD_24
+    p_str := @"24"
+#endif
+#ifdef PAD_28
+    p_str := @"28"
+#endif
+
+
+PRI verdictName(verdictCode) : p_str
+
+    case verdictCode
+        V_CORRECT: p_str := @"CORRECT"
+        V_LATE:    p_str := @"SHIFTED-LATE"
+        V_EARLY:   p_str := @"SHIFTED-EARLY"
+        V_OTHER:   p_str := @"OTHER"
+        V_WRFAIL:  p_str := @"WRITE-FAIL"
+        other:     p_str := @"READ-FAIL"

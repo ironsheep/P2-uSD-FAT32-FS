@@ -60,6 +60,7 @@ usage() {
     echo "  -t <sec>   - Timeout in seconds (default: 60)"
     echo "  --external - Compile with -D SD_PINS_EXTERNAL (external SD header, base pin 16)"
     echo "               Default (no flag): P2 Edge onboard SD slot."
+    echo "  -D <sym>   - Pass -D <sym> through to pnut-ts (repeatable)"
     echo "  --stack-report - Compile with -D SD_INCLUDE_STACK_REPORT (measurement build:"
     echo "               enlarged worker stack + per-suite watermark line; see the"
     echo "               STACK_SIZE CON in the driver)"
@@ -85,6 +86,7 @@ shift
 TIMEOUT_SECS="60"
 PIN_DEFINE_FLAG=""
 STACK_DEFINE_FLAG=""
+EXTRA_DEFINE_FLAGS=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -103,6 +105,16 @@ while [[ $# -gt 0 ]]; do
         --stack-report)
             STACK_DEFINE_FLAG="-D SD_INCLUDE_STACK_REPORT"
             shift
+            ;;
+        -D|--define)
+            # Pass an arbitrary -D through to pnut-ts. Added 2026-08-14 for the
+            # DAT-displacement probes, which need one build per pad size and cannot
+            # express that as a runtime parameter. Accumulates, so several may be given.
+            if [[ -z "${2:-}" ]]; then
+                echo -e "${RED}Error: $1 requires a symbol${NC}"; usage
+            fi
+            EXTRA_DEFINE_FLAGS="${EXTRA_DEFINE_FLAGS} -D $2"
+            shift 2
             ;;
         -h|--help) usage ;;
         *) echo -e "${RED}Error: Unknown option: $1${NC}"; usage ;;
@@ -179,7 +191,7 @@ if [[ "$USE_CACHE" == "0" ]]; then
 else
     CACHE_FLAGS="--cache --cache-dir $CACHE_DIR"
 fi
-COMPILE_CMD="pnut-ts -d $CACHE_FLAGS $PIN_DEFINE_FLAG $STACK_DEFINE_FLAG -I $SRC_PATH -I $UTILS_PATH -I $DEMO_PATH -I $REGTEST_PATH $BASENAME.spin2"
+COMPILE_CMD="pnut-ts -d $CACHE_FLAGS $PIN_DEFINE_FLAG $STACK_DEFINE_FLAG $EXTRA_DEFINE_FLAGS -I $SRC_PATH -I $UTILS_PATH -I $DEMO_PATH -I $REGTEST_PATH $BASENAME.spin2"
 echo "  Command: $COMPILE_CMD"
 
 if ! $COMPILE_CMD; then
