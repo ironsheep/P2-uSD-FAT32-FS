@@ -69,13 +69,28 @@ Reads were never affected. This was measured on one card at 350 MHz / 25 MHz SPI
 
 ### Breaking Changes
 
-- **BREAKING**: `eofHandle()` and `isFileContiguous()` return a boolean only. They previously returned `TRUE`, `FALSE`, or a negative error code, and `TRUE` is -1 in Spin2 while `E_TIMEOUT` is also -1 — there was no correct way to call either one. `eofHandle()` reports `TRUE` when the query fails, `isFileContiguous()` reports `FALSE`, and `error()` distinguishes.
-- **BREAKING**: `readHandle()` and `writeHandle()` return their error code when nothing at all was transferred, so a return of 0 from `readHandle()` now means end of file and nothing else. A read that failed on its first sector previously returned 0, and a file on a failing card was processed as a complete file. A failure part-way through still returns the partial count. A read loop that stops on `n =< 0` or `n > 0` needs no change; one that stops only on `n == 0` will not terminate on a persistent failure.
-- **BREAKING**: `changeDirectory()` on a name with no entry returns `E_FILE_NOT_FOUND` (-40). `E_NOT_A_DIR` (-43) now means the name exists and is not a directory — the two conditions previously shared it. Code branching on `E_NOT_A_DIR` to mean "no such directory" must change. The volume label, invisible to file operations everywhere, reports `E_FILE_NOT_FOUND` rather than leaking its existence through the error code.
-- **BREAKING**: `unmount()` on a card with invalid FSInfo signatures reports the new `E_BAD_FSINFO` (-24) rather than `E_IO_ERROR`.
+**Five changes can affect existing code.** Only the first can break a program that
+currently works — the rest surface as a different error code than before.
+
+| If your code… | …then |
+|---|---|
+| ends a read loop **only** on `n == 0` | it will not terminate on a persistent read failure. Change to `n =< 0`. |
+| tests `eofHandle()` or `isFileContiguous()` for a negative value | remove the test; both return a boolean now |
+| branches on `E_NOT_A_DIR` to mean "no such directory" | test `E_FILE_NOT_FOUND` instead |
+| deletes a directory without emptying it, or a file with a handle still open | close/empty first; the delete now refuses |
+| matches `unmount()`'s exact error code on a corrupt card | it is now `E_BAD_FSINFO` (-24) |
+
+Nothing else in this release requires a source change.
+
+- **BREAKING**: `readHandle()` and `writeHandle()` return their error code when nothing at all was transferred, so 0 from `readHandle()` now means end of file and nothing else. A read that failed on its first sector previously returned 0, and a file on a failing card was processed as a complete file. A partial transfer still returns the partial count.
+- **BREAKING**: `eofHandle()` and `isFileContiguous()` return a boolean only. They previously returned `TRUE`, `FALSE`, or a negative error code — and `TRUE` is -1 in Spin2 while `E_TIMEOUT` is also -1, so there was no correct way to call either. On a failed query `eofHandle()` reports `TRUE` and `isFileContiguous()` reports `FALSE`; `error()` distinguishes.
+- **BREAKING**: `changeDirectory()` on a name with no entry returns `E_FILE_NOT_FOUND` (-40). `E_NOT_A_DIR` (-43) now means the name exists and is not a directory; the two conditions previously shared it.
+- **BREAKING**: `deleteFile()` refuses two cases it used to accept, and deletes nothing in either. A directory that still contains entries returns `E_DIR_NOT_EMPTY` (-44) — it previously freed only the directory's own chain, leaving every file inside allocated and unreachable until reformat. A file that any handle still has open returns `E_FILE_OPEN` (-47) — the delete previously succeeded, after which the background flush could write that handle's data into a cluster already given to another file. Empty directories before removing them, children before parents; there is no recursive delete.
+- **BREAKING**: `unmount()` on a card with invalid FSInfo signatures reports `E_BAD_FSINFO` (-24) rather than `E_IO_ERROR`.
+
+Additive, listed here because they belong with the above:
+
 - New error constants: `E_BAD_FSINFO` (-24), `E_BAD_CHAIN` (-25), `E_STACK_OVERFLOW` (-26), `E_DIR_NOT_EMPTY` (-44), `E_FILE_OPEN` (-47), `E_NO_COG` (-65). `E_NO_COG` replaces `E_NO_LOCK` when `start()` cannot get a cog. `E_FILE_NOT_OPEN` (-45) is documented as reserved; no code path produces it.
-- **BREAKING**: `deleteFile()` on a directory that still contains entries returns the new `E_DIR_NOT_EMPTY` (-44) and deletes nothing. It previously removed the directory and freed only the directory's own cluster chain, leaving every file inside it allocated and unreachable — space that stayed lost until the card was reformatted. Empty a directory before removing it, children before parents. There is no recursive delete.
-- **BREAKING**: `deleteFile()` on a file that any handle still has open returns the new `E_FILE_OPEN` (-47) and deletes nothing. The delete previously succeeded, after which the background flush could write that handle's buffered data into a cluster that had been freed and given to another file. Close the handle first.
 - `stop()` and `closeDirectoryHandle()` return a status where they previously returned nothing. Existing calls compile and behave as before.
 
 ## [1.6.1] - 2026-07-27
