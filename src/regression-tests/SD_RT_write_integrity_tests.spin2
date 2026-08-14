@@ -152,14 +152,26 @@ PRI multiFileGroup() | hA, hB, hC, len, off, verdict
     utils.startTest(@"Three files written interleaved")
     utils.setCheckCountPerTest(3)
 
+    ' ESTABLISH THE PRECONDITION. The boundary groups above write through fileA and leave
+    ' it on the card, so createFileNew() here returns E_FILE_EXISTS and every check below
+    ' fails for a reason that has nothing to do with write integrity. roundTripOne deletes
+    ' before creating for exactly this reason; this group did not, and that is what failed
+    ' on its first hardware run. A test must not inherit state from the test before it.
+    sd.deleteFile(@fileA)                                   ' ignore result -- may not exist
+    sd.deleteFile(@fileB)
+    sd.deleteFile(@fileC)
+
     hA := sd.createFileNew(@fileA)
     hB := sd.createFileNew(@fileB)
     hC := sd.createFileNew(@fileC)
 
     if hA < 0 or hB < 0 or hC < 0
-        utils.evaluateSubBool(false, @"three handles opened", true)
-        utils.evaluateSubBool(false, @"(skipped)", true)
-        utils.evaluateSubBool(false, @"(skipped)", true)
+        ' Report the handle values, not a bare false: a precondition failure and a write
+        ' failure look identical in the score line otherwise.
+        debug("    handles: A=", sdec_(hA), " B=", sdec_(hB), " C=", sdec_(hC))
+        utils.evaluateSubValue(hA, @"handle A opened (>=0)", 0)
+        utils.evaluateSubValue(hB, @"handle B opened (>=0)", 0)
+        utils.evaluateSubValue(hC, @"handle C opened (>=0)", 0)
         utils.showSubTestResults()
         return
 
