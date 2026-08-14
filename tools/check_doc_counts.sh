@@ -83,6 +83,12 @@ while IFS=: read -r file line _; do
     [[ -z "$file" ]] && continue
     n=$(sed -n "${line}p" "$file" | grep -oE '[0-9]{3,}( [a-z]+)* tests?' | grep -oE '^[0-9]+' | head -1)
     [[ -z "$n" ]] && continue
+    # HISTORICAL-RECORD EXEMPTION. A line marked <!-- doc-count: historical --> states
+    # what a PAST release was certified at, not the current inventory. Forcing those to
+    # the live number would make the record false -- v1.7.0 really was certified at 574
+    # tests across 27 suites, and a later suite addition does not change that. The marker
+    # is an HTML comment, so it is invisible in rendered Markdown.
+    sed -n "${line}p" "$file" | grep -q 'doc-count: historical' && continue
     report "test total" "$README_TOTAL" "$n" "$file:$line"
 done < <(grep -rnE '[0-9]{3,}( [a-z]+)* tests?' "${DOC_SET[@]}" 2>/dev/null)
 
@@ -91,6 +97,7 @@ while IFS=: read -r file line _; do
     [[ -z "$file" ]] && continue
     n=$(sed -n "${line}p" "$file" | grep -oE '[0-9]{1,3} test (suites|files)' | grep -oE '^[0-9]+' | head -1)
     [[ -z "$n" ]] && continue
+    sed -n "${line}p" "$file" | grep -q 'doc-count: historical' && continue
     report "suite count" "$SUITES_ON_DISK" "$n" "$file:$line"
 done < <(grep -rnE '[0-9]{1,3} test (suites|files)' "${DOC_SET[@]}" 2>/dev/null)
 

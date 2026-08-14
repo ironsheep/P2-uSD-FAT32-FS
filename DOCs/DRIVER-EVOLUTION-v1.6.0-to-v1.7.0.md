@@ -367,7 +367,7 @@ Fault-injection hooks are gated behind `SD_INCLUDE_TEST_HOOKS`, enabled by `SD_I
 
 ## 6. Verification basis for v1.7.0
 
-**Suite:** 27 suites, 574 tests.
+**Suite:** 27 suites, 574 tests, as certified at v1.7.0. <!-- doc-count: historical -->
 
 **Certification:** two full sweeps, `tools/run_regression.sh --include-format`, each preceded by a sweep-start `fsck` and closed by a structural audit. Zero infrastructure retries.
 

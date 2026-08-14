@@ -43,8 +43,9 @@ Automated regression test suite for the P2 SD Card Driver. All tests execute on 
 | **Async I/O Tests** | Non-blocking read/write, isComplete polling, cancelAsync, multi-cog interleave, per-cog ownership, same-cog busy guard, failure paths (injected read failure, partial count, collect-time errors) | 13 |
 | **Defrag Tests** | fileFragments, isFileContiguous, compactFile, createFileContiguous, duplicate-create leak witness, next-fit allocation | 13 |
 | **FAT Chain Tests** | Cross-boundary overwrite follows the FAT chain; mid-sector append preserves leading bytes | 2 |
-| | **Additional Total** | **243** |
-| | **Grand Total (27 suites)** | **574** |
+| **Write Integrity Tests** | Content written is content stored: byte-level verification against an independently generated pattern across sector boundaries (511/512/513, 1023/1024/1025), cluster boundaries derived from `clusterBytes()` at run time, three files written interleaved, and a raw multi-block round-trip that bypasses the file layer. Classifies a mismatch as SHIFTED-LATE / SHIFTED-EARLY / OTHER so a write-phase fault is named on sight | 13 |
+| | **Additional Total** | **256** |
+| | **Grand Total (28 suites)** | **587** |
 
 **How a test is counted.** One test is one *executed* `utils.startTest()` call — the same
 unit the framework prints as `* Test #N`. Every suite, including `SD_RT_multiblock_tests`

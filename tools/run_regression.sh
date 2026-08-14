@@ -608,6 +608,7 @@ SUITES+=(
 SUITES+=(
     "SD_RT_file_ops_tests.spin2:120"
     "SD_RT_read_write_tests.spin2:90"
+    "SD_RT_write_integrity_tests.spin2:180"
     "SD_RT_fatchain_tests.spin2:120"
     "SD_RT_multihandle_tests.spin2:120"
 )
@@ -684,6 +685,26 @@ if [[ -n "$FROM_SUITE" ]]; then
     echo "  Total suites: ${TOTAL_SUITES} (running ${RUN_COUNT} from #$((START_INDEX + 1)))"
 else
     echo "  Test suites: ${TOTAL_SUITES}"
+fi
+
+# TREE PROVENANCE -- stamp what was actually built, not just how.
+#
+# Added 2026-08-14. Pinning which tree produced the 2026-08-06..08-11 sweeps took
+# compiling sixteen commits and matching binary byte sizes, because the transcripts
+# recorded the suite count, the card and the pin config but never the commit. The
+# answer mattered: every sweep that showed the write-path failure turned out to have
+# run on a tree matching NO commit -- uncommitted bench edits -- which is the single
+# most important fact about that defect's exposure. Do not remove this.
+#
+# --dirty is the load-bearing half. A clean describe is reproducible; a dirty one says
+# "this result cannot be tied to any commit" and must be read that way.
+GIT_STAMP=$(git -C "$PROJECT_ROOT" describe --tags --always --dirty 2>/dev/null || echo "unknown")
+GIT_SHA=$(git -C "$PROJECT_ROOT" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+GIT_BRANCH=$(git -C "$PROJECT_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+echo "  Tree:        ${GIT_STAMP}  (${GIT_BRANCH} @ ${GIT_SHA})"
+if [[ "$GIT_STAMP" == *-dirty ]]; then
+    echo "               ^^ UNCOMMITTED CHANGES -- this result is not reproducible from"
+    echo "                  any commit. Commit before a certifying run."
 fi
 echo "  Format test: $([[ "$INCLUDE_FORMAT" == true ]] && echo "INCLUDED (destructive!)" || echo "excluded")"
 echo "  SD pins:     $([[ "$EXTERNAL_PINS" == true ]] && echo "EXTERNAL header (base pin 16)" || echo "P2 Edge onboard slot")"

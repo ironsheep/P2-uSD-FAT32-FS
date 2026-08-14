@@ -1,0 +1,347 @@
+'' =================================================================================================
+''
+''   File....... SD_RT_write_integrity_tests.spin2
+''   Purpose.... Gate suite for write-path CONTENT integrity: prove that what the caller
+''               handed the driver is what the card actually holds, across every boundary
+''               where a write-path fault could hide, and say WHICH KIND of corruption it
+''               is when it is not.
+''
+''               WHY THIS SUITE EXISTS. In August 2026 a write-path timing fault stored
+''               every sector one bit late at the card while reporting success. Two things
+''               that look like they should have caught it could not: the card's
+''               data-response token proves packet framing only (SPI write-CRC is off
+''               unless the host sends CMD59, which this driver never does), and a
+''               read-back comparison agrees with itself because the card faithfully
+''               returns whatever it stored. The fault was caught by content comparison
+''               against an INDEPENDENTLY GENERATED expectation -- never by comparing a
+''               buffer to itself. That is the discipline this suite enforces.
+''
+''               WHAT MAKES A FINDING HERE DIFFERENT. On mismatch the suite does not just
+''               say "wrong". It classifies: CORRECT / SHIFTED-LATE / SHIFTED-EARLY /
+''               OTHER, using the same bit-shift classifier as SD_tx_phase_shmoo. A
+''               SHIFTED verdict is the write-phase signature and points straight at the
+''               streamer ordering; OTHER points somewhere else entirely. That distinction
+''               cost days to make by hand in August 2026.
+''
+''               THE PATTERN IS A FUNCTION OF ABSOLUTE FILE OFFSET, not of buffer
+''               position. Any chunk can therefore be verified independently without
+''               holding the whole file, which is what lets the cluster-boundary groups
+''               run at 32 KB clusters without a 64 KB buffer.
+''
+''               COVERAGE. Sector boundaries (511/512/513, 1023/1024/1025); cluster
+''               boundaries derived from clusterBytes() at run time so the suite is
+''               geometry-agnostic; multiple files written interleaved so the per-handle
+''               buffers and the three cache tiers are all in play; and a raw-sector
+''               round-trip that bypasses the file layer entirely, so a fault in the
+''               streamer path cannot hide behind the file API.
+''
+''   Author..... Iron Sheep Productions, LLC
+''   Updated.... 14 AUG 2026
+''
+'' =================================================================================================
+
+CON
+    _CLKFREQ = 350_000_000
+    DEBUG_BAUD = 2_000_000
+
+    SD_CS = 60, SD_MOSI = 59, SD_MISO = 58, SD_SCK = 61
+
+    CHUNK      = 512                            ' Working buffer; files are written in chunks
+    GUARD_SIZE = 16
+    GUARD_BYTE = $CC
+
+    ' Sanctioned scratch LBAs -- same as SD_RT_raw_sector_tests
+    RAW_LBA    = 100_000
+    RAW_COUNT  = 2
+
+    ' Verdict codes (same encoding as SD_tx_phase_shmoo / SD_buffer_alignment_sweep)
+    V_CORRECT = 0
+    V_LATE    = 1
+    V_EARLY   = 2
+    V_OTHER   = 3
+
+#pragma exportdef SD_INCLUDE_ALL
+
+OBJ
+    sd    : "micro_sd_fat32_fs"
+    utils : "isp_rt_utilities"
+
+DAT
+    fileA       BYTE    "WINTEGA.BIN", 0
+    fileB       BYTE    "WINTEGB.BIN", 0
+    fileC       BYTE    "WINTEGC.BIN", 0
+
+VAR
+    BYTE    wrBuf[CHUNK]
+    BYTE    rdBuf[CHUNK]
+    BYTE    rdGuard[GUARD_SIZE]
+    BYTE    rawWr[RAW_COUNT * 512]
+    BYTE    rawRd[RAW_COUNT * 512]
+
+PUB go() | cBytes
+
+    if sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK) < 0
+        debug("MOUNT FAILED: ", sdec_(sd.error()))
+        debug("END_SESSION")
+        return
+
+    cBytes := sd.clusterBytes()
+
+    sectorBoundaryGroup()
+    clusterBoundaryGroup(cBytes)
+    multiFileGroup()
+    rawRoundTripGroup()
+
+    cleanup()
+    sd.unmount()
+    utils.ShowTestEndCounts()
+    debug("END_SESSION")
+
+
+'' -------------------------------------------------------------------------------------
+'' Group 1 -- sector boundaries
+'' -------------------------------------------------------------------------------------
+PRI sectorBoundaryGroup() | sizes[7], idx, len
+
+    utils.startTestGroup(@"Content integrity across sector boundaries")
+
+    sizes[0] := 1
+    sizes[1] := 511
+    sizes[2] := 512
+    sizes[3] := 513
+    sizes[4] := 1023
+    sizes[5] := 1024
+    sizes[6] := 1025
+
+    repeat idx from 0 to 6
+        len := sizes[idx]
+        utils.startTest(@"Write/verify at sector boundary")
+        roundTripOne(@fileA, len, 0)
+
+
+'' -------------------------------------------------------------------------------------
+'' Group 2 -- cluster boundaries, geometry-agnostic
+'' -------------------------------------------------------------------------------------
+PRI clusterBoundaryGroup(cBytes) | sizes[4], idx
+
+    utils.startTestGroup(@"Content integrity across cluster boundaries")
+
+    sizes[0] := cBytes - 1
+    sizes[1] := cBytes
+    sizes[2] := cBytes + 1
+    sizes[3] := (cBytes * 2) + 1
+
+    repeat idx from 0 to 3
+        utils.startTest(@"Write/verify at cluster boundary")
+        roundTripOne(@fileA, sizes[idx], 0)
+
+
+'' -------------------------------------------------------------------------------------
+'' Group 3 -- three files interleaved
+''
+'' Each file gets a distinct pattern seed, so a cross-file mix-up (a per-handle buffer
+'' written to the wrong file, a cache tier serving another file's sector) shows as
+'' content corruption rather than passing silently.
+'' -------------------------------------------------------------------------------------
+PRI multiFileGroup() | hA, hB, hC, len, off, verdict
+
+    utils.startTestGroup(@"Interleaved multi-file content integrity")
+
+    len := 2048
+
+    utils.startTest(@"Three files written interleaved")
+    utils.setCheckCountPerTest(3)
+
+    hA := sd.createFileNew(@fileA)
+    hB := sd.createFileNew(@fileB)
+    hC := sd.createFileNew(@fileC)
+
+    if hA < 0 or hB < 0 or hC < 0
+        utils.evaluateSubBool(false, @"three handles opened", true)
+        utils.evaluateSubBool(false, @"(skipped)", true)
+        utils.evaluateSubBool(false, @"(skipped)", true)
+        utils.showSubTestResults()
+        return
+
+    off := 0
+    repeat while off < len
+        writeChunk(hA, off, len, 0)
+        writeChunk(hB, off, len, 1)
+        writeChunk(hC, off, len, 2)
+        off += CHUNK
+
+    sd.closeFileHandle(hA)
+    sd.closeFileHandle(hB)
+    sd.closeFileHandle(hC)
+
+    verdict := verifyFile(@fileA, len, 0)
+    utils.evaluateSubValue(verdict, @"file A content", V_CORRECT)
+    verdict := verifyFile(@fileB, len, 1)
+    utils.evaluateSubValue(verdict, @"file B content", V_CORRECT)
+    verdict := verifyFile(@fileC, len, 2)
+    utils.evaluateSubValue(verdict, @"file C content", V_CORRECT)
+    utils.showSubTestResults()
+
+
+'' -------------------------------------------------------------------------------------
+'' Group 4 -- raw sector round-trip
+''
+'' Bypasses the file layer entirely. If the streamer stores shifted data, this fails even
+'' when the file API happens to mask it. Multi-block (CMD25/CMD18) because that path
+'' passes the caller's buffer straight to RDFAST/WRFAST.
+'' -------------------------------------------------------------------------------------
+PRI rawRoundTripGroup() | idx, written, readBack, verdict
+
+    utils.startTestGroup(@"Raw multi-block round-trip (bypasses the file layer)")
+
+    utils.startTest(@"Raw sectors store exactly what was written")
+    utils.setCheckCountPerTest(3)
+
+    repeat idx from 0 to (RAW_COUNT * 512) - 1
+        rawWr[idx] := patByte(idx, 0)
+
+    written := sd.writeSectorsRaw(RAW_LBA, RAW_COUNT, @rawWr)
+    utils.evaluateSubValue(written, @"sectors written", RAW_COUNT)
+
+    bytefill(@rawRd, $5A, RAW_COUNT * 512)
+    readBack := sd.readSectorsRaw(RAW_LBA, RAW_COUNT, @rawRd)
+    utils.evaluateSubValue(readBack, @"sectors read back", RAW_COUNT)
+
+    verdict := classify(@rawRd, RAW_COUNT * 512, 0, 0)
+    reportVerdict(verdict)
+    utils.evaluateSubValue(verdict, @"raw content verdict", V_CORRECT)
+    utils.showSubTestResults()
+
+
+'' -------------------------------------------------------------------------------------
+'' Helpers
+'' -------------------------------------------------------------------------------------
+PRI roundTripOne(pName, len, seed) | handle, off, verdict
+
+    utils.setCheckCountPerTest(3)
+
+    sd.deleteFile(pName)                                    ' ignore result -- may not exist
+    handle := sd.createFileNew(pName)
+    if handle < 0
+        utils.evaluateSubBool(false, @"file created", true)
+        utils.evaluateSubBool(false, @"(skipped)", true)
+        utils.evaluateSubBool(false, @"(skipped)", true)
+        utils.showSubTestResults()
+        return
+    utils.evaluateSubBool(true, @"file created", true)
+
+    off := 0
+    repeat while off < len
+        writeChunk(handle, off, len, seed)
+        off += CHUNK
+    utils.evaluateSubValue(sd.closeFileHandle(handle), @"file closed", sd.SUCCESS)
+
+    verdict := verifyFile(pName, len, seed)
+    reportVerdict(verdict)
+    utils.evaluateSubValue(verdict, @"content verdict", V_CORRECT)
+    utils.showSubTestResults()
+
+
+PRI writeChunk(handle, off, len, seed) | idx, thisLen
+
+    thisLen := len - off
+    if thisLen > CHUNK
+        thisLen := CHUNK
+    repeat idx from 0 to thisLen - 1
+        wrBuf[idx] := patByte(off + idx, seed)
+    sd.writeHandle(handle, @wrBuf, thisLen)
+
+
+'' Reopen, read back in chunks, classify. Returns the worst verdict seen.
+PRI verifyFile(pName, len, seed) : verdict | handle, off, got, thisLen, v
+
+    verdict := V_CORRECT
+    handle := sd.openFileRead(pName)
+    if handle < 0
+        return V_OTHER
+
+    off := 0
+    repeat while off < len
+        thisLen := len - off
+        if thisLen > CHUNK
+            thisLen := CHUNK
+        bytefill(@rdBuf, $5A, CHUNK)
+        bytefill(@rdGuard, GUARD_BYTE, GUARD_SIZE)
+        got := sd.readHandle(handle, @rdBuf, thisLen)
+        if got <> thisLen
+            verdict := V_OTHER
+            quit
+        v := classify(@rdBuf, thisLen, off, seed)
+        if v <> V_CORRECT
+            verdict := v
+            quit
+        off += thisLen
+
+    sd.closeFileHandle(handle)
+
+    ' Guard: a read that overran its buffer invalidates the verdict above
+    repeat off from 0 to GUARD_SIZE - 1
+        if rdGuard[off] <> GUARD_BYTE
+            verdict := V_OTHER
+
+
+'' The whole point of the suite: compare against an INDEPENDENTLY GENERATED expectation,
+'' never against the buffer that was written. Then say which kind of wrong it is.
+PRI classify(pBuf, len, baseOff, seed) : verdict | idx, corr, prev, nxt, late, early, nCorr, nLate, nEarly, nCheck
+
+    nCorr := 0
+    nLate := 0
+    nEarly := 0
+    nCheck := 0
+
+    repeat idx from 1 to len - 2
+        corr  := patByte(baseOff + idx, seed)
+        prev  := patByte(baseOff + idx - 1, seed)
+        nxt   := patByte(baseOff + idx + 1, seed)
+        late  := ((corr >> 1) | ((prev & 1) << 7)) & $FF
+        early := ((corr << 1) | ((nxt >> 7) & 1)) & $FF
+        nCheck++
+        if BYTE[pBuf][idx] == corr
+            nCorr++
+        elseif BYTE[pBuf][idx] == late
+            nLate++
+        elseif BYTE[pBuf][idx] == early
+            nEarly++
+
+    if nCheck == 0                                          ' 1- and 2-byte files: direct compare
+        if BYTE[pBuf][0] == patByte(baseOff, seed)
+            return V_CORRECT
+        return V_OTHER
+
+    if nCorr == nCheck
+        return V_CORRECT
+    if (nLate * 100 / nCheck) >= 98
+        return V_LATE
+    if (nEarly * 100 / nCheck) >= 98
+        return V_EARLY
+    return V_OTHER
+
+
+'' Pattern is a pure function of ABSOLUTE offset, so any chunk verifies independently.
+'' The seed separates files; the multiply-and-xor keeps neighbouring bytes unrelated so a
+'' one-bit shift cannot alias onto a correct value.
+PRI patByte(absOff, seed) : value
+
+    value := ((absOff * 7) + (seed * 89) + (absOff >> 8)) & $FF
+    value ^= $5A
+
+
+PRI reportVerdict(verdict)
+
+    case verdict
+        V_CORRECT: return
+        V_LATE:    debug("    VERDICT: SHIFTED-LATE -- write-phase signature, see SPI-PHASE-MARGIN-API.md")
+        V_EARLY:   debug("    VERDICT: SHIFTED-EARLY -- write-phase signature, see SPI-PHASE-MARGIN-API.md")
+        other:     debug("    VERDICT: OTHER -- content wrong but NOT a bit shift; look elsewhere")
+
+
+PRI cleanup()
+
+    sd.deleteFile(@fileA)
+    sd.deleteFile(@fileB)
+    sd.deleteFile(@fileC)
