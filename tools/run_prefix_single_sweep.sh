@@ -17,6 +17,11 @@
 # users. Do not read a single pad's result as the answer.
 #
 # Destructive only to LBA 100_000, a sanctioned scratch sector. Run from tools/.
+#
+# BASH 3.2 COMPATIBLE. The macOS host ships bash 3.2, where "${arr[@]}" on an empty
+# array under `set -u` aborts. Every array expansion here uses the ${arr[@]+"${arr[@]}"}
+# form. Do not "simplify" them back -- the failure mode is a silent NO RESULT in the one
+# cell that takes no defines, which reads as a probe fault rather than a script bug.
 
 set -uo pipefail
 
@@ -52,7 +57,9 @@ for drv in "${DRIVERS[@]}"; do
     args=()
     [[ -n "$drvDef" ]] && args+=(-D "$drvDef")
     [[ "$pad" != "BASELINE" ]] && args+=(-D "$pad")
-    out=$(./run_test.sh "$PROBE" "${args[@]}" 2>&1)
+    # ${arr[@]+"${arr[@]}"} is the bash-3.2-safe empty-array expansion; a bare
+    # "${args[@]}" aborts under `set -u` on macOS when no defines are given.
+    out=$(./run_test.sh "$PROBE" ${args[@]+"${args[@]}"} 2>&1)
 
     line=$(echo "$out" | sed 's/\x1b\[[0-9;]*m//g' | grep -oE '\* pad=[^:]+: A=[A-Z-]+  B=[A-Z-]+' | head -1)
     addr=$(echo "$out" | sed 's/\x1b\[[0-9;]*m//g' | grep -oE 'DRIVER INTERNAL BUF: \$?[0-9A-Fa-f_]+' | grep -oE '[0-9A-Fa-f_]+$' | head -1)
@@ -80,7 +87,7 @@ done
 echo ""
 # SELF-VALIDATION. If the pad never moved the driver's internal buffer, every verdict
 # above is a null result that reports correct and means nothing. Refuse to conclude.
-uniq_addrs=$(printf "%s\n" "${addrs[@]:-}" | sort -u | grep -c . || true)
+uniq_addrs=$(printf "%s\n" ${addrs[@]+"${addrs[@]}"} | sort -u | grep -c . || true)
 echo "  driver internal buffer addresses seen: ${uniq_addrs} distinct of ${#addrs[@]} runs"
 if [[ "${#addrs[@]}" -gt 1 && "$uniq_addrs" -lt 2 ]]; then
     echo ""
@@ -93,8 +100,8 @@ fi
 
 echo ""
 echo "============================================================"
-prefixShift=$(printf "%s\n" "${results[@]}" | grep -c "^PREFIX .*SHIFTED" || true)
-fixedShift=$(printf "%s\n" "${results[@]}" | grep -c "^FIXED .*SHIFTED" || true)
+prefixShift=$(printf "%s\n" ${results[@]+"${results[@]}"} | grep -c "^PREFIX .*SHIFTED" || true)
+fixedShift=$(printf "%s\n" ${results[@]+"${results[@]}"} | grep -c "^FIXED .*SHIFTED" || true)
 
 if [[ "$fixedShift" -gt 0 ]]; then
     echo -e "${RED}THE FIX DOES NOT HOLD: ${fixedShift} shifted position(s) on the CURRENT driver.${NC}"
