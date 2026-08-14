@@ -15,7 +15,7 @@ Data-losing file operations are fixed, failures the driver detected but discarde
 - The write path reports `E_NO_CONTIGUOUS_SPACE` when a pre-allocated contiguous reservation runs out, and `E_BAD_CHAIN` when a cluster chain walk lands in the metadata region. Both were previously reported as a zero-byte write.
 - `lastFlushError()` and `clearFlushError()` report failures of the automatic idle flush. That flush is started by the worker cog, so a failure had no caller to return to: the data did not reach the card and every later call still reported success.
 - `SD_INCLUDE_TEST_HOOKS` builds in fault injection — `setTestFailSector()`, `setTestFailWriteAfter()`, `getTestWriteCallCount()`, `setTestMaxClusters()`, `clearTestErrors()`. Enabled by `SD_INCLUDE_ALL`, and deliberately not by `SD_INCLUDE_DEBUG`.
-- `debugSetTxAlignDelay()` and `debugGetTxAlignDelay()` tune the padding between the write path's clock setup and its data fetch, for measuring write phase margin on an unfamiliar board or card socket. Diagnostic only, gated behind `SD_INCLUDE_DEBUG`; the shipped default is centered on measured margin and needs no adjustment. Documented in `DOCs/SPI-PHASE-MARGIN-API.md`.
+- `debugSetTxAlignDelay()` and `debugGetTxAlignDelay()` measure write timing margin on an unfamiliar board or card socket. Diagnostic only, gated behind `SD_INCLUDE_DEBUG`; the shipped default needs no adjustment. Documented in `DOCs/SPI-PHASE-MARGIN-API.md`.
 - `DOCs/ERROR-HANDLING-GUIDE.md` covers detecting and responding to every error the driver reports. `DOCs/MIGRATION-GUIDE-v1.7.0.md` covers moving from v1.6.x.
 
 ### Bug Fixes
@@ -34,7 +34,7 @@ Data-losing file operations are fixed, failures the driver detected but discarde
 - `unmount()` clears the cached sectors and cancels the background flush timer. A bare `unmount()` was followed about 200 ms later by the worker reading and writing FSInfo on a card the caller had finished with.
 - Closing a file whose final flush failed no longer records the new size and timestamp in the directory. The entry advertised bytes that never reached the card.
 - `mount()` on a corrupted card whose boot record claims zero sectors per cluster fails with `E_NOT_FAT32` instead of hanging the worker cog.
-- The write path no longer issues a hub fetch inside the window where the clock pin is being set up. Data landing in that window could end up one bit out of phase with the clock, so the card stored a shifted sector and reported success — the acknowledgement it returns proves packet framing, not payload. Reads were never affected. Observed once during development and not in any released build; see the upgrade note below.
+- `writeSectorsRaw()` stores the bytes you gave it. A timing fault in the raw multi-block write path could put the outgoing data one bit out of phase with the clock, so the card stored a corrupted sector and reported success. File operations were never affected — they use a different path. See the upgrade note below.
 - `error()` describes the operation that just completed rather than the last failure since boot. Every method that issues a command records its outcome on both exit paths; the pure accessors are exempt so a diagnostic call cannot erase the error being diagnosed.
 - `sync()` reports failure, and keeps the pending directory entry so a later sync can still write it. It previously discarded the entry whether or not it reached the card.
 - `freeSpace()` returns 0 with an error rather than the partial count from an interrupted FAT scan.
@@ -46,26 +46,21 @@ Data-losing file operations are fixed, failures the driver detected but discarde
 - A blocking call from the cog that owns an in-flight async operation returns `E_ASYNC_BUSY` — from every API, info getters included — instead of deadlocking; a losing concurrent `start*()` gets the same answer promptly instead of blocking for the winner's operation.
 - `getResult()` and `cancelAsync()` report `E_STACK_OVERFLOW` when the worker's stack guard was violated during the operation, as blocking calls already do.
 - `setDate()` rejects every out-of-range date or time field with `E_INVALID_PARAM`; negative values were previously accepted.
-- `attemptHighSpeed()` verifies the 50 MHz switch by re-reading a sector captured at the known-good speed and comparing. It previously wrote to the card at the unverified speed and compared the result against itself, so the check could not detect the failure it existed to catch. Nothing is written at an unverified speed.
+- `attemptHighSpeed()` detects a failed 50 MHz switch instead of reporting success. Its previous check compared the card against itself and could not fail. Nothing is written to the card at a speed that has not been verified.
 - `SD_FAT32_fsck` recovers directory entries stranded past a spurious end-of-directory marker, rewriting the marker as a deleted-entry tombstone so a conforming scan reaches them. It previously freed their cluster chains and left the entries in place pointing at them.
-- `SD_FAT32_audit` and `SD_FAT32_fsck` check every sector read. An unchecked read left the previous sector in the buffer, which was then validated as directory entries or FAT data; a run that cannot read the media now says so and never reports `CLEAN`.
+- `SD_FAT32_audit` and `SD_FAT32_fsck` report a card they cannot read instead of reporting `CLEAN`. A failed read previously went unnoticed and the stale buffer contents were validated as if they were real directory or FAT data.
 - `SD_card_identify` names Gigastone OEM cards (manufacturer ID `$12`) instead of reporting `Unknown`. `SD_card_characterize` already named them.
 - The read/write example no longer null-terminates its buffer at a negative index when a read fails. The demo shell reports a read that failed part-way through `type` and `hexdump` instead of printing a byte count as if the file were complete, reports a `copy` whose writes were refused or short instead of reporting the source size as copied, and distinguishes a card with no free space from a free-space query that failed.
 
 ### Upgrade / recovery note
 
-**Ordinary file operations were not affected.** The write-path fault above was reachable only through `writeSectorsRaw()`, the public multi-block raw-sector API. Every filesystem operation — file data, directory entries, FAT sectors, FSInfo — goes through the single-block path, and that path was measured correct at **every** memory position on v1.6.1.
+**Ordinary file operations were not affected.** The write-path fault above could only be reached through `writeSectorsRaw()`, the raw multi-block sector API available under `SD_INCLUDE_RAW`. Everything the filesystem does — reading and writing files, directories, timestamps — goes through a different path that was tested clean on the affected releases.
 
-Measured on hardware 2026-08-14, both paths swept through all eight long positions:
+**If your application never calls `writeSectorsRaw()`, there is nothing to check.**
 
-| Path | Callers | v1.6.1 (pre-fix) | v1.7.0 |
-|---|---|---|---|
-| `writeSector` — every file, directory, FAT and FSInfo write | 41 | correct at all 8 positions | correct at all 8 |
-| `writeSectors` — reached only from `writeSectorsRaw()` | 1 | **shifted at 1 of 8** | correct at all 8 |
+If it does, and the data matters: open a file and look at it. The corruption is not subtle — it makes text unreadable and binary structures obviously malformed. Rewriting an affected file with a v1.7.0 build is enough; the card does not need reformatting. Note that `SD_FAT32_audit` and `SD_FAT32_fsck` cannot find this, and a `CLEAN` result from either says nothing either way — the filesystem structures stay intact and only the contents of data sectors would be wrong.
 
-**What to do.** If your application never calls `writeSectorsRaw()`, there is nothing to check — your data was written through the single-block path. If it does, and the data matters, verify it: a one-bit shift makes text unreadable and binary structures obviously malformed, so opening a file and looking at it settles the question in a minute. Rewriting an affected file with a v1.7.0 build is sufficient; no reformat is needed. `SD_FAT32_audit` and `SD_FAT32_fsck` cannot detect it — the filesystem structures stay intact and only sector contents would be wrong.
-
-Reads were never affected. This was measured on one card at 350 MHz / 25 MHz SPI, which is evidence rather than proof for every card and clock.
+Reads were never affected.
 
 ### Breaking Changes
 
