@@ -289,6 +289,18 @@ PRI verifyFile(pName, len, seed) : verdict | handle, off, got, thisLen, chunkVer
 '' never against the buffer that was written. Then say which kind of wrong it is.
 PRI classify(pBuf, len, baseOff, seed) : verdict | idx, corr, prev, nxt, late, early, nCorr, nLate, nEarly, nCheck
 
+    ' SHORT BUFFERS FIRST -- AND THIS GUARD IS LOAD-BEARING.
+    ' The shift classifier needs a neighbour on each side, so it can only judge interior
+    ' bytes. Spin2's repeat-from-to AUTO-DETECTS DIRECTION (p2kbSpin2Repeat), so
+    ' `repeat idx from 1 to len - 2` with len=1 does NOT execute zero times -- it counts
+    ' DOWN through 1, 0, -1, reading out of bounds at both ends and returning a spurious
+    ' verdict. The 1-byte case in the sector-boundary group hits exactly that.
+    if len < 3
+        repeat idx from 0 to len - 1
+            if BYTE[pBuf][idx] <> patByte(baseOff + idx, seed)
+                return V_OTHER
+        return V_CORRECT
+
     nCorr := 0
     nLate := 0
     nEarly := 0
@@ -307,11 +319,6 @@ PRI classify(pBuf, len, baseOff, seed) : verdict | idx, corr, prev, nxt, late, e
             nLate++
         elseif BYTE[pBuf][idx] == early
             nEarly++
-
-    if nCheck == 0                                          ' 1- and 2-byte files: direct compare
-        if BYTE[pBuf][0] == patByte(baseOff, seed)
-            return V_CORRECT
-        return V_OTHER
 
     if nCorr == nCheck
         return V_CORRECT
