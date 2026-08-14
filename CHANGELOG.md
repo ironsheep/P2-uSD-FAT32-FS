@@ -54,13 +54,18 @@ Data-losing file operations are fixed, failures the driver detected but discarde
 
 ### Upgrade / recovery note
 
-The instruction ordering that allowed this was present in every release from v0.9.3 through v1.6.1. **Whether any released build could actually produce the fault is not established, and the evidence suggests not:** no user has reported it, and it never occurred across four months of certification — 27 regression binaries per release, each with a different memory layout, all doing byte-level content verification. It was observed once, on one development commit. A one-bit shift is also not subtle; it makes text unreadable and binary structures obviously malformed, so an affected user would have known.
+**Ordinary file operations were not affected.** The write-path fault above was reachable only through `writeSectorsRaw()`, the public multi-block raw-sector API. Every filesystem operation — file data, directory entries, FAT sectors, FSInfo — goes through the single-block path, and that path was measured correct at **every** memory position on v1.6.1.
 
-- `SD_FAT32_audit` and `SD_FAT32_fsck` cannot detect it, and a CLEAN result is not evidence either way — the filesystem structures stay intact and only sector *contents* would be wrong. Same shape as v1.6.0's mid-sector append defect.
-- Opening a file and looking at it settles the question for most data. Rewriting an affected file with a v1.7.0 build is sufficient; no reformat is needed.
-- Reads were never affected, so a card written by another system and only read by this driver was never at risk.
+Measured on hardware 2026-08-14, both paths swept through all eight long positions:
 
-`DOCs/MIGRATION-GUIDE-v1.7.0.md` §0 covers this in full, including why the driver's own two checks could not catch it.
+| Path | Callers | v1.6.1 (pre-fix) | v1.7.0 |
+|---|---|---|---|
+| `writeSector` — every file, directory, FAT and FSInfo write | 41 | correct at all 8 positions | correct at all 8 |
+| `writeSectors` — reached only from `writeSectorsRaw()` | 1 | **shifted at 1 of 8** | correct at all 8 |
+
+**What to do.** If your application never calls `writeSectorsRaw()`, there is nothing to check — your data was written through the single-block path. If it does, and the data matters, verify it: a one-bit shift makes text unreadable and binary structures obviously malformed, so opening a file and looking at it settles the question in a minute. Rewriting an affected file with a v1.7.0 build is sufficient; no reformat is needed. `SD_FAT32_audit` and `SD_FAT32_fsck` cannot detect it — the filesystem structures stay intact and only sector contents would be wrong.
+
+Reads were never affected. This was measured on one card at 350 MHz / 25 MHz SPI, which is evidence rather than proof for every card and clock.
 
 ### Breaking Changes
 

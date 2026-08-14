@@ -12,68 +12,53 @@ For the full picture of how error reporting now works, see
 
 ---
 
-## 0. A write-path timing defect was fixed — what it means for data you already wrote
+## 0. A write-path timing defect was fixed — and ordinary file I/O was not affected
 
-**Short version: the risk to your existing data is low, and there is very likely nothing
-for you to do.** This section exists because the defect was real and you are entitled to
-know it existed, not because we think your card is corrupt.
+**If your application never calls `writeSectorsRaw()`, there is nothing here for you to
+do.** This section exists because the defect was real and confined, and you are entitled
+to know exactly where its edge was.
 
 ### What was wrong
 
-v1.7.0 fixes a write-path timing defect in which the outgoing data could be one bit out
-of phase with the clock that latched it, so the card **stored a shifted sector while
-reporting success**. It was observed once, on a development commit, and confirmed by
-reading the affected sectors back with a known-good build: the data on the card really
-was the one-bit-late bitstream. Reads were never affected — the fault was entirely on
-the write side.
+A hub fetch sat inside the window where the clock pin was being set up, so the outgoing
+data could land one bit out of phase with the clock. The card then stored a shifted
+sector and reported success — the acknowledgement it returns proves packet framing, not
+payload, because SPI write-CRC is off unless the host sends CMD59 and this driver never
+has. Reads were never affected; the fault was entirely on the write side.
 
 The instruction ordering that permitted it was present in every release from v0.9.3
-through v1.6.1. **Whether any released build could actually produce the fault is not
-established** — see below.
+through v1.6.1.
 
-### Why we believe the practical risk is low
+### Where the edge actually was — measured, not inferred
 
-- **It has never been observed outside one development commit.** What selects the
-  failing timing has not been identified. Until it is, the step from "the ordering was
-  present" to "a released build could hit it" is an inference, not a finding.
-- **No user has reported it.** A one-bit shift does not corrupt data subtly — it makes
-  text unreadable and binary structures obviously malformed. Anyone affected while
-  writing ordinary files would have noticed at once.
-- **Our own certification never hit it in four months.** Each release was verified by 27
-  regression binaries, each with its own hub layout, exercising thousands of sector
-  writes with byte-level content verification. Across 18 releases, none landed on the
-  failing side. The defect surfaced only when an unrelated commit shifted the layout
-  during v1.7.0 development.
-- Together those say the failing layout region is small, not that it is impossible.
+The driver has two write paths. Both were swept on hardware through all eight long
+memory positions on 2026-08-14, on v1.6.1 and again on v1.7.0:
 
-**The honest caveat:** our test binaries are harnesses. Yours is your application plus
-this driver, which samples a layout we never did. That is why this note exists at all,
-rather than "it never affected anyone."
+| Path | Reached from | v1.6.1 (pre-fix) | v1.7.0 |
+|---|---|---|---|
+| **single-block** `writeSector` | 41 call sites — **every** file, directory, FAT and FSInfo write | **correct at all 8 positions** | correct at all 8 |
+| **multi-block** `writeSectors` | one caller: the public `writeSectorsRaw()` | **shifted at 1 position in 8** | correct at all 8 |
 
-### Why the driver did not catch it itself
+So the exposure in released code was confined to `writeSectorsRaw()` — bulk raw-sector
+writes, available only when you build with `SD_INCLUDE_RAW`. Everything the filesystem
+API does went through the path that measured clean at every position.
 
-Not because you could not have seen it — you very likely would have. Because the
-driver's *own* two checks were both incapable of it:
+### If you used `writeSectorsRaw()` and the data matters
 
-- The card's data-response token said "accepted." In SPI mode, write-CRC checking is off
-  unless the host enables it with CMD59, which this driver has never sent — so that token
-  only ever confirmed the packet was well-formed, never that the payload bits were yours.
-- A read-back comparison agreed with itself. The shifted bytes were genuinely what the
-  card had stored, so the card returned them faithfully.
+- **Look at it.** A one-bit shift is not subtle — it makes text unreadable and binary
+  structures obviously malformed. Opening a file settles it in a minute.
+- `SD_FAT32_audit` and `SD_FAT32_fsck` **cannot detect this**, and a `CLEAN` result is
+  not evidence either way: the filesystem structures stay intact and self-consistent, and
+  only the *contents* of data sectors would be wrong.
+- Rewriting an affected sector or file with a v1.7.0 build is sufficient. Nothing about
+  the card needs reformatting.
 
-### If you want to check anyway
+### The honest limit
 
-- `SD_FAT32_audit` and `SD_FAT32_fsck` **will not find this**, and their reporting the
-  volume CLEAN is not evidence either way. The filesystem structures are intact and
-  self-consistent; only the *contents* of data sectors would be wrong. Same shape as
-  v1.6.0's mid-sector append defect.
-- **Open a file and look at it.** For text, logs, or anything with recognisable
-  structure, a bit-shifted sector is immediately obvious. That check costs a minute and
-  settles it for most people.
-- Only if you hold data that is *both* opaque — binary telemetry, say — *and*
-  irreplaceable is a comparison against a known-good copy worth the effort. If you find
-  a problem, rewriting the file with a v1.7.0 build is sufficient; nothing about the card
-  needs reformatting.
+This was measured on one card at 350 MHz sysclk / 25 MHz SPI. It is strong evidence, not
+a proof covering every card, clock and temperature. What *is* structural: v1.7.0 moves
+the variable-latency instruction out of the timing window entirely at both sites, so
+there is nothing left in that window that can vary.
 
 ---
 

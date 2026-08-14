@@ -300,6 +300,34 @@ Four failures at 8, 15, 22, 29; 25 passing points. All three runs agree on the f
 
 `debugSetTxAlignDelay()` / `debugGetTxAlignDelay()` expose the knob under `SD_INCLUDE_DEBUG` for characterizing an unfamiliar board or socket. See `DOCs/SPI-PHASE-MARGIN-API.md`.
 
+### 4.6a Exposure in released code — measured 2026-08-14
+
+The question §4.3 leaves open — what the fault could actually reach in shipped builds —
+was settled by sweeping both write paths through all eight long memory positions, on the
+driver as tagged at v1.6.1 and again on v1.7.0.
+
+| Path | Callers in v1.6.1 | v1.6.1 | v1.7.0 |
+|---|---|---|---|
+| `writeSector` (single-block) | **41** — every file, directory, FAT and FSInfo write | correct at 8/8 | correct at 8/8 |
+| `writeSectors` (multi-block) | **1** — the `CMD_WRITE_SECTORS` arm, reached only from public `writeSectorsRaw()` | **SHIFTED at 1 of 8** (slice 7) | correct at 8/8 |
+
+**Released exposure was confined to `writeSectorsRaw()`.** The filesystem never touches
+the multi-block path. Instruments: `SD_prefix_write_probe` (caller-buffer sweep, reaches
+multi-block only), `SD_prefix_single_probe` + `run_prefix_single_sweep.sh` (DAT-displacement
+sweep, the only way to move the internal buffer the single-block path streams from).
+
+Two methodological notes worth keeping:
+
+- The two paths **disagree at the same slice** — 7 fails on multi-block, passes on
+  single-block. They are different code sites with different instruction counts between
+  the SCK reset and `XINIT`, so different phase. A result from one path says nothing
+  about the other, which is why both had to be swept.
+- The first single-block sweep looked complete at eight runs and was not: the baseline
+  landed on slice 6 and `PAD_24` duplicated it, leaving slice 0 blind. It was only
+  auditable because the probe prints the driver's internal buffer address. A sweep that
+  does not record its own independent variable cannot be checked for coverage after the
+  fact.
+
 ### 4.7 Invariance verification
 
 **Measured 2026-08-13 on the Gigastone 64GB (`$0000_0F14`), release configuration. All 32 points CORRECT — layout invariance holds.**
