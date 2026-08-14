@@ -6,7 +6,9 @@
 '' with RDFAST between the SCK reset and XINIT (verified ordering at v1.6.1:
 '' DIRL DRVL SETXFRQ RDFAST XINIT WYPIN). Renamed so it can never be confused with,
 '' or silently replaced by, the current driver on an include path.
-'' Delete this file once the pre-fix question is settled.
+'' The pre-fix question was SETTLED 2026-08-14 -- see SD_prefix_write_probe and
+'' SD_prefix_single_probe. This file is now the record rather than a temporary: keep it,
+'' because the instrument that answered the question is what makes the answer checkable.
 '' ==========================================
 
 '' =================================================================================================

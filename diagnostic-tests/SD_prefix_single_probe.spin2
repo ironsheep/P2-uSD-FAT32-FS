@@ -1,9 +1,10 @@
 '' =================================================================================================
 ''
 ''   File....... SD_prefix_single_probe.spin2
-''   Purpose.... The question SD_prefix_write_probe left open: does the SINGLE-BLOCK write
-''               path -- the one every filesystem operation uses -- store shifted data in
-''               released code?
+''   Purpose.... Does the SINGLE-BLOCK write path -- the one every filesystem operation
+''               uses -- store shifted data in released code?
+''               ANSWERED 2026-08-14: NO. Correct at all eight long positions on v1.6.1,
+''               and again on v1.7.0. Ordinary file I/O was never exposed.
 ''
 ''               WHY A SECOND PROBE. SD_prefix_write_probe proved that v1.6.1's MULTI-BLOCK
 ''               path stores one-bit-late data at one caller-buffer position in eight. But
@@ -38,6 +39,17 @@
 ''                     (writeSectorsRaw), which SD_prefix_write_probe already confirmed.
 ''                     File I/O was not affected. The upgrade note should say exactly that
 ''                     rather than warning every user.
+''
+''
+''   RESULT -- 2026-08-14. The question is answered; these files are now the record.
+''
+''     single-block  writeSector    41 callers   v1.6.1: correct at 8/8   v1.7.0: 8/8
+''     multi-block   writeSectors    1 caller    v1.6.1: SHIFTED at 1/8   v1.7.0: 8/8
+''
+''   Released exposure was confined to writeSectorsRaw(), the public raw multi-block API.
+''   Every filesystem operation uses the single-block path, which measured correct at every
+''   position on the pre-fix driver. KEEP THESE FILES: they are the instruments that
+''   answered "were released users exposed", and that question recurs. Do not delete.
 ''
 ''   Author..... Iron Sheep Productions, LLC
 ''   Updated.... 14 AUG 2026

@@ -1,20 +1,21 @@
 '' =================================================================================================
 ''
 ''   File....... SD_prefix_write_probe.spin2
-''   Purpose.... Settle one question: did the PRE-FIX write path ever store shifted data
-''               in a build that was actually released?
+''   Purpose.... Did the PRE-FIX write path ever store shifted data in a build that was
+''               actually released?  ANSWERED 2026-08-14: yes, on this path -- SHIFTED at
+''               one caller-buffer position in eight (offset +8, addr $0000_8C1C).
+''               But this path has ONE caller: public writeSectorsRaw(). See
+''               SD_prefix_single_probe for the path the filesystem actually uses.
 ''
-''               THE QUESTION. In August 2026 a write-path fault stored every sector one
-''               bit late at the card. It was proven at the card by SD_stored_shift_probe
-''               (495/495 bytes shifted, three patterns) -- but on a bench tree matching
-''               no commit. Pinning the sweeps by binary fingerprint showed that EVERY
-''               observation of the fault came from an uncommitted working tree, and that
-''               no committed state, and no release, has ever been shown to produce it.
-''
-''               The instruction ordering that permitted it was present in every release
-''               from v0.9.3 through v1.6.1 -- that part is verified by walking the tags.
-''               Whether a released build could actually PRODUCE the fault is not, and
-''               that gap is why the v1.7.0 upgrade note has to hedge.
+''               THE QUESTION AS IT STOOD. In August 2026 a write-path fault stored every
+''               sector one bit late at the card, proven by SD_stored_shift_probe (495/495
+''               bytes shifted, three patterns) -- but on a bench tree matching no commit.
+''               Pinning the sweeps by binary fingerprint showed every observation came from
+''               an uncommitted working tree, so at that point no released build had been
+''               shown to produce it. The instruction ordering that permitted it was present
+''               in every release from v0.9.3 through v1.6.1, verified by walking the tags.
+''               This probe closed the gap between "the ordering was present" and "a release
+''               could produce the fault" -- and on THIS path, it could.
 ''
 ''               WHAT THIS PROBE DOES. It compiles against micro_sd_fat32_fs_v161 -- a
 ''               vendored copy of the driver exactly as tagged at v1.6.1, whose write path
@@ -45,6 +46,17 @@
 ''   NOTE. This probe deliberately does NOT test the current driver. Its whole value is
 ''   that it runs v1.6.1's code. Both drivers are present in this repository; the vendored
 ''   one is named differently so an include path cannot silently swap them.
+''
+''
+''   RESULT -- 2026-08-14. The question is answered; these files are now the record.
+''
+''     single-block  writeSector    41 callers   v1.6.1: correct at 8/8   v1.7.0: 8/8
+''     multi-block   writeSectors    1 caller    v1.6.1: SHIFTED at 1/8   v1.7.0: 8/8
+''
+''   Released exposure was confined to writeSectorsRaw(), the public raw multi-block API.
+''   Every filesystem operation uses the single-block path, which measured correct at every
+''   position on the pre-fix driver. KEEP THESE FILES: they are the instruments that
+''   answered "were released users exposed", and that question recurs. Do not delete.
 ''
 ''   Author..... Iron Sheep Productions, LLC
 ''   Updated.... 14 AUG 2026
