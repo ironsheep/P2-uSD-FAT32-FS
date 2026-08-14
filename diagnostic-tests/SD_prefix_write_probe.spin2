@@ -1,0 +1,242 @@
+'' =================================================================================================
+''
+''   File....... SD_prefix_write_probe.spin2
+''   Purpose.... Settle one question: did the PRE-FIX write path ever store shifted data
+''               in a build that was actually released?
+''
+''               THE QUESTION. In August 2026 a write-path fault stored every sector one
+''               bit late at the card. It was proven at the card by SD_stored_shift_probe
+''               (495/495 bytes shifted, three patterns) -- but on a bench tree matching
+''               no commit. Pinning the sweeps by binary fingerprint showed that EVERY
+''               observation of the fault came from an uncommitted working tree, and that
+''               no committed state, and no release, has ever been shown to produce it.
+''
+''               The instruction ordering that permitted it was present in every release
+''               from v0.9.3 through v1.6.1 -- that part is verified by walking the tags.
+''               Whether a released build could actually PRODUCE the fault is not, and
+''               that gap is why the v1.7.0 upgrade note has to hedge.
+''
+''               WHAT THIS PROBE DOES. It compiles against micro_sd_fat32_fs_v161 -- a
+''               vendored copy of the driver exactly as tagged at v1.6.1, whose write path
+''               is confirmed pre-fix (DIRL DRVL SETXFRQ RDFAST XINIT WYPIN, with RDFAST
+''               inside the phase window). It then writes known patterns through that
+''               driver and classifies what the card actually stored.
+''
+''               It sweeps the streamer's hub buffer across all eight long-aligned
+''               positions, because writeSectorsRaw/readSectorsRaw pass the caller's
+''               pointer straight to RDFAST/WRFAST. If buffer position selects the phase,
+''               one of the eight will store shifted data.
+''
+''   READING THE RESULT
+''
+''     ALL 8 CORRECT  -- the released write path stored correct data at every buffer
+''                       position on this card. It does NOT prove no release could ever
+''                       fail; it does mean the failing condition is not reachable by
+''                       moving the buffer, which is the mechanism most often assumed.
+''                       The v1.7.0 upgrade note should soften further.
+''
+''     ANY SHIFTED    -- released code could produce the fault. The upgrade note is right
+''                       as written and should probably be strengthened. STOP and report
+''                       which offsets failed.
+''
+''     Anything else (WRITE-FAIL / READ-FAIL / OTHER) -- instrument problem or a different
+''                       defect. Do not read it as either answer.
+''
+''   NOTE. This probe deliberately does NOT test the current driver. Its whole value is
+''   that it runs v1.6.1's code. Both drivers are present in this repository; the vendored
+''   one is named differently so an include path cannot silently swap them.
+''
+''   Author..... Iron Sheep Productions, LLC
+''   Updated.... 14 AUG 2026
+''
+'' =================================================================================================
+
+CON
+    _CLKFREQ = 350_000_000
+    DEBUG_BAUD = 2_000_000
+
+    ' P2 Edge onboard SD slot
+    SD_CS = 60, SD_MOSI = 59, SD_MISO = 58, SD_SCK = 61
+
+    ' Sanctioned scratch LBAs -- same as SD_RT_raw_sector_tests and SD_tx_phase_shmoo.
+    ' Two consecutive sectors: multi-block is the path that passes the caller pointer
+    ' through to RDFAST.
+    SECTOR_BASE  = 100_000
+    SECTOR_COUNT = 2
+    XFER_BYTES   = SECTOR_COUNT * 512
+
+    OFF_MIN  = 0
+    OFF_MAX  = 28
+    OFF_STEP = 4
+    OFF_PTS  = 8
+
+    GUARD_SIZE = 16
+    GUARD_BYTE = $CC
+
+    V_CORRECT = 0
+    V_LATE    = 1
+    V_EARLY   = 2
+    V_OTHER   = 3
+    V_WRFAIL  = 4
+    V_RDFAIL  = 5
+
+#pragma exportdef SD_INCLUDE_ALL
+
+OBJ
+    sd : "micro_sd_fat32_fs_v161"                   ' PRE-FIX driver, vendored from v1.6.1
+
+VAR
+    BYTE    txBuf[OFF_MAX + XFER_BYTES + GUARD_SIZE]
+    BYTE    rxBuf[OFF_MAX + XFER_BYTES + GUARD_SIZE]
+    LONG    verdictA[OFF_PTS]
+    LONG    verdictB[OFF_PTS]
+
+PUB go() | off, slot, nShifted, nOther, guardBad, initResult
+
+    debug(" ")
+    debug("============================================================")
+    debug("  PRE-FIX write probe -- driver as tagged at v1.6.1")
+    debug("============================================================")
+    debug("  Write path under test: DIRL DRVL SETXFRQ RDFAST XINIT WYPIN")
+    debug("                         (RDFAST INSIDE the phase window)")
+    debug("  txBuf base:  $", uhex_long_(@txBuf))
+    debug("  sectors:     ", udec_(SECTOR_BASE), "..", udec_(SECTOR_BASE + SECTOR_COUNT - 1))
+    debug(" ")
+
+    initResult := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    if initResult < 0
+        debug("ERROR: initCardOnly failed: ", sdec_(initResult))
+        waitms(500)
+        debug("END_SESSION")
+        return
+
+    nShifted := 0
+    nOther := 0
+    slot := 0
+
+    repeat off from OFF_MIN to OFF_MAX step OFF_STEP
+        verdictA[slot] := onePoint(off, 0)
+        verdictB[slot] := onePoint(off, 1)
+        debug("* off=+", udec_(off), " (addr ", uhex_long_(@txBuf + off), "): A=", zstr_(verdictName(verdictA[slot])), "  B=", zstr_(verdictName(verdictB[slot])))
+        nShifted += tallyShift(verdictA[slot]) + tallyShift(verdictB[slot])
+        nOther   += tallyOther(verdictA[slot]) + tallyOther(verdictB[slot])
+        slot++
+
+    guardBad := 0
+    repeat off from 0 to GUARD_SIZE - 1
+        if txBuf[OFF_MAX + XFER_BYTES + off] <> GUARD_BYTE
+            guardBad++
+        if rxBuf[OFF_MAX + XFER_BYTES + off] <> GUARD_BYTE
+            guardBad++
+
+    debug(" ")
+    debug("============================================================")
+    if guardBad > 0
+        debug("* GUARD VIOLATED (", udec_(guardBad), " bytes) -- RESULTS INVALID, probe overran its buffer")
+    elseif nOther > 0
+        debug("* ", udec_(nOther), " INCONCLUSIVE point(s) -- transfer failed or content wrong but not a shift.")
+        debug("* Do NOT read this as an answer either way. Instrument or a different defect.")
+    elseif nShifted > 0
+        debug("* ", udec_(nShifted), " SHIFTED point(s) of ", udec_(OFF_PTS * 2), " -- THE PRE-FIX PATH CAN STORE SHIFTED DATA")
+        debug("* Released code could produce the fault. The v1.7.0 upgrade note stands and")
+        debug("* should probably be strengthened. Report which offsets failed.")
+    else
+        debug("* ALL ", udec_(OFF_PTS * 2), " POINTS CORRECT -- v1.6.1's write path stored correct data")
+        debug("* at every buffer position on this card. Not proof that no release could ever")
+        debug("* fail, but the failing condition is not reachable by moving the buffer.")
+        debug("* The v1.7.0 upgrade note should soften further.")
+    debug("============================================================")
+    debug(" ")
+    waitms(500)
+    debug("END_SESSION")
+
+
+PRI onePoint(wrOff, patSel) : verdict | idx, result
+
+    bytefill(@txBuf, 0, OFF_MAX + XFER_BYTES)
+    bytefill(@txBuf + OFF_MAX + XFER_BYTES, GUARD_BYTE, GUARD_SIZE)
+    repeat idx from 0 to XFER_BYTES - 1
+        txBuf[wrOff + idx] := patByte(patSel, idx)
+
+    result := sd.writeSectorsRaw(SECTOR_BASE, SECTOR_COUNT, @txBuf + wrOff)
+    if result <> SECTOR_COUNT
+        return V_WRFAIL
+
+    bytefill(@rxBuf, $5A, OFF_MAX + XFER_BYTES)
+    bytefill(@rxBuf + OFF_MAX + XFER_BYTES, GUARD_BYTE, GUARD_SIZE)
+
+    ' Read back at offset 0 always: this probe asks what the WRITE stored, so the read
+    ' side is held constant.
+    result := sd.readSectorsRaw(SECTOR_BASE, SECTOR_COUNT, @rxBuf)
+    if result <> SECTOR_COUNT
+        return V_RDFAIL
+
+    return classify(patSel)
+
+
+'' Compare against an INDEPENDENTLY GENERATED expectation -- never against txBuf. Then say
+'' which kind of wrong it is. Same classifier as SD_tx_phase_shmoo.
+PRI classify(patSel) : verdict | idx, corr, prev, nxt, late, early, nCorr, nLate, nEarly, nCheck
+
+    nCorr := 0
+    nLate := 0
+    nEarly := 0
+    nCheck := 0
+
+    repeat idx from 1 to XFER_BYTES - 2
+        corr  := patByte(patSel, idx)
+        prev  := patByte(patSel, idx - 1)
+        nxt   := patByte(patSel, idx + 1)
+        late  := ((corr >> 1) | ((prev & 1) << 7)) & $FF
+        early := ((corr << 1) | ((nxt >> 7) & 1)) & $FF
+        nCheck++
+        if rxBuf[idx] == corr
+            nCorr++
+        elseif rxBuf[idx] == late
+            nLate++
+        elseif rxBuf[idx] == early
+            nEarly++
+
+    if nCorr == nCheck
+        return V_CORRECT
+    if (nLate * 100 / nCheck) >= 98
+        return V_LATE
+    if (nEarly * 100 / nCheck) >= 98
+        return V_EARLY
+    return V_OTHER
+
+
+'' Pattern A is sequential, pattern B alternating. Neither is degenerate: an all-$FF or
+'' all-$00 fill cannot separate "stored correctly" from "stored one bit late", which is
+'' why SD_stored_shift_probe reported two of its five sectors as DEGENERATE.
+PRI patByte(patSel, idx) : value
+
+    if patSel == 0
+        value := idx & $FF
+    else
+        value := (idx & 1) ? $55 : $AA
+
+
+PRI tallyShift(verdict) : count
+
+    if verdict == V_LATE or verdict == V_EARLY
+        return 1
+    return 0
+
+
+PRI tallyOther(verdict) : count
+
+    if verdict == V_OTHER or verdict == V_WRFAIL or verdict == V_RDFAIL
+        return 1
+    return 0
+
+
+PRI verdictName(verdictCode) : p_str
+
+    case verdictCode
+        V_CORRECT: p_str := @"CORRECT"
+        V_LATE:    p_str := @"SHIFTED-LATE"
+        V_EARLY:   p_str := @"SHIFTED-EARLY"
+        V_OTHER:   p_str := @"OTHER"
+        V_WRFAIL:  p_str := @"WRITE-FAIL"
+        other:     p_str := @"READ-FAIL"
