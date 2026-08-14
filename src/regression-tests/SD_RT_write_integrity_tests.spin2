@@ -253,7 +253,7 @@ PRI writeChunk(handle, off, len, seed) | idx, thisLen
 
 
 '' Reopen, read back in chunks, classify. Returns the worst verdict seen.
-PRI verifyFile(pName, len, seed) : verdict | handle, off, got, thisLen, v
+PRI verifyFile(pName, len, seed) : verdict | handle, off, got, thisLen, chunkVerdict
 
     verdict := V_CORRECT
     handle := sd.openFileRead(pName)
@@ -271,9 +271,9 @@ PRI verifyFile(pName, len, seed) : verdict | handle, off, got, thisLen, v
         if got <> thisLen
             verdict := V_OTHER
             quit
-        v := classify(@rdBuf, thisLen, off, seed)
-        if v <> V_CORRECT
-            verdict := v
+        chunkVerdict := classify(@rdBuf, thisLen, off, seed)
+        if chunkVerdict <> V_CORRECT
+            verdict := chunkVerdict
             quit
         off += thisLen
 
