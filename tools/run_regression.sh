@@ -230,13 +230,21 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# --- Tee all output to a transcript, if asked -------------------------------
+# --- Tee all output to a transcript -----------------------------------------
 # Done immediately after arg parsing so the banner and every phase land in the
 # file. Enables "launch in background, poll the log" instead of chunked runs.
-if [[ -n "$TEE_LOG" ]]; then
-    mkdir -p "$(dirname "$TEE_LOG")"
-    exec > >(tee -a "$TEE_LOG") 2>&1
+#
+# ALWAYS ON as of 2026-08-14. It used to require --log, and the 587/587 run that
+# certified 28 suites was launched without it: every per-suite log survived, but the
+# aggregate -- including the Tree: provenance line added that same morning, whose entire
+# purpose is tying a result to a commit -- went to the console and was lost. A record
+# that depends on the operator remembering a flag is not a record. --log still overrides
+# the default path.
+if [[ -z "$TEE_LOG" ]]; then
+    TEE_LOG="${SCRIPT_DIR}/logs/sweep_$(date +%y%m%d-%H%M%S).txt"
 fi
+mkdir -p "$(dirname "$TEE_LOG")"
+exec > >(tee -a "$TEE_LOG") 2>&1
 
 # Build per-test --external flag pass-through (for run_test.sh) and direct
 # pnut-ts preprocessor flag (for compile-only path that calls pnut-ts directly).
