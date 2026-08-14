@@ -20,7 +20,7 @@ Sector writes no longer depend on where the linker put the driver, failures the 
 
 ### Bug Fixes
 
-- Every sector write lands at the card as the bytes the caller gave, whatever the build's memory layout. The write path could fetch its data inside the window where the clock pin was being set up, which put the data one bit out of phase with the clock and stored a shifted sector while reporting success — and reading it back reported the shifted bytes as correct, because the card had genuinely stored them that way. Which side of the boundary a build fell on depended on where the linker placed the driver's data, so enabling `SD_INCLUDE_SPEED` was enough to change a working build into a silently corrupting one. Reads were never affected.
+- Every sector write lands at the card as the bytes the caller gave. The write path could fetch its data inside the window where the clock pin was being set up, putting the data one bit out of phase with the clock, so the card stored a shifted sector while reporting success — and reading it back returned the shifted bytes, because the card had genuinely stored them that way. The fetch is now issued before that window opens, so the timing no longer depends on anything outside the instruction sequence. Reads were never affected.
 - `error()` describes the operation that just completed rather than the last failure since boot. Every method that issues a command records its outcome on both exit paths; the pure accessors are exempt so a diagnostic call cannot erase the error being diagnosed.
 - A metadata write that fails part-way no longer leaves the filesystem in a state that reports success. Cluster allocation, delete, directory creation, rename and move each check every write and leave the recoverable outcome on the card.
 - An unreadable directory is no longer indistinguishable from a name that is not there, so a create no longer writes a second entry for a file that already exists.
@@ -54,7 +54,7 @@ Sector writes no longer depend on where the linker put the driver, failures the 
 
 ### Upgrade / recovery note
 
-The write-path defect above was structurally present in every release from v0.9.3 through v1.6.1, so data written by an earlier release *could* be wrong on the card. **The practical risk is low:** no user has reported it, and it never occurred across four months of certification — 27 regression binaries per release, each with its own hub layout, all doing byte-level content verification. A one-bit shift is also not subtle; it makes text unreadable and binary structures obviously malformed.
+The instruction ordering that allowed this was present in every release from v0.9.3 through v1.6.1. **Whether any released build could actually produce the fault is not established, and the evidence suggests not:** no user has reported it, and it never occurred across four months of certification — 27 regression binaries per release, each with a different memory layout, all doing byte-level content verification. It was observed once, on one development commit. A one-bit shift is also not subtle; it makes text unreadable and binary structures obviously malformed, so an affected user would have known.
 
 - `SD_FAT32_audit` and `SD_FAT32_fsck` cannot detect it, and a CLEAN result is not evidence either way — the filesystem structures stay intact and only sector *contents* would be wrong. Same shape as v1.6.0's mid-sector append defect.
 - Opening a file and looking at it settles the question for most data. Rewriting an affected file with a v1.7.0 build is sufficient; no reformat is needed.

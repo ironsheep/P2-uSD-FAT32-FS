@@ -27,6 +27,8 @@ Detection method is recorded per defect because the three methods used had subst
 
 Relevant to §4. The write burst's timing has been modified four times.
 
+**`RDFAST` sat between the SCK reset and `XINIT` in every release from v0.9.3 through v1.6.1** — verified by walking the tags. None of the changes below introduced that; they moved the phase within a window that already had the problem.
+
 | Release | Change |
 |---|---|
 | v1.3.2 | Streamer write timing corrected for power-of-2 SPI half-periods (hp=4, hp=8) via NCO frequency adjustment |
@@ -34,7 +36,7 @@ Relevant to §4. The write burst's timing has been modified four times.
 | v1.5.2 | Write path: removed the explicit `WAITX align_delay` from the write burst, relying on the incidental delay of surrounding instructions |
 | v1.7.0 | `SETXFRQ`/`RDFAST` hoisted above the SCK reset; explicit `WAITX tx_align_delay` restored with a measured value (§4) |
 
-The v1.5.2 change converted an explicit timing guarantee into an implicit one. §4 is the failure of that implicit guarantee.
+The v1.5.2 change converted an explicit timing guarantee into an implicit one, and so moved the phase — but the window itself predates it by fourteen releases. §4 is the failure of that implicit guarantee, observed once.
 
 ---
 
@@ -169,7 +171,7 @@ Listed separately because the mechanism recurs in §4.
 
 ---
 
-## 4. v1.7.0 — write-path phase dependence on binary layout
+## 4. v1.7.0 — write-path phase fault: sectors stored one bit late
 
 ### 4.1 Presentation
 

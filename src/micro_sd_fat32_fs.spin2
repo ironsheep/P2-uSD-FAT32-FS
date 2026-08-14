@@ -7992,8 +7992,8 @@ PRI readSectors(start_sector, count, p_buffer) : sectors_read | _sck, _miso, p_b
         ' Streamer bulk transfer: 512 bytes from MISO to hub.
         ' LAYOUT-INVARIANCE (2026-08-12): SETXFRQ/WRFAST hoisted above the SCK
         ' reset, matching readSector's Phase 1.5 ordering, so every op from
-        ' DRVL onward is fixed-2-clock and capture phase cannot move with hub
-        ' layout. (WRFAST is near-fixed latency per p2kbArchFifo, unlike the
+        ' DRVL onward is fixed-2-clock and the capture phase is a compile-time
+        ' constant. (WRFAST is near-fixed latency per p2kbArchFifo, unlike the
         ' write path's RDFAST -- hoisted anyway for one uniform discipline.)
         ORG
               SETXFRQ   xfrq                            ' Set streamer NCO rate (before SCK reset)
@@ -8240,8 +8240,15 @@ PRI writeSector(sector, buf_type) : status | _sck, _mosi, p_buf, stream_mode, cl
     '      SCK edges land on the base-period grid anchored at DIR-rise
     '      (p2kbArchSmartPin00101TransitionOutput), so data-vs-clock phase is
     '      now a build-independent constant, tuned once via tx_align_delay.
-    ' History: v1.5.2 removed WAITX align_delay here, relying on "natural
-    ' settling" -- that margin was a layout lottery, won until a41c839 lost it.
+    ' History: RDFAST sat inside this window in EVERY release from v0.9.3 through
+    ' v1.6.1 (verified by walking the tags). v1.5.2 additionally removed the WAITX
+    ' that had sat between XINIT and WYPIN, which moved the phase but did not
+    ' introduce the window problem. The fault was observed ONCE, at a41c839, and
+    ' confirmed at the card by reading the affected sectors back with a known-good
+    ' build (SD_stored_shift_probe: 495/495 bytes shifted, three patterns).
+    ' WHAT SELECTS THE FAILING PHASE IS NOT IDENTIFIED. Do not write "layout" here
+    ' as though it were the cause -- that attribution was withdrawn 2026-08-13, and
+    ' no released build has ever been shown to produce the fault.
     ORG
               SETXFRQ   xfrq                            ' Set streamer bit rate (before SCK reset)
               RDFAST    #0, p_buf                       ' Prime FIFO -- variable-latency op lands HERE, outside the phase window

@@ -22,13 +22,20 @@ know it existed, not because we think your card is corrupt.
 
 v1.7.0 fixes a write-path timing defect in which the outgoing data could be one bit out
 of phase with the clock that latched it, so the card **stored a shifted sector while
-reporting success**. Whether a build was affected depended on where the linker placed
-the driver's data in hub RAM — a property of the *binary*, not of the card, the card
-slot, or the code you wrote. Reads were never affected. The structural flaw was present
-in every release from v0.9.3 through v1.6.1.
+reporting success**. It was observed once, on a development commit, and confirmed by
+reading the affected sectors back with a known-good build: the data on the card really
+was the one-bit-late bitstream. Reads were never affected — the fault was entirely on
+the write side.
+
+The instruction ordering that permitted it was present in every release from v0.9.3
+through v1.6.1. **Whether any released build could actually produce the fault is not
+established** — see below.
 
 ### Why we believe the practical risk is low
 
+- **It has never been observed outside one development commit.** What selects the
+  failing timing has not been identified. Until it is, the step from "the ordering was
+  present" to "a released build could hit it" is an inference, not a finding.
 - **No user has reported it.** A one-bit shift does not corrupt data subtly — it makes
   text unreadable and binary structures obviously malformed. Anyone affected while
   writing ordinary files would have noticed at once.
