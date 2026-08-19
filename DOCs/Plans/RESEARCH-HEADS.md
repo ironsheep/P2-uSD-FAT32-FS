@@ -9,8 +9,9 @@ that has a bench-side action queued; container-side actions proceed between
 sessions. Settled findings move down into each head's running list and stay
 there, so the history accumulates without cluttering the decision surface.
 
-**Last updated:** 2026-08-19, H3's container work complete — the sweep instruments
-are built and the two-table format is defined. Round 16 queued.
+**Last updated:** 2026-08-19 (bench session 2 hand-back). Driver **certified
+534/534**; H2's 16d found unreachable and deferred past the tag; round 16 resumes at
+the run sheet's step 4.
 
 **Round 11 run sheet:** `DOCs/Plans/SOCKET-SHMOO-RUN-BRIEF.md`, section ROUND 11.
 Card selection is coordinated there — 11b and 11c are meaningless on a card that
@@ -27,10 +28,10 @@ root-caused fix for a months-old defect plus a public API contract change.
 
 | Head | Next action | Where | Blocked? |
 |---|---|---|---|
-| **H1 · Edge wedge** | ✅ **Root-caused and FIXED.** CMD12 quiesce is unconditional in `initCard()`. Needs full regression to certify | bench | no |
-| **H3 · Catalog integrity** | 🔴 **RELEASE GATE.** Full catalog performance sweep. **Container work is DONE — the instruments are built.** | bench | no |
-| **H2 · High-speed performance** | 🔴 **GATES 16c.** One unrun measurement (16d) decides whether the policy can be general | bench | no |
-| **H4 · Release** | Blocked on H3's sweep, not on H1. Then doc close-out and tag | container | **yes — H3** |
+| **H1 · Edge wedge** | ✅ **Root-caused, FIXED and CERTIFIED** — 534/534, 27 suites, every mount through the quiesce. Remaining: step 4, the Lerdisk in the Edge socket, which retires a documented incompatibility | bench | no |
+| **H3 · Catalog integrity** | 🔴 **RELEASE GATE.** Full catalog performance sweep (run sheet steps 5-6). Instruments built; benchmark + characterize still unproven on hardware since their rewrite | bench | no |
+| **H2 · High-speed performance** | ⏸ **No longer gates 16c** — the two-armed sweep discharges it, and v1.8.0 ships the default unchanged. 16d turned out **unreachable** on the shipped driver; H2's own campaign follows the tag | later | no |
+| **H4 · Release** | Blocked on H3's sweep, not on H1 and no longer on H2. Then doc close-out and tag | container | **yes — H3** |
 
 **Stephen's release conditions (2026-08-19):**
 1. The quiesce runs **on every driver start**, not gated behind a flag.
@@ -332,32 +333,62 @@ follow-ups agreed: writes verify byte-clean, and the pad at hp=4 is two clear of
 the nearest tooth. The one reproducible regression (Samsung, −52%) is card-side
 behaviour in high-speed mode.
 
-### Next — and this head GATES the release, it is not parked
+### 🔑 The missing cell is UNREACHABLE on the shipped driver (2026-08-19)
 
-**Corrected 2026-08-19.** This head was filed as "nothing at the bench, a product
-decision". Both halves were wrong.
+**Round 16d was written into the run sheet as step 2 and deferred before it ran.**
+The container found, while building the arm the bench asked for, that the cell
+cannot be constructed:
 
-1. **It gates the sweep.** `mount()` never calls `attemptHighSpeed()`, so 16c
-   measures the non-high-speed path. If the default changes afterwards, every read
-   row moves by up to +47% and the sweep is repeated — the same "or we sweep twice"
-   trap already flagged for the table format. Either the decision lands first, or
-   **16c runs two-armed**, which is the recommendation.
-2. **It is not purely a decision — one measurement is missing.** Rounds 10b/11b
-   moved mode and clock together, so the Samsung's −52% has never been attributed
-   to either. Round **16d** is the missing cell: high speed negotiated, writes
-   clocked at 25 MHz. Clock-side means the asymmetric policy works and is general;
-   mode-side means it cannot, and the choice narrows.
+- The `CMD_SET_SPI_SPEED` handler calls `applyDefaultSpeedMode()` — a CMD6 switch
+  back to default mode — **before** applying any hand-set clock. `attemptHighSpeed()`
+  then `setSPISpeed(25_000_000)` therefore lands in *default mode at 25 MHz*, which
+  is 10b's arm, not the missing cell. There is no public path to the cell, and
+  `attemptHighSpeed()` takes no frequency argument.
+- **The prohibition is measured.** Round 8a run 2 built the cell by accident, before
+  that exit was hooked, and every operation after it returned `-7` — card on
+  high-speed output timing, host sampling default. Hooking it is v1.8.0 item 5.
+- **A previous entry here was wrong** and is retracted: "`effectiveAlignDelay()`
+  derives from live `spi_period`, so a per-operation clock change needs no new timing
+  machinery." The *align* machinery does adapt per burst; the clock change never
+  arrives with the mode still set. That error is what put an unreachable step on a
+  bench run sheet, and it cost a bench pause.
+
+**What the spec does and does not say** (checked in `DOCs/Specs/`, not recalled):
+High Speed is "Frequency **up to** 50 MHz" — a ceiling, stated unlike UHS-II which
+is given as a range — and SPI mode inherits it (§7.2.14, "Same as SD mode"). No floor
+appears anywhere. But §6.6.6/§6.6.7, the bus-timing tables that would carry one, are
+**blank in the Simplified Specification**, so the spec in our tree neither grants nor
+denies a minimum. It is an empirical question, and 8a run 2 is the only data.
+
+### Next — H2's own campaign, after v1.8.0 tags
+
+**This head no longer gates the release.** The sweep dependency is discharged by
+16c running **two-armed** (run sheet step 6), which makes the catalog valid for
+whichever policy is eventually chosen; v1.8.0 ships the high-speed default unchanged
+and opt-in. What remains is a product decision for a later release.
+
+The experiment, in order, on the **retained** Samsung EVO — no one-shot cards, no
+release clock:
+
+1. **A diagnostic clock knob** that sets the frequency *without* the CMD6
+   switch-back, debug-only, following the `debugSetOverspeedAllowed()` precedent.
+   Nothing else can reach the cell.
+2. **A read-band phase sweep at hp=7 inside verified high-speed mode.** Round 12d
+   measured the hp=4 band inside high-speed mode at `[-3..+4]` centre 0, three ticks
+   below where the same band sits outside it — bands move with the card's mode, which
+   is the likeliest reason 8a run 2 stranded rather than a physical bar. **If no band
+   exists here, the cell is closed and the asymmetric policy is dead.** That is a
+   real result, not a failed run.
+3. **Then 16d itself** at the band centre, and the rungs between are the more
+   interesting space: hp=5 = 35 MHz and hp=6 = 29.17 MHz are both inside high speed
+   and both spec-legal, and may buy the read gain without the write loss.
 
 **Any policy must be general, not card-specific** — brand does not predict
 controller, one silicon key carries two labels, and SKUs are re-sourced silently, so
 a per-card table would mis-fire unobserved. An asymmetric rule is a policy about
-*operation type*, which stays general.
-
-**Two feasibility facts, both checked rather than recalled:** the spec permits a
-card in high-speed mode to be clocked below 50 MHz (High Speed is "Frequency up to
-50 MHz", a ceiling — stated unlike UHS-II, which is given as a range); and
-`effectiveAlignDelay()` derives from the live `spi_period` at each burst site, so a
-per-operation clock change needs no new timing machinery.
+*operation type*, which stays general. Note that the *cheap* asymmetric form is the
+one that needs the knob; the CMD6-switch-per-operation form was already judged viable
+per-session only.
 
 **Standing exposure:** every conclusion on this head is **n=1 per card**. Round 16e's
 three Lexar reds test whether the +44% write gain belongs to the product or to one

@@ -121,11 +121,75 @@ contract, not against output.
 
 | | |
 |---|---|
-| **Source SHA to run** | `88fe9a3` — verify with `git log --oneline -1 -- src/ diagnostic-tests/` |
+| **Source SHA to run** | `88fe9a3` — **unchanged**; verify with `git log --oneline -1 -- src/ diagnostic-tests/` |
 | **Tree** | clean; six gates green |
-| **Resume at** | **Step 1, re-run in full** (driver + test changed) |
+| **Resume at** | **Step 4.** Step 2 is deferred — do not run it; see below |
 
-### Container hand-back, session 1 → 2
+### Container hand-back, session 2 → 3
+
+**No source changed, so your 534/534 still certifies the driver steps 4-6 will run
+on.** The whole of this hand-back is a decision and a correction.
+
+#### Step 2 is DEFERRED. Do not run it.
+
+**The cell it asks for cannot be built with the driver you are holding, and that is
+a fault in the run sheet, not in your reading of it.** Three facts, in the order that
+matters:
+
+1. **`setSPISpeed()` leaves high-speed mode on the way through.** The
+   `CMD_SET_SPI_SPEED` handler calls `applyDefaultSpeedMode()` — a CMD6 switch back
+   to default mode — *before* it applies any hand-set clock. So `attemptHighSpeed()`
+   followed by `setSPISpeed(25_000_000)` lands in **default mode at 25 MHz**: round
+   10b's arm, already measured, not the missing cell. Your search found no
+   instrument for the cell because the driver has no way to reach it.
+
+2. **That prohibition is measured, not precautionary.** Round 8a run 2 built this
+   exact cell by accident — a verified high-speed switch, then a hand-set 25 MHz,
+   before that exit was hooked — and every operation after it returned `-7`
+   (`SD_RT_speed_tests` #9/#12). Card on high-speed output timing, host sampling on
+   default-mode timing. Hooking that exit is item 5 of the bundle you just certified.
+
+3. **Reaching the cell needs new machinery *and* a sweep before the sweep.** A
+   debug-only knob that sets the clock without the switch-back, then a read-band
+   phase sweep at hp=7 *inside* verified high-speed mode to find where to sample.
+   Round 12d measured the hp=4 band inside high-speed mode at `[-3..+4]`, centre 0,
+   with the shipped +5 outside it — bands move when the card's mode changes, which
+   is the likeliest reason 8a run 2 stranded. Without that sweep first, the cell
+   returns nothing but `-7` and we would merely be re-running 8a run 2.
+
+#### Why deferred rather than built now
+
+- **A driver change invalidates your 534/534.** A certification run is atomic. The
+  knob would be debug-only and would not alter what ships, but it would still cost a
+  full re-sweep before steps 4-6 could start.
+- **The scarce resource this round is the deployment-bound cards.** They are
+  one-shot. The Samsung EVO is retained and will be on the shelf whenever we come
+  back to it. Unrepeatable work goes first.
+- **Nothing downstream needs the answer.** Step 6 is two-armed *by design*, so the
+  sweep produces release numbers for whichever policy is eventually chosen. That is
+  precisely the job two arms were added to do.
+- **v1.8.0 does not change the high-speed default.** It ships high speed opt-in with
+  correct mode bookkeeping. The policy belongs to a later release.
+
+The punch-list entry is corrected — it had claimed "the driver already supports it",
+which is what put an unreachable step on this sheet — and re-classified from release
+gate to open product decision, carrying the three-step design for the real
+experiment.
+
+#### Settled without bench time — do not spend a slot on it
+
+The Samsung EVO PSN question (catalog row keyed `C0305565`, the campaign card reads
+`$4AC8_5F42`) is **not** a transcription error: `DOCs/cards/samsung-gd4qt-128gb.md`
+already documents two physical units of the same model. The sweep's per-card
+`CARD-ID:` line keys whichever unit is in the socket, so this resolves mechanically
+when you get there.
+
+#### Then
+
+Resume at **step 4** (16b, the Lerdisk in the Edge socket), then step 5, then step 6.
+The Samsung EVO can be unstaged.
+
+### Container hand-back, session 1 → 2 *(historical — completed)*
 
 **Both work items are done, and one of them was a near miss.**
 
@@ -199,10 +263,13 @@ cd tools
 A sweep run under a stale version constant mislabels every row it produces, and
 the mislabelling is indistinguishable from correct data afterwards.
 
-**Nothing below has run on hardware yet.** The driver, `SD_performance_benchmark`,
-`SD_speed_characterize` and `SD_card_identify` all changed on 2026-08-19 and are
-compile-verified only. Expect first-light friction in step 2 and step 5; that is
-the point of running them before the sweep, not after.
+**First-light status, updated after session 2.** The driver is certified on hardware
+(534/534) and `SD_card_identify` is verified end to end, emitter through harvester.
+**`SD_performance_benchmark` and `SD_speed_characterize` have still not run since
+their 2026-08-19 rewrite** — their identity and CATALOG lines were fixed alongside
+`SD_card_identify` but only that one has been proven on a card. Expect first-light
+friction at step 5, and run one throwaway benchmark through `harvest_catalog.sh`
+before any one-shot card goes in the socket.
 
 ---
 
@@ -249,30 +316,38 @@ version constant.
 
 ---
 
-## Step 2 — 16d: the cell that decides the speed policy 🔑
+## Step 2 — 16d: the speed-policy cell — ⏸ DEFERRED, DO NOT RUN
 
-**One card (Samsung EVO `$4AC8_5F42`), one arm, minutes. Run it before anything
-downstream, because it is the only step whose outcome can change the driver.**
+**Deferred 2026-08-19, before it ran. The cell is unreachable with the shipped
+driver; the full reasoning is in the session 2 → 3 hand-back above.**
 
-Rounds 10b/11b moved *mode* and *clock* together, so the Samsung's reproducible
-−52% write regression has never been attributed to either. The missing cell is
-**high speed negotiated, then writes clocked at 25 MHz**.
+In one line: `setSPISpeed()` CMD6-switches the card *out* of high-speed mode before
+applying any hand-set clock, so "high speed negotiated, writes at 25 MHz" cannot be
+constructed — and round 8a run 2 already showed that holding the card in high speed
+while the host drops to 25 MHz strands the link with a `-7` cascade.
 
-| Result | Meaning | What happens next |
-|---|---|---|
-| Writes recover at 25 MHz | Regression is **clock-side** | Asymmetric policy works and is general — reads fast, writes at 25, one rule for every card. **Driver changes → re-run step 1** |
-| Writes still slow | Regression is **mode-side** | Dropping the clock cannot help. Either keep high speed opt-in (no driver change, continue), or ship it by default accepting one controller family's write loss |
+Reaching it needs a debug-only clock knob that skips the switch-back, plus a read-band
+phase sweep at hp=7 *inside* high-speed mode to find the sampling centre there. That
+is **H2's next campaign, after v1.8.0 tags**, on the retained Samsung — not this
+round, whose scarce resource is the one-shot deployment-bound cards.
 
-**Record:** the write figures at 43.75 vs 25 MHz inside high-speed mode, and
-whether `isHighSpeedActive()` stayed true throughout.
+Nothing downstream depends on it: step 6 is two-armed, so the sweep is valid for
+whichever policy is eventually chosen, and v1.8.0 does not change the high-speed
+default.
 
 ---
 
-## Step 3 — decide the policy  *(container, between bench sessions)*
+## Step 3 — decide the policy — ✅ DECIDED (no change in v1.8.0)
 
-Step 2's answer maps to a policy via the table above. If the driver changes,
-**return to step 1** before going further — a sweep must measure the shipping
-driver.
+**Decided 2026-08-19 without step 2, because step 2 turned out to be unreachable.**
+
+v1.8.0 ships the high-speed default **unchanged**: opt-in via `attemptHighSpeed()`,
+now with correct mode bookkeeping and a switch-back on every exit. No driver change,
+so **step 1 does not re-run** and the 534/534 certification stands for steps 4-6.
+
+The policy question itself stays open as a product decision for a later release; the
+evidence and the design of the experiment that would settle it live in the punch-list
+entry "Read/write speed policy is undecided".
 
 ---
 
@@ -301,6 +376,10 @@ a card-to-card delta means nothing until the same-card spread is known.
    keys, that is a *better* result, not a spoiled one, but we must know which
    experiment we are running.
 2. **Run variance:** one Gigastone, `REPEAT_RUNS > 1` in `SD_performance_benchmark`.
+   **This is also the benchmark's first light since its 2026-08-19 rewrite** — it is
+   a *retained* card, so put it in the socket before any one-shot unit and feed its
+   log to `harvest_catalog.sh`. If the harvester refuses a field, stop: that is the
+   emitter fix incomplete, and it must be right before a card you cannot re-measure.
 3. **Instance variance:** all 5 Camera Plus. n=5 is the only set that can show a distribution.
 4. **The 3 Lexar reds — not optional.** The Lexar red is one of the three H2 cards
    and the clean-win case (+47% reads, +44% writes). Every H2 conclusion is **n=1
@@ -339,10 +418,10 @@ spanning two driver versions.
 
 ## What "done" looks like
 
-- [ ] Step 0: both 64 GB PSNs recorded, `00000F14` marked green
-- [ ] Step 1: 534/534
-- [ ] Step 2: write regression attributed to clock or mode
-- [ ] Step 3: policy decided; if the driver changed, step 1 re-run and green
+- [x] Step 0: both 64 GB PSNs recorded, `00000F14` marked green
+- [x] Step 1: **534/534** (session 2, sweep `260819-155926`)
+- [~] Step 2: **deferred** — cell unreachable on the shipped driver; H2's next campaign
+- [x] Step 3: policy decided — **no change in v1.8.0**, high speed stays opt-in
 - [ ] Step 4: Lerdisk verdict in the Edge socket
 - [ ] Step 5: run variance measured before instance variance; one-shot cards fully captured
 - [ ] Step 6: catalog tables harvested, single driver-version banner
