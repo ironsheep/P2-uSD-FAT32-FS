@@ -174,10 +174,45 @@ mandatory regardless of what causes the wedge** — which is why 14a leads. A
 prevention measure (parking pins at `stop()`, a CS pull-up) reduces incidence and
 is worth having, but it cannot close the defect on its own.
 
-**Note on `unmount()` returning the card to a safe mode:** the SD command set has
-no documented way to leave SPI mode once entered — it is understood to persist
-until power is removed, which is consistent with everything observed here. That
-should be confirmed against the SD specification before any fix relies on it.
+### What the SD specification says (checked 2026-08-19, `DOCs/specs/`)
+
+The Physical Layer Simplified Specification v9.10 is in the tree, so three things
+that were assumptions are now quotations.
+
+**1. SPI mode is entered by CS-asserted CMD0 and exited only by power** — §7.2.1,
+verbatim: *"The only way to return to the SD mode is by entering the power cycle."*
+So `unmount()` cannot return the card to SD mode; no command does. This does not
+explain the wedge by itself (the mode is entered on cold runs too, which are
+clean), but it does mean "cleared only by power" is the expected shape for
+**anything** latched in SPI mode, and it closes the question of whether a tidy-up
+at unmount could sidestep the problem. It cannot.
+
+**2. The card carries an internal 50 kΩ pull-up on CS, and it is host-controllable
+via ACMD42** (`SET_CLR_CARD_DETECT`): *"Connect[1]/Disconnect[0] the 50 KOhm
+pull-up resistor on CS (pin 1) of the card."* **Our driver never sends ACMD42** —
+checked; it uses only ACMD13, ACMD41 and ACMD51 — so the pull-up stays in whatever
+state the card powers up in. On a conforming card that is *connected*, which would
+hold a floating CS high and make the float window harmless. On counterfeit silicon
+it is exactly the kind of detail that may not be implemented.
+
+**3. The spec states the principle directly**, for UHS-II but as a general host
+obligation: *"Host shall not leave these unused lines floating, but keep them at a
+defined high or low level."* Our `stop()` leaves all four SD pins floating, and a
+P2 reset does the same for about a second.
+
+### An unprobeable question that turns out to be readable
+
+We cannot put an analyser on the Edge socket — but the P2 can read its own pins.
+Floating CS with `pinclear()` and then sampling `pinr()` measures whether anything
+is actually pulling that line up, which is a **card-side property measured from the
+host side**, needing no probe access at all.
+
+If CS reads high and stable during the float, the card's 50 kΩ pull-up is working
+and a floating CS is not the mechanism. If it reads low, or drifts, then a floating
+CS is a *selected* card and the whole float hypothesis gains a physical basis.
+
+**Queued as an instrument change for the round after next** — the wedge probe is in
+the bench's hands for round 14 and must not change underneath it.
 4. Then the ladder (400 kHz, read-only), finally meaningful now a reproducer exists.
 5. Bench-supply swap if anything points back at power.
 
