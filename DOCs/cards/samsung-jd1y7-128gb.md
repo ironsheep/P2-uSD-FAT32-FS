@@ -1,6 +1,7 @@
 # Card: Samsung PRO Endurance 128GB SDXC
 
 **Label:** [`samsung-pro-endurance-128gb`](CARD-LABELS.md#samsung-pro-endurance-128gb) — printed text is mastered there, not here
+**Disposition:** `retained`
 **Unique ID:** `Samsung_JD1Y7_3.0_D27654A6_202512`
 **Test Date:** 2026-02-17 (initial characterization)
 

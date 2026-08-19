@@ -80,7 +80,7 @@ append a disambiguator when the second one is found.
 
 ### kingston-microsd-hc-8gb
 - **Printed:** Kingston 8GB microSD HC I ui (10) "Taiwan" F(c)o
-- **Notes:** The trailing `F(c)o` is printed on the card and is deliberately preserved; it was lost in one copy previously. Card is dead (no init in either socket, runs hot).
+- **Notes:** The trailing `F(c)o` is printed on the card and is deliberately preserved; it was lost in one copy previously. This is the working 8 GB unit (SN `43F65DC9`, characterized 2026-02-02) — **not** the Kingston-labelled 2 GB that died in round 10a, which has no card record and no label entry.
 
 ### lerdisk-microsd-1gb-class4
 - **Printed:** microSD 1GB Class 4 — "Lerdisk"

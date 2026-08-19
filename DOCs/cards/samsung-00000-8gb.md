@@ -1,6 +1,7 @@
 # Card: "Chinese Made" #2 8GB SDHC (Samsung inside)
 
 **Label:** [`unbranded-chinese-8gb-card2`](CARD-LABELS.md#unbranded-chinese-8gb-card2) — printed text is mastered there, not here
+**Disposition:** `not-located` — card cannot be found in the drawer; its open format defect is blocked on locating it.
 **Unique ID:** `Samsung_00000_1.0_D9FB539C_201408`
 **Test Date:** 2026-02-02 (characterization)
 

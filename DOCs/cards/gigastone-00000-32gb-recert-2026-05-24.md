@@ -1,6 +1,7 @@
 # Card: Gigastone 32GB SDHC — Re-Certification 2026-05-24
 
 **Label:** [`gigastone-microsd-hc-a1-u1-32gb`](CARD-LABELS.md#gigastone-microsd-hc-a1-u1-32gb) — printed text is mastered there, not here
+**Disposition:** `retained`
 **Unique ID:** `Transcend_00000_0.0_000001C9_202307`
 **Original characterization:** 2026-02-02 — see [gigastone-00000-32gb.md](gigastone-00000-32gb.md)
 **This re-cert date:** 2026-05-24

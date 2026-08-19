@@ -91,6 +91,41 @@ evidence base needs re-reading before the policy ships.
 **Step 4 — the 2 SanDisk Extremes.** n=2 cannot give a distribution but will catch
 a gross outlier cheaply. Lowest priority.
 
+### THE DEPLOYMENT-BOUND UNITS ARE A ONE-SHOT
+
+Of each matched set, only the catalog cards stay: **Gigastone unmarked + Gigastone
+green**, and **one Lexar red** (`Longsys/Lexar_MSSD0_6.1_33549024_202411`). The
+remaining three Gigastones and two Lexars are working stock — they are measured on
+the bench and then deployed, and **they do not come back.**
+
+Two consequences that change what to do in the session:
+
+1. **Capture everything from them while they are on the bench**, not just the
+   instance-variance datapoint: identity, both speed arms, the full benchmark. There
+   is no second chance, and a gap found during write-up cannot be filled.
+2. **The n=5 and n=3 findings are unrepeatable by construction.** Any future
+   re-check can only use the retained units — two Gigastones and one Lexar. The
+   write-up must say so rather than implying the experiment can be redone.
+
+They get **no card records** (see CATALOG-PROCEDURE.md, "Two populations of card").
+Their CIDs and measurements live in this round's run notes, because a card record
+asserts re-sweepability and these cards will not be.
+
+### ⚠ TWO THINGS TO RESOLVE AT STEP 0
+
+**(a) Only ONE Camera Plus card record exists.** `gigastone-astc-64gb`
+(`GigastoneOEM_ASTC_2.0_00000F14_202306`) is the only one. If both the green and
+the unmarked Gigastone are staying in the catalog, **one of the two has no card
+record** and needs one created from this round's data.
+
+**(b) This brief says the green/unmarked pair are "two Gigastone 32GB cards"**
+(section ROUND 5 setup, 2026-08-17), but they are now described as part of the
+Camera Plus **64GB** set. One of those is wrong. The catalogued 32GB Gigastone is
+`Transcend_00000_0.0_000001C9_202307` — a different silicon key entirely from the
+Camera Plus `GigastoneOEM_ASTC_2.0`. **The PSNs read at step 0 settle it**, and they
+must, because the socket campaign's card-vs-socket separation algebra keys off the
+green/unmarked PSN mapping.
+
 **Record how and when each unit was purchased.** Five cards from one batch are
 likely one production run, which measures *within-batch* variance — the narrowest
 case, and it understates real-world spread. The write-up has to say which was

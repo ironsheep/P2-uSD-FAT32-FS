@@ -1,6 +1,7 @@
 # Card: Gigastone "Camera Plus" 64GB SDXC
 
 **Label:** [`gigastone-camera-plus-64gb`](CARD-LABELS.md#gigastone-camera-plus-64gb) — printed text is mastered there, not here
+**Disposition:** `retained`
 **Unique ID:** `GigastoneOEM_ASTC_2.0_00000F14_202306`
 **Test Date:** 2026-02-25 (characterization + benchmark)
 

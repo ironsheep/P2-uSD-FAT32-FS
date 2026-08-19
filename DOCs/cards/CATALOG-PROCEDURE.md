@@ -34,6 +34,46 @@ all. It also refuses to emit a table spanning two driver versions.
 instruments' output and into the harvested banner, because throughput is a
 property of the driver as much as of the card.
 
+## Two populations of card, and only one of them gets a record
+
+**A catalog card is committed to this project permanently.** It stays available to
+be re-measured for as long as it works, and **dying is the only way out** of the
+population. That commitment is the entire basis of the pristine-table format: one
+banner naming the driver version, no per-row provenance and no exception table is
+only honest because a full re-sweep is one afternoon — which is only true if every
+card carrying a performance row is still on the shelf.
+
+**Everything else is working stock**, needed elsewhere. Such a card may be measured
+while it is on the bench, but it then goes into service and never comes back.
+
+| | Catalog card | Working stock |
+|---|---|---|
+| Card record | **Yes** | **No** |
+| Performance row | Yes | Never |
+| Re-measurable on the next release | Yes | No |
+| Leaves the population when | It dies | It is deployed |
+
+**Measurements from working stock go in the experiment record that produced them**,
+not into a card record. A card record asserts re-sweepability; a one-shot number
+from a card that has left is an experiment datapoint. Keeping the two apart is what
+keeps the card-record population exactly equal to the re-sweepable population, which
+is what makes the check mechanical.
+
+Every card record therefore carries a **`Disposition:`** line, validated by
+`tools/check_card_labels.sh`:
+
+| Value | Meaning |
+|---|---|
+| `retained` | Committed to the project; re-measurable. The normal case |
+| `dead` | Was retained, has failed. Record and historical data stay; no new rows |
+| `deployed` | Measured once, then went into service. Should rarely have a record at all |
+| `not-in-possession` | Never ours, or returned — e.g. a customer's card |
+| `not-located` | Believed retained, cannot currently be found |
+
+Availability used to live in prose scattered across three documents. Reading it
+that way is how the working 8 GB Kingston came to be annotated with the death of a
+different, uncatalogued 2 GB Kingston.
+
 ## Run variance is measured BEFORE instance variance
 
 One physical card has been measured moving up to **3x between rounds**, with 6x

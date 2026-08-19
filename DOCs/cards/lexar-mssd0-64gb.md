@@ -1,6 +1,7 @@
 # Card: Lexar Red MicroSD XC A1 V30 U3 64GB
 
 **Label:** [`lexar-a1-v30-u3-64gb`](CARD-LABELS.md#lexar-a1-v30-u3-64gb) — printed text is mastered there, not here
+**Disposition:** `retained`
 **Unique ID:** `Longsys/Lexar_MSSD0_6.1_33549024_202411`
 **Test Date:** 2026-02-17 (full re-characterization)
 

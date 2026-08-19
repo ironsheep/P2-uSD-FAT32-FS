@@ -1,6 +1,7 @@
 # Card: SanDisk SU01G 1 GB SDSC (Industrial, June 2007)
 
 **Label:** [`sandisk-industrial-su-1gb`](CARD-LABELS.md#sandisk-industrial-su-1gb) — printed text is mastered there, not here
+**Disposition:** `not-in-possession` — customer's card, in Italy. Register and identity data are historical and valid; it can never be re-measured.
 **Unique ID:** `SanDisk_SU01G_8.0_006CD5B2_200706`
 **Test Date:** 2026-05-05 (characterization on @macca's hardware)
 **Reporter:** @macca (field user)

@@ -1,6 +1,7 @@
 # Card: Western Digital WD Purple QD101 64GB SDXC
 
 **Label:** [`wd-purple-qd101-64gb`](CARD-LABELS.md#wd-purple-qd101-64gb) — printed text is mastered there, not here
+**Disposition:** `retained`
 **Unique ID:** `SanDisk_WX64G_8.0_EEBAD6C0_202403`
 **Test Date:** 2026-02-17 (initial characterization)
 

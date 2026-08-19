@@ -1,6 +1,7 @@
 # Card: Gigastone 32GB SDHC
 
 **Label:** [`gigastone-microsd-hc-a1-u1-32gb`](CARD-LABELS.md#gigastone-microsd-hc-a1-u1-32gb) — printed text is mastered there, not here
+**Disposition:** `retained`
 **Unique ID:** `Transcend_00000_0.0_000001C9_202307`
 **Test Date:** 2026-02-02 (characterization)
 

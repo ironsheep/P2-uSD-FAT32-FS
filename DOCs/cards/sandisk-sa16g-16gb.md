@@ -1,6 +1,7 @@
 # Card: SanDisk Industrial 16GB SDHC
 
 **Label:** [`sandisk-industrial-16gb`](CARD-LABELS.md#sandisk-industrial-16gb) — printed text is mastered there, not here
+**Disposition:** `retained`
 **Unique ID:** `SanDisk_SA16G_8.0_93E9C0A1_202511`
 **Test Date:** 2026-02-25 (characterization + speed characterization + benchmark)
 

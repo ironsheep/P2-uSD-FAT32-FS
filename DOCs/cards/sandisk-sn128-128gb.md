@@ -1,6 +1,7 @@
 # Card: SanDisk Nintendo Switch 128GB SDXC
 
 **Label:** [`sandisk-nintendo-switch-128gb`](CARD-LABELS.md#sandisk-nintendo-switch-128gb) — printed text is mastered there, not here
+**Disposition:** `retained`
 **Unique ID:** `SanDisk_SN128_8.0_F79E34F6_201912`
 **Test Date:** 2026-02-17 (full re-characterization)
 

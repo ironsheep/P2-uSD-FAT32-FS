@@ -1,6 +1,7 @@
 # Card: SanDisk Extreme PRO 128GB SDXC
 
 **Label:** [`sandisk-extreme-pro-128gb`](CARD-LABELS.md#sandisk-extreme-pro-128gb) — printed text is mastered there, not here
+**Disposition:** `retained`
 **Unique ID:** `SanDisk_AGGCF_8.0_E05C352B_201707`
 **Test Date:** 2026-02-25
 

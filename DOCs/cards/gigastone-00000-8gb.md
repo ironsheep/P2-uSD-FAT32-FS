@@ -1,6 +1,7 @@
 # Card: Gigastone "High Endurance" 8GB SDHC MLC
 
 **Label:** [`gigastone-high-endurance-8gb`](CARD-LABELS.md#gigastone-high-endurance-8gb) — printed text is mastered there, not here
+**Disposition:** `retained`
 **Unique ID:** `SharedOEM_00000_0.0_0001B9D5_202109`
 **Test Date:** 2026-02-01 (characterization)
 
