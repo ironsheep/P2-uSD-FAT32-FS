@@ -3138,3 +3138,19 @@ bench notes — the sweep banner caught a dirty tree; nothing ran on hardware).
 Amazon Basics was reformatted twice by the sweep harness as designed and REMAINS
 SEATED in the Edge socket for the re-run. No incidents; PropPlug and board
 behaved throughout.
+
+---
+
+# Round 16 (bench session 2, 2026-08-19) — resume verified, STEP 1 GREEN
+
+Resumed per the container hand-back in ROUND-16-RUN-SHEET.md (source SHA
+`88fe9a3` verified via the scoped log check; tree clean; check_doc_version 0).
+
+| Gate | Result |
+|---|---|
+| Item B on hardware | **PASS** — identify on the seated Amazon Basics emits `SILICON-KEY: $AD_USD00_2.0`, `CARD-ID: $AD_USD00_2.0_35841E2E_202507`, CATALOG-CARD all plain digits (`tools/logs/SD_card_identify_260819-155904.log`); `harvest_catalog.sh` parses clean, banner "All figures measured on driver v1.8.0", exit 0 |
+| Step 1 (16a) re-run | **534/534, 27 suites, 0 fail.** Speed suite 17/17 — Test #8 now passes on the CMD6-claims-but-refuses card class. Closing audit 23/23; 2 reformats OK. Transcript `tools/logs/sweep_260819-155926.txt`, tree `v1.7.0-31-g80cff82`, source `88fe9a3` |
+
+**v1.8.0 driver certification on Amazon Basics `$3584_1E2E` (64 sec/cluster
+geometry) is complete.** Next per resume: re-identify both retained 64 GB cards
+(clean record-source transcripts), then step 2 (16d, Samsung EVO `$4AC8_5F42`).
