@@ -99,6 +99,11 @@ CON
     BUFFER_SIZE     = 512
     SCRATCH_PATTERN = $5A
 
+    ' FLOAT_BETWEEN / FLOAT_CS_HIGH: how long the SD pins sit undriven between
+    ' cycles. Chosen to match the P2 reset-and-download window that separates two
+    ' driver sessions in the known reproducer (~47-50 KB at 2 Mbaud).
+    FLOAT_MS        = 1200
+
 ' Full driver features: setSPISpeed (SPEED), raw reads for the autopsy (RAW),
 ' and the debug getters (DEBUG).
 #ifdef __SPINTOOLS__
@@ -131,6 +136,12 @@ PUB go() | cycle, verdict, wedged_at
     showArm()
     showCardIdentity()
     debug(" ")
+
+#ifdef RECOVERY
+    runRecoveryLadder()
+    debug("END_SESSION")
+    return
+#endif
 
     wedged_at := -1
     repeat cycle from 1 to CYCLE_COUNT
@@ -171,6 +182,13 @@ PRI showArm()
 
 #ifdef BAD_PIN_PREFIX
     debug("  ARM: BAD_PIN_PREFIX -- two rejected mount() calls on wrong pins before each cycle")
+#endif
+
+#ifdef FLOAT_BETWEEN
+    debug("  ARM: FLOAT_BETWEEN -- SD pins released to high-Z for ", udec_(FLOAT_MS), " ms between cycles")
+#endif
+#ifdef FLOAT_CS_HIGH
+    debug("  ARM: FLOAT_CS_HIGH -- as FLOAT_BETWEEN, but CS is DRIVEN HIGH throughout")
 #endif
 
     if SPEED_TARGET_HZ > 0
@@ -302,7 +320,142 @@ PRI runCycle(cycle) : verdict | status, elapsed_ms, start_ms
         autopsy()
         return -3
     sd.unmount()
+
+#ifdef FLOAT_BETWEEN
+    floatPins(false)
+#elseifdef FLOAT_CS_HIGH
+    floatPins(true)
+#endif
+
     debug("    cycle ", udec_(cycle), " CLEAN")
+
+PRI runRecoveryLadder() | status, attempt, clocks
+' RECOVERY arm: can a WEDGED card be revived by anything short of removing power?
+'
+' RUN THIS ON AN ALREADY-WEDGED CARD -- i.e. immediately after a warm mount_tests
+' has wedged it, with no power cycle in between. It makes no sense on a healthy one.
+'
+' WHY THIS MATTERS MORE THAN THE ROOT CAUSE RIGHT NOW. Rounds 12 and 13 established
+' thoroughly what CAUSES the wedge. Nothing has yet asked what CLEARS it: "only a
+' power cycle" is an observation about the two things anyone happened to try, not a
+' tested claim. If any sequence here revives the card, the user-facing defect becomes
+' something the driver can detect and repair, and the release stops depending on
+' finding the root cause at all.
+'
+' The ladder escalates, and each rung is reported separately so a partial success is
+' visible rather than averaged away:
+'   1. plain re-init, twice -- the baseline the driver already performs
+'   2. a long clocked flush with CS HIGH -- 25x the driver's own recovery flush.
+'      13b showed idle time does not help, but idle is not the same as clocked:
+'      an SD card advances its state machine on SCK, and a card waiting for clocks
+'      it will never receive looks exactly like a card that is dead
+'   3. re-init after that flush
+'   4. a long clocked flush with CS LOW (selected) -- the other half of the space
+'   5. re-init after that
+'
+' @local clocks - Flush clock counter
+
+    debug("======================================================")
+    debug("  RECOVERY LADDER -- expects an ALREADY-WEDGED card")
+    debug("  (run straight after a warm mount_tests, no power cycle)")
+    debug("======================================================")
+
+    repeat attempt from 1 to 2
+        status := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+        debug("  rung 1.", udec_(attempt), " plain initCardOnly: ", sdec_(status), " (", zstr_(errName(status)), ")")
+        if status >= 0
+            debug("  >>> RECOVERED at rung 1 -- the wedge is not persistent across re-init <<<")
+            reportRecovered()
+            return
+        sd.stop()
+
+    debug("  rung 2: 102_400 clocks with CS HIGH (driver's own flush is 4_096)")
+    pinclear(SD_SCK)
+    pinh(SD_CS)
+    pinl(SD_SCK)
+    repeat clocks from 1 to 102_400
+        pinh(SD_SCK)
+        pinl(SD_SCK)
+
+    status := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    debug("  rung 3: initCardOnly after CS-high flush: ", sdec_(status), " (", zstr_(errName(status)), ")")
+    if status >= 0
+        debug("  >>> RECOVERED by clocking with CS HIGH -- this is a DRIVER-FIXABLE defect <<<")
+        reportRecovered()
+        return
+    sd.stop()
+
+    debug("  rung 4: 102_400 clocks with CS LOW (card selected)")
+    pinclear(SD_SCK)
+    pinl(SD_CS)
+    pinl(SD_SCK)
+    repeat clocks from 1 to 102_400
+        pinh(SD_SCK)
+        pinl(SD_SCK)
+    pinh(SD_CS)
+
+    status := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    debug("  rung 5: initCardOnly after CS-low flush: ", sdec_(status), " (", zstr_(errName(status)), ")")
+    if status >= 0
+        debug("  >>> RECOVERED by clocking with CS LOW -- DRIVER-FIXABLE <<<")
+        reportRecovered()
+        return
+
+    debug(" ")
+    debug("  NOT RECOVERED by any rung. 'Only a power cycle clears it' is now a")
+    debug("  tested claim rather than an assumption -- report it as the result.")
+
+PRI reportRecovered() | status
+' Prove a claimed recovery actually reads, rather than merely returning a good
+' status from init. A card that inits but cannot read is not recovered.
+
+    status := sd.readSectorRaw(0, @rawBuffer)
+    debug("  post-recovery raw read of sector 0: ", sdec_(status))
+    if status < 0
+        debug("  >>> init succeeded but the READ still fails -- NOT a real recovery <<<")
+    sd.stop()
+
+PRI floatPins(holdCsHigh)
+' Release the SD pins to high-impedance for FLOAT_MS, reproducing the ONE condition
+' a P2 reset creates that an in-binary cycle never does.
+'
+' WHY (2026-08-19). Round 13a ran a 49.7 KB binary that touched no pin as the
+' predecessor and stayed clean, and concluded that the reset, the float window and
+' the download traffic were all eliminated. That is true only for a VIRGIN card:
+' in 13a the float came BEFORE any driver session had ever touched the card. In the
+' wedging sequence the float comes AFTER one. The order was never varied, so
+' "a card that has been driven, then left floating" remains untested.
+'
+' That combination has an obvious candidate mechanism. CMD0 latches the card into
+' SPI mode until it loses power, and a card already in SPI mode interprets a
+' floating CS and stray SCK very differently from one still in native SD mode. It
+' would explain every row of round 13's table at once: cold clean, null-binary
+' clean, in-binary cycles clean (pins stay driven, CS held high), and every
+' reset-separated session wedged.
+'
+' This routine tests it WITHOUT a reset. If floating after a driver session wedges
+' the card in-binary, no reset is needed and the mechanism is bounded to the pins.
+' If it stays clean, something else about the reset matters and the P2 side comes
+' back into scope.
+'
+' @param holdCsHigh - TRUE keeps CS driven high while the other three float, which
+'                     is the discriminator: if CS is what matters, this arm is clean
+'                     while the plain float arm wedges -- and a board-level pull-up
+'                     on CS becomes a candidate fix
+
+    sd.stop()                                           ' release the driver's ownership first
+
+    pinclear(SD_SCK)                                    ' WRPIN=0 + DIRL: fully high-Z
+    pinclear(SD_MOSI)
+    pinclear(SD_MISO)
+    if holdCsHigh
+        pinh(SD_CS)                                     ' asserted-deselected, as a pull-up would
+        debug("    float ", udec_(FLOAT_MS), " ms (CS held HIGH, SCK/MOSI/MISO high-Z)")
+    else
+        pinclear(SD_CS)
+        debug("    float ", udec_(FLOAT_MS), " ms (ALL four pins high-Z, as a P2 reset leaves them)")
+
+    waitms(FLOAT_MS)
 
 PRI doWriteBurst() | handle, written, bytesRead
 ' The write half: create, write, close, reopen, read back, delete. The original

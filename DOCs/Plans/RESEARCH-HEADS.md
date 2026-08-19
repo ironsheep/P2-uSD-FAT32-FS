@@ -23,10 +23,10 @@ two counterfeits are 11a's subject.
 
 | Head | Next action | Where | Blocked? |
 |---|---|---|---|
-| **H1 · Edge wedge** | **13a/b/c** narrow what a "prior session" leaves behind. Deterministic reproducer in hand at last | bench | no |
-| **H2 · High-speed performance** | Nothing at the bench. **Decide the read/write asymmetry policy** — correctness is established | container | no |
+| **H1 · Edge wedge** | **14a** can a wedged card be RECOVERED without power? Then **14b/c** float-after-session | bench | no |
+| **H2 · High-speed performance** | Nothing at the bench. Decide the read/write asymmetry policy | container | no |
 | **H3 · Catalog integrity** | Build instruments to emit the new format; run variance before instance variance | container | no |
-| **H4 · Release** | §8 numbers can be written now. Version still depends on H1 | container | version: **yes — H1** |
+| **H4 · Release** | §8 numbers writable now. **14a could unblock the version decision without a root cause** | container | version: **yes — H1** |
 
 **A method rule this campaign has now paid for twice — measure in the state that
 ships, not the state that is convenient.** Reference-content aliasing (round 6)
@@ -114,7 +114,16 @@ socket. Wedge is invariant: `mount()` #2 returns `-8`, raw init then fails.
 - [x] **Cross-binary boundary eliminated in its literal form** — no boundary is crossed before the wedge fires at test #13
 - [x] The predecessor does not need to be a *different* program: one wedging run's predecessor was the identical `mount_tests` binary
 
-### What survives, and the constraint that shapes round 13
+- [x] **A driver session IS required** (13a): a 49.7 KB binary that touches no pin, download-size-matched so its float window is *longer*, is clean 2/2
+- [x] **The state is LATCHED** (13b): 120 s of powered idle still wedges. The garbage-collection model is refuted, and so is any fix resting on "wait longer in init"
+- [x] **Writes are irrelevant** (13c): a read-only predecessor with FSInfo suppressed still wedges. Filesystem state exonerated — what persists is **controller state, not data**
+
+### The condition, as bounded after round 13
+
+**A driver session that touches the SD pins (reads suffice), then a P2 reset, then
+another driver session. Latched in the card; cleared only by removing power.**
+
+### What survives, and the constraint that shapes round 14
 
 What is left is **card or pin state that persists across a P2 reset and is cleared
 only by power**. But "prior driver session" is not by itself the trigger: the
@@ -137,17 +146,19 @@ the trigger is in that suite's own prefix — most conspicuously its two
 Nobody has run `mount_tests` alone from a cold power-on, so the two are still
 unseparated.
 
-1. **13a** — non-SD binary as predecessor. Separates "driver session required"
-   from "the reset itself".
-2. **13b** — does a 120 s wait clear it, or only power? Latched state versus a
-   process completing. These cards are documented as re-busying themselves for
-   garbage collection after CS deassert, and the driver's init busy-poll gives up
-   after ~2 s and proceeds regardless — so this outcome would make it
-   driver-fixable.
-3. **13c** — read-only prior session: must the predecessor have written?
-4. Then the ladder (400 kHz, read-only), which is finally meaningful now that a
-   reproducer exists.
-5. Bench-supply swap if the write burst is implicated.
+1. **14a — can a wedged card be RECOVERED without power?** Never asked. "Only a
+   power cycle clears it" describes the two things anyone happened to try, not a
+   tested claim. **If any rung of the recovery ladder works, the release stops
+   depending on root cause** — the driver detects and repairs instead.
+2. **14b — float the pins after a driver session, no reset.** Round 13a floated a
+   *virgin* card; the order was never varied. Candidate mechanism: CMD0 latches
+   the card into SPI mode until power loss, and a card in SPI mode reads a
+   floating CS very differently from one still in native SD mode. That single
+   mechanism fits every row of the table above.
+3. **14c — the same float with CS held high.** If CS is it, a board-level pull-up
+   is a fix needing no driver change.
+4. Then the ladder (400 kHz, read-only), finally meaningful now a reproducer exists.
+5. Bench-supply swap if anything points back at power.
 
 ### Parked
 

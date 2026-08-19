@@ -1251,6 +1251,17 @@ user-affecting.**
 
 # Hand-back — consolidated, all rounds
 
+> ✅ **ROUND 13 COMPLETE (2026-08-19)** — the wedge condition is now tightly
+> bounded: **a driver session that touches the pins (reads suffice, writes are
+> unnecessary), then a P2 reset, then another driver session**; the state is
+> **latched in the controller** and cleared only by removing power. Eliminated:
+> the reset alone (a larger null binary is clean 2/2), time-based recovery (120 s
+> powered idle still wedges — the GC-completes model is refuted), and filesystem
+> state (read-only predecessor with FSInfo suppressed still wedges).
+> One gap remains: in-binary cycles stay clean while reset-separated sessions
+> wedge, with reads in both.
+> See the Round 13 section at the end.
+>
 > ✅ **ROUND 12 COMPLETE (2026-08-19)** — 🔑 **the wedge is now a switch**: cold
 > (first binary after power-on) is clean 4/4, warm is wedged 2/2, cleared only by
 > power — a deterministic reproducer for #3240 at last, and the bad-pin prefix is
@@ -1485,6 +1496,10 @@ on three of the five. Options and their trade-offs are in Round 7b.
 | `SD_phase_sweep_test_260818-185537/-185616.log` | R12d PNY in HS mode — band `[-1..5]` centre +2 |
 | `SD_phase_sweep_test_260818-190333/-190346.log` | **R12d Lexar in HS mode — `[-3..4]` centre 0; `+5` OUTSIDE** |
 | `SD_phase_sweep_test_260818-190607/-190610.log` | **R12d Samsung in HS mode — `[-3..4]` centre 0; `+5` OUTSIDE** |
+| `SD_RT_mount_tests_260818-192229/-194244.log` | **R13a after null predecessor — CLEAN 2/2; reset eliminated** |
+| `SD_null_predecessor_260818-200349.log` | R13b the P2-timed 120 s hold, transcript-confirmed |
+| `SD_RT_mount_tests_260818-200403.log` | **R13b WEDGED after 120 s idle — state is latched** |
+| `SD_edge_wedge_probe_260818-2142*.log` + `SD_RT_mount_tests_260818-214314.log` | **R13c read-only predecessor still WEDGES — writes irrelevant** |
 
 ---
 
@@ -2387,3 +2402,128 @@ Not committed. The tree still carries the container side's uncommitted work.
 12a complete (6 runs + identity). 12b not run, by elimination. 12c complete
 (3 cards x 2). 12d complete (3 cards x 2) after two instrument fixes. Lexar and
 PNY were reformatted after 12c's destructive writes.
+
+---
+
+# Round 13 — what exactly does a "prior session" leave behind? (run 2026-08-18/19)
+
+One card throughout: **Lerdisk `asdfg` `$0000_01F4`, Edge socket**, adapter empty.
+Identity confirmed in the 13c probe transcript (`CARD: MID=$05 PNM='asdfg'
+PSN=$0000_01F4`). **No identify was run before any warm sequence** — an identify is
+itself a driver-session predecessor and would have destroyed every result.
+
+## Correction carried in from round 12
+
+Round 12's write-up said the wedge needs "a prior driver session". **That was
+looser than the data supported**, and the brief caught it: the wedge probe runs
+eight mount/operate/unmount cycles inside a single power-on and stays clean, and
+cycles 2-8 are each "after a prior driver session". So a prior driver session
+**alone** was never the trigger. The reset window is part of the condition.
+
+## 13a — a DRIVER session is required; the reset alone is not enough
+
+| Predecessor | Runs | `mount_tests` | `unmount()` | `mount()` #2 |
+|---|---|---|---|---|
+| **null binary** — 49_691 bytes, no driver object, no pin touched | **2** | **43/43 CLEAN** | `0` | `0` |
+| `mount_tests` — 47.3 KB, driver session (round 12a) | 2 | 19/24 WEDGED | `-7` | `-8` |
+
+The two predecessors are **matched on download size — the null one is larger**, so
+its high-impedance float window is *longer*. It still does not wedge.
+
+**This eliminates the reset itself, the float window, and the download traffic.**
+The hypothesis stays on what the driver does to the card, not on what the P2 does
+to the pins.
+
+## 13b — the state is LATCHED: time does not clear it, only power
+
+| Step | Predecessor | Gap | Result |
+|---|---|---|---|
+| 1 | none (cold) | — | **43/43 CLEAN**, `0` / `0` |
+| 2 | — | **120 s idle, P2-timed, card powered** | — |
+| 3 | driver session + the 120 s hold | 120 s | **19/24 WEDGED**, `-7` / `-8` |
+
+The hold is confirmed in its own transcript (`ARM: HOLD_120S -- idling 120 s
+before exit`, ticking `idle 10 s of 120` … ), so the interval is exact rather than
+operator-timed.
+
+**This refutes the internal-housekeeping model.** These cards are documented as
+re-busying themselves after CS deassert for garbage collection, and the driver's
+init busy-poll gives up after about two seconds and proceeds regardless — which
+made "the card is still busy and the driver stopped waiting too early" both
+plausible and *convenient*, since it would have been driver-fixable. **120 seconds
+of powered idle changes nothing.** The defect is not fixable by waiting longer in
+init.
+
+## 13c — writes are IRRELEVANT; reads suffice
+
+Predecessor: `SD_edge_wedge_probe -D READ_ONLY` — transcript confirms
+`ARM: READ_ONLY -- no writes, FSInfo update suppressed at unmount`, and the probe
+itself ran **8/8 clean**.
+
+Then `mount_tests` warm: **19/24 WEDGED**, `unmount()` `-7`, `mount()` #2 `-8`.
+
+**The card's filesystem state is exonerated.** No writes occur, and the FSInfo
+update is suppressed, yet it still wedges. Nothing on the card was modified, so
+whatever persists is **controller state, not data**.
+
+## The condition, as now bounded
+
+| Predecessor | Wedges? | What it eliminates |
+|---|---|---|
+| none (cold) — 6 runs across rounds 12-13 | **no** | — |
+| null binary, 49.7 KB, no pins — 2 runs | **no** | the reset, the float window, download traffic |
+| driver session + 120 s powered idle | **yes** | time-based recovery; the GC-completes model |
+| driver session, **read-only** | **yes** | writes, FSInfo update, post-write internal activity |
+| driver session, with writes (12a) | **yes** | — |
+| 8 in-binary cycles, no reset (probe) | **no** | "prior driver session" alone |
+
+**The trigger is: a driver session that touches the SD pins — reads suffice,
+writes are unnecessary — followed by a P2 reset, then another driver session. The
+resulting state is latched in the card and cleared only by removing power.**
+
+### ⚠ The one thing that fits no single model yet
+
+**Why do the probe's in-binary cycles stay clean while a reset-separated session
+wedges?** Reads happen in both. The only remaining difference is the reset — which
+13a proves is **insufficient alone**, but which may still be **necessary in
+combination** with a driver session. That is the shape of the next experiment:
+something that separates "driver session, then reset, then driver session" from
+"driver session, then driver session" with the reset as the only variable.
+
+Stated as the open question, not as a proposed mechanism. Designing that
+experiment is container-side work; the bench did not improvise one.
+
+## The cold/warm model held on every run
+
+The brief asked for any run breaking the `0`-cold / `-7`-warm split. **None did**,
+across all of round 13. The single earlier `0` on a wedged run (round 10c) remains
+the only exception on record and is still unexplained.
+
+# Round 13 — hand-back summary
+
+| Study | Question | Answer |
+|---|---|---|
+| 13a | Is a *driver* session required? | **Yes.** A larger null binary with no pin activity is clean 2/2 — reset, float window and download traffic are all eliminated |
+| 13b | Does time clear it, or only power? | **Only power.** 120 s of powered idle still wedges — the state is latched, and the GC-completes model is refuted |
+| 13c | Must the prior session have written? | **No.** A read-only predecessor with FSInfo suppressed still wedges — filesystem state is exonerated, this is controller state |
+
+## Container-side items from round 13
+
+1. **Design the reset-isolating experiment.** The last unexplained gap is
+   in-binary cycles (clean) vs reset-separated sessions (wedge), with reads in
+   both. The reset is insufficient alone (13a) but may be necessary in
+   combination. Needs an instrument that varies *only* the reset.
+2. **Drop the busy-poll / init-timeout line of attack.** 13b refutes it with 120 s
+   of idle. Any fix proposal resting on "wait longer for the card" is dead.
+3. **Stop looking at filesystem state.** 13c wedges with no writes and FSInfo
+   suppressed. Whatever persists is in the controller.
+4. **Round 12's phrasing needs tightening** wherever it says the wedge needs "a
+   prior driver session" — true but incomplete; the reset window is part of the
+   condition, as the probe's eight clean in-binary cycles show.
+
+## Bench scope
+
+13a complete (2 runs), 13b complete (3-step sequence with a P2-timed hold), 13c
+complete. Six power cycles. No card written, nothing to reformat — 13c's
+predecessor was read-only by construction and the rest were `mount_tests`, which
+cleans up after itself.

@@ -4,19 +4,18 @@
 **Authored:** 2026-08-17, container side.
 **Plan:** `DOCs/Plans/SOCKET-TIMING-CHARACTERIZATION-PLAN.md` (results so far: §11).
 
-## ⟹ CURRENT STATE + WHAT TO RUN NEXT (updated 2026-08-19, round 13 queued)
+## ⟹ CURRENT STATE + WHAT TO RUN NEXT (updated 2026-08-19, round 14 queued)
 
-Round 12 is complete, and the wedge finally has a deterministic reproducer.
-Status per head: `DOCs/Plans/RESEARCH-HEADS.md`.
+Round 13 bounded the wedge condition tightly. Status per head:
+`DOCs/Plans/RESEARCH-HEADS.md`.
 
-**Run next: ROUND 13 — narrow the wedge's trigger.** Everything else on the board
-is settled or container-side.
+**Run next: ROUND 14 — one isolation experiment, and the question nobody has asked.**
 
-| Track | What | New code? |
+| Track | What | Why |
 |---|---|---|
-| **13a** | A non-SD binary as the "prior session" | no |
-| **13b** | Does waiting clear it, or only power? | no |
-| **13c** | Does the prior session need to have WRITTEN? | no |
+| **14a** | Can the card be RECOVERED without power? | Never tested. If yes, the release stops depending on root cause |
+| **14b** | Float the pins after a driver session, **without a reset** | The one order never varied — 13a floated a virgin card, not a driven one |
+| **14c** | Same float, but CS held high | If CS is the mechanism, a board-level pull-up is a fix |
 
 ## What this tool does
 
@@ -1110,6 +1109,91 @@ Per run: cold or warm, what the predecessor was, the gap in seconds, and
 `mount_tests`' pass/fail plus its `unmount()` and `mount()` #2 codes. The
 cold/warm split predicts `0` and `-7` respectively — note any run that breaks
 that model, since one earlier `0` on a wedged run is still unexplained.
+
+**Standing rules:** a study returning "nothing here" is a result; and do not
+diagnose from hypotheses — send the transcript and say what surprised you.
+
+## ROUND 14 — recovery, and the float that was never tested in the right order
+
+### 14a — can a wedged card be recovered without removing power? (do this first)
+
+**Nobody has asked.** Rounds 12 and 13 established thoroughly what *causes* the
+wedge. "Only a power cycle clears it" is an observation about the two things anyone
+happened to try — re-running the suite, and waiting — not a tested claim.
+
+It matters more than root cause right now: if any sequence revives the card, the
+user-facing defect becomes something the driver can detect and repair, and
+**v1.7.1 stops being blocked on an explanation**.
+
+```bash
+cd tools
+# 1. POWER-CYCLE.  2. Wedge the card deliberately:
+./run_test.sh ../src/regression-tests/SD_RT_mount_tests.spin2 -t 120   # cold, expect CLEAN
+./run_test.sh ../src/regression-tests/SD_RT_mount_tests.spin2 -t 120   # warm, expect WEDGED
+# 3. WITHOUT power cycling, run the recovery ladder:
+./run_test.sh ../diagnostic-tests/SD_edge_wedge_probe.spin2 -t 300 -D RECOVERY
+```
+
+Five escalating rungs, each reported separately so a partial success is visible:
+plain re-init twice, then 102,400 clocks with **CS high** (25x the driver's own
+recovery flush) and a re-init, then the same with **CS low** and a re-init. A
+claimed recovery is checked with a real sector read — a card that inits but cannot
+read is not recovered.
+
+Idle time is already known not to help (13b), but idle is not the same as clocked:
+an SD card advances its state machine on SCK, and a card waiting for clocks it will
+never receive looks exactly like a dead one.
+
+**Any rung succeeding is the most valuable result available this round.**
+
+### 14b — float the pins after a driver session, with no reset
+
+**Round 13a's conclusion needs one qualification.** It ran a 49.7 KB pin-silent
+binary as predecessor, stayed clean, and concluded the reset, the float window and
+the download traffic were all eliminated. That holds for a **virgin** card — in 13a
+the float came *before* any driver session ever touched the card. In the wedging
+sequence the float comes *after* one. **The order was never varied**, so "a card
+that has been driven, then left floating" is still untested.
+
+That combination has a candidate mechanism: CMD0 latches the card into SPI mode
+until it loses power, and a card already in SPI mode interprets a floating CS and
+stray SCK very differently from one still in native SD mode. It would explain every
+row of round 13's table at once — cold clean, null-binary clean, in-binary cycles
+clean (pins stay driven, CS held high), reset-separated sessions wedged.
+
+```bash
+cd tools
+# POWER-CYCLE first. One binary, no reset anywhere in it:
+./run_test.sh ../diagnostic-tests/SD_edge_wedge_probe.spin2 -t 300 -D FLOAT_BETWEEN
+```
+
+The probe releases all four SD pins to high-Z for 1200 ms between cycles — matched
+to the reset-and-download window — and then mounts again.
+
+- **Wedges** → no reset is required. The mechanism is bounded to the pins, and the
+  P2 side is out of scope entirely
+- **Clean** → floating after a driver session is *not* it either, and something
+  else about the reset matters
+
+### 14c — the same float, with CS held high
+
+Only if 14b wedges. Same sequence, but CS is **driven high** throughout the float
+while the other three go high-Z — which is what a board-level pull-up would do.
+
+```bash
+cd tools
+./run_test.sh ../diagnostic-tests/SD_edge_wedge_probe.spin2 -t 300 -D FLOAT_CS_HIGH
+```
+
+- **Clean** → CS is the mechanism, and a pull-up on the CS pin is a candidate fix
+  that needs no driver change at all
+- **Wedges** → CS is not sufficient on its own; SCK or MOSI floating matters too
+
+### Bring back for round 14
+
+14a: the rung reached, each rung's status, and the post-recovery read result.
+14b/14c: wedged or clean, and on which cycle. As always the identity line, and the
+`unmount()` / `mount()` #2 codes.
 
 **Standing rules:** a study returning "nothing here" is a result; and do not
 diagnose from hypotheses — send the transcript and say what surprised you.
