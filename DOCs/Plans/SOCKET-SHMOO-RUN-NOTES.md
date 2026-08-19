@@ -3154,3 +3154,16 @@ Resumed per the container hand-back in ROUND-16-RUN-SHEET.md (source SHA
 **v1.8.0 driver certification on Amazon Basics `$3584_1E2E` (64 sec/cluster
 geometry) is complete.** Next per resume: re-identify both retained 64 GB cards
 (clean record-source transcripts), then step 2 (16d, Samsung EVO `$4AC8_5F42`).
+
+## Clean record-source transcripts for the retained 64 GB pair
+
+Re-identified on driver 1.8.0 with the fixed key lines. Both card records key
+from these transcripts (supersede the session-1 mangled-key transcripts):
+
+| Card | CARD-ID | Transcript |
+|---|---|---|
+| A (unmarked, record OWED) | `$12_ASTC_2.0_00000E2F_202306` | `tools/logs/SD_card_identify_260819-161527.log` |
+| B (green, catalogued) | `$12_ASTC_2.0_00000F14_202306` | `tools/logs/SD_card_identify_260819-161620.log` |
+
+Same silicon key `$12_ASTC_2.0` on both — one product, one silicon. A carries
+mkfs.fat, B carries P2FMTER. Next: step 2 (16d), Samsung EVO `$4AC8_5F42`.
