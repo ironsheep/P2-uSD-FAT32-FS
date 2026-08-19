@@ -174,7 +174,7 @@ mandatory regardless of what causes the wedge** — which is why 14a leads. A
 prevention measure (parking pins at `stop()`, a CS pull-up) reduces incidence and
 is worth having, but it cannot close the defect on its own.
 
-### What the SD specification says (checked 2026-08-19, `DOCs/specs/`)
+### What the SD specification says (checked 2026-08-19, `DOCs/Specs/`)
 
 The Physical Layer Simplified Specification v9.10 is in the tree, so three things
 that were assumptions are now quotations.
