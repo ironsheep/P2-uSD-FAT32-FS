@@ -4,18 +4,18 @@
 **Authored:** 2026-08-17, container side.
 **Plan:** `DOCs/Plans/SOCKET-TIMING-CHARACTERIZATION-PLAN.md` (results so far: §11).
 
-## ⟹ CURRENT STATE + WHAT TO RUN NEXT (updated 2026-08-19, round 14 queued)
+## ⟹ CURRENT STATE + WHAT TO RUN NEXT (updated 2026-08-19, round 15 queued)
 
-Round 13 bounded the wedge condition. Status per head:
-`DOCs/Plans/RESEARCH-HEADS.md`.
+Round 14 eliminated recovery, exonerated the filesystem layer, and refuted both
+float orders. The surviving condition is `initCardOnly()` + a P2 reset + another
+driver session — and the reset's two known card-visible effects are both refuted.
 
-**Run next: ROUND 14.** Three tracks; the first two are the high-value ones.
+**Run next: ROUND 15 — one DIP switch.** There is a third thing a reset does that
+no experiment has touched, and the Edge module has a switch that turns it off.
 
-| Track | What | Why |
+| Track | What | Cost |
 |---|---|---|
-| **14a** | Can a wedged card be RECOVERED without power? | Never tested. If yes, the release stops depending on root cause |
-| **14b** | **Bisect the predecessor** — what is the smallest session that arms it? | "A driver session arms it" names a whole suite. This names the operation |
-| **14c/d** | Float the pins after a session, no reset (+ a CS-high variant) | The one order never varied |
+| **15a** | Flip the **P59 △ (up)** DIP switch, re-run the reproducer | one switch, no code, no soldering |
 
 ## What this tool does
 
@@ -1237,6 +1237,85 @@ cd tools
 14b: the rung reached and whether each wedged — the SMALLEST wedging rung is the
 result. 14c/14d: wedged or clean, and on which cycle. As always the identity line, and the
 `unmount()` / `mount()` #2 codes.
+
+**Standing rules:** a study returning "nothing here" is a result; and do not
+diagnose from hypotheses — send the transcript and say what surprised you.
+
+## ROUND 15 — the third thing a reset does (added 2026-08-19)
+
+### The gap in the elimination table
+
+Round 14 closed out the reset's two *card-visible* effects — floating pins (both
+orders) and download duration. But a P2 reset does something else to the card
+entirely, and nothing has tested it: **the boot ROM talks to the SD card.**
+
+Per the P2 knowledge base (`p2kbArchSdCardBoot`, `p2kbArchBootPatternSelection`),
+the ROM boot pattern is read from P59/P60/P61 on every reset, and:
+
+- **P60 pulled up selects SD boot** — and P60 *is our CS pin*. The SD specification
+  gives the card an internal 50 kΩ pull-up on CS, which is exactly what would
+  assert that pattern whenever a card is seated.
+- On that pattern the ROM **initialises the card in SPI mode, mounts FAT32, and
+  looks for a boot file**, then falls back to the serial window when it finds none.
+- All of this happens under **RCFAST (20-30 MHz)**, before any user code runs.
+
+So on every single download, the boot ROM may be conducting its own complete SD
+conversation with our card, at a clock we do not control, before our driver ever
+sees it. That is a card-visible effect of the reset, it is not floating pins, and
+it is not download duration.
+
+### The model this produces, and it fits every row
+
+**Our driver's init leaves the card in a state that the ROM's next SD-boot attempt
+turns into a wedge.**
+
+| Sequence | ROM/driver order | Observed |
+|---|---|---|
+| cold | ROM init → our init | clean ✓ |
+| null-binary predecessor (13a) | ROM init → ROM init → our init | clean ✓ |
+| `P_INIT` predecessor (14b) | ROM init → **our init** → ROM init → our init | **wedge** ✓ |
+| in-binary cycles (14c and the probe) | our init → our init, no ROM | clean ✓ |
+| 120 s powered idle (13b) | our init → idle → ROM init → our init | **wedge** ✓ |
+
+Every row agrees, including the two that most constrained the space. The ROM's own
+leftovers are benign to the ROM; ours are not.
+
+### 15a — turn SD boot off and re-run
+
+The boot pattern table gives a clean way to stop the ROM touching the card:
+**`P59 = up` → "Program from serial within 60 s window; no flash or microSD card
+boot"**. On the Edge module P59 is the **`△` / `▽` DIP switch pair** — flip **`△`
+ON** (and make sure `▽` is OFF; both on is a contradiction). Serial download keeps
+working, which is the whole point.
+
+```bash
+# 1. Set the P59 UP DIP switch ON. 2. POWER-CYCLE.
+cd tools
+./run_test.sh ../src/regression-tests/SD_RT_mount_tests.spin2 -t 120   # cold  -- expect CLEAN
+./run_test.sh ../src/regression-tests/SD_RT_mount_tests.spin2 -t 120   # warm  -- THE QUESTION
+```
+
+- **Warm run CLEAN** → the boot ROM's SD conversation is the trigger. That is the
+  root cause, after four rounds, and it explains why nothing the driver does can
+  recover: the damage is done before our code runs
+- **Warm run WEDGED** → the ROM is exonerated too, and the reset's effect on the
+  card is something none of us has thought of yet
+
+Run the pair twice to be sure, power-cycling between. Then **flip the switch back**
+and confirm the wedge returns — a fix that cannot be un-fixed is not yet proven.
+
+### If it is confirmed
+
+The immediate practical consequence is guidance rather than a code change: a P2
+board that uses SD as *data storage* rather than boot media should set P59 up, and
+the driver's documentation should say so. It would also mean this exposure is not
+specific to our driver — any P2 application holding an SD card through a reset has
+it.
+
+### Bring back for round 15
+
+Switch position for every run, cold/warm, `mount_tests` pass/fail, and the
+`unmount()` / `mount()` #2 codes. Both directions: switch on, and switch back off.
 
 **Standing rules:** a study returning "nothing here" is a result; and do not
 diagnose from hypotheses — send the transcript and say what surprised you.

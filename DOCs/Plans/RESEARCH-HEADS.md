@@ -23,10 +23,10 @@ two counterfeits are 11a's subject.
 
 | Head | Next action | Where | Blocked? |
 |---|---|---|---|
-| **H1 · Edge wedge** | **14a** recovery ladder, **14b** bisect the predecessor, **14c/d** float-after-session | bench | no |
+| **H1 · Edge wedge** | **15a** — flip the P59 △ DIP switch to stop the boot ROM touching the card, re-run the reproducer | bench | no |
 | **H2 · High-speed performance** | Nothing at the bench. Decide the read/write asymmetry policy | container | no |
 | **H3 · Catalog integrity** | Build instruments to emit the new format; run variance before instance variance | container | no |
-| **H4 · Release** | §8 numbers writable now. **14a could unblock the version decision without a root cause** | container | version: **yes — H1** |
+| **H4 · Release** | **Recovery FAILED (14a)** — v1.7.1 is not unblocked that way. Decision now: detect-and-document, or accept | container | **yes — Stephen** |
 
 **A method rule this campaign has now paid for twice — measure in the state that
 ships, not the state that is convenient.** Reference-content aliasing (round 6)
@@ -108,6 +108,9 @@ socket. Wedge is invariant: `mount()` #2 returns `-8`, raw init then fails.
 
 ### Next
 
+- [x] ⛔ **NO RECOVERY EXISTS (14a).** Five rungs — two plain re-inits, then 102,400 clocks in *each* CS polarity with a re-init after each — every one returned `-8`. The driver can **detect** the wedge but cannot repair it. This was the path that would have unblocked the release without a root cause, and it is closed
+- [x] **`initCardOnly()` ALONE arms it (14b)**, with the `P_NOTHING` control clean. The entire filesystem layer, the unmount, the FSInfo update and the cog shutdown are all exonerated. The space collapses to card initialisation
+- [x] **Float after a driver session: 8/8 clean (14c).** My CMD0-latch / floating-CS hypothesis is refuted. Both float orders are now eliminated, and pin-state mechanisms should not be re-proposed without something new to distinguish them
 - [x] 🔑 **DETERMINISTIC REPRODUCER (12a).** Cold — first binary after power-on — is **clean 4/4**. Warm — any prior session, no power cycle — **wedges 2/2**. Power clears it. Demonstrated in both directions in one sitting
 - [x] **The `-7` was never noise.** Split by condition: every warm run gives `-7`, every cold run gives `0`. One earlier `0` on a wedged run remains unexplained
 - [x] **Bad-pin prefix POSITIVELY ELIMINATED** — those calls execute in the four clean cold runs too. A path that runs identically in clean and wedged runs cannot be what distinguishes them. My hypothesis, refuted by their data before a run was spent on it
@@ -123,18 +126,36 @@ socket. Wedge is invariant: `mount()` #2 returns `-8`, raw init then fails.
 **A driver session that touches the SD pins (reads suffice), then a P2 reset, then
 another driver session. Latched in the card; cleared only by removing power.**
 
-### What survives, and the constraint that shapes round 14
+### What survives after round 14 — and the gap in the elimination table
 
-What is left is **card or pin state that persists across a P2 reset and is cleared
-only by power**. But "prior driver session" is not by itself the trigger: the
-wedge probe runs eight mount/operate/unmount cycles inside one power-on and stays
-clean every time, so cycles 2-8 are all "after a prior session" without wedging.
+The surviving condition is **`initCardOnly()` + a P2 reset + another driver
+session**. A reset is necessary, yet both of its *card-visible* effects — floating
+pins in either order, and download duration — are independently refuted.
 
-The difference is the **reset window** — roughly a second in which the P2 drives
-nothing and the card sits with CS floating and unclocked. No in-binary cycle ever
-creates that condition. Round 13a separates the two by using a **non-SD binary**
-as the predecessor: if that wedges, no driver session is required at all and the
-trigger is the reset itself.
+**There is a third thing a reset does that nothing has tested: the boot ROM talks
+to the SD card.** Per `p2kbArchSdCardBoot` and `p2kbArchBootPatternSelection`, the
+ROM reads its boot pattern from P59/P60/P61 on every reset; **P60 pulled up selects
+SD boot, and P60 is our CS pin** — which the SD spec's internal 50 kΩ CS pull-up
+would assert whenever a card is seated. On that pattern the ROM initialises the
+card in SPI mode, mounts FAT32, hunts for a boot file, and falls back to serial —
+all under RCFAST, before any user code runs.
+
+**Model: our driver's init leaves the card in a state that the ROM's next SD-boot
+attempt turns into a wedge.** It fits every row on record:
+
+| Sequence | Order | Observed |
+|---|---|---|
+| cold | ROM → ours | clean ✓ |
+| null-binary predecessor (13a) | ROM → ROM → ours | clean ✓ |
+| `P_INIT` predecessor (14b) | ROM → **ours** → ROM → ours | **wedge** ✓ |
+| in-binary cycles (14c, probe) | ours → ours, no ROM | clean ✓ |
+| 120 s powered idle (13b) | ours → idle → ROM → ours | **wedge** ✓ |
+
+It also explains why no recovery works: the damage is done before our code runs.
+
+**Round 15 tests it with one DIP switch.** `P59 = up` selects "no flash or microSD
+card boot" while keeping the serial window — on the Edge that is the `△` switch.
+Flip it, re-run the reproducer, then flip it back and confirm the wedge returns.
 
 **Superseded hypotheses, kept so they are not re-proposed:** Round 11's hand-back
 proposes the **cross-binary boundary** — the reproducer is two downloads with a

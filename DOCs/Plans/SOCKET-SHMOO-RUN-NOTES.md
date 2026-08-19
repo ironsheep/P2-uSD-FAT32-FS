@@ -1251,6 +1251,16 @@ user-affecting.**
 
 # Hand-back — consolidated, all rounds
 
+> ✅ **ROUND 14 COMPLETE (2026-08-19)** — 🔑 **`initCardOnly()` ALONE arms the
+> wedge** (control clean, size-matched): the filesystem layer is exonerated and
+> the search collapses to CMD0/CMD8/ACMD41/CMD58. ⛔ **A wedged card is NOT
+> recoverable without removing power** — five rungs incl. 102_400 clocks in both
+> CS polarities, all `-8`; **v1.7.1 is not unblocked by recovery**. Floating the
+> pins **after** a driver session is also clean (8/8), closing the ordering
+> qualification round 13 left open. The paradox sharpens: a reset is necessary,
+> but both of its card-visible effects are now refuted.
+> See the Round 14 section at the end.
+>
 > ✅ **ROUND 13 COMPLETE (2026-08-19)** — the wedge condition is now tightly
 > bounded: **a driver session that touches the pins (reads suffice, writes are
 > unnecessary), then a P2 reset, then another driver session**; the state is
@@ -1500,6 +1510,10 @@ on three of the five. Options and their trade-offs are in Round 7b.
 | `SD_null_predecessor_260818-200349.log` | R13b the P2-timed 120 s hold, transcript-confirmed |
 | `SD_RT_mount_tests_260818-200403.log` | **R13b WEDGED after 120 s idle — state is latched** |
 | `SD_edge_wedge_probe_260818-2142*.log` + `SD_RT_mount_tests_260818-214314.log` | **R13c read-only predecessor still WEDGES — writes irrelevant** |
+| `SD_edge_wedge_probe_260818-231037.log` | **R14a RECOVERY ladder — all 5 rungs `-8`; not recoverable without power** |
+| `SD_wedge_predecessor` `P_INIT` + `SD_RT_mount_tests_260818-231212.log` | **R14b `initCardOnly()` alone WEDGES — filesystem exonerated** |
+| `SD_wedge_predecessor` `P_NOTHING` + `SD_RT_mount_tests_260818-231838.log` | R14b control — CLEAN 43/43 |
+| `SD_edge_wedge_probe_260818-231954.log` | **R14c FLOAT_BETWEEN — 8/8 clean; float-after-session refuted** |
 
 ---
 
@@ -2527,3 +2541,156 @@ the only exception on record and is still unexplained.
 complete. Six power cycles. No card written, nothing to reformat — 13c's
 predecessor was read-only by construction and the rest were `mount_tests`, which
 cleans up after itself.
+
+---
+
+# Round 14 — recovery, and the float tested in the right order (run 2026-08-19)
+
+One card throughout: **Lerdisk `asdfg` `$0000_01F4`, Edge socket**, adapter empty.
+Four power cycles.
+
+## 14a — ⛔ NOT RECOVERABLE without removing power. Now a tested claim.
+
+Card deliberately wedged first (cold `mount_tests` **43/43 CLEAN** -> warm
+**19/24 WEDGED**, `-7` / `-8`), then the ladder with no power cycle:
+
+| Rung | Action | Result |
+|---|---|---|
+| 1.1 | plain `initCardOnly()` | **`-8` E_NO_CARD** |
+| 1.2 | plain `initCardOnly()` again | **`-8`** |
+| 2 -> 3 | **102_400 clocks, CS HIGH** (25x the driver's own 4_096 flush), then init | **`-8`** |
+| 4 -> 5 | **102_400 clocks, CS LOW** (card selected), then init | **`-8`** |
+
+"Only a power cycle clears it" was previously an observation about the two things
+anyone happened to try — re-running the suite, and waiting. **It is now tested.**
+
+**Clocking does not help either.** Idle is not the same as clocked: an SD card
+advances its state machine on SCK, and a card waiting for clocks it will never
+receive looks exactly like a dead one. It was given 25x the driver's recovery
+flush in **both** CS polarities and stayed dead.
+
+**The consequence for v1.7.1 is the unwelcome one, and 14a was aimed squarely at
+avoiding it:** there is no in-driver repair to apply. The defect can be *detected*
+(init returns `-8`) but not *fixed* without the user physically removing power.
+
+Log: `SD_edge_wedge_probe_260818-231037.log`.
+
+## 14b — 🔑 `initCardOnly()` ALONE arms it. The filesystem layer is exonerated.
+
+Three binaries within **35 bytes** of each other and of the reproducer
+(`SD_RT_mount_tests` = 47_347), so the arms differ in what they *do*, not in how
+long they take to download:
+
+| Rung | Predecessor does | Size | `mount_tests` warm |
+|---|---|---|---|
+| `P_NOTHING` | nothing at all, no pin touched | 47_369 | **43/43 CLEAN**, `0` / `0` |
+| `P_INIT` | `initCardOnly()` only, **cog left RUNNING** | 47_334 | **19/24 WEDGED**, `-7` / `-8` |
+| `P_INIT_STOP` … `P_READ` | — | — | **not needed** |
+
+`P_INIT`'s own `initCardOnly` returned `0` — it succeeded, then armed the wedge.
+
+**The control was run and passed.** `P_NOTHING` is the size-matched control inside
+the same instrument (stronger than round 13a's separate null binary, which also
+passed), so the reproducer is responding to the predecessor and not to "any binary
+having run".
+
+**What this eliminates in one run:** the filesystem mount, directory reads, the FAT
+scan, the unmount, and the FSInfo update. Whatever the mechanism is, it lives in
+**card initialisation** — CMD0/CMD8/ACMD41/CMD58 and SPI-mode entry — not in
+anything the filesystem layer does.
+
+**It also moots `P_INIT_STOP` for arming purposes.** That rung exists to test
+whether `stop()` halting the worker cog (releasing DIR bits, floating the pins
+inside a running application) is the trigger. `P_INIT` **left the cog running**, so
+no `COGSTOP` float occurred, and it armed anyway. Cog shutdown is not required.
+
+## 14c — floating after a driver session is NOT it either
+
+`-D FLOAT_BETWEEN`: all four SD pins released to high-Z for **1_200 ms** between
+cycles, matched to the reset-and-download window. **8/8 cycles CLEAN.**
+
+Transcript confirms both that the float happened and that it happened in the right
+order: `unmount: status=0` -> `float 1_200 ms (ALL four pins high-Z, as a P2 reset
+leaves them)` -> `cycle N CLEAN`. By cycle 2 this is unambiguously a card that has
+been mounted, FAT-scanned, written, read and unmounted, then left floating.
+
+### This closes a qualification the round-13 write-up got ahead of itself on
+
+Round 13a concluded the reset, the float window and download traffic were "all
+eliminated" — but 13a floated a **virgin** card, before any driver session ever
+touched it. In the wedging sequence the float comes **after** one. The order was
+never varied, and I reported the elimination without noting that. 14c tests the
+order that actually occurs, and it is **also clean**, so the conclusion survives —
+but it survives on evidence, not on an untested assumption.
+
+**The CMD0-latches-SPI-mode candidate does not survive.** The proposal was that a
+card already latched into SPI mode interprets floating CS and stray SCK very
+differently from one still in native SD mode. By cycle 2 the card is unambiguously
+in SPI mode, and floating it changes nothing.
+
+## 14d — NOT RUN
+
+Gated on 14c wedging. It did not. Testing CS-held-high as "the mechanism" when the
+all-pins-float case is already clean would be testing a weaker version of a
+refuted condition.
+
+## Where the wedge stands after round 14
+
+| Ingredient | Status |
+|---|---|
+| Filesystem operations (mount, FAT scan, unmount, writes) | ❌ eliminated — `P_INIT` alone arms it (14b), writes already irrelevant (13c) |
+| Cog shutdown / `COGSTOP` pin release | ❌ not required — `P_INIT` left the cog running (14b) |
+| Pin float **after** a driver session | ❌ eliminated — 8/8 clean (14c) |
+| Pin float **before** any driver session | ❌ eliminated — 2/2 clean (13a) |
+| Time / card housekeeping completing | ❌ eliminated — 120 s powered idle (13b) |
+| Clocked recovery, either CS polarity | ❌ eliminated — 25x flush, `-8` every rung (14a) |
+| Download duration | ❌ eliminated — size-matched arms throughout (13a, 14b) |
+| **`initCardOnly()` + a P2 reset + another driver session** | ✅ **the surviving condition** |
+
+### ⚠ The paradox is sharper, not resolved
+
+**A reset is necessary, but neither of the two things a reset does to the card —
+floating the pins, or the download delay — reproduces it.** Both are now
+independently eliminated, in both orders. A reset also resets **the P2 itself**,
+and that is the part no experiment has isolated.
+
+One observation, offered as an observation and **not** as a mechanism: every
+wedging sequence initialises the card **twice** — once in the predecessor, once in
+the reproducer — with a P2 reset between them. No in-binary experiment has ever
+re-initialised a card that a *previous binary* already initialised; the probe's
+cycles re-mount, but the driver object and its cog persist across them. That is
+the remaining structural difference. Designing the instrument that isolates it is
+container-side work and the bench did not improvise one.
+
+# Round 14 — hand-back summary
+
+| Study | Question | Answer |
+|---|---|---|
+| 14a | Can a wedged card be recovered without power? | **NO — five rungs, all `-8`**, including 102_400 clocks in both CS polarities. Now tested, not assumed. **No in-driver repair exists** |
+| 14b | Which operation arms it? | **`initCardOnly()` alone.** Control `P_NOTHING` clean. **Filesystem layer exonerated**; cog shutdown not required |
+| 14c | Does floating after a driver session do it? | **No — 8/8 clean.** Closes the ordering qualification 13a left open; CMD0-latch candidate refuted |
+| 14d | CS-high float? | **Not run** — gated on 14c wedging |
+
+## Container-side items from round 14
+
+1. **v1.7.1 is NOT unblocked by recovery.** 14a was the attempt and it failed: the
+   driver can detect the wedge (`-8` from init) but cannot repair it. Any release
+   decision has to be made on that basis — detection plus documentation, or a
+   deliberate acceptance.
+2. **Search only card initialisation.** 14b collapses the space to
+   CMD0/CMD8/ACMD41/CMD58 and SPI-mode entry. The filesystem layer, the unmount,
+   the FSInfo update and cog shutdown are all out.
+3. **Both float orders are now eliminated** — stop proposing pin-state mechanisms
+   unless something new distinguishes them. 14d remains unrun and unneeded.
+4. **The next instrument must isolate the P2 reset itself**, since the reset is
+   necessary but its two card-visible effects are refuted. The double-initialise
+   asymmetry noted above is the concrete structural difference to attack.
+5. **Round 13's phrasing needs the ordering caveat** wherever it says the float
+   window is eliminated — true, but only proven for both orders as of 14c.
+
+## Bench scope
+
+14a complete (wedge + 5 rungs), 14b complete and decided at the second rung with
+its control, 14c complete (8 cycles), 14d not run by gate. Four power cycles. No
+card written beyond the probe's own scratch file, which it deletes; nothing to
+reformat.
