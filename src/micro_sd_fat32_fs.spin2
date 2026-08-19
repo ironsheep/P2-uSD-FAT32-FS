@@ -9507,16 +9507,26 @@ PRI effectiveAlignDelay() : delay
 ' The ONE computation of the read-streamer WAITX phase pad, shared by both
 ' burst sites and the diagnostic getter.
 '
-' hp=4 FLOOR-CELL RULE (2026-08-18): positive offsets do NOT apply at
-' spi_period = 4 -- that cell keeps the historical align = hp behavior. The
-' campaign's passing bands were measured at hp = 5..7 (all centered +5); at
-' hp = 4 the +5 default would exceed the whole bit period (2*hp = 8 sysclks)
-' and was measured breaking the CMD6 high-speed verify read (round 8a,
-' SD_RT_speed_tests). hp = 4 arises at the 50 MHz high-speed request and at
-' low-sysclk 25 MHz configurations (e.g. 200 MHz sysclk) -- both keep their
-' long-certified historical alignment until the floor cell's band is
-' characterized. Negative (diagnostic) offsets still apply, floored at the
-' WAITX minimum of 2.
+' hp=4 FLOOR-CELL RULE: positive offsets do NOT apply at spi_period = 4 -- that
+' cell keeps align = hp. hp = 4 arises at the 50 MHz high-speed request and at
+' low-sysclk 25 MHz configurations (e.g. 200 MHz sysclk).
+'
+' DO NOT REMOVE THIS AS A CONSERVATIVE PLACEHOLDER. It was introduced as one
+' (2026-08-18) and has since been MEASURED CORRECT (2026-08-19). Swept inside
+' verified CMD6 high-speed mode -- the state hp=4 actually ships in -- the read
+' band is [-3..+4] on two cards and [-1..+5] on a third. This rule's offset 0 is
+' inside on all three and dead centre on two; the +5 production default is
+' OUTSIDE the band on two of the three.
+'
+' An earlier sweep found [+2..+8] centred +5 at hp=4 and was read as grounds for
+' deleting this rule. That sweep reached 43.75 MHz by SETTING the clock, which
+' leaves the card in default speed mode driven above spec, and the band there sits
+' three ticks higher than in the shipping state. Measuring the convenient state
+' instead of the shipping state inverted the conclusion. See
+' DOCs/SPI-PHASE-MARGIN-API.md for the per-card table.
+'
+' Negative (diagnostic) offsets still apply, floored at the WAITX minimum of 2.
+' debugSetAlignFloorRuleEnabled() lifts the rule for characterization only.
 
   if spi_period >= 5 or floor_rule_disabled
     delay := spi_period + align_delay_offset

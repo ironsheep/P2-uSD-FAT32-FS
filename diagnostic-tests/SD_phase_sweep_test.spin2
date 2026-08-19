@@ -144,6 +144,15 @@ PUB go() | mode, offset, status
     debug("  FLOOR-CELL ARM: hp=4 rule LIFTED for measurement (production keeps it)")
 #endif
 
+
+    status := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    if status < 0
+        debug("FATAL: initCardOnly failed (", sdec_(status), ")")
+        debug("END_SESSION")
+        return
+
+    debug("  initCardOnly OK. hp = ", udec_(sd.debugGetCurrentHp()))
+
 #ifdef SPI_43M_HS
     ' THE READ BAND AT hp=4, INSIDE VERIFIED HIGH-SPEED MODE (added 2026-08-19).
     '
@@ -161,23 +170,25 @@ PUB go() | mode, offset, status
     ' sampling is hardware-synchronised to SCK and unaffected by align_delay.
     ' Round 8b measured that byte-by-byte path clean at hp=4, so the reference is
     ' trustworthy here.
-    sd.debugSetAlignFloorRuleEnabled(false)
+    ' ORDER MATTERS (bench fix 2026-08-19): negotiate FIRST, with the floor rule
+    ' still in force, and only then lift it for the sweep. Lifting it first puts
+    ' align = hp + 5 at hp=4 on the CMD6 verify read -- which exceeds the whole
+    ' bit period (2*hp = 8 sysclks) and is the exact read that round 8a measured
+    ' breaking. That made attemptHighSpeed() fail verification and return FALSE
+    ' with ERROR() = E_IO_ERROR on a card that negotiates perfectly well.
     if not sd.attemptHighSpeed()
-        debug("  HS ARM: card DECLINED high speed (ERROR(): ", sdec_(sd.error()), ")")
-        debug("  This arm is MEANINGLESS without hp=4. Not a failure -- use a card that negotiates.")
+        if sd.error() == 0
+            debug("  HS ARM: card DECLINED high speed -- use a card that negotiates.")
+        else
+            debug("  HS ARM: high-speed QUERY FAILED, ERROR(): ", sdec_(sd.error()), ...
+                  " -- this is NOT a decline; the card could not be asked.")
+        debug("  This arm is MEANINGLESS without hp=4. Not a failure in itself.")
         debug("END_SESSION")
         return
     debug("  HS ARM: high speed ACTIVE at ", udec_(sd.getSPIFrequency() / 1000), " kHz, hp=", udec_(sd.debugGetCurrentHp()))
+    sd.debugSetAlignFloorRuleEnabled(false)
     debug("  HS ARM: hp=4 floor rule LIFTED for measurement (production keeps it)")
 #endif
-
-    status := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
-    if status < 0
-        debug("FATAL: initCardOnly failed (", sdec_(status), ")")
-        debug("END_SESSION")
-        return
-
-    debug("  initCardOnly OK. hp = ", udec_(sd.debugGetCurrentHp()))
     if SPI_TARGET_HZ > 0
         debug("  SPI override: requested ", udec_(SPI_TARGET_HZ / 1_000), " kHz, got ", ...
             udec_(sd.setSPISpeed(SPI_TARGET_HZ) / 1_000), " kHz (hp = ", udec_(sd.debugGetCurrentHp()), ")")

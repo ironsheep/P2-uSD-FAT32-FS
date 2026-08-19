@@ -23,10 +23,18 @@ two counterfeits are 11a's subject.
 
 | Head | Next action | Where | Blocked? |
 |---|---|---|---|
-| **H1 · Edge wedge** | **12a** cold-power-on run splits two hypotheses (free, no new code), then **12b** bad-pin prefix | bench | no |
-| **H2 · High-speed performance** | **12c** hp=4 pad on two more cards (the map is n=1), **12d** read band inside HS mode. Then the read/write asymmetry policy | bench | no |
-| **H3 · Catalog integrity** | Build instruments to emit the new format. **Design change:** run-to-run variance must be measured before instance variance | container | no |
-| **H4 · Release** | Doc pass done. §8 numbers + plan §11 append want round 12 | container | version: **yes — H1** |
+| **H1 · Edge wedge** | **13a/b/c** narrow what a "prior session" leaves behind. Deterministic reproducer in hand at last | bench | no |
+| **H2 · High-speed performance** | Nothing at the bench. **Decide the read/write asymmetry policy** — correctness is established | container | no |
+| **H3 · Catalog integrity** | Build instruments to emit the new format; run variance before instance variance | container | no |
+| **H4 · Release** | §8 numbers can be written now. Version still depends on H1 | container | version: **yes — H1** |
+
+**A method rule this campaign has now paid for twice — measure in the state that
+ships, not the state that is convenient.** Reference-content aliasing (round 6)
+and the hp=4 band (round 9c vs 12d) each produced a confident conclusion that
+inverted when re-measured properly, and each cost a hand-back item that had to be
+withdrawn. Any measurement that reaches its target by a shortcut — setting a clock
+instead of negotiating, using a uniform test pattern, reading back at a different
+speed than the write — states which state it was taken in, or it does not count.
 
 **Decisions SETTLED by Stephen, 2026-08-18:**
 
@@ -100,7 +108,26 @@ socket. Wedge is invariant: `mount()` #2 returns `-8`, raw init then fails.
 
 ### Next
 
-**Two hypotheses, and they make opposite predictions.** Round 11's hand-back
+- [x] 🔑 **DETERMINISTIC REPRODUCER (12a).** Cold — first binary after power-on — is **clean 4/4**. Warm — any prior session, no power cycle — **wedges 2/2**. Power clears it. Demonstrated in both directions in one sitting
+- [x] **The `-7` was never noise.** Split by condition: every warm run gives `-7`, every cold run gives `0`. One earlier `0` on a wedged run remains unexplained
+- [x] **Bad-pin prefix POSITIVELY ELIMINATED** — those calls execute in the four clean cold runs too. A path that runs identically in clean and wedged runs cannot be what distinguishes them. My hypothesis, refuted by their data before a run was spent on it
+- [x] **Cross-binary boundary eliminated in its literal form** — no boundary is crossed before the wedge fires at test #13
+- [x] The predecessor does not need to be a *different* program: one wedging run's predecessor was the identical `mount_tests` binary
+
+### What survives, and the constraint that shapes round 13
+
+What is left is **card or pin state that persists across a P2 reset and is cleared
+only by power**. But "prior driver session" is not by itself the trigger: the
+wedge probe runs eight mount/operate/unmount cycles inside one power-on and stays
+clean every time, so cycles 2-8 are all "after a prior session" without wedging.
+
+The difference is the **reset window** — roughly a second in which the P2 drives
+nothing and the card sits with CS floating and unclocked. No in-binary cycle ever
+creates that condition. Round 13a separates the two by using a **non-SD binary**
+as the predecessor: if that wedges, no driver session is required at all and the
+trigger is the reset itself.
+
+**Superseded hypotheses, kept so they are not re-proposed:** Round 11's hand-back
 proposes the **cross-binary boundary** — the reproducer is two downloads with a
 reset between them, the probe is one binary looping. But the wedge fires at
 **test #13 inside `mount_tests`**, before any boundary is crossed, which argues
@@ -110,13 +137,17 @@ the trigger is in that suite's own prefix — most conspicuously its two
 Nobody has run `mount_tests` alone from a cold power-on, so the two are still
 unseparated.
 
-1. **12a — cold power-on, `mount_tests` alone, three times.** Free, no new code,
-   and it decides which hypothesis to pursue. Wedges cold → trigger is inside the
-   suite → 12b. Clean cold → a preceding binary is required → cross-binary.
-2. **12b — `-D BAD_PIN_PREFIX`** (built), only if 12a wedges cold.
-3. Only once the probe reproduces: the ladder — 400 kHz (decisive), then
-   read-only.
-4. Bench-supply swap if the write burst is implicated.
+1. **13a** — non-SD binary as predecessor. Separates "driver session required"
+   from "the reset itself".
+2. **13b** — does a 120 s wait clear it, or only power? Latched state versus a
+   process completing. These cards are documented as re-busying themselves for
+   garbage collection after CS deassert, and the driver's init busy-poll gives up
+   after ~2 s and proceeds regardless — so this outcome would make it
+   driver-fixable.
+3. **13c** — read-only prior session: must the predecessor have written?
+4. Then the ladder (400 kHz, read-only), which is finally meaningful now that a
+   reproducer exists.
+5. Bench-supply swap if the write burst is implicated.
 
 ### Parked
 
@@ -143,11 +174,13 @@ have to do to turn that into real performance — and where does it hurt?
 - [x] **CORRECTION to 10b:** writes regress on **one of three** cards, not two. The PNY's −64% did not reproduce — its standard-arm numbers moved up to 3× between rounds while its high-speed numbers repeated to 0.3%, and it shows 6× dispersion inside a single measurement loop. Card variance, not a bus effect
 - [x] The hp=4 write corruption is **bit-smearing** (`exp | exp>>1`), the opposite of the read path's true one-bit shift with carry-in. Different path, different mechanism — do not conflate them
 
+- [x] **The hp=4 pad map now covers three cards** (12c): two controllers share residue `≡ 2 (mod 4)`, the third expresses no tooth, and **pad 4 passes on all three**. Off n=1
+- [x] 🔑 **The hp=4 exemption is LOAD-BEARING** (12d), measured inside high-speed mode: band `[-3..+4]` on two cards, `[-1..+5]` on the third. The rule's offset 0 is inside on all three and dead centre on two; **the shipped +5 is outside the band on two of three**. Round 9's recommendation to delete the rule is withdrawn — it was based on a sweep that set the clock instead of negotiating, and the band sits three ticks higher in that state
+- [x] Independent confirmation, by accident: an instrument that lifted the rule before negotiating put `align = hp + 5` on the CMD6 verify read; that verify failed on the Lexar and the driver correctly refused a mode it could not verify
+
 ### Open questions
 
-- **The hp=4 pad map is n=1.** It cleared the shipped default, and the tooth is expressed by only three of five cards surveyed while its residue moves with hp. A single-card map carrying a safety conclusion is the same evidence base that made the v1.7.0 characterization wrong. **12c** repeats it on the other two high-speed-capable cards.
-- **The hp=4 READ band has still never been measured inside high-speed mode.** Round 9c set the clock instead of negotiating, which leaves the card in default mode above spec. The exemption is known *safe* empirically — 11b's high-speed reads were clean and gained up to 47% — but whether it is *optimal* is unmeasured. **12d**.
-- **What policy replaces "always negotiate"?** Now a product question rather than a safety one. Candidates: asymmetric (high speed for reads, standard for writes), per-card gating, or negotiate-then-measure.
+- **What policy replaces "always negotiate"?** The only one left, and it is a product question rather than a safety one. Reads gain up to +47% on every card; writes are byte-correct but no faster, and one card of three is reproducibly slower. Candidates: asymmetric (high speed for reads, standard for writes), per-card gating, or negotiate-then-measure.
 
 ### That reading held up
 
@@ -158,10 +191,8 @@ behaviour in high-speed mode.
 
 ### Next
 
-1. **12c** — hp=4 pad on the Lexar and PNY, to take the map off n=1.
-2. **12d** — hp=4 read band inside high-speed mode (`-D SPI_43M_HS`, built).
-3. Then choose the adaptation policy. Correctness is established; what remains is
-   how a user reaches the mode given reads gain and writes do not.
+**Nothing at the bench.** Choose the adaptation policy — that is a design
+discussion, not a measurement.
 
 ---
 

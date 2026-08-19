@@ -83,7 +83,25 @@ Returns the streamer-DMA `align_delay` value that will be used on the next strea
 
 **The hp=4 floor-cell rule.** At `spi_period = 4`, positive offsets are *not* applied; that cell keeps the historical `align_delay = hp`. The passing bands were measured at hp 5..7 only, and at hp=4 the default +5 exceeds the whole bit period (`2*hp` = 8 sysclks) — it was measured breaking the CMD6 high-speed verify read. Negative (diagnostic) offsets still apply. hp=4 arises at the 50 MHz high-speed request and at low-sysclk 25 MHz configurations (e.g. 200 MHz sysclk); both keep their long-certified alignment until that cell is characterized.
 
-> **Measurement status of the floor cell (2026-08-18).** A sweep at hp=4 found a real band, `[+2..+8]` centred +5, on three of four cards — but it was taken in **default speed mode driven above spec**, which is a different card state from the verified high-speed mode where hp=4 actually occurs in production. It therefore does *not* yet justify lifting the rule. A sweep inside high-speed mode is the outstanding measurement.
+> **The floor-cell rule is load-bearing, and measurement proved it (2026-08-19).**
+> An earlier sweep found a band of `[+2..+8]` centred +5 at hp=4 and was read as
+> evidence the rule could be dropped. That sweep reached 43.75 MHz by *setting* the
+> clock, which leaves the card in default speed mode driven above spec — not the
+> state hp=4 ships in. Measured **inside verified high-speed mode**, the band moves
+> down by three:
+>
+> | Card | Band | Centre | offset 0 (the rule) | offset +5 (the default) |
+> |---|---|---|---|---|
+> | Samsung `$4AC8_5F42` | `[-3..+4]` | 0 | dead centre | **outside** |
+> | Lexar `$3354_9024` | `[-3..+4]` | 0 | dead centre | **outside** |
+> | PNY `$01CD_5CF5` | `[-1..+5]` | +2 | inside | upper edge |
+>
+> The rule keeps `align = hp`, i.e. offset 0 — inside the band on all three cards
+> and dead centre on two, while the shipped +5 is excluded outright on two. It is
+> **the correct value at hp=4, not a conservative placeholder**. An independent
+> confirmation arrived by accident: an instrument that lifted the rule *before*
+> negotiating put `align = hp + 5` on the CMD6 verify read, and that verify failed
+> on the Lexar — the driver correctly refusing a mode it could not verify.
 
 ### `debugSetTxAlignDelay(pad)`
 
@@ -241,11 +259,10 @@ The residue offset now has four data points — hp=4 → 2, hp=5 → 4, hp=7 →
 hp=14 → 8 — and no formula fits them that is worth trusting. Treat each hp as
 requiring its own measurement.
 
-> **Sample size.** The hp=4 map is currently **one card**. The tooth is expressed
-> by only three of five cards surveyed, and the residue moves with hp, so a
-> single-card map is exactly the evidence base that made the v1.7.0
-> characterization wrong. Confirming pad 4's safety at hp=4 across more cards is
-> outstanding.
+**Confirmed across three cards (2026-08-19).** Two controllers share the residue
+`≡ 2 (mod 4)`; the third expresses no tooth at all, consistent with the earlier
+finding that only some cards are sensitive to it. **Pad 4 passes on all three**, so
+the shipped default is established safe at hp=4 rather than resting on one card.
 
 **The corruption here is bit-SMEARING, not a bit-shift.** At every failing pad the
 corrupted byte is exactly `exp | (exp >> 1)` — every `1` also appears in the
@@ -256,7 +273,9 @@ sliding by a position.
 This is **the opposite of the read-path failure**, and the two must not be
 conflated: a read taken with too small an `align_delay` produces a true one-bit
 right shift with carry-in (`$C1` stored → `$E0` received; a smear would have given
-`$E1`). Different path, different mechanism, different arithmetic.
+`$E1`). Different path, different mechanism, different arithmetic. The smear
+reproduces on a second controller at lower severity, so it is a property of the
+write path rather than of one card.
 
 **Why the fix matters more than the pad.** With `RDFAST` hoisted out of the phase-critical window, every instruction between the SCK reset and `XINIT` is a fixed 2-clock cog operation, so `XINIT` sits at a compile-time-constant offset from the reset. That is what makes a *single* correct default possible; before the fix, the offset included a variable-latency instruction and no pad value could have been correct for every build.
 

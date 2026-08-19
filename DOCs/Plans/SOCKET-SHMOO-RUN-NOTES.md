@@ -1251,6 +1251,16 @@ user-affecting.**
 
 # Hand-back — consolidated, all rounds
 
+> ✅ **ROUND 12 COMPLETE (2026-08-19)** — 🔑 **the wedge is now a switch**: cold
+> (first binary after power-on) is clean 4/4, warm is wedged 2/2, cleared only by
+> power — a deterministic reproducer for #3240 at last, and the bad-pin prefix is
+> positively eliminated. 🔑 **the hp=4 exemption is LOAD-BEARING**: measured inside
+> real high-speed mode the band is `[-3..4]` centre 0 on two cards, so the shipped
+> `+5` is **outside** it — **round 9's item 3 is REVERSED**. hp=4 write teeth hold
+> across three cards with **pad 4 passing on all**. Two bench fixes to the
+> `SPI_43M_HS` arm, which could never have worked as delivered.
+> See the Round 12 section at the end.
+>
 > ✅ **ROUND 11 COMPLETE (2026-08-18)** — **11c mapped the hp=4 write cell at last**:
 > not a band but periodic teeth at ≡ 2 (mod 4), and **the shipped default pad 4
 > PASSES**, so the pad is not the cause and high speed is correctness-clear.
@@ -1469,6 +1479,12 @@ on three of the five. Options and their trade-offs are in Round 7b.
 | `SD_performance_benchmark_260818-180316/-180336.log` | R11b Lexar — gains everywhere, all verifies match |
 | `SD_performance_benchmark_260818-181751/-181822.log` | **R11b PNY — regression NOT reproducible; std arm varies 3x** |
 | `SD_write_probe_260818-182055.log` (+3 identical repeats) | **R11c hp=4 write teeth ≡ 2 (mod 4); default pad 4 PASSES** |
+| `SD_RT_mount_tests_260818-184339/-184420/-184503/-184949.log` | **R12a COLD — 43/43 clean, four times** |
+| `SD_RT_mount_tests_260818-184534/-185003.log` | **R12a WARM — 19/24 wedged, both times** |
+| `SD_write_probe_260818-1851*/-1853*.log` | R12c Lexar (no tooth) + PNY (≡ 2 mod 4); pad 4 PASS on both |
+| `SD_phase_sweep_test_260818-185537/-185616.log` | R12d PNY in HS mode — band `[-1..5]` centre +2 |
+| `SD_phase_sweep_test_260818-190333/-190346.log` | **R12d Lexar in HS mode — `[-3..4]` centre 0; `+5` OUTSIDE** |
+| `SD_phase_sweep_test_260818-190607/-190610.log` | **R12d Samsung in HS mode — `[-3..4]` centre 0; `+5` OUTSIDE** |
 
 ---
 
@@ -1798,9 +1814,13 @@ card whose wedge was the subject of the study).**
    container agent plans this. Detail in the 9d section.
 2. **`SD-CARD-PERFORMANCE.md` §7 must be corrected** — "fails on all tested
    cards" is false on three of four cards tested today, with transcripts.
-3. **The hp=4 production exemption can now be decided** (9c) — it currently
-   trades a measured band center for a near-edge value, on evidence that no
-   longer requires it.
+3. **The hp=4 production exemption can now be decided** (9c) — ⚠ **REVERSED by
+   round 12d: the exemption must STAY.** 9c's band `[2..8]` centre `+5` was
+   measured with the clock *set* to 43.75 MHz, leaving the card in default speed
+   mode driven above spec. Measured inside real high-speed mode the band is
+   `[-3..4]` centre 0 on two of three cards, putting the shipped `+5` **outside**
+   it. The exemption's `align = hp` (offset 0) is dead centre on two cards and
+   inside on all three.
 4. **Two timeout budgets must rise** before a large card is used for
    certification again (9e).
 5. **The asdfg contradictory getter pair** (9d) — `checkCMD6Support()=0` with
@@ -2183,3 +2203,187 @@ Log: `SD_write_probe_260818-182055.log` plus three byte-identical repeats.
 11a stopped at the gate by the brief's own rule. 11b complete (6 runs, 3 cards,
 12 verifies). 11c complete and repeated 4x. The Samsung's raw scratch sectors at
 LBA 200/100+ were overwritten by 11c and the card was reformatted afterward.
+
+---
+
+# Round 12 — the wedge becomes deterministic, and the hp=4 exemption is vindicated (run 2026-08-18/19)
+
+## 12a — 🔑 THE WEDGE IS NOW A SWITCH: cold is clean, warm wedges, every time
+
+**Six runs on Lerdisk `$0000_01F4` in Edge, zero exceptions:**
+
+| Condition | Runs | `mount_tests` | `unmount()` | `mount()` #2 |
+|---|---|---|---|---|
+| **COLD** — first binary after power-on | **4** | **43/43 PASS** | `0` | `0` |
+| **WARM** — any prior driver session, no power cycle | **2** | **19/24 FAIL** | `-7` | `-8` |
+
+**The wedge requires a prior driver session on the card. A power cycle clears it.**
+Demonstrated in both directions in one sitting, alternating on demand. #3240 has
+been an intermittent, hard-to-trigger defect since May; it now has a
+**deterministic two-command reproducer**.
+
+Card identity confirmed between runs (`asdfg $0000_01F4`). **Note the deliberate
+omission: no identify was run before the cold runs** — an identify is itself a
+preceding binary and would have destroyed the experiment. Identity was checked
+after run 1 instead.
+
+### The preceding binary does NOT need to be a different program
+
+Run 4's predecessor was **the identical `mount_tests` binary**. So this is not
+about another tool leaving pins in a strange state, nor about tool-specific
+configuration. It is about the card having been through *any* prior driver
+session without losing power.
+
+### ⛔ 12b is POSITIVELY ELIMINATED — not deferred
+
+The brief proposes the bad-pin prefix (`mount(60, 10, 58, 15)` and
+`mount(60, 59, 20, 16)` in the "Pin offset validation" group) as the trigger the
+probe never reproduced. **Those calls execute in all six runs, including the four
+clean ones.** A code path that runs identically in clean and wedged runs cannot be
+what distinguishes them. `-D BAD_PIN_PREFIX` would be testing a hypothesis the
+data has already refuted, so it was not run.
+
+This also retires round 11's **cross-binary-boundary** candidate in its literal
+form: no boundary is crossed inside run 4 before the wedge fires at test #13. What
+survives is narrower and better — **card state that persists across a P2 reset and
+is cleared only by power**.
+
+### The `-7` intermittency was an uncontrolled variable, not noise
+
+The tally had been `-7`, `-7`, `0`, `-7` and read as flakiness. Split by
+condition it is not: **every warm run gives `-7`, every cold run gives `0`.**
+(The one earlier `0` on a wedged run remains the outstanding exception to that
+model and is worth checking against it.)
+
+Logs: `SD_RT_mount_tests_260818-184339/-184420/-184503` (cold, clean),
+`-184534` (warm, wedged), `-184949` (cold, clean), `-185003` (warm, wedged).
+
+## 12c — the hp=4 write teeth on two more cards: pad 4 is ESTABLISHED safe
+
+| Card | Controller | Failing pads | Residue | **pad 4** |
+|---|---|---|---|---|
+| Samsung `$4AC8_5F42` (11c) | Samsung `$1B` | 2, 6, 10 | ≡ 2 (mod 4) | **PASS** |
+| Lexar `$3354_9024` | Longsys `$AD` | **none** | — | **PASS** |
+| PNY `$01CD_5CF5` | Phison `$27` | 2, 6, 10 | **≡ 2 (mod 4)** | **PASS** |
+
+Each card run twice; identical both times. **Two unrelated controllers land on the
+identical residue** and the third expresses no tooth — matching round 7b, where
+only three of five cards expressed it. **Nowhere does pad 4 fail.** By the brief's
+own decision rule the map is a driver property and the shipped pad is safe, now on
+three cards rather than one. The sample-size gap that made 11c's safety conclusion
+fragile is **closed**.
+
+### The smearing signature reproduces on a second controller, at lower severity
+
+| pad | expected | Samsung got | PNY got |
+|---|---|---|---|
+| 2 | `$C2` | `$E3` (bits 5 **and** 0) | `$E2` (bit 5 only) |
+| 6 | `$46` | `$67` | `$47` (bit 0 only) |
+| 10 | `$CA` | `$EF` | `$EA` (bit 5 only) |
+
+`diffs = 379/380` on the PNY versus `496` on the Samsung. **Same failing pads, same
+smear direction — every affected bit propagating into the next-lower position —
+but the PNY smears one bit where the Samsung smears several.** The same phenomenon
+at lower severity, as expected from a shared timing cause with card-dependent
+margin. It further undercuts "one-bit shift": a shift would corrupt the whole
+stream identically on both cards.
+
+## 12d — 🔑 THE hp=4 EXEMPTION IS LOAD-BEARING, and round 9c's reading is REVERSED
+
+Measured **inside verified high-speed mode** (banner `HS ARM: high speed ACTIVE at
+43_750 kHz, hp=4`), which is the state hp=4 actually ships in. Each card twice,
+identical.
+
+| Card | Band | Centre | offset 0 (**exemption**) | offset +5 (**shipped default**) |
+|---|---|---|---|---|
+| Samsung `$4AC8_5F42` | `[-3..4]` | **0** | **dead centre** | ❌ **OUTSIDE** |
+| Lexar `$3354_9024` | `[-3..4]` | **0** | **dead centre** | ❌ **OUTSIDE** |
+| PNY `$01CD_5CF5` | `[-1..5]` | +2 | inside | at the **upper edge** |
+
+**Two of three cards exclude the shipped `+5` outright; the third has it on the
+boundary. Offset 0 is inside on all three and dead centre on two.**
+
+At hp=4 the floor rule keeps `align = hp`, i.e. **offset 0** — confirmed at
+`micro_sd_fat32_fs.spin2:9510`.
+
+### ⚠ CORRECTION to the round-9 hand-back
+
+Round 9's item 3 said the hp=4 exemption "trades the measured centre for a
+nearer-edge value" and could now be deleted. **That is wrong, and it is reversed
+here.** It rested on round 9c's band of `[2..8]` centre `+5` — which was measured
+by *setting* the clock to 43.75 MHz, leaving the card in **default speed mode
+driven above spec**. In the state that ships, the band moves down by 3 and
+`+5` falls outside it on two of three cards.
+
+**The exemption is not a conservative placeholder awaiting better data. It is the
+correct value, and the only one of the two that works on every card tested.**
+
+### The instrument's own failure was independent confirmation
+
+Before the bench fix below, the arm lifted the floor rule *before* negotiating,
+putting `align = hp + 5` on the CMD6 verify read. On the **Lexar that verify
+failed** with `E_IO_ERROR` and the card appeared to "decline" high speed. It was
+not declining: `+5` genuinely does not work on that card at hp=4, and the driver
+correctly refused a mode it could not verify. **Two independent observations, same
+conclusion** — and the same failure round 8a originally hit.
+
+### ⚠ Pattern worth naming: measuring in a convenient state instead of the shipping state
+
+This is the **second** time this campaign that a measurement taken in a convenient
+state produced a conclusion that inverted once measured properly. First the
+reference-content aliasing (round 6), now the hp=4 band (9c vs 12d). Both cost a
+hand-back item that had to be withdrawn.
+
+## ⚠ TWO BENCH FIXES to `SD_phase_sweep_test.spin2` (the `SPI_43M_HS` arm)
+
+The new arm could **never have worked on any card** as delivered. Both fixes are
+ordering, both verified on hardware.
+
+1. **`attemptHighSpeed()` was called BEFORE `initCardOnly()`.** The driver's worker
+   cog did not exist yet, so `cog_id == -1` returned `E_NOT_MOUNTED` (`-20`) and
+   the arm bailed printing "card DECLINED". Block moved to after `initCardOnly`.
+   (`SPI_TARGET_HZ = 0` for this arm, so the `setSPISpeed` override is correctly
+   skipped and needed no change.)
+2. **`debugSetAlignFloorRuleEnabled(false)` was called BEFORE the negotiation.**
+   That put `align = hp + 5` at hp=4 on the CMD6 verify read — exceeding the whole
+   bit period (`2*hp = 8` sysclks), the exact read round 8a measured breaking. Moved
+   to after a successful negotiation, with a comment recording why.
+
+**Also fixed: the arm reported both `-20` and `-7` as `card DECLINED`.** That is
+the decline-vs-query-failed conflation `attemptHighSpeed()`'s own docstring warns
+against — "the card said no" and "the card could not be asked" call for opposite
+responses. The arm now branches on `ERROR() == 0` and says which it was.
+
+Not committed. The tree still carries the container side's uncommitted work.
+
+# Round 12 — hand-back summary
+
+| Study | Question | Answer |
+|---|---|---|
+| 12a | Does `mount_tests` wedge from cold? | **NO — clean 4/4 cold, wedged 2/2 warm.** The wedge needs a prior driver session; power clears it. **Deterministic reproducer at last** |
+| 12b | Is the bad-pin prefix the trigger? | **Not run — positively eliminated.** Those calls execute in the clean cold runs too |
+| 12c | Do the hp=4 teeth hold across cards? | **Yes.** Two controllers share residue ≡ 2 (mod 4), one has no tooth, **pad 4 passes on all three** |
+| 12d | Is the exemption's `align = hp` inside the real band? | **Yes — dead centre on 2 of 3.** And the shipped `+5` is **outside** on those two. **Round 9's item 3 is reversed** |
+
+## Container-side items from round 12
+
+1. **The hp=4 exemption must STAY, and round 9's item 3 must be withdrawn.** 12d
+   measures `+5` outside the band on two of three cards in the shipping state.
+   This is now the strongest single result about the floor cell.
+2. **The wedge has a deterministic reproducer** (12a): cold = clean, warm = wedge,
+   any prior driver session, cleared only by power. The next question is what
+   card-side state survives a P2 reset — and the probe should be rebuilt to run
+   *twice in one power-on*, which is the shape that reproduces.
+3. **Bad-pin prefix is eliminated** — do not spend a round on it.
+4. **Two instrument fixes** to the `SPI_43M_HS` arm plus a decline-vs-failure
+   message fix; review and fold in.
+5. **`exp | (exp >> 1)` reproduces on a second controller** at lower severity —
+   the "one-bit shift" language needs revisiting (carried over from round 11).
+6. **Name the measurement-state pattern** in the campaign's method notes: measure
+   in the state that ships, not the state that is convenient. Two inversions so far.
+
+## Bench scope
+
+12a complete (6 runs + identity). 12b not run, by elimination. 12c complete
+(3 cards x 2). 12d complete (3 cards x 2) after two instrument fixes. Lexar and
+PNY were reformatted after 12c's destructive writes.

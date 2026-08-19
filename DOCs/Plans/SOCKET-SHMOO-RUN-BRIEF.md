@@ -4,19 +4,19 @@
 **Authored:** 2026-08-17, container side.
 **Plan:** `DOCs/Plans/SOCKET-TIMING-CHARACTERIZATION-PLAN.md` (results so far: §11).
 
-## ⟹ CURRENT STATE + WHAT TO RUN NEXT (updated 2026-08-19, round 12 queued)
+## ⟹ CURRENT STATE + WHAT TO RUN NEXT (updated 2026-08-19, round 13 queued)
 
-Round 11 is complete. Status per head: `DOCs/Plans/RESEARCH-HEADS.md` — read it
-first. This brief carries the bench procedure.
+Round 12 is complete, and the wedge finally has a deterministic reproducer.
+Status per head: `DOCs/Plans/RESEARCH-HEADS.md`.
 
-**Run next: ROUND 12.** Full run sheet at the end.
+**Run next: ROUND 13 — narrow the wedge's trigger.** Everything else on the board
+is settled or container-side.
 
-| Track | What | Why |
+| Track | What | New code? |
 |---|---|---|
-| **12a** | Does `mount_tests` wedge from a COLD power-on? | One run, no new code, and it decides which of two hypotheses the wedge lives in |
-| **12b** | Wedge probe with `-D BAD_PIN_PREFIX` | The one thing the reproducer does that the probe never has |
-| **12c** | hp=4 write pad on **two more cards** | The map that cleared the shipped default is currently n=1 |
-| **12d** | hp=4 read band **inside high-speed mode** | Never measured in the card state where hp=4 actually occurs |
+| **13a** | A non-SD binary as the "prior session" | no |
+| **13b** | Does waiting clear it, or only power? | no |
+| **13c** | Does the prior session need to have WRITTEN? | no |
 
 ## What this tool does
 
@@ -1019,6 +1019,82 @@ were clean and gained up to 47% — so this decides whether it is also *optimal*
 12a: wedged or clean, on each of three cold runs. 12b: same, plus the bad-pin
 mount return codes. 12c: the failing pads per card. 12d: the band per card and
 whether `align = hp` falls inside it.
+
+**Standing rules:** a study returning "nothing here" is a result; and do not
+diagnose from hypotheses — send the transcript and say what surprised you.
+
+## ROUND 13 — what exactly does a "prior session" leave behind? (added 2026-08-19)
+
+Round 12a turned #3240 from an intermittent mystery into a switch: **cold is
+clean (4/4), warm wedges (2/2), power clears it.** That is a large step. This
+round narrows *what* the warm condition actually consists of, because the current
+description still contains at least two independent variables.
+
+**The observation that constrains everything here:** the wedge probe runs eight
+mount/operate/unmount cycles inside a single power-on and stays clean, every time.
+Cycles 2 through 8 are all "after a prior driver session" — yet only a session
+that follows **a P2 reset and re-download** wedges. So "prior driver session" is
+not by itself the trigger. Something about the reset window is part of it.
+
+During a P2 reset and download the pins go high-impedance for roughly a second:
+the card sits with CS floating and unclocked, which is a condition no in-binary
+cycle ever creates.
+
+### 13a — is a *driver* session required at all? (the decisive one)
+
+Run any binary that does **not** touch the SD pins as the predecessor, then
+`mount_tests` warm.
+
+```bash
+# 1. POWER-CYCLE. 2. Run a non-SD binary -- any small program that leaves the SD
+#    pins alone. 3. WITHOUT power cycling:
+cd tools
+./run_test.sh ../src/regression-tests/SD_RT_mount_tests.spin2 -t 120
+```
+
+- **Wedges** → a driver session is NOT required. The trigger is the reset itself —
+  the float window, or the download traffic — and the whole hypothesis moves off
+  the card's filesystem state and onto the pins
+- **Clean** → a driver session genuinely is required, and 13b/13c narrow which
+  part of it
+
+Run it twice to be sure, power-cycling before each.
+
+### 13b — does time clear it, or only power?
+
+```bash
+# POWER-CYCLE, run mount_tests (cold, expect clean), then WAIT 120 s doing
+# nothing at all, then run it again WITHOUT power cycling:
+./run_test.sh ../src/regression-tests/SD_RT_mount_tests.spin2 -t 120
+```
+
+- **Wedges after the wait** → the state is latched, not a process finishing
+- **Clean after the wait** → something in the card completes on its own, and
+  internal housekeeping moves to the front. These cards are documented as
+  re-busying themselves after CS deassert for garbage collection, and the driver's
+  init busy-poll gives up after about two seconds and proceeds regardless
+
+That second outcome would make this a driver-fixable defect rather than a card
+limitation, so it is worth the two minutes.
+
+### 13c — must the prior session have written?
+
+```bash
+# POWER-CYCLE, then a READ-ONLY prior session, then mount_tests warm:
+./run_test.sh ../diagnostic-tests/SD_edge_wedge_probe.spin2 -t 300 -D READ_ONLY
+./run_test.sh ../src/regression-tests/SD_RT_mount_tests.spin2 -t 120
+```
+
+- **Clean** → prior *writes* are required, which points hard at post-write
+  internal activity
+- **Wedges** → writes are irrelevant and the trigger is in init/teardown
+
+### Bring back for round 13
+
+Per run: cold or warm, what the predecessor was, the gap in seconds, and
+`mount_tests`' pass/fail plus its `unmount()` and `mount()` #2 codes. The
+cold/warm split predicts `0` and `-7` respectively — note any run that breaks
+that model, since one earlier `0` on a wedged run is still unexplained.
 
 **Standing rules:** a study returning "nothing here" is a result; and do not
 diagnose from hypotheses — send the transcript and say what surprised you.
