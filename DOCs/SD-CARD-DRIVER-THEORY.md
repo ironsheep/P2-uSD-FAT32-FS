@@ -502,6 +502,47 @@ The half-period is clamped to a minimum of 4 system clocks (the hardware minimum
 
 The driver starts at 400 kHz for card initialization (SD specification requirement), then `setOptimalSpeed()` switches to the card's maximum speed (up to 25 MHz) after init.
 
+### Card Initialisation Starts by Quiescing the Card (v1.8.0)
+
+`initCard()` issues **CMD12 (STOP_TRANSMISSION) before CMD0**, unconditionally, on
+every driver start.
+
+**Why: the driver is not the only bus master.** On the P2 Edge the microSD socket
+shares P58-P61 with the boot flash, and the two pin roles do not line up:
+
+| Pin | Flash role | microSD role |
+|---|---|---|
+| P58 | DO | MISO |
+| P59 | DI | MOSI |
+| **P60** | **CLK** | **DAT3/CS** |
+| **P61** | **CS** | **CLK** |
+
+CLK and CS are swapped. So while the boot sequence touches flash, the card sees
+**its own chip-select toggling at flash clock rate** with traffic on its data
+lines — on every reset, at RCFAST, before a single user instruction executes.
+
+**A card left mid-transfer by that is streaming, not listening.** CMD0 sent into
+the stream is data rather than a command, so initialisation sees five silent
+retries and reports `E_NO_CARD` for a card that is present and healthy. Nothing
+downstream recovers it: a multiple-block read continues until told to stop, so
+additional clocking only feeds it, and waiting does not help — both measured, at
+102,400 clocks in each CS polarity and at 120 seconds of powered idle. Only
+removing power cleared it.
+
+CMD12 is what the SD specification designates for this (Part 1 Physical Layer
+§4.3): *"All data read commands can be aborted any time by the stop command
+(CMD12). The data transfer will terminate and the card will return to the Transfer
+State."*
+
+**It is safe to run unconditionally.** On an idle card CMD12 has nothing to stop
+and returns an error bit the driver ignores; there is no state to get wrong. The
+cost is one command plus a short settle delay, once per start.
+
+**Scope of the original defect:** it required a card that had been used before the
+reset, and appeared most readily on marginal or counterfeit silicon. Mainstream
+cards were not observed to wedge — but the exposure is a property of the board's
+pin sharing, not of any particular card.
+
 **The production speed bound (v1.7.1).** User `setSPISpeed()` requests are clamped
 at the card's declared `TRAN_SPEED`, itself capped at the SD SPI-mode 25 MHz — and
 lifted to 50 MHz only while verified CMD6 high-speed mode is active. Internal speed

@@ -21,12 +21,20 @@ two counterfeits are 11a's subject.
 
 ## ⟹ NEXT UP — what each head needs
 
+**Release is now v1.8.0** (Stephen, 2026-08-19). Scope grew from a patch to a
+root-caused fix for a months-old defect plus a public API contract change.
+
 | Head | Next action | Where | Blocked? |
 |---|---|---|---|
-| **H1 · Edge wedge** | 🔑 **Root cause found AND a fix proven.** Decide whether `SD_INIT_QUIESCE` becomes the default, then certify | container → bench | **decision — Stephen** |
+| **H1 · Edge wedge** | ✅ **Root-caused and FIXED.** CMD12 quiesce is unconditional in `initCard()`. Needs full regression to certify | bench | no |
+| **H3 · Catalog integrity** | 🔴 **RELEASE GATE.** Full catalog performance sweep — tomorrow's effort. **v1.8.0 does not ship before it** | bench | no |
 | **H2 · High-speed performance** | Decide the read/write asymmetry policy | container | no |
-| **H3 · Catalog integrity** | Build instruments to emit the new format; run variance before instance variance | container | no |
-| **H4 · Release** | **Unblocked if the quiesce ships.** Then doc pass close-out + version decision | container | follows H1 |
+| **H4 · Release** | Blocked on H3's sweep, not on H1. Then doc close-out and tag | container | **yes — H3** |
+
+**Stephen's release conditions (2026-08-19):**
+1. The quiesce runs **on every driver start**, not gated behind a flag.
+2. **Nothing ships until a new full catalog performance sweep** has been run — the
+   sweep is a release gate, not a nice-to-have.
 
 **A method rule this campaign has now paid for twice — measure in the state that
 ships, not the state that is convenient.** Reference-content aliasing (round 6)
@@ -398,7 +406,8 @@ dispersion needs repeat runs before any delta is believed.
 
 - [x] v1.7.1 mitigation bundle certified: 530/530 (round 8a run 3), closing audit clean
 - [x] 532/532 on a second geometry — 119GB, 64 sectors/cluster (round 9e)
-- [x] **Stephen's call:** hold for an Edge fix. With a fix it may ship as **v1.8.0**; without one it ships as **v1.7.1**. A card-location restriction is not acceptable as a shipped limitation
+- [x] **Stephen's call:** hold for an Edge fix. With a fix it may ship as **v1.8.0**; without one it ships as v1.7.1. A card-location restriction is not acceptable as a shipped limitation
+- [x] **RESOLVED 2026-08-19 — the fix landed, so it is v1.8.0.** The card-location restriction is going away rather than being documented
 - [x] T1/T2 style-audit deferral recorded in `RELEASE-CHECKLIST.md` §2 in Stephen's words — settled, do not re-raise
 
 ### Open

@@ -5,11 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.8.0] - unreleased
 
-Cards that sat at the edge of the driver's read timing now carry full margin, both
-SD sockets on a board behave alike, and high-speed mode can be left without
-stranding the card.
+A card that stopped responding after a reset now starts normally. Cards that sat at
+the edge of the driver's read timing carry full margin, both SD sockets on a board
+behave alike, and high-speed mode can be left without stranding the card.
+
+### Bug Fixes
+
+- **A card can be left unusable by the boot process, and now recovers on its own.**
+  On boards where the microSD socket shares pins with the boot flash — including
+  the P2 Edge — the boot sequence drives those pins before any user code runs, and
+  the two roles do not line up: the pin the card uses for chip-select is the flash
+  clock. A card that was in use before the reset can be left mid-transfer by this,
+  after which it is streaming rather than listening, and `mount()` reports
+  `E_NO_CARD` on a card that is present and healthy. Only removing power cleared
+  it.
+
+  The driver now issues a stop-transmission command at the start of card
+  initialisation, which returns such a card to a state where it accepts commands.
+  This runs on every start, costs one command, and does nothing on a card that is
+  already idle.
+
+  The symptom was intermittent and long-standing: it required a card that had been
+  used before the reset, and it appeared most readily on marginal or counterfeit
+  cards. If you have seen a card work from a cold power-up and fail after
+  re-downloading a program, this was why.
 
 ### Changes
 

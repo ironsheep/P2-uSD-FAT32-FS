@@ -6,20 +6,21 @@
 
 ## ⟹ CURRENT STATE + WHAT TO RUN NEXT (updated 2026-08-19, round 16 queued)
 
-🔑 **Round 15a found the root cause: boot-time SD access wedges the card.** Four
-warm runs clean with it disabled, wedge back immediately when re-enabled, toggled
-both directions. The card is wedged before our first instruction executes — which
-is also why no recovery exists.
+🔑 **The #3240 wedge is root-caused AND fixed.** Boot-time access to the shared
+flash/microSD pins leaves the card mid-transfer; **CMD12 before CMD0 aborts it**.
+Proven on hardware — five clean warm runs across two power cycles, each pair
+followed by a build without the step, which wedged both times.
 
-**Run next: ROUND 16.**
+**The fix is now unconditional in `initCard()`** — no flag, every driver start
+(Stephen, 2026-08-19). Release is **v1.8.0**.
+
+**Run next: ROUND 16 — certification, then the catalog sweep.**
 
 | Track | What | Why |
 |---|---|---|
-| **16a** | `-D SD_INIT_QUIESCE` at **normal** switch settings | The only identified fix that works on a board we do not control. Carried over from 15b, not run |
-| **16b** | Erase or replace the flash program, keep flash boot ON | Separates a **general Edge exposure** from an artefact of this bench's flash |
-
-16b decides how large this defect actually is, so it decides what the release has
-to say.
+| **16a** | Full regression, standard card, quiesce now default | Certifies a change that touches every card start |
+| **16b** | Full regression on the **Lerdisk in the EDGE socket** | The card the whole campaign was about. Its record says "External only" — this may now be wrong |
+| **16c** | 🔴 **Full catalog performance sweep** | **RELEASE GATE** — v1.8.0 does not ship without it |
 
 ## What this tool does
 
@@ -1420,3 +1421,61 @@ and 16b can be skipped.
 16a: cold/warm for both the quiesce build and the unmodified build, same session.
 16b: what was in flash, what replaced it, and the cold/warm result with flash boot
 still enabled.
+
+## ROUND 16 — certify the fix, then the catalog sweep (added 2026-08-19)
+
+### 16a — full regression with the quiesce as default
+
+`initCard()` now issues CMD12 before CMD0 on every start, with no flag. That
+touches every card, every mount, so it needs the full suite rather than a spot
+check.
+
+```bash
+cd tools
+./run_regression.sh
+```
+
+Expect **532/532**. Note the driver no longer prints a quiesce marker — the
+unconditional debug line was removed when the step became production, because
+production has no business printing on every mount. Build shape is the proof now:
+there is no other build.
+
+### 16b — is the Lerdisk still "External only"?
+
+The two `asdfg` cards are recorded in the catalog as **External connector only**,
+because they wedged in the Edge socket. **That was this defect.** Round 15b already
+showed `mount_tests` 43/43 on the Lerdisk in the Edge socket with the fix — but the
+catalog claim covers the whole suite, so it needs the whole suite.
+
+```bash
+# Lerdisk $0000_01F4 in the EDGE socket:
+cd tools
+./run_regression.sh
+```
+
+- **Passes** → the card records and `CARD-CATALOG.md` need rewriting: these cards
+  are no longer socket-restricted, and a documented incompatibility disappears
+- **Fails elsewhere** → the wedge is fixed but something else limits them; record
+  precisely what, because "External only" would then need a narrower reason
+
+This card is expendable and reformattable.
+
+### 16c — full catalog performance sweep (RELEASE GATE)
+
+**v1.8.0 does not ship without this** (Stephen, 2026-08-19). The driver has changed
+materially since every number in the catalog was taken — read alignment moved to
+the measured band centre, a production speed bound was added, and now every card
+start begins with a quiesce. The existing figures predate all of it.
+
+Procedure is `DOCs/cards/CATALOG-PROCEDURE.md` per card. Two things the container
+side must settle **before** the sweep starts, because they change what the
+instruments must emit:
+
+1. **Run variance before instance variance.** Round 11b measured the same physical
+   card moving up to 3x between rounds. Repeat one card several times first to
+   establish the noise floor; only then do differences between instances mean
+   anything.
+2. The new two-table format, silicon-key grouping, and driver-version stamping are
+   **not built yet**. Sweeping before they exist means sweeping twice.
+
+Expect this to be an afternoon for every working card, per Stephen's estimate.

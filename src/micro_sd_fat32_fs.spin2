@@ -7555,46 +7555,42 @@ PRI initCard() : bSuccess | timeout, resp, card_version, acmd41_arg, got_respons
   ' Sends: 0x40 0x00 0x00 0x00 0x00 0x95
   ' Expected R1: 0x01 (in idle state)
   ' ============================================
-#ifdef SD_INIT_QUIESCE
   ' ============================================
-  ' STEP 3.9 (EXPERIMENTAL, -D SD_INIT_QUIESCE): quiesce a card that a PREVIOUS
-  ' bus master may have left mid-transfer.
+  ' STEP 3.9: quiesce a card a PREVIOUS bus master may have left mid-transfer
+  ' ============================================
+  ' We are not the only thing that talks to this card. On the P2 Edge the microSD
+  ' socket shares P58-P61 with the boot flash, and CLK and CS are SWAPPED between
+  ' the two roles: P60 is flash CLK but microSD CS, P61 is flash CS but microSD
+  ' CLK. So while the boot sequence touches flash, the card sees its own
+  ' chip-select toggling at flash clock rate with traffic on its data lines --
+  ' every reset, at RCFAST, before a single user instruction executes.
   '
-  ' We are not the only thing that talks to this card. On every P2 reset the boot
-  ' ROM reads its boot pattern from P59/P60/P61, and P60 pulled up selects SD boot
-  ' -- P60 being our CS pin, which the card's own internal 50 kOhm CS pull-up
-  ' asserts whenever a card is seated. On that pattern the ROM initialises the card
-  ' in SPI mode, mounts FAT32, hunts for a boot file, and gives up. It runs under
-  ' RCFAST, before any user code, and nothing guarantees it terminated cleanly.
+  ' A card left in a data-transfer state by that is STREAMING, NOT LISTENING.
+  ' CMD0 sent into the stream is data, not a command, so init sees five silent
+  ' retries and reports E_NO_CARD on a card that is present and healthy. Nothing
+  ' downstream can recover it: a multiple-block read continues until it is told to
+  ' stop, so more clocking only feeds it (measured -- 102_400 clocks in each CS
+  ' polarity recovered nothing), and waiting does not help either (measured --
+  ' 120 s of powered idle changed nothing). Only a power cycle cleared it.
   '
-  ' A card left in a data-transfer state is not listening for commands -- it is
-  ' streaming. CMD0 sent into that stream is data, not a command, which is exactly
-  ' the observed failure: five CMD0 retries, no response, E_NO_CARD. And more
-  ' clocking cannot fix it, because a multiple-block read continues until it is
-  ' told to stop; clocking only feeds it. (Measured: 102_400 clocks in each CS
-  ' polarity recovered nothing.)
+  ' CMD12 is the command the specification designates for exactly this. Part 1
+  ' Physical Layer section 4.3: "All data read commands can be aborted any time by
+  ' the stop command (CMD12). The data transfer will terminate and the card will
+  ' return to the Transfer State."
   '
-  ' CMD12 is the command the specification designates for this. Part 1 Physical
-  ' Layer, section 4.3: "All data read commands can be aborted any time by the stop
-  ' command (CMD12). The data transfer will terminate and the card will return to
-  ' the Transfer State."
+  ' Unconditional, and safe to be. On an idle card CMD12 has nothing to stop and
+  ' returns an error bit we deliberately ignore -- there is no state here to get
+  ' wrong, which is what lets it sit ahead of CMD0 for every card on every start.
+  ' Cost is one command plus CMD_RETRY_DELAY_MS.
   '
-  ' Harmless on a card that is idle -- CMD12 with nothing to stop is a no-op that
-  ' returns an error bit we deliberately ignore. There is no state here to get
-  ' wrong, which is why it can sit unconditionally ahead of CMD0 if it proves out.
-  ' UNCONDITIONAL print while this is an experimental -D arm, so a transcript
-  ' PROVES which build produced it. Round 15b's five clean runs rest on the
-  ' operator having passed the right -D: the two builds differ by 20 bytes and the
-  ' captured log records neither the size nor any marker, so nothing in the
-  ' transcript distinguished them. The result stands on its interleaved controls,
-  ' but it should not have needed to. Drop this line if the step becomes the
-  ' default -- production has no business printing on every mount.
-  debug("    [initCard] CMD12 quiesce ACTIVE (SD_INIT_QUIESCE build)")
+  ' Proven on hardware (2026-08-19): five clean warm runs across two power cycles
+  ' on the card that had wedged on the first attempt in every previous session,
+  ' each pair followed by a build WITHOUT this step run warm on the same card --
+  ' which wedged both times. See DOCs/Plans/SOCKET-SHMOO-RUN-NOTES.md round 15b.
   cmd(CMD12, 0)
   pinh(cs)                                                                      '  deselect
   sp_transfer_8($FF)                                                            '  NCS recovery clocks (SD spec)
   waitms(CMD_RETRY_DELAY_MS)
-#endif
 
   DEBUG[CH_INIT]("    [initCard] Step 4: CMD0 (GO_IDLE_STATE)...")
   resp := 0
