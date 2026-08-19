@@ -20,7 +20,105 @@ followed by a build without the step, which wedged both times.
 |---|---|---|
 | **16a** | Full regression, standard card, quiesce now default | Certifies a change that touches every card start |
 | **16b** | Full regression on the **Lerdisk in the EDGE socket** | The card the whole campaign was about. Its record says "External only" — this may now be wrong |
-| **16c** | 🔴 **Full catalog performance sweep** | **RELEASE GATE** — v1.8.0 does not ship without it |
+| **16d** | 🔑 **The missing H2 cell** — HS mode negotiated, writes clocked at 25 MHz | **Decides whether the read/write speed policy can be general.** Run BEFORE 16c |
+| **16e** | Multi-card: run variance, then instance variance | Tells us whether any card-to-card delta means anything |
+| **16c** | 🔴 **Full catalog performance sweep, TWO-ARMED** | **RELEASE GATE** — v1.8.0 does not ship without it |
+
+---
+
+## ROUND 16d — the cell nobody has run
+
+**One card (Samsung EVO `$4AC8_5F42`), one arm, a few minutes. Run it before 16c.**
+
+Rounds 10b and 11b compared *(default mode, 25 MHz)* against *(HS mode, 43.75 MHz)*
+— **two variables moved at once.** So the Samsung's reproducible −52% write
+regression has never been attributed to either one. The missing cell is:
+
+> **High speed negotiated via CMD6, then writes clocked at 25 MHz.**
+
+The spec permits this: High Speed is *"Frequency up to 50 MHz"* (Part 1, bus speed
+mode list) — a ceiling, not a required rate, and stated differently from UHS-II
+which is given as a *range*. So a card can sit in high-speed mode while the host
+clocks writes down.
+
+The driver already supports it without new machinery: `effectiveAlignDelay()` is
+called at each burst site and derives from the live `spi_period`, so a
+per-operation clock change automatically picks up the hp=4 floor rule at 43.75 and
+the +5 offset at 25.
+
+**What each outcome means:**
+
+| Result | Meaning | Policy |
+|---|---|---|
+| Writes recover at 25 MHz | The regression is **clock-side** | Asymmetric policy works and is **general** — reads fast, writes at 25, one rule for every card |
+| Writes still slow | The regression is **mode-side** | Dropping the clock cannot help. Choice narrows to keeping high speed opt-in, or shipping it by default and accepting one controller family's write loss for +47% reads everywhere |
+
+Switching the card back per-write via CMD6 is viable per-*session* only, never
+per-operation — that is an API question, not a default-policy one.
+
+---
+
+## ROUND 16e — multi-card: run variance, then instance variance
+
+**Available matched sets:** 5x Gigastone Camera Plus 64GB, 3x Lexar 64GB (red),
+2x SanDisk Extreme 64GB. Each set already has one catalogued unit, so every new
+unit has a known comparator.
+
+**Step 0 — identify all of them first.** `SD_card_identify` on every card in the
+set before any measurement. **Same label does NOT mean same silicon**:
+Gigastone-printed labels sit on four different MIDs in this drawer, and SKUs get
+re-sourced silently. If the five Camera Plus units split across silicon keys, the
+experiment is not spoiled — it becomes a direct measurement of how much a
+re-sourced SKU varies under one printed label. But we must know which experiment
+we are running before we run it.
+
+**Step 1 — RUN variance, on ONE Gigastone.** `REPEAT_RUNS > 1` in the benchmark.
+Round 11b measured one physical card moving up to 3x between rounds, so a
+card-to-card delta means nothing until the same-card spread is known. Use a card
+from the instance set, so the two variances share silicon and are directly
+comparable without a bridge.
+
+**Step 2 — INSTANCE variance, all 5 Gigastones.** n=5 is the only set here that
+can show a distribution; n=2 cannot, and n=3 is thin.
+
+**Step 3 — the 3 Lexar reds. NOT optional, and not a curiosity.** The Lexar red is
+one of the three H2 cards and the clean-win case (+47% reads, +44% writes in high
+speed). **Every H2 conclusion is n=1 per card**, and it is about to inform a
+shipped default policy. Three units say whether "the Lexar gains 44% on writes" is
+a property of the product or of that one unit. If unit variance is large, the H2
+evidence base needs re-reading before the policy ships.
+
+**Step 4 — the 2 SanDisk Extremes.** n=2 cannot give a distribution but will catch
+a gross outlier cheaply. Lowest priority.
+
+**Record how and when each unit was purchased.** Five cards from one batch are
+likely one production run, which measures *within-batch* variance — the narrowest
+case, and it understates real-world spread. The write-up has to say which was
+measured.
+
+**Catalog consequence:** each unit gets its own card record keyed by its own Card
+ID, all pointing at the same label ID in `CARD-LABELS.md`. This is the first
+many-to-one use of the label master; today it is 1:1 throughout.
+
+---
+
+## ROUND 16c — the sweep is TWO-ARMED
+
+Standard **and** high-speed arms, same session, same card, same instrument.
+
+**Why both, rather than picking one:** the sweep measures the default I/O path, and
+whether high speed becomes the default is undecided until 16d. A single-arm sweep
+taken before that decision is obsolete the day the policy lands — every read row
+moves by up to +47%. Two arms produce the release numbers for **whichever** policy
+ships, answer the policy question across the whole fleet instead of three cards,
+and satisfy the same-instrument/same-session comparator rule. Cost is roughly
+double: one long afternoon instead of one.
+
+Procedure: `DOCs/cards/CATALOG-PROCEDURE.md`. Harvest with
+`tools/harvest_catalog.sh`; do not hand-type rows. Confirm
+`tools/check_doc_version.sh` passes before starting — a sweep run under a stale
+version constant mislabels every row it produces, indistinguishably from correct
+data.
 
 ## What this tool does
 

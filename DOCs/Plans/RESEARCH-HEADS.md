@@ -29,7 +29,7 @@ root-caused fix for a months-old defect plus a public API contract change.
 |---|---|---|---|
 | **H1 · Edge wedge** | ✅ **Root-caused and FIXED.** CMD12 quiesce is unconditional in `initCard()`. Needs full regression to certify | bench | no |
 | **H3 · Catalog integrity** | 🔴 **RELEASE GATE.** Full catalog performance sweep. **Container work is DONE — the instruments are built.** | bench | no |
-| **H2 · High-speed performance** | Decide the read/write asymmetry policy | container | no |
+| **H2 · High-speed performance** | 🔴 **GATES 16c.** One unrun measurement (16d) decides whether the policy can be general | bench | no |
 | **H4 · Release** | Blocked on H3's sweep, not on H1. Then doc close-out and tag | container | **yes — H3** |
 
 **Stephen's release conditions (2026-08-19):**
@@ -332,10 +332,36 @@ follow-ups agreed: writes verify byte-clean, and the pad at hp=4 is two clear of
 the nearest tooth. The one reproducible regression (Samsung, −52%) is card-side
 behaviour in high-speed mode.
 
-### Next
+### Next — and this head GATES the release, it is not parked
 
-**Nothing at the bench.** Choose the adaptation policy — that is a design
-discussion, not a measurement.
+**Corrected 2026-08-19.** This head was filed as "nothing at the bench, a product
+decision". Both halves were wrong.
+
+1. **It gates the sweep.** `mount()` never calls `attemptHighSpeed()`, so 16c
+   measures the non-high-speed path. If the default changes afterwards, every read
+   row moves by up to +47% and the sweep is repeated — the same "or we sweep twice"
+   trap already flagged for the table format. Either the decision lands first, or
+   **16c runs two-armed**, which is the recommendation.
+2. **It is not purely a decision — one measurement is missing.** Rounds 10b/11b
+   moved mode and clock together, so the Samsung's −52% has never been attributed
+   to either. Round **16d** is the missing cell: high speed negotiated, writes
+   clocked at 25 MHz. Clock-side means the asymmetric policy works and is general;
+   mode-side means it cannot, and the choice narrows.
+
+**Any policy must be general, not card-specific** — brand does not predict
+controller, one silicon key carries two labels, and SKUs are re-sourced silently, so
+a per-card table would mis-fire unobserved. An asymmetric rule is a policy about
+*operation type*, which stays general.
+
+**Two feasibility facts, both checked rather than recalled:** the spec permits a
+card in high-speed mode to be clocked below 50 MHz (High Speed is "Frequency up to
+50 MHz", a ceiling — stated unlike UHS-II, which is given as a range); and
+`effectiveAlignDelay()` derives from the live `spi_period` at each burst site, so a
+per-operation clock change needs no new timing machinery.
+
+**Standing exposure:** every conclusion on this head is **n=1 per card**. Round 16e's
+three Lexar reds test whether the +44% write gain belongs to the product or to one
+unit.
 
 ---
 
