@@ -2973,3 +2973,168 @@ misplaced digit-grouping underscore in the date fields. **Must be fixed before
 the two owed card records are keyed from transcripts, and before step 5's
 one-shot captures** — those transcripts are unrepeatable and would carry the
 mangled keys forever. Card identity itself is unaffected (PSNs are readable).
+
+## Step 1 (16a) — RESULT: 533/534, single failure ROOT-CAUSED as a test defect
+
+**BENCH PAUSED HERE awaiting container changes** (policy, Stephen 2026-08-19:
+bench diagnoses and documents; container makes ALL code changes, then adds
+resume documentation below; bench picks up from there).
+
+Sweep: Amazon Basics `$3584_1E2E`, EDGE socket, tree **clean at `1ee21cc`**
+(`v1.7.0-25-g1ee21cc`), 27 suites, closing audit 23/23 OK, both mid-sweep
+reformats OK. Transcript: `tools/logs/sweep_260819-150140.txt`.
+Only red: `SD_RT_speed_tests` 16/17 — Test #8, first hardware light of the
+2026-08-19 speed suite. Failing suite log:
+`tools/logs/SD_RT_speed_tests_260819-150702.log`.
+
+### Root cause (bench analysis, evidence in the two logs above)
+
+Test #8 (`attemptHighSpeed()` consistent with `isHighSpeedActive()`,
+`src/regression-tests/SD_RT_speed_tests.spin2` ~lines 207-230): on this card
+`attemptHighSpeed()` = FALSE, `isHighSpeedActive()` = FALSE, `ERROR()` = -7
+(E_IO_ERROR). The test's FALSE branch demands `ERROR() == SUCCESS` ("card
+declined, query did not fail") — it models only two of the driver's three
+documented outcomes. The driver docstring (`micro_sd_fat32_fs.spin2:2348`)
+defines: TRUE; FALSE+SUCCESS = card said no; FALSE+error = query/switch/verify
+failed. This card CLAIMS capability (tests #6/#7 = TRUE, error 0) but its
+record documents "CMD6 High Speed switch fails despite CCC including Class 10"
+(`DOCs/cards/amazon-basics-usd00-64gb.md:256`, known since characterization).
+Driver behaved per contract: switch failed, safe rollback proven by tests
+#9/#10 (integrity green, 25 MHz restored). **Driver correct; test incomplete.**
+
+### Container work item A — fix Test #8 (and one latent driver/docstring gap)
+
+Bench recommendation (container has decision latitude):
+1. **Test**: FALSE branch should assert consistency with the capability answer
+   already captured by test #7: capable=TRUE → expect `ERROR() <> SUCCESS`
+   (switch/verify failure is the documented outcome); capable=FALSE → expect
+   `ERROR() == SUCCESS` (clean decline). Keep the hsActive==FALSE check; a
+   freq-unchanged check strengthens the failure arm.
+2. **Driver (one line)**: the verify-MISMATCH fallback
+   (`micro_sd_fat32_fs.spin2:6250` region) sets NO error code, though the
+   docstring says verification failure carries one — FALSE+SUCCESS from a
+   capable card would be indistinguishable from a polite decline and would
+   fail the recommended test invariant if a card ever exercises that path.
+   Set `hs_query_error := E_IO_ERROR` there to align code with contract.
+   (If declined, punch-list it and weaken the test invariant accordingly.)
+3. If sub-test counts change, update every doc citing **534** (ROUND-16-RUN-SHEET
+   step 1, SOCKET-SHMOO-RUN-BRIEF 16a) to the new total.
+
+Driver change → step 1 re-runs in full per the run sheet; the re-sweep is
+needed anyway for a green cert transcript, so it costs nothing extra.
+
+### Container work item B — catalog key-line formatting defect (3 tools)
+
+First light proved the machine-readable identity lines are mangled and would
+corrupt the harvest. Evidence: step-0 transcripts above. Mechanism:
+- `uhex_byte_()`/`uhex_long_()` emit their own `$` (doubling the literal:
+  `$$12`) and underscore-group longs (`$0000_0F14` where the key needs
+  contiguous `00000F14`)
+- `udec_()` underscore-groups >=1000: CARD-ID dates render `2_02306`, and every
+  numeric CATALOG-ROW field (kbps, avg_us, landed_hz…) breaks
+  `harvest_catalog.sh`'s `field()+0` (awk reads `2_500` as 2 — silent numeric
+  corruption of the whole sweep)
+- `lstr_(@pnm, 5)` prints the space-padded PNM verbatim (`ASTC ` inside keys)
+
+The parser (`tools/harvest_catalog.sh`) documents the canonical form and is
+correct — fix the emitters. Canonical targets:
+`SILICON-KEY: $12_ASTC_2.0` · `CARD-ID: $12_ASTC_2.0_00000F14_202306` (no inner
+$, PSN 8 contiguous hex, YYYYMM zero-padded) · CATALOG-CARD/ROW values as plain
+digits (`mid=$12 pnm=ASTC psn=$00000F14 mdt=2023/6 sysclk=350000000`).
+
+Fix pattern (house precedent `src/DEMO/SD_demo_shell.spin2:1125-1132`): use
+existing `src/isp_mem_strings.spin2` — `fmt.sFormatStrN` into a line buffer,
+emit via one `debug(zstr_(@lineBuf))`. `%.2x` = 2 hex digits no sigil, `%.8x` =
+8 hex digits, `%d` plain decimal, `%.2d` zero-padded month (collapses the
+month-padding if/else). Lines needing >8 args: second call appends at
+`@BYTE[@lineBuf][nLen]` (demo-shell pattern). Trim trailing spaces from a PNM
+copy for key use (in SD_card_identify the existing `@pnm` buffer can be trimmed
+in place right after its terminator is placed — also fixes L1's silent double
+space; benchmark/characterize need a small `pnmKey[6]` since they print raw CID
+bytes today).
+
+Affected emitters:
+- `src/UTILS/SD_card_identify.spin2` 185-200 (SILICON-KEY, CARD-ID both
+  branches, CATALOG-CARD incl. spi_hz)
+- `src/UTILS/SD_performance_benchmark.spin2` 293-316 (same set) and 467-471
+  (CATALOG-ROW instr=throughput: run/bytes/avg_us/min_us/max_us/kbps/pct_bus/
+  spi_hz all need plain digits; op & limiter are strings already)
+- `diagnostic-tests/SD_speed_characterize.spin2` 327-349 (same identity set;
+  CATALOG-CARD has NO spi_hz field, ends at sysclk; 2-space indent file) and
+  623-626 (CATALOG-ROW instr=random_access: iters/kbps/mean_us/min_us/max_us/
+  req_hz/landed_hz)
+Human-readable lines (L1/L2/L3, `Card:`, `>>> SERIAL`) keep their formatters —
+grouping is good for humans; only machine lines change.
+
+### Bench resume procedure (container: append your hand-back below this)
+
+1. `cd tools && ./check_doc_version.sh` (exit 0) and confirm clean tree at the
+   container's commit
+2. Re-run step 1: `./run_regression.sh` — Amazon Basics `$3584_1E2E` is STILL
+   SEATED in the Edge socket. Expect the (possibly updated) full-green total
+3. Verify item B on hardware: one `./run_test.sh ../src/UTILS/SD_card_identify.spin2`
+   run (any seated card) — key lines must match canonical form; feed the log to
+   `./harvest_catalog.sh` if practical (expect clean CATALOG-CARD parse, no rows)
+4. Cheap while sockets are free: re-identify both retained 64 GB cards for
+   clean record-source transcripts (records for `$0000_0E2F` and the 32 GB
+   `$0000_01C7` are owed from this round)
+5. Continue the run sheet at step 2 (16d, Samsung EVO `$4AC8_5F42`)
+
+---
+
+# Round 16 (bench session 1, 2026-08-19) — hand-back summary
+
+Steps 0 and 1 of ROUND-16-RUN-SHEET.md ran; bench is PAUSED at the step-1 gate.
+Detail and evidence pointers are in the bench notes above; this is the record.
+
+| Step | Question | Answer |
+|---|---|---|
+| pre | Version constants consistent? | **YES** — check_doc_version.sh exit 0, driver/string/CHANGELOG all 1.8.0 |
+| 0 | Which retained 64 GB is the catalogued unit? | **Card B = `$0000_0F14`, now marked green.** Card A = `$0000_0E2F` (the open #3348 card) — record owed |
+| 1 (16a) | Does the quiesce-default driver certify? | **533/534 — driver exonerated, the one red is a TEST defect.** Closing audit 23/23; transcript `tools/logs/sweep_260819-150140.txt` on clean tree `1ee21cc` |
+| — | What failed and why? | Speed suite Test #8: its FALSE branch models 2 of the driver's 3 documented outcomes. Amazon Basics claims CMD6 capability but the switch fails (behavior already in its card record); driver returned FALSE + E_IO_ERROR per contract and rolled back cleanly (integrity + 25 MHz proven by tests #9/#10) |
+
+## Observations of record
+
+1. **The unconditional CMD12 quiesce passed its first full-suite exposure.**
+   533 of 534 tests green across 27 suites, every mount in every suite starting
+   with the quiesce, plus two mid-sweep reformats and a 23/23 closing audit.
+   The single failure is unrelated to the quiesce.
+2. **Test #8's contract gap is card-class-shaped, not random**: it will fail on
+   every card that advertises CMD6 capability but refuses the switch — a class
+   the catalog already documents. First light behaved exactly as the
+   new-test-first-run lesson predicts: the red indicted the test, not the code.
+3. **Latent driver/docstring gap found during root-cause** (not hit by any card
+   yet): the 50 MHz verify-MISMATCH fallback leaves ERROR()=SUCCESS while the
+   docstring promises an error on verification failure. Fix or punch-list —
+   container's call; work item A above carries both options.
+4. **Instrument defect, first light of the 2026-08-19 identity lines**: all
+   three catalog instruments emit mangled machine keys (`$$12`, `ASTC `,
+   `2_02306`) and — worse — `udec_()` digit-grouping breaks every numeric
+   field the harvester reads (`kbps=2_500` parses as 2). Caught before any
+   one-shot card was measured, which was the point of running first-light
+   before the sweep. Full fix spec is work item B above.
+5. **Fleet corrections from Stephen taken as notes above**: matched-set counts
+   INCLUDE retained units (one-shot population is 6 cards, not 10); purchase
+   provenance recorded (Gigastones 2024-03-13, Lexar reds 2026-01-16, SanDisk
+   Extreme no record).
+
+## Container-side items from this session
+
+1. **Work item A** — Test #8 three-outcome fix + optional one-line driver
+   mismatch-path error (spec above). If test counts change, update every doc
+   citing 534.
+2. **Work item B** — catalog key-line formatting in identify / benchmark /
+   speed_characterize (spec above). Must land before step 5's one-shot captures
+   and before the two owed card records are keyed from transcripts.
+3. Append the resume hand-back below the bench resume procedure above.
+
+## Bench scope
+
+Step 0: two identify runs (retained 64 GB pair), green mark applied to
+`$0000_0F14`. Step 1: one full regression sweep, Amazon Basics `$3584_1E2E`,
+Edge socket, plus one aborted sweep start (stopped in compile phase to commit
+bench notes — the sweep banner caught a dirty tree; nothing ran on hardware).
+Amazon Basics was reformatted twice by the sweep harness as designed and REMAINS
+SEATED in the Edge socket for the re-run. No incidents; PropPlug and board
+behaved throughout.
