@@ -11,6 +11,73 @@ All commands run from `tools/`.
 
 ---
 
+## Handoff protocol — bench pauses, container changes, bench resumes
+
+Set 2026-08-19. **The bench agent never edits source.** It observes, pauses, and
+hands back; the container agent makes every change and writes the resume below;
+the bench agent picks up from there. The two share one working tree, which is why
+the rules are specific.
+
+**When the bench pauses, it hands back:**
+
+1. **A clean tree, or an exact statement of what is dirty.** `git status --short`
+   in the handback. A container agent building on an unknown working tree is the
+   fastest way to lose an afternoon.
+2. **The observation, not the verdict.** Exact suite, exact test name, expected vs
+   got, and the surrounding transcript lines. **Do not pre-classify a failure as
+   "a test bug"** — test-side versus driver-side is the judgement that decides
+   whether something is a quick fix or a release-gate finding, and it is made
+   against the source and the documented contract, not against the output. A
+   failure called test-side and patched away is how a false green is born.
+3. **Which steps of this sheet completed**, and their results.
+
+**When the container hands back, the resume below states:**
+
+1. **The commit SHA to run.** The bench verifies `git log --oneline -1` matches
+   before resuming. This campaign has three times produced transcripts that could
+   not prove which build made them; with two agents alternating, that risk only
+   goes up, and one line of `git log` closes the whole class.
+2. **What changed and why.**
+3. **Where to resume, and what the change invalidated.** A driver change
+   invalidates every completed suite — a certification run is atomic, so it
+   restarts. Say so explicitly rather than leaving it to be inferred.
+
+---
+
+## ▶ SESSION STATE — read this before anything
+
+*Updated by the container agent at each handback. Bench: confirm the SHA first.*
+
+| | |
+|---|---|
+| **Run this commit** | `9f22a44` — verify with `git log --oneline -1` |
+| **Tree** | clean; six gates green |
+| **Resume at** | **Step 1, from the top** |
+
+**Why step 1 restarts:** the driver changed twice since the last run began — the
+`Driver identity` test group (mount_tests, +2 tests) and the high-speed
+verify-mismatch error-code fix. A certification run that spans a source change is
+not a certification.
+
+**Changed since the last bench pickup:**
+
+- **FIXED, driver:** `do_attempt_high_speed()` verify-MISMATCH branch set no error
+  code, so a card corrupting data at 50 MHz reported `FALSE` + `ERROR() == SUCCESS`
+  — which `attemptHighSpeed()`'s contract defines as "the card declined". Now
+  `E_IO_ERROR`, matching all four sibling exits. *(This was the bench agent's
+  find — correctly classified as driver-side.)*
+- **ADDED, tests:** `Driver identity` group in `SD_RT_mount_tests`. **Expect 534,
+  not 532.**
+- **NOT COVERED:** the mismatch path cannot be reached by injection — the hooks
+  force read *failures*, not a read that succeeds with wrong bytes. Punch-listed
+  with a recommended `setTestCorruptReadAfter()` facility. Decision pending.
+
+**⚠ OUTSTANDING — container is blocked on this:** the bench reported **1 regression
+failure** whose identity has not been passed back. It has not been classified or
+fixed. Hand back the suite, test name, expected vs got, and transcript lines.
+
+---
+
 ## Before you start
 
 ```bash
