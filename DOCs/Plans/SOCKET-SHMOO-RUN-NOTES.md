@@ -2905,3 +2905,71 @@ by a power cycle; no data affected, nothing needed re-running. Worth noting
 because the symptom is identical to the known PropPlug failure mode AND to a
 no-serial-window boot-switch setting (`P61 = up` with `P59 = down`); check all
 three, in that order.
+
+---
+
+# Round 16 — bench notes (run 2026-08-19)
+
+## Fleet correction, from Stephen before any card was handled
+
+**The Camera Plus 64 GB set is FIVE cards TOTAL: 2 retained + 3 deploy-bound** —
+not 5 deploy-bound plus a separate retained pair as the run sheet / brief imply.
+Consequences for this round:
+
+1. **16e instance variance (n=5) includes both retained units.** The n=5
+   distribution is still measurable, but only 3 of its points are one-shot.
+2. **The one-shot capture-everything rule applies to the 3 deploy-bound units**
+   (plus the 2 non-retained Lexar reds), not to five.
+3. **Any future re-check has n=2 Camera Plus available** (the retained pair),
+   not n=1 — slightly better than the brief's write-up caveat assumed.
+4. Step 0's STOP condition is unchanged: if neither retained unit reads
+   `$0000_0F14`, the catalogued unit is among the 3 deploy-bound cards.
+
+**Same pattern for the other two matched sets (Stephen, same conversation):**
+the stated set sizes are totals that INCLUDE each set's retained/catalogued unit.
+
+| Set | Total | Retained (catalogued) | Deploy-bound (one-shot) |
+|---|---|---|---|
+| Gigastone Camera Plus 64 GB | 5 | 2 | 3 |
+| Lexar red 64 GB | 3 | 1 (`Longsys/Lexar_MSSD0_6.1_33549024_202411`) | 2 |
+| SanDisk Extreme 64 GB | 2 | 1 | 1 |
+
+So the one-shot population this round is **6 cards** (3 + 2 + 1), and every
+matched set keeps at least one unit for future re-checks.
+
+## Step 0 — retained 64 GB pair identified and marked (16:46–16:49 bench time)
+
+| Card | PSN | Details | Disposition |
+|---|---|---|---|
+| A | `$0000_0E2F` | Gigastone OEM ASTC SDXC 58GB, rev 2.0, 2023/06, [mkfs.fat], warnings $00 | Unmarked retained unit — **card record owed**. This is Card 2a, the open #3348 raw-init defect card |
+| B | `$0000_0F14` | Gigastone OEM ASTC SDXC 58GB, rev 2.0, 2023/06, [P2FMTER], warnings $00 | **Marked GREEN** = catalogued `GigastoneOEM_ASTC_2.0_00000F14_202306` |
+
+Transcripts: `tools/logs/SD_card_identify_260819-144633.log` (A),
+`tools/logs/SD_card_identify_260819-144930.log` (B). Both identified in the
+EDGE socket on driver 1.8.0. **Purchase date (Stephen): Gigastone 64 GB
+units purchased 2024-03-13; the 32 GB Gigastone pair the same date.
+Lexar red 64 GB units purchased 2026-01-16. SanDisk Extreme 64 GB:
+no purchase record.**
+Source/vendor not recorded.
+
+**Bonus fact:** the unmarked retained 64 GB is `$0000_0E2F` = Card 2a of #3348
+(initCardOnly/audit/fsck/formatter fail, mount/identify work). Retained status
+means #3348 stays reproducible-on-demand; the unconditional CMD12 quiesce in
+v1.8.0 has not yet been tested against it.
+
+### ⚠ INSTRUMENT DEFECT (first light): machine-readable identify lines malformed
+
+`SD_card_identify` 2026-08-19 build emits mangled key lines (human L1/L2/L3 fine):
+
+```
+SILICON-KEY: $$12_ASTC _2.0                        ← doubled $, embedded space
+CARD-ID: $$12_ASTC _2.0_$0000_0F14_2_02306         ← date mangled "2_02306", $ and _ inside key
+CATALOG-CARD: ... mid=$$12 pnm=ASTC  prv=2.0 psn=$$0000_0F14 mdt=2_023/6 ...
+```
+
+Expected key style (per catalog): `GigastoneOEM_ASTC_2.0_00000F14_202306`.
+Looks like `$`-prefixed debug formatting applied on top of literal `$`, plus a
+misplaced digit-grouping underscore in the date fields. **Must be fixed before
+the two owed card records are keyed from transcripts, and before step 5's
+one-shot captures** — those transcripts are unrepeatable and would carry the
+mangled keys forever. Card identity itself is unaffected (PSNs are readable).
