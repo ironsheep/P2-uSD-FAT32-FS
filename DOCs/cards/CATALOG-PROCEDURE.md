@@ -59,6 +59,24 @@ from a card that has left is an experiment datapoint. Keeping the two apart is w
 keeps the card-record population exactly equal to the re-sweepable population, which
 is what makes the check mechanical.
 
+### Marking identical units: green means catalogued
+
+Two units of one product are indistinguishable by eye, and a card record is useless
+if nobody can tell which card in the hand it describes. The convention, already in
+effect for the 32 GB Gigastone pair and now deliberate:
+
+> **A green highlighter mark means: this is the retained, catalogued unit.**
+
+That makes the mark carry information rather than being an arbitrary tiebreak, and
+it doubles as a **do-not-deploy** signal — green is a card committed to the project,
+and retained cards leave the population only by dying. Cards bearing a mark record
+it in a **`Physical mark:`** line, so the hand-to-record mapping survives outside
+the run notes where it currently lives.
+
+Confirm the mark against the PSN once, in a transcript, and state it in the record.
+The 32 GB pair is the worked example: GREEN is `$0000_01C9`, unmarked is
+`$0000_01C7`, PSN-confirmed in every socket-campaign run.
+
 Every card record therefore carries a **`Disposition:`** line, validated by
 `tools/check_card_labels.sh`:
 

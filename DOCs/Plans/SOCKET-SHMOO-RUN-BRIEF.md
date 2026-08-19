@@ -113,35 +113,33 @@ They get **no card records** (see CATALOG-PROCEDURE.md, "Two populations of card
 Their CIDs and measurements live in this round's run notes, because a card record
 asserts re-sweepability and these cards will not be.
 
-### ⚠ THE RETAINED CARDS ARE INDISTINGUISHABLE BY EYE — CHECK PSNs BEFORE DEPLOYING
+### ⚠ FOUR RETAINED GIGASTONES, TWO CARD RECORDS — AND GREEN MEANS CATALOGUED
 
-Three physical Gigastones are **retained** (committed to the project; only death
-removes them). Two are 32 GB, one is a Camera Plus 64 GB:
+Two pairs are retained, one pair per product. **Only one unit of each pair has ever
+been catalogued**, so two card records are owed from this round:
 
-| Card | Product | Card ID | Catalogued? |
-|---|---|---|---|
-| Gigastone **unmarked** | 32 GB | one of these is `Transcend_00000_0.0_000001C9_202307` | one of the pair only |
-| Gigastone **green** | 32 GB | the other has **no record yet** | — |
-| Camera Plus | 64 GB | `GigastoneOEM_ASTC_2.0_00000F14_202306` | yes |
+| Product | Green (catalogued) | Unmarked (NO RECORD) |
+|---|---|---|
+| Gigastone 32 GB | PSN `$0000_01C9` = `Transcend_00000_0.0_000001C9_202307` | PSN `$0000_01C7` — **owed** |
+| Gigastone Camera Plus 64 GB | PSN `$0000_0F14` = `GigastoneOEM_ASTC_2.0_00000F14_202306` | PSN unknown — **owed** |
 
-**(a) DO NOT DEPLOY PSN `00000F14`.** If the retained Camera Plus is physically
-among the five 64 GB units being assembled, it is indistinguishable from the four
-working-stock units by eye. Deploying it would remove a card from the permanent
-population by a route the model does not allow — retained cards leave only by
-dying. **Read the five PSNs at step 0 and set that one aside**, or mark it
-physically the way the green 32 GB is marked, so the mistake cannot be made twice.
+**The convention is: green = the retained, catalogued unit.** That is already true
+of the 32 GB pair, PSN-confirmed in every socket-campaign transcript, and the 64 GB
+green mark is being applied to match. It doubles as a **do-not-deploy** signal —
+green is committed to the project, and retained cards leave only by dying.
 
-**(b) One of the two retained 32 GB cards has never been catalogued.** Both
-`gigastone-00000-32gb.md` and `gigastone-00000-32gb-recert-2026-05-24.md` carry the
-**same** Card ID (`...000001C9`) — the recert is a re-characterization of one
-physical card, not a record of the second. So whichever of green/unmarked is not
-`000001C9` needs a card record created from this round's data. Note this is the
-pair the socket campaign's card-vs-socket separation algebra keys off, so the PSN
-mapping matters beyond the catalog.
+**(a) Mark the 64 GB `00000F14` green BEFORE the five Camera Plus units are mixed
+together.** Otherwise the retained unit is indistinguishable from the four
+working-stock units, and deploying it would remove a card from the permanent
+population by a route the model does not allow. If they are already mixed, read all
+five PSNs first and mark `00000F14` on the spot.
 
-*(A previously flagged conflict here — the brief calling this pair "32 GB" while
-they were described as Camera Plus 64 GB — is resolved: the brief was right. They
-are 32 GB.)*
+**(b) The unmarked 32 GB `$0000_01C7` has carried socket-campaign data since round
+5 and still has no card record.** That is the "measured but never reached the
+catalog" failure mode, live. Create its record from this round.
+
+**(c) Confirm each new mark against a PSN in a transcript**, and put it in the card
+record's `Physical mark:` line. Today that mapping lives only in the run notes.
 
 **Record how and when each unit was purchased.** Five cards from one batch are
 likely one production run, which measures *within-batch* variance — the narrowest
