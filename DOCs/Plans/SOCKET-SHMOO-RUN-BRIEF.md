@@ -93,10 +93,12 @@ a gross outlier cheaply. Lowest priority.
 
 ### THE DEPLOYMENT-BOUND UNITS ARE A ONE-SHOT
 
-Of each matched set, only the catalog cards stay: **Gigastone unmarked + Gigastone
-green**, and **one Lexar red** (`Longsys/Lexar_MSSD0_6.1_33549024_202411`). The
-remaining three Gigastones and two Lexars are working stock — they are measured on
-the bench and then deployed, and **they do not come back.**
+Of each matched set, only the catalog cards stay. The retained Gigastones are the
+**unmarked and green 32 GB pair** plus the **Camera Plus 64 GB** (`00000F14`); the
+retained Lexar is the one red already catalogued
+(`Longsys/Lexar_MSSD0_6.1_33549024_202411`). Every other unit in the 5x Camera Plus
+and 3x Lexar sets is working stock — measured on the bench, then deployed, and
+**they do not come back.**
 
 Two consequences that change what to do in the session:
 
@@ -111,20 +113,35 @@ They get **no card records** (see CATALOG-PROCEDURE.md, "Two populations of card
 Their CIDs and measurements live in this round's run notes, because a card record
 asserts re-sweepability and these cards will not be.
 
-### ⚠ TWO THINGS TO RESOLVE AT STEP 0
+### ⚠ THE RETAINED CARDS ARE INDISTINGUISHABLE BY EYE — CHECK PSNs BEFORE DEPLOYING
 
-**(a) Only ONE Camera Plus card record exists.** `gigastone-astc-64gb`
-(`GigastoneOEM_ASTC_2.0_00000F14_202306`) is the only one. If both the green and
-the unmarked Gigastone are staying in the catalog, **one of the two has no card
-record** and needs one created from this round's data.
+Three physical Gigastones are **retained** (committed to the project; only death
+removes them). Two are 32 GB, one is a Camera Plus 64 GB:
 
-**(b) This brief says the green/unmarked pair are "two Gigastone 32GB cards"**
-(section ROUND 5 setup, 2026-08-17), but they are now described as part of the
-Camera Plus **64GB** set. One of those is wrong. The catalogued 32GB Gigastone is
-`Transcend_00000_0.0_000001C9_202307` — a different silicon key entirely from the
-Camera Plus `GigastoneOEM_ASTC_2.0`. **The PSNs read at step 0 settle it**, and they
-must, because the socket campaign's card-vs-socket separation algebra keys off the
-green/unmarked PSN mapping.
+| Card | Product | Card ID | Catalogued? |
+|---|---|---|---|
+| Gigastone **unmarked** | 32 GB | one of these is `Transcend_00000_0.0_000001C9_202307` | one of the pair only |
+| Gigastone **green** | 32 GB | the other has **no record yet** | — |
+| Camera Plus | 64 GB | `GigastoneOEM_ASTC_2.0_00000F14_202306` | yes |
+
+**(a) DO NOT DEPLOY PSN `00000F14`.** If the retained Camera Plus is physically
+among the five 64 GB units being assembled, it is indistinguishable from the four
+working-stock units by eye. Deploying it would remove a card from the permanent
+population by a route the model does not allow — retained cards leave only by
+dying. **Read the five PSNs at step 0 and set that one aside**, or mark it
+physically the way the green 32 GB is marked, so the mistake cannot be made twice.
+
+**(b) One of the two retained 32 GB cards has never been catalogued.** Both
+`gigastone-00000-32gb.md` and `gigastone-00000-32gb-recert-2026-05-24.md` carry the
+**same** Card ID (`...000001C9`) — the recert is a re-characterization of one
+physical card, not a record of the second. So whichever of green/unmarked is not
+`000001C9` needs a card record created from this round's data. Note this is the
+pair the socket campaign's card-vs-socket separation algebra keys off, so the PSN
+mapping matters beyond the catalog.
+
+*(A previously flagged conflict here — the brief calling this pair "32 GB" while
+they were described as Camera Plus 64 GB — is resolved: the brief was right. They
+are 32 GB.)*
 
 **Record how and when each unit was purchased.** Five cards from one batch are
 likely one production run, which measures *within-batch* variance — the narrowest
