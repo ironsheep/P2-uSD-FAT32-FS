@@ -1,0 +1,941 @@
+# Socket Shmoo — Bench Run Brief
+
+**For:** the host-native bench agent (hardware side of this two-agent effort).
+**Authored:** 2026-08-17, container side.
+**Plan:** `DOCs/Plans/SOCKET-TIMING-CHARACTERIZATION-PLAN.md` (results so far: §11).
+
+## ⟹ CURRENT STATE + WHAT TO RUN NEXT (updated 2026-08-18, round 11 queued)
+
+Round 10 is complete. Work now runs as **parallel research heads** — status and
+per-head history live in `DOCs/Plans/RESEARCH-HEADS.md`, which is the document to
+read first. This brief carries the bench procedure for whatever each head has
+queued.
+
+**Run next: ROUND 11.** Full run sheet at the end of this brief.
+
+| Track | What | Cards |
+|---|---|---|
+| **11a** | Wedge probe, REBUILT to actually reproduce | Lerdisk 1GB, Cloudisk 2GB |
+| **11b** | Write **verification** at high speed — is the 10b regression slow, or corrupt? | Lexar Red, Samsung EVO, PNY |
+| **11c** | `tx_align_delay` band at **hp=4, inside high-speed mode** | same three, high-speed capable only |
+
+**Card selection rule for 11b/11c:** these arms are meaningless on a card that
+cannot negotiate high speed. Round 9d established which can:
+
+| Card | High speed? | In 11b/11c? |
+|---|---|---|
+| Lexar Red 64GB | yes, 43.75 MHz | **yes** — gained on writes in 10b, the counter-example |
+| Samsung EVO Select 128GB | yes, 43.75 MHz | **yes** — regressed −55% |
+| PNY 16GB | yes, 43.75 MHz | **yes** — regressed −64%, the worst case |
+| SanDisk MAX Endurance 32GB | **declines** | no — cannot reach hp=4 |
+| Lerdisk 1GB / Cloudisk 2GB | decline (SD 1.x) | no — and they are 11a's subject |
+
+Do not re-run rounds 1-10; those sections are method reference and
+output-interpretation keys.
+
+## What this tool does
+
+One binary sweeps SPI half-period hp=14→4 (12.5 → 43.75 MHz at 350 MHz sysclk) ×
+sampling mode (ON-edge `%1_00111`, PRE-edge `%0_00111`) × socket (Edge onboard, then
+external adapter, one powered session). Each cell reads sector 1000 eight times per
+path — Path A byte-by-byte through the MISO smart pin (the sampling-mode curve),
+Path B through the production streamer — and scores cmd/crc/data errors separately.
+**Read-only; it never writes either card.**
+
+## Setup
+
+1. Populate **both** sockets. Primary protocol (plan §4.1): a **matched same-vendor
+   pair** (same model; name them by brand + label size in your notes). Single-socket
+   sessions also work — the tool reports the empty socket and produces a half-matrix.
+2. No `-D` flags — both pin sets are baked into the one binary (Edge 60/59/58/61,
+   adapter 20/19/18/21).
+
+```bash
+cd tools
+./run_test.sh ../diagnostic-tests/SD_socket_shmoo.spin2 -t 300
+```
+
+Clean sweep ≈ a couple of minutes. Cells that fail burn read-timeouts (~100–200 ms
+each, early-abort after 2 consecutive), hence `-t 300`.
+
+## The session sequence (2×2 crossed design)
+
+Selected pair for this campaign: **two Gigastone 32GB cards** (Stephen, 2026-08-17).
+One is marked with a **green highlight**; the other is unmarked.
+
+1. **Run 1:** unmarked card in Edge (onboard), **GREEN card in the external
+   adapter** (Stephen's placement, 2026-08-17).
+2. **Run 2:** swap — GREEN to Edge, unmarked to adapter. Same powered session if
+   practical.
+3. Each socket phase prints a full identity block — MID/OID/PNM/rev, then a
+   `>>> SERIAL PSN=$xxxxxxxx  mfg YYYY/M <<<` line, then the raw 16-byte CID.
+   A same-model pair is identical in everything **except PSN and possibly the
+   mfg date** — the PSN is the ground truth for which card was where.
+4. **At run 1, record the PSN↔card mapping from the transcript:** the ADAPTER
+   phase's PSN is the GREEN card, the EDGE phase's PSN is the unmarked card.
+   State it explicitly in the run notes ("GREEN = PSN $…, unmarked = PSN $…").
+   Run 2's transcripts then prove the swap happened, and the card-vs-socket
+   separation algebra keys off it.
+
+## Reading the output
+
+- Per-cell rows: `hp freq_kHz mode | A: cmd crc data | B: cmd crc data` — counts are
+  error reads out of 8. A first data-mismatch in a cell prints one detail line
+  (diff count, first offset, expected/got) so a shifted read names itself.
+- Per-socket summary grid, then a cross-socket comparison: the clean boundary
+  (fastest hp with that and every slower cell clean) per mode/path, per socket.
+  **The boundary delta between sockets is the number this whole exercise is after.**
+- `254` = cell aborted on consecutive cmd failures; `255` = never ran.
+
+## Warnings that are signal, not faults
+
+- `WARNING: CRC scoring appears INACTIVE` — the card carries the no-data-CRC quirk;
+  crc columns will be 0, cmd/data columns still score. Note which card.
+- `WARNING: hp=N requested but driver landed M` — the frequency-request rounding
+  missed its hp target; report it, the container side will fix the request math.
+- `Reference reads DISAGREE at benign speed` — the socket can't even baseline at
+  2 MHz; that socket is skipped. That itself is data — report it.
+
+## First-light risks (dial-in expectations)
+
+This tool exercises `stop()` → `initCardOnly()` on a different pin base for the
+first time in this codebase's diagnostics. If the **adapter phase** fails to init
+after a clean Edge phase, suspect the restart path before suspecting the socket.
+Also: if every cell of a socket fails identically including hp=14/12.5 MHz, the
+tool (or wiring) is broken, not the timing — 12.5 MHz should be trivially clean on
+both sockets.
+
+## ROUND 2 — boundary refinement (added 2026-08-17 after first light)
+
+Round 1 found: adapter clean ≤ 35.0 MHz, dead at 43.75 MHz; Edge clean at every
+cell (boundary censored by the hp ≥ 4 driver clamp). The 35 → 43.75 gap is one hp
+step at 350 MHz sysclk — the ladder below rebuilds the same tool at other sysclk
+values so hp=4 lands *inside* that gap. Cards stay where run 1 had them (GREEN in
+adapter); no swap needed — the card term is already proven zero.
+
+Run all five, same session:
+
+```bash
+cd tools
+./run_test.sh ../diagnostic-tests/SD_socket_shmoo.spin2 -t 300                 # hp4 = 43.75 MHz
+./run_test.sh ../diagnostic-tests/SD_socket_shmoo.spin2 -t 300 -D SYSCLK_336   # hp4 = 42.0 MHz
+./run_test.sh ../diagnostic-tests/SD_socket_shmoo.spin2 -t 300 -D SYSCLK_320   # hp4 = 40.0 MHz
+./run_test.sh ../diagnostic-tests/SD_socket_shmoo.spin2 -t 300 -D SYSCLK_300   # hp4 = 37.5 MHz
+./run_test.sh ../diagnostic-tests/SD_socket_shmoo.spin2 -t 300 -D SYSCLK_290   # hp4 = 36.25 MHz
+```
+
+Each transcript's banner prints its SYSCLK — self-labeling as usual. The adapter
+boundary falls out as the highest hp=4 frequency that runs clean.
+
+The tool also now prints a status line for every failing cmd read:
+
+- `status=-1` (E_TIMEOUT) — the card **never answered**: it likely never decoded
+  the command → outbound SCK/MOSI integrity through the adapter is the suspect.
+- `status=-3` (E_BAD_RESPONSE) — an answer arrived **garbled** → return-path
+  (MISO) suspect.
+
+Round 1's failures were mode-invariant (ON = PRE), which already leans away from
+MISO sampling margin; the status codes are the next discriminator. Report which
+one appears.
+
+## ROUND 2b — the asdfg pair (the cards that motivated this study)
+
+The catalog's two **Edge-FAIL / External-PASS** cards — the inversion this whole
+study exists to explain (approved by Stephen, 2026-08-17):
+
+- **Lerdisk asdfg 1GB** (PSN `$0000_01F4`) and **Cloudisk asdfg 2GB**
+  (PSN `$0000_1680`) — counterfeit SDSC silicon twins, MID `$05`, PNM `"asdfg"`,
+  `CW_NO_DATA_CRC`. Records: `DOCs/cards/lerdisk-asdfg-1gb.md`,
+  `DOCs/cards/cloudisk-asdfg-2gb.md`,
+  `DOCs/Analysis/COUNTERFEIT-ASDFG-SDSC-INVESTIGATION.md`.
+
+**Pair in hand (Stephen, 2026-08-17): one Lerdisk 1GB + one Cloudisk 2GB.**
+Different labels and sizes is fine here — they are recorded silicon twins (same
+MID/PNM/rev/controller behavior), so the card timing term is near-matched at the
+level that matters, and the 2×2 swap separates card from socket algebraically
+either way. The PSN tells them apart in the transcripts (Lerdisk `$0000_01F4`,
+Cloudisk `$0000_1680`); size in the banner is a second check.
+
+Run the standard shmoo (default 350 MHz build is enough to start), one asdfg card
+per socket, then swap — same 2×2 protocol as round 1:
+
+```bash
+cd tools
+./run_test.sh ../diagnostic-tests/SD_socket_shmoo.spin2 -t 300
+```
+
+**What discriminates what** (the reconciliation question this run answers):
+
+- **Edge phase fails mode-DEPENDENTLY** (ON and PRE columns differ, possibly
+  frequency-banded, crc/data-class errors) → cyclic sampling-alignment
+  mechanism: the adapter's extra delay was *rescuing* these cards by shifting
+  their long-t_ODLY transitions past the sample point.
+- **Edge phase fails everywhere incl. 12.5 MHz, mode-invariant** → edge-rate /
+  ringing mechanism: sharp Edge-socket edges glitching the counterfeit
+  controller; adapter capacitance damps them.
+- **Reads clean on BOTH sockets at every cell** → their documented Edge failure
+  is confined to the write/commit path (wedge #3240 is write-triggered and this
+  tool is read-only) — a third mechanism, needing a separate write-capable probe.
+
+**Expected and not a fault:** the `CRC scoring appears INACTIVE` warning WILL
+fire on these cards (dummy-CRC quirk) — crc columns read 0 by construction; the
+cmd and data columns carry the scoring.
+
+**Wedge protocol:** the shmoo never writes, so wedge #3240 should not fire. But
+these cards have wedged on Edge after operation-pattern surprises before — if a
+socket phase starts timing out wholesale after a clean start (`status=-1` on
+every read regardless of frequency), assume the card is wedged: **power-cycle
+the rig**, note it in the hand-back, and re-run. A wedge fired by a read-only
+workload would itself be a finding — say so loudly.
+
+**SDSC note:** these are byte-addressed 1–2 GB cards; sector 1000 is in range
+and the driver's `hcs` shift handles addressing — no tool change needed.
+
+## ROUND 3 — Lerdisk streamer-alignment hunt + fixed scoring (added after rounds 1–2b)
+
+Container-side changes since round 2b, all compile-verified:
+
+- **Shmoo scoring fixed** per the hand-back: dummy-CRC cards now have crc
+  *excluded* from scoring (columns read 0 by construction, warning text says so),
+  and the grid stores **bad reads** (a read with any error counts once) so the
+  header is truthful and a dummy-CRC card can report a clean boundary. The
+  Lerdisk's `none clean` artifact is gone.
+- **Full-sector dual dump**: the first data-mismatching read of each socket phase
+  now dumps all 512 bytes, exp/got interleaved 16 per row — the one-bit-shift
+  question settles from the whole stream, not one byte pair.
+- **`SD_phase_sweep_test.spin2` gained speed arms**: `-D SYSCLK_350` and
+  `-D SPI_35M` / `-D SPI_29M` / `-D SPI_25M` (default keeps historical
+  init-settled behavior). It sweeps 2 sample modes × align-delay offsets −3..+8 —
+  the knob the Lerdisk finding points at.
+
+**R3a — align-delay sweep on the Lerdisk** (the mechanism test for the
+card-property streamer corruption; prediction: some positive offsets rescue
+Path B, and the passing-band shift between sockets measures the socket delay in
+sysclk ticks):
+
+```bash
+cd tools
+# Lerdisk in EDGE socket (Path B onset was 35.0 MHz there):
+./run_test.sh ../diagnostic-tests/SD_phase_sweep_test.spin2 -t 300 -D SYSCLK_350 -D SPI_35M
+# Lerdisk in ADAPTER (onset 29.17 MHz there):
+./run_test.sh ../diagnostic-tests/SD_phase_sweep_test.spin2 -t 300 --external -D SYSCLK_350 -D SPI_29M
+```
+
+(Phase-sweep reads sector 0, not 1000 — fine, it self-references a slow read.)
+
+**R3b — one shmoo re-run with the fixed tool**, Lerdisk in Edge, default build:
+gives the Lerdisk's *true* per-cell boundaries (previous run's totals were
+crc-poisoned) and captures the full dump at the first Path-B corruption.
+
+## ROUND 4 — find the band's TOP (added 2026-08-17, after the clamp widening)
+
+The driver's `debugSetAlignDelayOffset` clamp is widened to `[-8, +16]` and
+`SD_phase_sweep_test` now sweeps offsets −3..+16 (both compile-verified). This is
+step 2 of the approved mitigation path: **close the passing band's upper edge on
+healthy cards** so a production default can be chosen against a measured band,
+not a censored one.
+
+⚠️ The clamp change is a `src/` driver edit — **the full regression suite must be
+run and green on hardware** before this driver state is treated as certified.
+Suggest running regression first, then the sweeps.
+
+Sweeps (Gigastone pair, both sockets — same arms as R3a but the band top is the
+target; every arm should now show FAILs at high offsets, and where they start is
+the measurement):
+
+```bash
+cd tools
+./run_test.sh ../diagnostic-tests/SD_phase_sweep_test.spin2 -t 300 -D SYSCLK_350 -D SPI_25M              # Edge, production speed
+./run_test.sh ../diagnostic-tests/SD_phase_sweep_test.spin2 -t 300 --external -D SYSCLK_350 -D SPI_25M   # adapter, production speed
+./run_test.sh ../diagnostic-tests/SD_phase_sweep_test.spin2 -t 300 -D SYSCLK_350 -D SPI_35M              # Edge, high
+./run_test.sh ../diagnostic-tests/SD_phase_sweep_test.spin2 -t 300 --external -D SYSCLK_350 -D SPI_29M   # adapter, high (its 35 MHz cmd margin is too thin)
+```
+
+Optionally repeat one arm with the Lerdisk to see whether slow silicon narrows
+the band from the top as well as the bottom. Bring back the per-arm bands; the
+candidate default (`hp + 2`) is judged against the *narrowest* measured band.
+
+## ROUND 5 — the write path, wedge-aware (added 2026-08-17; the last uncharted IO surface)
+
+New instrument: `diagnostic-tests/SD_write_probe.spin2` (compile-verified, all
+variants; **DESTRUCTIVE** — writes scratch sectors at LBA 200,100+; run only on
+cards whose contents are expendable). It maps frequency (12.5 / 25 / 35 MHz) ×
+tx_align_delay pad (full SCK period, 2..2+2·hp) × command (CMD25 vs CMD24) ×
+socket, writing a **period-256 non-uniform pattern** (absolute shift counts are
+recoverable from its dumps) and reading back at a known-safe slow configuration
+so failures attribute to the write path.
+
+**Structure is safest-first; the wedge zone is quarantined:**
+
+The same binary serves 5a and 5b — **the difference is which cards sit in the
+sockets** (see the sequencing table at the top; PSN in the transcript is the
+proof):
+
+```bash
+cd tools
+# 5a — HEALTHY CARDS: Gigastone unmarked in Edge, GREEN in adapter.
+#      Full phases 1+2 (adapter CMD25+CMD24 grids, Edge CMD25 grid) in one run:
+./run_test.sh ../diagnostic-tests/SD_write_probe.spin2 -t 600
+
+# 5b — ASDFG CLASS: Lerdisk $0000_01F4 in Edge, Cloudisk #2 $0001_9B39 in adapter.
+#      Same phases 1+2 (the wedge has never fired in these regions; wedge
+#      detection + autopsy run automatically if that belief is wrong):
+./run_test.sh ../diagnostic-tests/SD_write_probe.spin2 -t 600
+
+# 5c — THE WEDGE ZONE: Lerdisk $0000_01F4 in Edge (the documented #3240 wedger).
+#      Edge + CMD24, ONE cell per run, ONE power cycle budgeted per run,
+#      slowest frequency first:
+./run_test.sh ../diagnostic-tests/SD_write_probe.spin2 -t 300 -D P3_SLOW    # 12.5 MHz
+# power-cycle if wedged, then:
+./run_test.sh ../diagnostic-tests/SD_write_probe.spin2 -t 300 -D P3_PROD    # 25 MHz
+# power-cycle if wedged, then:
+./run_test.sh ../diagnostic-tests/SD_write_probe.spin2 -t 300 -D P3_HIGH    # 35 MHz
+```
+
+**What 5c decides:** a wedge at 12.5 MHz is frequency-INDEPENDENT → edge-rate /
+signal-quality at the card's inputs. A wedge only at higher frequency →
+timing-domain. Either way, on any wedge the tool runs an **autopsy** (what the
+stuck controller still answers: re-init ×2, read attempts, every status printed)
+before asking for the power cycle — each cycle buys maximum information. A
+completed 5c cell with NO wedge is equally a finding (the raw-init path may not
+reproduce what the filesystem-mount path triggered — say so loudly if seen).
+
+Ordering note: run ROUND 4's regression + band-top sweeps first — the clamp
+driver-edit must be re-certified before more instruments stack on it.
+
+## ROUND 6 — reconciliation: prove the instruments, then re-verdict (added 2026-08-18)
+
+Container-side analysis resolved both round-4/5 blockers; this round confirms the
+resolutions on hardware. Both resolutions, briefly:
+
+- **The shmoo/phase-sweep conflict is reference-content aliasing.** A one-bit
+  shift of a *uniform* sector (fresh-card LBA 1000 = one repeated byte)
+  reproduces itself byte-for-byte *including its CRC*, so the shmoo's Path B was
+  blind exactly where the phase sweep (whose sector-0 MBR reference has
+  structure) saw the true shift. The shmoo now scans for a shift-distinguishable
+  reference (falls back to sector 0) and prints which sector it chose.
+  **Retroactive consequence: all prior Gigastone shmoo Path-B "clean" columns
+  are unreliable; Path A and cmd-cliff results stand.**
+- **The write probe's 336 green cells never included the one condition known to
+  fail** — v1.7.0 measured failing pads (≡ 1 mod 7) on **Edge + CMD24**, and the
+  probe's phase structure ran CMD24 pad sweeps only on the *adapter* and Edge
+  only with CMD25. New `-D EDGE_CMD24_SWEEP` arm runs exactly the v1.7.0
+  condition; new `-D DETECT_SELFTEST` arm proves the failure reporting fires.
+
+Run with the **unmarked Gigastone `$0000_01C7` in Edge** (adapter may stay
+populated; only 6c uses it):
+
+```bash
+cd tools
+# 6a — instrument proof: both verdict lines must print INSTRUMENT PASS
+./run_test.sh ../diagnostic-tests/SD_write_probe.spin2 -t 300 -D DETECT_SELFTEST
+# 6b — the v1.7.0 condition: EXPECT FAILs at pads 8 and 15 in the hp=7 group.
+#      Failing there = detection proven + v1.7.0 reproduced (green grids become
+#      evidence). All-PASS there = real conflict with the v1.7.0 record — report
+#      loudly, do not proceed to conclusions.
+./run_test.sh ../diagnostic-tests/SD_write_probe.spin2 -t 600 -D EDGE_CMD24_SWEEP
+# 6c — fixed shmoo (alias guard live), Gigastone pair both sockets: re-verdicts
+#      every Path-B column. Expect Edge hp=5 Path B to now show errors (matching
+#      the phase sweep's offset-0 FAIL at 35 MHz).
+./run_test.sh ../diagnostic-tests/SD_socket_shmoo.spin2 -t 300
+# 6d — optional cross-check with the original v1.7.0 instrument, same card:
+./run_test.sh ../diagnostic-tests/SD_tx_phase_shmoo.spin2 -t 600
+```
+
+The production align-delay default discussion resumes only after 6a/6b prove the
+instruments; then round 4's phase-sweep bands (which the aliasing resolution
+leaves as the trustworthy record) carry the decision.
+
+## ROUND 7 — tx-tooth population survey (added 2026-08-18, after round 6)
+
+Round 6 established: the v1.7.0 losing-phase cliff (pads ≡ 1 mod 7 at hp=7) was
+characterized on **Card 2b `$0000_0F14` only** (the driver comment is explicitly
+card-scoped), and on `$0000_01C7` **two proven instruments independently find no
+tooth at all**. So the tooth is card-specific, and `tx_align_delay = 4`'s
+"maximal distance from the cliff" justification has a sample size of one. This
+round establishes the tooth's existence, position, and movement across the
+population — the write-side prerequisite for any default decision.
+
+Container-side changes: `SD_tx_phase_shmoo` now prints the card PSN (the round-6
+identity caveat is closed); the socket shmoo's per-cell column is relabeled
+`err` (a negative read status covers cmd/token failures AND in-driver CRC-retry
+exhaustion — the per-failure status line under the row disambiguates).
+
+⚠️ **Serial near-collision:** Card 2b `$0000_0F14` (Gigastone ASTC 64GB, 2023/06)
+and the Lerdisk `$0000_01F4` (asdfg 1GB, 2025/12) have **anagram serials** —
+same four hex digits, two transposed. They are different cards. Check the
+transcript's PNM as well as the PSN: Card 2b prints `PNM='ASTC '`-class content
+and 64GB capacity; the Lerdisk prints `PNM='asdfg'` and ~1GB. A 7a run showing
+`asdfg` is on the wrong card — stop and swap.
+
+```bash
+cd tools
+# 7a — THE DECISIVE PAIR, on Card 2b $0000_0F14 in Edge (characterization-only
+#      card; label the runs as such in the hand-back):
+./run_test.sh ../diagnostic-tests/SD_write_probe.spin2 -t 600 -D EDGE_CMD24_SWEEP
+./run_test.sh ../diagnostic-tests/SD_tx_phase_shmoo.spin2 -t 600
+#      Cliff reproduces -> tooth is real + card-specific: proceed to 7b to map it.
+#      Cliff GONE on its own card -> the phenomenon changed underneath the record
+#      (driver write path is unchanged since certification) -> report loudly, stop.
+# 7b — population: repeat the same pair on 2-3 more library cards, one at a
+#      time, Edge socket. Vary controller vendor (e.g. a SanDisk, a Samsung, a
+#      Phison). The question per card: tooth present? at which pads?
+# 7c — asdfg read-band top (their earlier bands were censored at the old +8
+#      sweep limit), Lerdisk in Edge:
+./run_test.sh ../diagnostic-tests/SD_phase_sweep_test.spin2 -t 300 -D SYSCLK_350 -D SPI_29M
+```
+
+Bring back per card: PSN, tooth present/absent, failing pads if present, and the
+passing band. The write-default decision (keep 4, move, or per-card calibrate)
+is judged against the union of these.
+
+### 7d — the Edge cmd ceiling at 360 MHz (approved overclock, one run)
+
+Stephen approved a **bounded overclock to 360 MHz sysclk — and no higher**
+(2026-08-18) to chase the one censored number left: the Edge socket's cmd
+ceiling (clean at 43.75 MHz, the 350 MHz instrument limit). At 360, hp=4 lands
+at **45.0 MHz**. Gigastone pair, standard placement:
+
+```bash
+./run_test.sh ../diagnostic-tests/SD_socket_shmoo.spin2 -t 300 -D SYSCLK_360
+```
+
+**Read it with the overclock control in mind:** the sweep's slower cells
+(12.5–36 MHz) re-run at 360 MHz sysclk and must stay clean — if THEY fail, the
+P2 itself is unhappy at 360 and the run is **discarded, not interpreted**. If
+slow cells are clean: Edge hp=4 failing = the ceiling is finally **measured**
+(bracketed 43.75–45.0 MHz); Edge hp=4 passing = the map closes at "Edge ≥ 45.0,
+socket delta ≥ 7.75 MHz" and we stop there by decision. The adapter phase will
+fail its usual high cells (~37+ MHz equivalents) — expected, and itself a
+same-session sanity check that the instrument still sees the known cliff.
+
+## ROUND 8 — certify the mitigation bundle (added 2026-08-18; Stephen-approved driver changes)
+
+The driver carries the campaign's mitigation bundle, compile-verified (34 of 34
+consumers — 27 suites plus examples and DEMO, both build shapes) and style-clean
+in `src/`. **The bundle grew between your 8a attempts**; this is the current
+contents, in the order they were added:
+
+1. **`align_delay_offset` default 0 → 5** — the read-streamer alignment moves to
+   the measured center of every band.
+2. **hp=4 floor-cell rule** (`effectiveAlignDelay()`) — positive offsets are
+   withheld at `spi_period = 4`, which keeps the historical `align = hp` there.
+   *Added after 8a run 1*: the bands were measured at hp 5–7 only, and +5 at
+   hp=4 exceeds the bit period, which is what broke the CMD6 verify read.
+3. **Production speed bound** — `setSPISpeed()` clamps at the card's declared
+   ceiling (TRAN_SPEED capped at the SPI-mode 25 MHz; 50 MHz during verified
+   CMD6 high-speed). New `debugSetOverspeedAllowed()` lifts it for diagnostics;
+   the shmoo, write probe and phase sweep already call it.
+4. **`applyDefaultSpeedMode()`** — CMD6 switch-back on the three high-speed
+   *fallback* paths. *Added after 8a run 1.*
+5. **Explicit high-speed mode state (`hs_mode_active`)** — *added after 8a run 2,
+   and the reason a third attempt is needed.* See below.
+
+### What changed since your 8a run 2, and why
+
+Run 2's surviving reds (`SD_RT_speed_tests` #9 and #12) were **not** marginal
+operation at 43.75 MHz, and **not** the new switch-back misbehaving. The high-speed
+verify *succeeded*; the test then hand-set the clock back to 25 MHz, and the card
+stayed in CMD6 high-speed mode — because item 4 above covered only the three
+fallback exits, and a verified success followed by any later `setSPISpeed()` is a
+**fourth exit** that nothing hooked. Card on high-speed output timing, host on
+default timing, `-7` on everything after.
+
+Hooking that exit needed state the driver did not have: high-speed mode was being
+*inferred* from `spi_freq >= 50_000_000`, which is false at 350 MHz sysclk where
+high speed resolves to hp=4 / **43_750_000 Hz**. So the driver now carries an
+explicit `hs_mode_active` flag, set at the verified switch and cleared only by the
+switch-back, and:
+
+- `isHighSpeedActive()` reports the **card's mode**, not a clock threshold.
+  **This is a public API contract change** — it previously answered FALSE at this
+  project's own sysclk while high-speed mode was genuinely active.
+- Every exit routes through the switch-back: the three fallbacks, a user
+  `setSPISpeed()`, and `unmount()`. `initCard()` clears the flag so a card swap
+  cannot inherit a stale TRUE.
+
+### `SD_RT_speed_tests` — read this suite closely
+
+Its scoring changed, so a comparison against your run-2 transcript needs care:
+
+- **Test #8** now makes **two** sub-checks instead of one. Expect
+  `attemptHighSpeed: -1  isHSActive: -1` — *both* true, at
+  `43_750_000 Hz`. Run 2 printed `isHSActive: 0` here alongside a successful
+  attempt; that contradiction was the tell, and it should be gone.
+- **Test #9** previously printed `createFileNew failed after HS: -7` and then
+  **scored itself a pass** ("Skip — card-specific"). That absolution is removed.
+  It must now genuinely create, write, read back and match. A `-7` here is a
+  **FAIL**, and it prints survey coordinates when it fails.
+- **Test #12** unchanged, and should now pass — it was collateral damage from the
+  same stranded card.
+- Expect **530/530**. Note that 529/530 in run 2 understated the problem: the
+  same root cause was inside #9 too, wearing a green mark.
+
+```bash
+cd tools
+# 8a — FULL REGRESSION certifies the whole bundle (Gigastone regression card, Edge):
+./run_regression.sh
+# 8b — one shmoo run, Gigastone pair, standard placement — the hp+5 default
+#      made VISIBLE: Path B columns should now stay clean far beyond the old
+#      29.17 MHz boundary (at default offset the band's lower edge no longer
+#      bites). Also proves the overspeed knob works (cells >25 MHz still sweep):
+./run_test.sh ../diagnostic-tests/SD_socket_shmoo.spin2 -t 300
+```
+
+Expected changes vs. earlier rounds, so nothing reads as a fault: 8b's Path B
+boundaries should IMPROVE markedly (that is the fix working); every ≤25 MHz cell
+behaves as before; tools still reach 43.75 MHz (knob working). A regression
+failure in 8a or a Path B boundary that did NOT move in 8b is a stop-and-report.
+
+### RESULT — certified 2026-08-18
+
+**8a run 3: 530/530, all 27 suites, closing audit clean (23/23)**
+(`regression_260818_round8a_run3.log`). The predicted signatures are present in
+`SD_RT_speed_tests_260818-125535.log`: #8 prints `attemptHighSpeed: -1
+isHSActive: -1` at `43_750_000 Hz`, and #9 passes on the real
+create/write/read/compare path rather than through the removed absolution.
+
+**8b clean** (`SD_socket_shmoo_260818-130306.log`, Gigastone pair — Edge
+`$0000_01C7`, adapter `$0000_01C9`). Path B is now clean through **35 MHz on both
+sockets**; the adapter's Path B boundary was ~29.17 MHz before the align default
+moved to +5. That is the fix working, and it is the "equal socket support" claim
+the changelog makes, measured.
+
+**One cell is worth recording, and it is not a defect.** At hp=4 / 43.75 MHz the
+Edge grid reads `ON-A 0, ON-B 254` — the byte-by-byte path is clean and the
+production streamer path aborts. This is the uncharacterized floor cell (item 2
+withholds the align offset there, and tx pad 4 at hp=4 was never measured — the
+tooth was mapped at hp 5, 7 and 14). Note what it does **not** contradict: the
+shmoo drives 43.75 MHz with the card in **default** speed mode, which is above
+spec, while the driver reaches 43.75 MHz only **inside verified CMD6 high-speed
+mode**, where the card is entitled to run that fast — and that path read cleanly
+in both green speed-test runs. Read together, the two results are the production
+speed clamp's justification: above-spec-in-default-mode fails, in-high-speed-mode
+works. Characterizing the hp=4 band is a future measurement, not a v1.7.1 item.
+
+## Bring back
+
+- The full log path(s) under `tools/logs/` (transcripts are the record).
+- Which physical card (brand + label size) was in which socket per run, even though
+  CID confirms it.
+- Any deviation from expectations above, verbatim lines preferred.
+
+## ROUND 9 — hardware-understanding studies (added 2026-08-18, post-certification)
+
+Six cards, in hand. Named by label so they can be found physically; the PSN in
+each transcript is the proof of which one actually ran.
+
+| # | Card (physical label) | Controller | Socket |
+|---|---|---|---|
+| 1 | **SanDisk MAX Endurance 32GB** microSD HC I U3 V30 | SanDisk `$03` | Edge |
+| 2 | **Samsung EVO Select 128GB** microSD XC I U3 | Samsung `$1B` | Edge |
+| 3 | **Lexar 64GB** microSD XC, red card, A1 V30 U3 | Longsys `$AD` | Edge |
+| 4 | **PNY 16GB** microSD HC I | Phison `$27` | Edge |
+| 5 | **Cloudisk 2GB** Class 4 (counterfeit `asdfg`) | unknown `$05` | see 9a |
+| 6 | **Lerdisk 1GB** (counterfeit `asdfg`, label reads only "microSD 1GB") | unknown `$05` | see 9a |
+
+### What changed in the shared tree since your last run
+
+We share this tree and there is no git handoff, so read this before comparing
+anything against your round-8 transcripts. All of it is compile-verified across
+34 consumers in both build shapes, and `check_style.sh` reports `src/` conformant.
+
+| Change | Why it matters to you |
+|---|---|
+| `SD_RT_speed_tests`: new **High-Speed Mode Exits** group, **15 tests → 17** | **Regression totals move 530 → 532.** A 530 means a stale binary |
+| Driver: new **`debugSetAlignFloorRuleEnabled()`** [SD_INCLUDE_DEBUG] | Makes 9c possible at all; production behavior unchanged |
+| `SD_phase_sweep_test`: new **`-D SPI_43M`** arm | 9c's instrument. Lifts two production guards on purpose |
+
+Nothing else in the driver moved. The v1.7.1 bundle is exactly as certified in
+round 8a run 3 — these are additive diagnostics and test coverage, not changes to
+shipped behavior.
+
+The two new tests cover paths that had **no coverage at all**: `setSPISpeed()`
+and `unmount()` both exit high-speed mode, and until now only the three *failure*
+exits were exercised by anything. The unmount test is deliberately end-to-end
+(unmount while high-speed → remount → file operation) because the card cannot be
+asked what mode it is in; the only honest proof is that the next mount works.
+
+### 9a — Does the bundle change the asdfg Edge wedge? (cheapest run, do first)
+
+**The belief under test:** the catalog says these two cards are External-only
+because of the #3240 Edge wedge. That guidance predates the mitigation bundle,
+and the bundle changed read alignment for every card. Nobody has run an asdfg
+card through the mount path on Edge since. So the honest status is *untested*,
+not *fixed*.
+
+Round 5 could never trigger the wedge with raw writes (~336 cells, zero wedges);
+Finding 1 relocated the trigger to the **filesystem/mount path**. The minimal
+reproducer on record is `mount_tests` then `raw_sector_tests` **with no power
+cycle between them**, on the Edge socket. Baseline to beat: raw_sector_tests 1/14.
+
+```bash
+cd tools
+# Lerdisk 1GB in EDGE, then repeat the identical pair with Cloudisk 2GB in EDGE:
+./run_test.sh ../src/regression-tests/SD_RT_mount_tests.spin2 -t 120
+./run_test.sh ../src/regression-tests/SD_RT_raw_sector_tests.spin2 -t 120
+```
+
+All three outcomes are worth having: **still wedges** confirms the reproducer
+still works and the catalog stands; **no longer wedges** means read alignment was
+implicated in something we had filed as a write-path defect, and the card records
+need rewriting; **wedges differently** is the most informative of all, since the
+campaign has never been able to trigger it on demand.
+
+If a card wedges: power-cycle, note it, move on. Do not spend more than one power
+cycle per card here.
+
+### 9b — Is the +5 align default universal, or vendor-dependent?
+
+**The belief under test:** the shipped default came from five sweeps across
+**two** card families. If different controllers center their read band at
+different offsets, one global default is the wrong architecture, and we would
+want that finding now rather than after release.
+
+Cards 1-4, one at a time, Edge socket, production speed:
+
+```bash
+cd tools
+./run_test.sh ../diagnostic-tests/SD_phase_sweep_test.spin2 -t 300 -D SYSCLK_350 -D SPI_25M
+```
+
+Bring back per card: the passing band (first and last passing offset) per sample
+mode, and where it centers. **The number that matters is whether every controller
+centers near +5.** A card centering at, say, +2 or +9 is the headline result of
+this whole round.
+
+### 9c — What is actually in the hp=4 floor cell?
+
+**The belief under test:** none — this is the cell we have never measured, and we
+carry a production exemption purely because of that ignorance. The driver's own
+verified high-speed path runs here. Measuring it may let the exemption be deleted.
+
+Cards 1-4, Edge socket. Note this arm lifts two production guards on purpose:
+
+```bash
+cd tools
+./run_test.sh ../diagnostic-tests/SD_phase_sweep_test.spin2 -t 300 -D SYSCLK_350 -D SPI_43M
+```
+
+The banner prints `FLOOR-CELL ARM: hp=4 rule LIFTED for measurement`. If that line
+is missing, the wrong binary is running — stop. Expect failures at the extremes;
+that is the measurement. A card that fails at **every** offset is itself the
+answer for that card (no usable band at hp=4), and should be reported as such
+rather than as a broken run.
+
+### 9d — Which controllers actually negotiate CMD6 high speed?
+
+**The belief under test:** `SD-CARD-PERFORMANCE.md` §7 says high speed "fails on
+all tested cards." One counterexample already falsifies it, but the real question
+is bigger: high speed is 43.75 MHz against 25 MHz, a ~75% clock increase we
+currently tell users is unavailable. Which silicon takes it, and holds it?
+
+All six cards, one at a time. Cards 1-4 in Edge; **cards 5 and 6 in the external
+adapter** unless 9a shows the Edge wedge is gone, in which case run them on Edge
+too and say which socket produced each transcript:
+
+```bash
+cd tools
+./run_test.sh ../src/regression-tests/SD_RT_speed_tests.spin2 -t 120              # Edge
+./run_test.sh ../src/regression-tests/SD_RT_speed_tests.spin2 -t 120 --external   # adapter
+```
+
+Read from each transcript: test #8's `attemptHighSpeed` / `isHSActive` pair and
+the achieved frequency, plus whether #6/#7 report the card *declining* versus the
+query *failing* — those are different answers and ERROR() separates them. The
+counterfeit SD 1.x cards should decline cleanly; that is a real check of the
+honest-boolean contract on a card that genuinely lacks the feature, which has
+probably never been exercised.
+
+This suite creates and deletes a scratch file. It does not format. It reports
+**17 tests** this round (was 15).
+
+**Expected on the two counterfeit cards, and not a driver defect:** the new
+High-Speed Mode Exits group unmounts and remounts. On marginal counterfeit
+silicon a remount can fail for reasons that have nothing to do with high-speed
+mode — these cards have a documented Edge wedge and a probe-found SCK ceiling.
+If those two tests are the only reds on cards 5-6, record it as card-specific and
+move on. Reds there on cards 1-4 are a different matter: report those loudly.
+
+### 9e — Second full regression: Samsung EVO Select 128GB
+
+**Why this card:** the regression card is 32GB at 32 sectors/cluster; this one
+formats to 119GB FAT32 at **64 sectors/cluster** — double the cluster size, ~4x
+the capacity, a much larger FAT — and it is a completely different controller.
+Full regression is the only thing that exercises FAT32 layout math, so the second
+card should maximize geometry, not vendor (9b/9d already cover vendor). Its card
+record shows it has been reformatted to FAT32 with P2FMTER before, so our
+formatter is known to handle it.
+
+**This run formats the card.** Do it last.
+
+```bash
+cd tools
+./run_regression.sh
+```
+
+**Expect 532/532, not 530/530.** `SD_RT_speed_tests` grew from 15 tests to 17
+this round (the High-Speed Mode Exits group), so the suite total moved with it.
+A run reporting 530 means the binary predates this round's tree — stop and say
+so rather than reading it as a pass.
+
+Any red here is a genuine finding about a geometry we have never certified. If
+the **format step** fails on a 128GB card, that is itself the finding: report it
+and stop rather than working around it — our formatter is documented as having
+handled this card before, so a failure means something changed.
+
+### Bring back for round 9
+
+Per study, per card: the log path, the physical card by label, which socket, and
+the specific number that study asked for (band edges for 9b/9c, the HS pair and
+frequency for 9d, pass/fail for 9a/9e). Deviations verbatim.
+
+**Two standing rules for this round, because these are studies and not pass/fail
+gates.** First, a study that returns "nothing works here" or "no band exists" is
+a **result**, not a failed run — report it as the answer rather than retrying
+until it looks better. Second, do not diagnose from hypotheses: if something
+surprises you, send the transcript and say what surprised you. Round 8 cost two
+bench runs to a hypothesis list standing in for a discriminating read of a log we
+already had.
+
+**Suggested order:** 9a (cheapest, gates 9d's socket choice) → 9b → 9c on the same
+card while it is seated → 9d → 9e last, since it formats. 9b and 9c are read-only;
+9d writes a scratch file; only 9e formats.
+
+## ROUND 10 — performance payoff and the first Edge-wedge answers (added 2026-08-18)
+
+### New and changed instruments (all compile-verified, `src/` style-clean)
+
+| Instrument | Change |
+|---|---|
+| `src/UTILS/SD_performance_benchmark.spin2` | New **`-D HIGH_SPEED`** arm negotiates CMD6 high speed before measuring. Every rate line now also reports **`[N% of bus, LIMITER]`** |
+| `diagnostic-tests/SD_edge_wedge_probe.spin2` | **NEW.** Five arms for blind differential diagnosis of the Edge wedge |
+
+**About the new benchmark annotation.** A 512-byte sector is 4096 bits on one SPI
+data line, so the bus ceiling is `spi_freq / 8` bytes per second and nothing —
+card or driver — can beat it. Each rate is printed as a percentage of that
+ceiling with a verdict: `BUS-bound` at or above 70%, `CARD-bound` below 30%,
+`mixed` between. Those two thresholds are reporting boundaries for legibility,
+not physics. This is what lets the catalog say *which* thing is the limit for
+each traffic type, and it is the baseline 4-bit support will be measured against.
+
+### 10a — deep-catalog the Kingston-labelled 2GB
+
+Stephen's suspicion is that we have seen this card already and do not know it.
+That is plausible: the catalog names cards by **silicon identity**, not by the
+label printed on them, and our only Kingston entry is an **8GB SDHC**
+(`Kingston_SD8GB`, CSD v2.0). A 2GB card is SDSC (CSD v1.0), so it cannot be that
+entry. Either it matches some other existing row under a different label, or it
+is genuinely new.
+
+Follow `DOCs/cards/CATALOG-PROCEDURE.md` as written — identify, characterize,
+benchmark at both sysclks, annotate:
+
+```bash
+cd tools
+./run_test.sh ../src/UTILS/SD_card_identify.spin2
+./run_test.sh ../src/UTILS/SD_card_characterize.spin2 -t 90
+```
+
+Bring back the PSN, MID, PNM and CSD version before going further — if the
+fingerprint matches an existing row, the rest of the procedure is an *update*,
+not a new entry, and which one it is changes what gets written.
+
+**This card also matters to 10c.** It is SDSC-class like both failing cards but
+is not an `asdfg` twin. If it wedges on Edge too, the problem is not about two
+counterfeit cards, it is about SDSC or low-power silicon generally — and the
+scope of what we are chasing changes completely. Worth knowing early.
+
+### 10b — does the 75% clock increase become 75% throughput?
+
+Three cards, each run **twice** — once standard, once with `-D HIGH_SPEED` — so
+each card is its own control and the delta is unambiguous:
+
+```bash
+cd tools
+./run_test.sh ../src/UTILS/SD_performance_benchmark.spin2 -t 180
+./run_test.sh ../src/UTILS/SD_performance_benchmark.spin2 -t 180 -D HIGH_SPEED
+```
+
+| Card | Catalog baseline | Why this card |
+|---|---|---|
+| **Samsung EVO Select 128GB** | 783 KB/s | Mid-range, high-speed capable, freshly certified and already formatted |
+| **Lexar 64GB** (red) | 1059 KB/s | Our fastest card — closest to the bus ceiling, so most likely to show the gain |
+| **PNY 16GB** | 31.3 KB/s | The extreme opposite: high-speed capable but a controller that delivers 31 KB/s. If a 75% clock increase does nothing here, that is the clearest possible illustration of what the catalog's limiter column is for |
+
+**What to expect, so a real result is not mistaken for a broken run.** The gain
+should be strongly workload-dependent. Random single-sector access is dominated
+by card-internal latency (0.5 ms and up), so it may gain little or nothing even
+on a fast card — that is the expected answer, not a failure. Sequential
+multi-block through the streamer is where the bus is plausibly the limit and
+where the gain should appear. **A card that gains on multi-block and not on
+single-sector is the headline result of 10b**, not an inconsistency.
+
+Bring back per card and per traffic type: the rate, the `% of bus`, and the
+limiter verdict, for both arms.
+
+### 10c — the Edge-wedge probe ladder
+
+**The constraint that shapes this whole track:** the Edge module socket cannot be
+probed. We cannot see anything, so every step is *change one thing and re-test*.
+That also means the reproducer itself is the instrument, and its reliability has
+to be established before any intervention result can be believed.
+
+**A wedge ends the session.** One arm per run, power-cycle after any wedge.
+
+Run in this order — each step is chosen to split what remains, not to confirm a
+hunch:
+
+```bash
+cd tools
+# 1. CONTROL -- Lerdisk 1GB in the EXTERNAL adapter. Must come back CLEAN.
+#    If this wedges, the fault is not socket-specific and the whole frame is wrong.
+./run_test.sh ../diagnostic-tests/SD_edge_wedge_probe.spin2 -t 300 -D SD_PINS_EXTERNAL
+
+# 2. RELIABILITY -- Lerdisk 1GB in EDGE, default arm. How many cycles until it wedges?
+./run_test.sh ../diagnostic-tests/SD_edge_wedge_probe.spin2 -t 300
+
+# 3. THE DECISIVE RUN -- same card, EDGE, clamped to 400 kHz.
+./run_test.sh ../diagnostic-tests/SD_edge_wedge_probe.spin2 -t 300 -D SPEED_400K
+
+# 4. WRITE-BURST -- same card, EDGE, no writes and no FSInfo update at unmount.
+./run_test.sh ../diagnostic-tests/SD_edge_wedge_probe.spin2 -t 300 -D READ_ONLY
+```
+
+**The decision tree.** Report the outcome of each step; the next step's meaning
+depends on it.
+
+- **Step 2 wedges on cycle 1 every time** → reproducer is deterministic, and
+  interventions can be trusted. **If it takes several cycles, or does not wedge
+  at all in eight, say so loudly** — an intermittent reproducer changes how every
+  later result must be read, and we would need repeat runs before believing any
+  intervention.
+- **Step 3 still wedges at 400 kHz** → timing and signal integrity are BOTH
+  eliminated. Nothing about edge rates, setup/hold or sampling margin survives at
+  400 kHz. Only power delivery and command protocol remain, and step 4 splits
+  those.
+- **Step 3 is clean at 400 kHz** → the failure IS speed-dependent, which puts
+  signal integrity back in play and makes a driver-side pin drive-strength knob
+  the next thing to build (P2 `WRPIN` bits 20:8 carry drive strength).
+- **Step 4 clean (read-only) while step 2 wedges** → the write burst is required,
+  which points hard at write/erase current draw. **That is the trigger for the
+  bench-supply intervention:** swap the USB 5 V feed for a robust bench supply and
+  re-run step 2. If that fixes it, the answer is power delivery.
+- **Step 4 also wedges (read-only)** → not the write burst; the fault is in the
+  unmount/re-init command sequence itself, and the next work is driver-side
+  protocol, not electrical.
+
+If the ladder completes and the Lerdisk is behaving, repeating step 2 and step 3
+on the **Cloudisk 2GB** confirms the twins behave identically, and on the
+**Kingston 2GB** answers the much larger question in 10a.
+
+### Bring back for round 10
+
+10a: the fingerprint fields, before anything else. 10b: per card, per traffic
+type, both arms — rate, `% of bus`, limiter. 10c: the outcome of each ladder step
+in order, the cycle number of any wedge, the unmount `elapsed=` figures
+(including near-misses that stalled but recovered), and the autopsy block from
+any wedge.
+
+**Standing rules from round 9 still apply:** a study returning "nothing here" is
+a result, not a failed run; and do not diagnose from hypotheses — send the
+transcript and say what surprised you.
+
+## ROUND 11 — reproduce the wedge, and settle the write regression (added 2026-08-18)
+
+### Instrument changes since round 10 (all compile-verified, `src/` style-clean)
+
+| Instrument | Change |
+|---|---|
+| `SD_edge_wedge_probe` | **Cycle rebuilt.** Round 10c's version was too gentle — 8/8 clean while the known reproducer wedged the same card minutes later. Now does `freeSpace()` (full FAT scan), `volumeLabel()`, a raw sector read, a double-mount, and create/write/read/delete. Also **prints card identity** via `initCardOnly` + CID, so a null result no longer needs a separate identify run |
+| `SD_performance_benchmark` | **Writes are now verified.** Read back and compared after the timed loop. The fill pattern was `bytefill($5A)` — uniform, and therefore blind to exactly the shift corruption we are hunting; it is now shift-detectable, varying within and between sectors |
+| `SD_write_probe` | **New `-D HS_PAD_SWEEP` arm** — the hp=4 write pad, measured inside verified high-speed mode |
+
+### 11a — does the rebuilt probe reproduce the wedge?
+
+**This is a gate, not a result.** If the probe still comes back clean while the
+suite pair still wedges, do NOT proceed to the ladder — report it and stop. An
+intervention tested against a reproducer that is not reproducing produces clean
+arms that mean nothing.
+
+```bash
+cd tools
+# Lerdisk 1GB in EDGE, default (heavy) arm:
+./run_test.sh ../diagnostic-tests/SD_edge_wedge_probe.spin2 -t 300
+```
+
+- **Wedges** → the gate is passed. Record the cycle number, then run the ladder:
+  `-D SPEED_400K` (decisive — nothing about edge rates or setup/hold survives at
+  400 kHz), then `-D READ_ONLY`. Power-cycle after each wedge, one arm per run.
+- **Still clean** → stop and report. The next move is container-side, not another
+  intervention.
+
+Confirm the reproducer is still live either way with the known pair
+(`SD_RT_mount_tests` then `SD_RT_raw_sector_tests`, no power cycle) — round 10c
+showed that check is what made a null result interpretable.
+
+### 11b — is the high-speed write regression slow, or corrupt?
+
+Round 10b measured writes getting much slower at 43.75 MHz with **zero reported
+errors** — but the benchmark had never checked that the bytes on the card matched
+the bytes sent. "No errors" meant no card *rejections*, not no corruption, and
+round 7b documented a driver-side phase that corrupts whole sectors silently.
+
+Three cards, both arms each, exactly as in 10b so the numbers stay comparable:
+
+```bash
+cd tools
+./run_test.sh ../src/UTILS/SD_performance_benchmark.spin2 -t 180
+./run_test.sh ../src/UTILS/SD_performance_benchmark.spin2 -t 180 -D HIGH_SPEED
+```
+
+New lines to watch for. A clean run prints `verify: N bytes match` after each
+write result. A mismatch prints the offset and then **re-reads at a trusted
+speed** to attribute it:
+
+- `CONFIRMED WRITE CORRUPTION` — the bytes on the card are wrong. The regression
+  is a correctness bug, not a performance one, and high speed must not be used
+  for writes on that card until the pad question is settled
+- `Write was CLEAN; the fast READ-BACK was at fault` — the write is fine and the
+  hp=4 *read* path is the problem instead
+
+Either mismatch message drops the clock to attribute it, which exits high-speed
+mode — so **timings after a mismatch in the same run are not comparable**. The
+transcript says so at the point it happens.
+
+### 11c — the hp=4 write pad, inside high-speed mode
+
+```bash
+cd tools
+./run_test.sh ../diagnostic-tests/SD_write_probe.spin2 -t 300 -D HS_PAD_SWEEP
+```
+
+**DESTRUCTIVE** (scratch sectors at LBA 200,100+) and **high-speed capable cards
+only** — the arm refuses and explains itself on a card that declines, which is
+not a failure.
+
+The arm negotiates high speed once, writes every pad in `[2..10]` to its own
+sector while still at hp=4, exits once, then reads them all back at 12.5 MHz and
+scores. That shape is forced: `setSPISpeed()` exits high-speed mode, and a card
+in high-speed mode cannot be read slowly — so per-cell write-then-readback is
+impossible here, and writing everything in one verified card state is also the
+cleaner experiment.
+
+Bring back the **passing band and its centre**. The shipped default is pad 4.
+
+- Default **outside** the band → this explains 10b's write regression, and the
+  fix is an hp-aware tx pad
+- Every pad passing → the pad is **not** the cause; the regression is card-side
+  behaviour in high-speed mode, and 11b's verification should agree by showing
+  the bytes were correct all along
+
+### Bring back for round 11
+
+11a: wedged or not, and on which cycle; the unmount `elapsed=` figures including
+near-misses; the identity line proving card and socket. 11b: per card, per
+traffic type, both arms — rate, `% of bus`, limiter, and every verify line.
+11c: the per-pad table and the band.
+
+**Standing rules:** a study returning "nothing here" is a result, not a failed
+run; and do not diagnose from hypotheses — send the transcript and say what
+surprised you.

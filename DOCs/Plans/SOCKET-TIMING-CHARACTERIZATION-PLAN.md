@@ -1,8 +1,11 @@
 # Socket Timing Characterization Plan
 
-**Status:** proposed 2026-08-11 — deferred until the v1.7.0 bench campaign completes.
-**Scope:** `diagnostic-tests/` only (never ships). The driver is not modified by any
-tier of this plan.
+**Status:** TIER 1 COMPLETE 2026-08-17 — 13 bench runs; results in §11, approved
+mitigation path in §12. Bench narrative: `DOCs/Plans/SOCKET-SHMOO-RUN-NOTES.md`;
+procedure: `DOCs/Plans/SOCKET-SHMOO-RUN-BRIEF.md`.
+(Originally proposed 2026-08-11, deferred until the v1.7.0 bench campaign completed.)
+**Scope:** `diagnostic-tests/` only (never ships), plus the single §12-authorized
+driver edit (diagnostic clamp widening) via the normal gate sequence.
 **Problem owner:** Stephen. Drafted from the 2026-08-11 discussion.
 
 ---
@@ -254,3 +257,87 @@ stories.
 - Nothing starts until the current bench campaign completes; if any tier's
   findings motivate a driver change, that change enters through the normal
   sequence (style conformance → compile → regression → hardware).
+- *Amended 2026-08-17:* §12's approved staged path authorizes exactly one
+  `src/` change — widening the `debugSetAlignDelayOffset` diagnostic clamp —
+  through the normal sequence above. All other constraints stand.
+
+## 11. Results — 2026-08-17 Tier-1 campaign (13 runs)
+
+Full transcripts: `tools/logs/SD_socket_shmoo_260817-*.log`,
+`SD_phase_sweep_test_260817-*.log`. Bench narrative:
+`DOCs/Plans/SOCKET-SHMOO-RUN-NOTES.md`. Instruments:
+`diagnostic-tests/SD_socket_shmoo.spin2` (authored this campaign) and
+`SD_phase_sweep_test.spin2` (gained `-D SYSCLK_350` / `SPI_35M/29M/25M` arms).
+
+1. **The socket difference is real, measured, and card-independent.** The
+   external adapter's command-path cliff sits in **(36.25, 37.50] MHz** (sysclk
+   ladder, sharp, no degraded cell); the Edge socket is clean at every reachable
+   cell (**≥ 43.75 MHz**, censored by the driver's hp ≥ 4 clamp). Carried by four
+   cards across two families; 2×2 swaps put the card term at zero.
+2. **The socket delay is quantified: the adapter consumes one additional
+   alignment tick at 350 MHz sysclk** — streamer align-delay passing band
+   `[0..8]` (Edge) vs `[1..8]` (adapter), same card, same hp/frequency. As a
+   physical quantity: **0 < Δt ≤ ~5.7 ns, most likely ~3 ns** (±1-tick
+   quantization at 2.857 ns/tick). State it in ns — the tick count is a function
+   of sysclk, not a property of the socket. The Tier-2 XOR probe demotes to a
+   cross-check of this number.
+3. **Command-path failures are `-3 E_BAD_RESPONSE`** (answer arrives garbled, not
+   silence) and are sampling-mode-invariant — consistent with the response
+   arriving bit-slipped once round-trip delay crosses a bit period (~26.7 ns at
+   37.5 MHz), which no sub-bit sample-point choice can undo.
+4. **The streamer receive default `align_delay = hp + 0` sits on the lower edge
+   of the passing band.** Requirement measured as `align_delay ≥ hp + k`, k
+   rising with SPI frequency, +1 tick charged by the adapter. The Lerdisk asdfg
+   SDSC card fails exactly where 0 exits the band (Path B onset 35.0 MHz Edge /
+   29.17 MHz adapter); its corruption is a **one-bit right shift of the entire
+   stream**, confirmed over all 512 bytes ($C1→$E0 uniformly; alias caveat
+   k ≡ 1 mod 8, direction certain), cured by any positive offset.
+5. **Dummy-CRC quirk cards make this failure silent** — no CRC error can fire, so
+   reactive (error-driven) mitigation is structurally blind for exactly the
+   silicon class most likely to need it. Proactive calibration must referee with
+   a data-compare against a slow-path read.
+6. **The catalog's Edge-FAIL/External-PASS inversion (asdfg class, wedge #3240)
+   does not exist in the read path** — the Lerdisk fails Path B on *both*
+   sockets, worse on the adapter. The inversion is confined to the write/commit
+   path, which the read-only instruments cannot see.
+7. **Band upper edge is censored at +8** — every arm passed at the sweep maximum,
+   which is also the driver's `debugSetAlignDelayOffset` range clamp.
+8. New card found: second Cloudisk 2GB, PSN `$0001_9B39`, mfg 2025/11 — returns
+   *real* data CRC unlike its documented family; needs its own catalog record.
+
+## 12. Driver mitigation — decision record (Stephen approved staged path, 2026-08-17)
+
+Premise established by the campaign: **the align-delay knob is not a performance
+trade** — it is a phase pad of a few sysclks per 512-byte burst (≤ ~23 ns per
+~170 µs transfer). Every option below preserves full throughput; the risks live
+in the censored band top and the quirk-card blindness, not in speed.
+
+Approved staged path:
+
+1. **Widen the `debugSetAlignDelayOffset` clamp past +8** (diagnostic-only driver
+   edit; normal sequence: style → compile → regression → hardware) so the band's
+   upper edge becomes measurable.
+2. **Close the band top on healthy cards** — positive-offset sweeps on the
+   Gigastone pair, both sockets, across the frequency ladder.
+3. **Near-term static default** (`hp + 2` is the candidate: mid-band for every
+   case measured) — only after step 2 confirms the top; not before.
+4. **Destination: mount-time auto-calibration** — at mount and on every
+   `setSPISpeed` (k is frequency-dependent): slow-read a sector as ground truth,
+   streamer-read at several offsets, sit mid-band. Handles any card × socket ×
+   sysclk × frequency combination including unmeasured ones, works on dummy-CRC
+   cards (data-compare referee), costs one-time microseconds at mount.
+   Rejected alternatives, for the record: reactive CRC-driven adaptation (blind
+   on dummy-CRC cards — finding 5), pin-based socket tables and CID tables (do
+   not generalize beyond this bench).
+5. **Command-path guard, separate mechanism:** verify-on-speed-change handshake —
+   after `setSPISpeed`, issue a cheap status command; on garble, step down and
+   report the achieved rate. Makes over-the-cliff configurations self-limiting.
+
+Public-doc placement (approved): mechanism → `DOCs/SD-CARD-DRIVER-THEORY.md`
+(SPI Implementation); numbers → `DOCs/SD-CARD-PERFORMANCE.md`; discoverability
+paragraph → `README.md` + `.release/README.md`; per-card boundaries → the card
+catalog. All public claims carry measurement conditions (sysclk, method, ±1-tick
+resolution).
+
+Still open (Stephen): overclock arms (> 350 MHz sysclk) to un-censor the Edge
+boundary; the write-capable probe for the wedge inversion.
