@@ -113,6 +113,43 @@ They get **no card records** (see CATALOG-PROCEDURE.md, "Two populations of card
 Their CIDs and measurements live in this round's run notes, because a card record
 asserts re-sweepability and these cards will not be.
 
+### STEP 0a — ONE-TIME: identify the two retained 64 GB units, then mark
+
+**Do this before the five Camera Plus units are handled together, and do it once.**
+
+```bash
+cd tools
+./run_test.sh ../src/UTILS/SD_card_identify.spin2      # card A
+./run_test.sh ../src/UTILS/SD_card_identify.spin2      # card B
+```
+
+**READ FIRST, MARK SECOND.** The order is what makes this a one-time job:
+
+1. Run identify on each of the **two retained** 64 GB cards, one at a time. Note
+   which physical card produced which transcript as you go — the P2 cannot see a
+   highlighter, so this one correspondence is yours to hold for the length of two
+   runs and no longer.
+2. One of them is PSN `$0000_0F14`, the already-catalogued
+   `GigastoneOEM_ASTC_2.0_00000F14_202306`. **Mark that one green.**
+3. The other is the second retained unit. Its transcript's `CARD-ID:` line is what
+   its new card record is keyed on.
+
+Marking *after* reading means green = catalogued **by construction**, matching the
+32 GB pair, and nothing has to be discovered later. Marking first would invert the
+job into working out which card happens to be green.
+
+`SD_card_identify` now emits `SILICON-KEY:`, `CARD-ID:` and a `CATALOG-CARD:` line
+alongside the human-readable designator, so both new card records are built from
+the transcripts rather than retyped from them.
+
+**If neither card reads `$0000_0F14`**, stop and re-check which cards are the
+retained pair before marking anything — the catalogued unit is somewhere in the
+set of five, and marking the wrong one puts a retained card in the deploy pile.
+
+**Do the same for the 32 GB pair if convenient**, though its mapping is already
+PSN-confirmed: GREEN `$0000_01C9`, unmarked `$0000_01C7`. Only the unmarked one's
+card record is owed.
+
 ### ⚠ FOUR RETAINED GIGASTONES, TWO CARD RECORDS — AND GREEN MEANS CATALOGUED
 
 Two pairs are retained, one pair per product. **Only one unit of each pair has ever

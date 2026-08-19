@@ -172,6 +172,33 @@ PRI displayCardID() | sd.cid_t cid, sd.scr_t scr, ...
     ' Line 3: CSD claim + driver warning flags (for analysis)
     debug("L3: CSD claims TRAN_SPEED = ", udec_(sd.getCardMaxSpeed() / 1_000_000), " MHz; cardWarnings() = ", uhex_byte_(sd.cardWarnings()))
 
+    ' CANONICAL KEYS + MACHINE-PARSEABLE IDENTITY (2026-08-19).
+    '
+    ' The designator above is for a human. These lines are the catalog's keys, in
+    ' the same shape SD_performance_benchmark and SD_speed_characterize emit, so a
+    ' new card record is built from a transcript rather than retyped from one.
+    ' That matters most here: this tool is what runs when two physically identical
+    ' units have to be told apart, and its output becomes their card records.
+    '
+    ' The MID stays hex -- mapping it to a manufacturer is a lookup CARD-CATALOG.md
+    ' owns in one place, and it is not a function ($9F is two different brands).
+    debug("  SILICON-KEY: $", uhex_byte_(cid.mid), "_", lstr_(@pnm, 5), "_", ...
+        udec_(cid.prv >> 4), ".", udec_(cid.prv & $0F))
+    ' Month zero-padded: unpadded, 2024/1 and 2024/11 both render "20241".
+    if mdtMonth < 10
+        debug("  CARD-ID: $", uhex_byte_(cid.mid), "_", lstr_(@pnm, 5), "_", ...
+            udec_(cid.prv >> 4), ".", udec_(cid.prv & $0F), "_", uhex_long_(psn), "_", ...
+            udec_(mdtYear), "0", udec_(mdtMonth))
+    else
+        debug("  CARD-ID: $", uhex_byte_(cid.mid), "_", lstr_(@pnm, 5), "_", ...
+            udec_(cid.prv >> 4), ".", udec_(cid.prv & $0F), "_", uhex_long_(psn), "_", ...
+            udec_(mdtYear), udec_(mdtMonth))
+    debug("CATALOG-CARD: tool=card_identify drv=", zstr_(sd.driverVersionString()), ...
+        " mid=$", uhex_byte_(cid.mid), " pnm=", lstr_(@pnm, 5), ...
+        " prv=", udec_(cid.prv >> 4), ".", udec_(cid.prv & $0F), ...
+        " psn=$", uhex_long_(psn), " mdt=", udec_(mdtYear), "/", udec_(mdtMonth), ...
+        " sysclk=", udec_(clkfreq), " spi_hz=", udec_(spiHz))
+
 
 PRI getSDSpecVersion(^sd.scr_t p_scr) : p_version | sdSpec, spec3, spec4, specX
 ' Decode SD spec version from SCR register.
