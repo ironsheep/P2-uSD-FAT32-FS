@@ -33,10 +33,22 @@ the rules are specific.
 
 **When the container hands back, the resume below states:**
 
-1. **The commit SHA to run.** The bench verifies `git log --oneline -1` matches
-   before resuming. This campaign has three times produced transcripts that could
-   not prove which build made them; with two agents alternating, that risk only
-   goes up, and one line of `git log` closes the whole class.
+1. **The source SHA to run.** The bench verifies it before resuming:
+
+   ```bash
+   git log --oneline -1 -- src/ diagnostic-tests/
+   ```
+
+   **Scoped to the source paths deliberately.** A bare `git log -1` names HEAD,
+   which moves every time the container edits a *document* — including this run
+   sheet — so the check would fail spuriously and, worse, would be trained out of
+   people. Scoping it to the paths that produce binaries makes it mean the one
+   thing it should: *is the tree I am about to build from the tree the resume
+   describes?*
+
+   This campaign has three times produced transcripts that could not prove which
+   build made them. Two agents alternating on one tree only raises that risk, and
+   one line of `git log` closes the class.
 2. **What changed and why.**
 3. **Where to resume, and what the change invalidated.** A driver change
    invalidates every completed suite — a certification run is atomic, so it
@@ -50,7 +62,7 @@ the rules are specific.
 
 | | |
 |---|---|
-| **Run this commit** | `9f22a44` — verify with `git log --oneline -1` |
+| **Source SHA to run** | `9f22a44` — verify with `git log --oneline -1 -- src/ diagnostic-tests/` |
 | **Tree** | clean; six gates green |
 | **Resume at** | **Step 1, from the top** |
 
