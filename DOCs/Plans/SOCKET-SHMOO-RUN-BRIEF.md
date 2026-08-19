@@ -1045,10 +1045,17 @@ cycle ever creates.
 Run any binary that does **not** touch the SD pins as the predecessor, then
 `mount_tests` warm.
 
+`diagnostic-tests/SD_null_predecessor.spin2` is built for exactly this: it does
+not include the driver object, touches no pin, and clocks nothing. It carries a
+DAT pad that brings it to **49.7 KB against mount_tests' 47.3 KB**, so the two
+predecessors differ in what they *do* and not in how long they take to download —
+and download time IS the float window under test. A 5 KB predecessor coming back
+clean would have been ambiguous.
+
 ```bash
-# 1. POWER-CYCLE. 2. Run a non-SD binary -- any small program that leaves the SD
-#    pins alone. 3. WITHOUT power cycling:
 cd tools
+# 1. POWER-CYCLE. 2. The null predecessor. 3. WITHOUT power cycling, the reproducer:
+./run_test.sh ../diagnostic-tests/SD_null_predecessor.spin2 -t 60
 ./run_test.sh ../src/regression-tests/SD_RT_mount_tests.spin2 -t 120
 ```
 
@@ -1063,10 +1070,18 @@ Run it twice to be sure, power-cycling before each.
 ### 13b — does time clear it, or only power?
 
 ```bash
-# POWER-CYCLE, run mount_tests (cold, expect clean), then WAIT 120 s doing
-# nothing at all, then run it again WITHOUT power cycling:
+cd tools
+# POWER-CYCLE, run mount_tests (cold, expect clean), then hold 120 s with the P2
+# idle and the card powered, then run the reproducer again -- no power cycle:
+./run_test.sh ../src/regression-tests/SD_RT_mount_tests.spin2 -t 120
+./run_test.sh ../diagnostic-tests/SD_null_predecessor.spin2 -t 200 -D HOLD_120S
 ./run_test.sh ../src/regression-tests/SD_RT_mount_tests.spin2 -t 120
 ```
+
+The hold is done by the P2 rather than by an operator with a watch, so the
+interval is exact and appears in the transcript. Note this run has **two**
+predecessors (a driver session, then the null hold) — if 13a shows the null
+binary alone wedges, re-read this result accordingly.
 
 - **Wedges after the wait** → the state is latched, not a process finishing
 - **Clean after the wait** → something in the card completes on its own, and

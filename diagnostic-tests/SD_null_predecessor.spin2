@@ -1,0 +1,122 @@
+'' =================================================================================================
+''
+''   File....... SD_null_predecessor.spin2
+''   Purpose.... A binary that resets the P2 and touches NOTHING on the SD bus
+''   Author..... Stephen M Moraco
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... AUG 2026
+''   Updated.... 19 AUG 2026
+''
+'' =================================================================================================
+''
+'' WHAT THIS IS FOR
+''
+'' Round 12a turned the Edge-socket wedge (#3240) into a switch: the first binary after a
+'' power cycle runs clean, any binary run afterwards without a power cycle wedges. The
+'' obvious reading is "a prior driver session leaves state on the card". But the wedge
+'' probe runs eight mount/operate/unmount cycles inside ONE power-on and stays clean every
+'' time -- so cycles 2 through 8 are all "after a prior driver session" and none of them
+'' wedge. A prior session is therefore not, by itself, the trigger.
+''
+'' What a wedging run has that an in-binary cycle does not is the RESET WINDOW: roughly a
+'' second in which the P2 drives nothing, the card sits with CS floating and unclocked, and
+'' a new binary is shifted in over serial.
+''
+'' This program isolates that. It creates the reset and the download window and then does
+'' NOTHING to the SD bus -- no driver object, no pin writes, no clocking. Run it as the
+'' predecessor and then run the reproducer:
+''
+''   wedges  -> no driver session is required. The trigger is the reset itself, and the
+''              hypothesis moves off the card's filesystem state and onto the pins
+''   clean   -> a driver session genuinely is required, and the next question is which
+''              part of it
+''
+'' THE SIZE CONFOUND, AND WHY THERE IS A PAD
+''
+'' Download time scales with binary size, and download time IS the float window under
+'' investigation. A 5 KB predecessor would hold the pins floating for a fraction of the
+'' time a 47 KB one does, so a clean result from a tiny binary would be ambiguous: it
+'' could mean "no driver session, no wedge" or merely "not long enough". The DAT pad below
+'' brings this binary into the same size class as SD_RT_mount_tests (~47 KB), so the two
+'' predecessors differ in what they DO and not in how long they take to arrive.
+''
+'' ARMS
+''
+''   (none)        reset, do nothing, exit -- the 13a predecessor
+''   -D HOLD_120S  additionally idle for 120 s before exiting, so a "does waiting clear
+''                 it" test is timed by the P2 rather than by an operator with a watch
+''
+'' This program deliberately does NOT include micro_sd_fat32_fs. Adding it would defeat
+'' the entire purpose -- the object's DAT initialisers and any mount call are exactly the
+'' variable being eliminated.
+''
+'' =================================================================================================
+
+CON
+
+    _CLKFREQ        = 350_000_000
+
+    HOLD_SECONDS    = 120                       ' Used only by the HOLD_120S arm
+
+    ' Pad the binary into SD_RT_mount_tests' size class. See the size-confound note above.
+    PAD_LONGS       = 10_000                    ' 40 KB
+
+DAT
+
+' Ballast. Never read, never written -- present only so this binary takes a
+' comparable time to download. Named so its purpose survives a later reader.
+downloadPad     LONG    0[PAD_LONGS]
+
+PUB go() | idx
+
+'' Reset the P2, touch nothing on the SD bus, and leave.
+
+    debug(" ")
+    debug("======================================================")
+    debug("  SD Null Predecessor")
+    debug("======================================================")
+    debug("  This binary does NOT touch the SD bus: no driver object, no pin")
+    debug("  writes, no clocking. It exists to create a P2 reset and download")
+    debug("  window with no driver session attached.")
+    debug("  SysClk: ", udec_(clkfreq / 1_000_000), " MHz")
+
+#ifdef HOLD_120S
+    debug("  ARM: HOLD_120S -- idling ", udec_(HOLD_SECONDS), " s before exit.")
+    debug("  The card is powered and unclocked throughout.")
+    repeat idx from 1 to HOLD_SECONDS
+        waitms(1000)
+        if idx // 10 == 0
+            debug("    idle ", udec_(idx), " s of ", udec_(HOLD_SECONDS))
+#else
+    debug("  ARM: immediate exit (no hold)")
+#endif
+
+    debug(" ")
+    debug("  Done. Run the reproducer next WITHOUT power-cycling.")
+    debug("END_SESSION")
+
+CON { license }
+
+{{
+ -------------------------------------------------------------------------------------------------
+  MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+  associated documentation files (the "Software"), to deal in the Software without restriction,
+  including without limitation the rights to use, copy, modify, merge, publish, distribute,
+  sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies or
+  substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT
+  NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+  NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+  DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ -------------------------------------------------------------------------------------------------
+}}
