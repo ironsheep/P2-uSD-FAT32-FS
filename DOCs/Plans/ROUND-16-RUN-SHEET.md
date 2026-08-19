@@ -143,19 +143,27 @@ matters:
    10b's arm, already measured, not the missing cell. Your search found no
    instrument for the cell because the driver has no way to reach it.
 
-2. **That prohibition is measured, not precautionary.** Round 8a run 2 built this
-   exact cell by accident — a verified high-speed switch, then a hand-set 25 MHz,
+2. **The cell was tried once and failed hard — though *why* is not established.**
+   Round 8a run 2 built this exact cell by accident — a verified high-speed switch,
+   then a hand-set 25 MHz,
    before that exit was hooked — and every operation after it returned `-7`
-   (`SD_RT_speed_tests` #9/#12). Card on high-speed output timing, host sampling on
-   default-mode timing. Hooking that exit is item 5 of the bundle you just certified.
+   (`SD_RT_speed_tests` #9/#12). Hooking that exit is item 5 of the bundle you just
+   certified.
 
-3. **Reaching the cell needs new machinery *and* a sweep before the sweep.** A
-   debug-only knob that sets the clock without the switch-back, then a read-band
-   phase sweep at hp=7 *inside* verified high-speed mode to find where to sample.
-   Round 12d measured the hp=4 band inside high-speed mode at `[-3..+4]`, centre 0,
-   with the shipped +5 outside it — bands move when the card's mode changes, which
-   is the likeliest reason 8a run 2 stranded. Without that sweep first, the cell
-   returns nothing but `-7` and we would merely be re-running 8a run 2.
+   **The `-7` is measured; the explanation for it is not.** It was attributed to the
+   card sitting on high-speed output timing while the host sampled on default-mode
+   timing, and that inference is shakier than it looked: the round 9b read band at
+   hp=7 is `[-1..12]` — 13 to 14 ticks of a 14-tick bit period, essentially the whole
+   period — and a mode shift the size of the one seen at hp=4 should not strand a
+   band that wide. The write side is a live alternative: test #9 was a
+   `createFileNew`, and the tx teeth at hp=7 sit at `≡ 1 (mod 7)`.
+
+3. **Reaching the cell is a campaign, not an arm.** It needs a debug-only knob that
+   sets the clock without the switch-back, *and* — because we do not know which side
+   failed — both a read-band phase sweep and a tx tooth map at hp=7 *inside* verified
+   high-speed mode. Round 12d showed bands do move with the card's mode (hp=4 inside
+   high speed is `[-3..+4]` centre 0, against `[2..8]` centre +5 outside it), so
+   neither map transfers from the default-mode measurements we hold.
 
 #### Why deferred rather than built now
 
@@ -337,17 +345,23 @@ default.
 
 ---
 
-## Step 3 — decide the policy — ✅ DECIDED (no change in v1.8.0)
+## Step 3 — decide the policy — ⏸ STEPHEN'S CALL, deferred to after step 6
 
-**Decided 2026-08-19 without step 2, because step 2 turned out to be unreachable.**
+**Not decided by the container.** Whether to spend bench time reaching the 16d cell
+is Stephen's decision, and he has asked to make it himself.
 
-v1.8.0 ships the high-speed default **unchanged**: opt-in via `attemptHighSpeed()`,
-now with correct mode bookkeeping and a switch-back on every exit. No driver change,
-so **step 1 does not re-run** and the 534/534 certification stands for steps 4-6.
+**What is not in question:** v1.8.0 changes nothing about the high-speed default —
+it stays opt-in via `attemptHighSpeed()`, now with correct mode bookkeeping and a
+switch-back on every exit. That is the state the driver was just certified in, and no
+driver change is proposed, so **step 1 does not re-run**.
 
-The policy question itself stays open as a product decision for a later release; the
-evidence and the design of the experiment that would settle it live in the punch-list
-entry "Read/write speed policy is undecided".
+**Why the decision waits for step 6 rather than preceding it.** The value of any
+asymmetric policy depends on how many cards actually lose writes in high-speed mode,
+and today that is n=1 per card on three cards — with one of the three already
+withdrawn on re-measurement. Step 6 runs both arms on every working card at no extra
+bench cost, which either makes the 16d campaign clearly worth funding or makes it
+unnecessary. The decision rule and the full cost estimate are in the punch-list entry
+"Read/write speed policy is undecided".
 
 ---
 
@@ -420,8 +434,8 @@ spanning two driver versions.
 
 - [x] Step 0: both 64 GB PSNs recorded, `00000F14` marked green
 - [x] Step 1: **534/534** (session 2, sweep `260819-155926`)
-- [~] Step 2: **deferred** — cell unreachable on the shipped driver; H2's next campaign
-- [x] Step 3: policy decided — **no change in v1.8.0**, high speed stays opt-in
+- [~] Step 2: **deferred** — cell unreachable on the shipped driver; funding the campaign is Stephen's call
+- [~] Step 3: **deferred to after step 6** — no default change in v1.8.0 either way
 - [ ] Step 4: Lerdisk verdict in the Edge socket
 - [ ] Step 5: run variance measured before instance variance; one-shot cards fully captured
 - [ ] Step 6: catalog tables harvested, single driver-version banner

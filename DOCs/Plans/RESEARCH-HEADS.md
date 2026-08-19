@@ -344,9 +344,13 @@ cannot be constructed:
   then `setSPISpeed(25_000_000)` therefore lands in *default mode at 25 MHz*, which
   is 10b's arm, not the missing cell. There is no public path to the cell, and
   `attemptHighSpeed()` takes no frequency argument.
-- **The prohibition is measured.** Round 8a run 2 built the cell by accident, before
-  that exit was hooked, and every operation after it returned `-7` — card on
-  high-speed output timing, host sampling default. Hooking it is v1.8.0 item 5.
+- **The cell was tried once and failed hard, but the explanation is not established.**
+  Round 8a run 2 built it by accident, before that exit was hooked, and every
+  operation after it returned `-7`. Hooking it is v1.8.0 item 5. The `-7` was
+  attributed to a read-timing mismatch, and **that inference is weak**: the 9b read
+  band at hp=7 is `[-1..12]`, essentially the whole 14-tick bit period, which a
+  mode shift the size of hp=4's should not strand. The write side was never ruled
+  out — test #9 was a `createFileNew` and the tx teeth at hp=7 sit at `≡ 1 (mod 7)`.
 - **A previous entry here was wrong** and is retracted: "`effectiveAlignDelay()`
   derives from live `spi_period`, so a per-operation clock change needs no new timing
   machinery." The *align* machinery does adapt per burst; the clock change never
@@ -367,21 +371,33 @@ denies a minimum. It is an empirical question, and 8a run 2 is the only data.
 whichever policy is eventually chosen; v1.8.0 ships the high-speed default unchanged
 and opt-in. What remains is a product decision for a later release.
 
-The experiment, in order, on the **retained** Samsung EVO — no one-shot cards, no
-release clock:
+**Whether to fund it at all is Stephen's call, and it waits for round 16c.** The value
+of asymmetric clocking is a function of how many cards actually lose writes in high
+speed; that is n=1 per card on three cards today, one already withdrawn as variance.
+**16c measures both arms on every working card at no extra bench cost.** Rare write
+loss → the campaign is not worth funding and the default can be decided from the sweep
+alone. Common write loss → it is clearly worth funding. Full decision rule in the
+punch-list entry.
+
+If funded, the campaign runs on the **retained** Samsung EVO — no one-shot cards, no
+release clock — and it is a campaign, not an arm, because we do not know which side
+failed in 8a:
 
 1. **A diagnostic clock knob** that sets the frequency *without* the CMD6
    switch-back, debug-only, following the `debugSetOverspeedAllowed()` precedent.
    Nothing else can reach the cell.
-2. **A read-band phase sweep at hp=7 inside verified high-speed mode.** Round 12d
-   measured the hp=4 band inside high-speed mode at `[-3..+4]` centre 0, three ticks
-   below where the same band sits outside it — bands move with the card's mode, which
-   is the likeliest reason 8a run 2 stranded rather than a physical bar. **If no band
-   exists here, the cell is closed and the asymmetric policy is dead.** That is a
-   real result, not a failed run.
-3. **Then 16d itself** at the band centre, and the rungs between are the more
-   interesting space: hp=5 = 35 MHz and hp=6 = 29.17 MHz are both inside high speed
-   and both spec-legal, and may buy the read gain without the write loss.
+2. **A read-band phase sweep at hp=7 inside verified high-speed mode**, and
+3. **a tx tooth map at hp=7 inside verified high-speed mode.** Neither transfers from
+   the default-mode measurements we hold: round 12d put the hp=4 band inside high
+   speed at `[-3..+4]` centre 0 against `[2..8]` centre +5 outside it. **If neither
+   map yields a workable cell, the asymmetric policy is dead** — a real result, not a
+   failed run.
+4. **Then 16d itself**, and the rungs between are the more interesting space: hp=5 =
+   35 MHz and hp=6 = 29.17 MHz are both inside high speed and both spec-legal, and may
+   buy the read gain without the write loss.
+
+Add a **full re-certification sweep** to the cost, since the knob is a driver change
+and step 1 is atomic. Realistically two bench sessions.
 
 **Any policy must be general, not card-specific** — brand does not predict
 controller, one silicon key carries two labels, and SKUs are re-sourced silently, so
