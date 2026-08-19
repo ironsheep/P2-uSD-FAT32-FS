@@ -6250,6 +6250,19 @@ PRI do_attempt_high_speed() : hs_ok | idx, mismatch
         if mismatch > 0
           DEBUG[CH_HSPEED]("  [do_attempt_high_speed] VERIFICATION FAILED - ", udec_(mismatch), " long mismatches")
           DEBUG[CH_HSPEED]("  [do_attempt_high_speed] Falling back to 25 MHz")
+          ' A CORRUPTING LINK IS NOT A CARD SAYING NO (fixed 2026-08-19).
+          '
+          ' Every other failure exit here sets hs_query_error; this one did not,
+          ' so it returned FALSE with ERROR() == SUCCESS -- which attemptHighSpeed's
+          ' own contract defines as "the card simply said no". A card whose data
+          ' comes back corrupted at 50 MHz would therefore have been reported as a
+          ' card that merely lacks the feature, which is exactly the confusion that
+          ' docstring exists to prevent, on the one path where it matters most.
+          '
+          ' E_IO_ERROR matches every sibling exit: the query failed, the switch
+          ' failed and the verify read failed all report it, and a verify MISMATCH
+          ' is the same class of fault -- the link did not carry the bytes.
+          hs_query_error := E_IO_ERROR
           applySPISpeed(25_000_000)
           applyDefaultSpeedMode()                       ' Card must not stay in high-speed mode either
           sec_in_buf := -1                              ' buf holds the suspect-speed bytes -- must not stay cached as valid

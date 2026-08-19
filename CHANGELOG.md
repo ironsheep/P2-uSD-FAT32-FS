@@ -13,6 +13,15 @@ behave alike, and high-speed mode can be left without stranding the card.
 
 ### Bug Fixes
 
+- **A card that fails high-speed verification now reports why.** `attemptHighSpeed()`
+  documents that `ERROR()` distinguishes a card that declined the feature from one
+  that could not be asked or failed verification. One path did not follow it: when
+  the card switched to high speed but the verification read came back with the wrong
+  data, the driver fell back correctly but reported no error — so a card whose link
+  corrupts data at high speed looked exactly like a card that simply does not offer
+  the feature. `ERROR()` now returns `E_IO_ERROR` on that path, as it already did
+  for every other high-speed failure.
+
 - **A card can be left unusable by the boot process, and now recovers on its own.**
   On boards where the microSD socket shares pins with the boot flash — including
   the P2 Edge — the boot sequence drives those pins before any user code runs, and
