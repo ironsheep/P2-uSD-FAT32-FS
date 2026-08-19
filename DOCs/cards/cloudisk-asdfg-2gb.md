@@ -1,6 +1,6 @@
 # Card: "Cloudisk" 2 GB SDSC (counterfeit twin of Lerdisk asdfg)
 
-**Label:** microSD 2GB Class 4 — "Cloudisk"
+**Label:** microSD 2GB Class 4 — "Cloudisk" (confirmed counterfeit; silicon PNM `"asdfg"`, silicon twin of the Lerdisk)
 **Unique ID:** `Unknown_asdfg_2.2_00001680_202511`
 **Test Date:** 2026-05-18 (initial Edge characterization), 2026-05-27 (External re-characterization)
 **Reporter:** stephen@ironsheep.biz

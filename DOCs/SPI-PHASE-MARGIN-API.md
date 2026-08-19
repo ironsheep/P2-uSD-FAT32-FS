@@ -69,16 +69,21 @@ Returns the current SPI half-period in sysclks (the value the SCK `P_TRANSITION`
 
 Set the signed integer offset added to `spi_period` (= hp) when computing the streamer's `align_delay` (the `WAITX` count before `XINIT`).
 
-- **Default 0:** preserves historical `align_delay = hp` behavior.
-- **Per `p2kbArchIoPinTiming`** the host-side I/O ring round trip is 5-6 sysclks (smart-pin output 1.5-3 + registered input 3-4), so the optimal offset post-Phase-1.5 is **in the +5 to +7 range**, not negative.
+- **Default +5** (changed from 0 in v1.7.1). Chosen from measurement, not prediction: five independent passing-band sweeps — two card families, both sockets, three frequencies — **all centred on +5**. The narrowest measured band was `[+1..+9]` at 35 MHz. The old default of 0 sat on or outside the lower edge at elevated frequencies.
+- **Corroborated by `p2kbArchIoPinTiming`:** the host-side I/O ring round trip is 5-6 sysclks (smart-pin output 1.5-3 + registered input 3-4), predicting an optimum at +5 to +7. The measurement landed inside the prediction.
+- **The hp=4 floor cell is exempt** — positive offsets are withheld there and the historical `align_delay = hp` applies instead. See `debugGetEffectiveAlignDelay` below for why.
 - **Floor:** `align_delay` is clamped to ≥ 2 (cog needs 2 sysclks to execute `WAITX` before `XINIT`).
-- **Range:** caller may pass `[-8, +8]`; out-of-range silently ignored.
+- **Range:** caller may pass `[-8, +16]`; out-of-range silently ignored. The upper limit covers one full bit period (`2*hp` = 14 at the production hp=7) so a sweep can find the band's upper edge — the earlier `+8` limit left the band top unmeasured.
 
 Affects ONLY streamer-driven 512-byte sector transfers (Path B). Does NOT affect single-byte transfers — for Path A see `debugSetSampleMode`.
 
 ### `debugGetEffectiveAlignDelay() : delay`
 
-Returns the streamer-DMA `align_delay` value that will be used on the next streamer-driven sector transfer. Computed as `spi_period + align_delay_offset`, clamped to a minimum of 2.
+Returns the streamer-DMA `align_delay` value that will be used on the next streamer-driven sector transfer — the shared computation, including the floor-cell rule and the `WAITX` minimum of 2.
+
+**The hp=4 floor-cell rule.** At `spi_period = 4`, positive offsets are *not* applied; that cell keeps the historical `align_delay = hp`. The passing bands were measured at hp 5..7 only, and at hp=4 the default +5 exceeds the whole bit period (`2*hp` = 8 sysclks) — it was measured breaking the CMD6 high-speed verify read. Negative (diagnostic) offsets still apply. hp=4 arises at the 50 MHz high-speed request and at low-sysclk 25 MHz configurations (e.g. 200 MHz sysclk); both keep their long-certified alignment until that cell is characterized.
+
+> **Measurement status of the floor cell (2026-08-18).** A sweep at hp=4 found a real band, `[+2..+8]` centred +5, on three of four cards — but it was taken in **default speed mode driven above spec**, which is a different card state from the verified high-speed mode where hp=4 actually occurs in production. It therefore does *not* yet justify lifting the rule. A sweep inside high-speed mode is the outstanding measurement.
 
 ### `debugSetTxAlignDelay(pad)`
 
@@ -92,6 +97,44 @@ Affects ONLY write-path streamer bursts. The read path's phase pad remains `alig
 ### `debugGetTxAlignDelay() : pad`
 
 Returns the configured `tx_align_delay` value (before the use-site floor clamp).
+
+---
+
+## Guard-lifting APIs (v1.7.1)
+
+Two production guards exist because measurement found real hazards behind them.
+Both can be lifted — but only by a characterization tool that knows what it is
+re-enabling. **Production applications must not call either.**
+
+### `debugSetOverspeedAllowed(enabled)`
+
+Allows `setSPISpeed()` targets above the production ceiling (the card's declared
+`TRAN_SPEED`, capped at the SD SPI-mode 25 MHz; 50 MHz while verified high-speed
+mode is active).
+
+The bound exists because the socket-timing campaign measured **silent
+whole-sector write corruption** above spec: the `tx_align_delay` losing phase
+moves with hp, and the shipped default lands on it at hp=5 / 35 MHz. Nothing at
+or below the ceiling can reach that configuration. Lifting the bound puts it back
+in reach — which is the point when you are mapping it, and a defect the rest of
+the time.
+
+Zero restores the bound. The socket shmoo, write probe and phase sweep all call
+this.
+
+### `debugSetAlignFloorRuleEnabled(enabled)`
+
+Enables (default) or disables the hp=4 floor-cell rule described under
+`debugGetEffectiveAlignDelay`.
+
+The rule makes the floor cell **unmeasurable** as a side effect of making it
+safe: with positive offsets withheld, every positive offset collapses to the same
+effective `align_delay`, so a sweep there returns a flat, meaningless grid. Pass
+zero to lift the rule and actually measure the band.
+
+Disabling it re-enables the configuration that broke the CMD6 high-speed verify
+read during v1.7.1 certification. That is the intent — a sweep is looking for
+where the edges are — but nothing outside a characterization run belongs here.
 
 ---
 
@@ -148,10 +191,10 @@ For full per-cell + margin-summary output, see `diagnostic-tests/SD_phase_sweep_
 At default settings (consumer does NOT export `SD_INCLUDE_DEBUG`, or does export it but does not call any `debug*` setters):
 
 - Path A: MISO `WXPIN[5]` auto-by-hp with threshold=5 → on-edge for hp ≥ 6, pre-edge for hp ≤ 5
-- Path B reads: `align_delay = spi_period` (offset=0)
+- Path B reads: `align_delay = spi_period + 5` (offset=+5, the measured band centre) — **except at hp=4**, where the floor-cell rule keeps `align_delay = spi_period`
 - Path B writes: `tx_align_delay = 4` — **characterized, not a floor value.** See below.
 
-These defaults reproduce pre-Phase-2/3 byte-on-the-wire behavior at sysclk=350 MHz and are validated against the regression suite. The production driver does not expose any tunable surface for these — the right values are hardcoded internally.
+These defaults are validated against the regression suite (530/530 at 350 MHz sysclk on the certification card, and 532/532 on a second 119GB / 64-sectors-per-cluster geometry). Note that the read offset default changed in v1.7.1 from 0 to +5, so byte-on-the-wire output is **no longer identical** to pre-Phase-2/3 behaviour — that equivalence was a v1.7.0 property, deliberately given up in exchange for centring the read alignment on its measured band. The production driver does not expose any tunable surface for these — the right values are hardcoded internally.
 
 ### The write-path pad was characterized on the bench (v1.7.0, 2026-08-11)
 
@@ -160,6 +203,32 @@ These defaults reproduce pre-Phase-2/3 byte-on-the-wire behavior at sysclk=350 M
 Measured on Card 2b (SN `$0000_0F14`) in the P2 Edge slot at 350 MHz sysclk / 25 MHz SPI (hp=7), across three `SD_tx_phase_shmoo` runs: pad-to-phase is a **sawtooth of period hp**, because SCK starts on the next base-period boundary after `WYPIN` while the streamer start moves continuously — so only hp distinct phases exist no matter how far the pad is swept. Exactly one of them loses: **pad ≡ 1 (mod 7)**, which failed at pads 8, 15, 22 and 29. All 24 other measured points passed.
 
 4 is the maximal mod-7 distance (3) from the losing phase on both sides. The old floor value of 2 sat one sysclk from the cliff.
+
+### What the five-card survey added (2026-08-18)
+
+The v1.7.0 characterization above was measured on **one card**. A survey across
+five cards revised it in three ways that matter:
+
+- **The losing phase is DRIVER-side, not card-side.** Every affected card fails
+  at identical pads. But **only three of five cards express it** — the other two
+  tolerate the marginal phase. So the tooth is a property of our timing that some
+  cards are sensitive to, not a property of any one card.
+- **The losing residue MOVES with hp.** Measured: pads `8, 22` at hp=14; `8, 15`
+  at hp=7; **`4, 9` at hp=5**. The spacing is hp, but three points do not
+  determine the residue as a function of hp, and it should not be extrapolated.
+- **Consequently the shipped default of 4 lands ON the losing phase at hp=5**
+  (35 MHz). Distance-from-cliff computed at one frequency does not transfer to
+  another.
+
+**Why that is not a shipped defect:** hp=5 is above the SD SPI-mode ceiling, and
+since v1.7.1 the production speed bound makes it unreachable — a user cannot
+arrive there without `debugSetOverspeedAllowed()`. Any future change that raises
+production SPI speed **must re-derive this pad for its hp** before shipping.
+
+**Open at hp=4.** The pad has never been characterized at hp=4, which is the cell
+verified CMD6 high-speed mode runs in. Round 10b measured writes regressing
+sharply at that frequency on two of three cards while reads gained up to +47%;
+whether the pad is implicated is an open measurement, not a conclusion.
 
 **Why the fix matters more than the pad.** With `RDFAST` hoisted out of the phase-critical window, every instruction between the SCK reset and `XINIT` is a fixed 2-clock cog operation, so `XINIT` sits at a compile-time-constant offset from the reset. That is what makes a *single* correct default possible; before the fix, the offset included a variable-latency instruction and no pad value could have been correct for every build.
 

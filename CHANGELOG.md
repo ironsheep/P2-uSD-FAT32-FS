@@ -5,6 +5,65 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Cards that sat at the edge of the driver's read timing now carry full margin, both
+SD sockets on a board behave alike, and high-speed mode can be left without
+stranding the card.
+
+### Changes
+
+- **Streamer read alignment moved to the centre of its measured passing band.**
+  The phase pad the read path uses to sample MISO previously sat at the band's
+  lower edge, which is where cards with slow clock-to-output timing, and sockets
+  with longer wiring, ran out of margin first. Cards that were marginal on an
+  external adapter socket, or at elevated clocks, now sit in the middle of the
+  window on both sockets.
+
+- **`setSPISpeed()` is bounded at the card's declared maximum**, itself capped at
+  the SD SPI-mode 25 MHz, and lifted to 50 MHz only while verified high-speed mode
+  is active. Requests above the bound return the clamped frequency rather than the
+  request. Above-spec operation was measured producing silent whole-sector write
+  corruption on some cards, and is now reserved for characterization tools via
+  `debugSetOverspeedAllowed()` under `SD_INCLUDE_DEBUG`.
+
+### Bug Fixes
+
+- **Leaving high-speed mode no longer strands the card.** The CMD6 high-speed
+  switch is sticky at the card: a host that lowered its clock without switching the
+  card back left the two running on different timings, and every subsequent
+  operation failed with `E_IO_ERROR` until the card was re-initialised. All four
+  ways out of high-speed mode — a failed switch, a failed verification, a later
+  `setSPISpeed()`, and `unmount()` — now switch the card back.
+
+- **`unmount()` returns the card in default speed mode**, rather than handing the
+  next user a card in a mode they never asked for.
+
+### Breaking Changes
+
+- **`isHighSpeedActive()` reports the card's mode, not a clock threshold.** It
+  previously answered `TRUE` only at 50 MHz or above. The SPI clock is
+  `sysclk / (2 x hp)` with integer `hp`, so most system clocks cannot produce
+  exactly 50 MHz — at 350 MHz sysclk high-speed mode runs at 43.75 MHz, and the old
+  test answered `FALSE` while the mode was genuinely active. Callers that used it
+  as a proxy for "is the clock fast" should read `getSPIFrequency()` instead.
+
+### New Features
+
+- **`debugSetOverspeedAllowed()`** and **`debugSetAlignFloorRuleEnabled()`**
+  (`SD_INCLUDE_DEBUG`) lift the two production guards described above for
+  characterization work. Documented in `DOCs/SPI-PHASE-MARGIN-API.md`. Production
+  applications should not call either.
+
+### Documentation
+
+- **`SD-CARD-PERFORMANCE.md` section 7 stated that CMD6 High Speed mode "fails on
+  all tested cards". That was wrong.** Of four modern cards retested, three
+  negotiate high speed and hold it at 43.75 MHz. Sequential reads gain up to 47%.
+  Write behaviour at that clock varies by card and is under investigation, so the
+  driver still does not negotiate high speed on its own — `attemptHighSpeed()`
+  remains opt-in.
+
 ## [1.7.0] - 2026-08-14
 
 Data-losing file operations are fixed, failures the driver detected but discarded are now reported, and files a PC wrote behave correctly.

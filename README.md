@@ -119,6 +119,8 @@ Raw SPI efficiency reaches 80% of theoretical maximum (2,427 / 3,052 KB/s). Mult
 
 > **Sysclk and performance:** Both 350 MHz and 250 MHz sysclk produce the same 25 MHz SPI clock, but higher sysclk reduces Spin2 inter-transfer overhead between SPI bursts, yielding 10-20% better file throughput. For best performance, use `_CLKFREQ = 350_000_000`. See the [Performance Guide](DOCs/SD-CARD-PERFORMANCE.md) for detailed analysis.
 
+> **Socket timing:** Two sockets wired to the same P2 can differ measurably in signal timing — on our bench, an external header-wired adapter adds a ~3 ns-class round-trip delay over the P2 Edge module's onboard socket. At the standard 25 MHz both carry wide margin, but a card that is itself timing-marginal may misbehave in one socket and work in the other. If you see socket-dependent card behavior, see [Socket Timing Differences](DOCs/SD-CARD-PERFORMANCE.md#8-socket-timing-differences) and the *Receive Alignment and Socket Timing* section of the [Theory of Operations](DOCs/SD-CARD-DRIVER-THEORY.md). Since v1.7.1 the read-path alignment sits at the centre of its measured passing band rather than the lower edge, which equalises read margin between sockets; socket-dependent behaviour can still occur on cards whose own timing is marginal, and one such case remains under investigation.
+
 ## Project Structure
 
 ```
@@ -178,7 +180,7 @@ P2-uSD-FAT32-FS/
 - **8.3 filenames only** — no long filename (LFN) support
 - **SDXC cards need reformatting** — cards >32 GB ship as exFAT; use the included format utility (no PC needed)
 - **SPI mode only** — no SD native 4-bit bus mode
-- **25 MHz SPI maximum** — CMD6 High Speed mode switch fails on all tested cards
+- **25 MHz SPI by default** — the SD specification's SPI-mode ceiling, and where the driver clamps. CMD6 High Speed mode does work on many cards (three of four modern cards retested negotiate it, reaching 43.75 MHz at 350 MHz sysclk, with sequential reads gaining up to 47%), but it is opt-in via `attemptHighSpeed()` and the driver never negotiates it automatically — write behaviour at that clock varies by card and is under investigation. See [Key Observations](DOCs/SD-CARD-PERFORMANCE.md#7-key-observations).
 
 ### Card Size Support
 

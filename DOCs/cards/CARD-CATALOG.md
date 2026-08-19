@@ -129,34 +129,34 @@ This section documents ALL fields available from SD card registers and indicates
 
 > **Note (audited 2026-05-18):** Rating **D** previously read "MID $27 triggers 20 MHz SPI limit." That MID-based SPI derate was never implemented in the driver and has been removed (see Driver Usage note above). **D** is now defined by measured throughput.
 
-| Card ID | Manufacturer | Product | Capacity | Speed | Test Status |
-|---------|-------------|---------|----------|:-----:|-------------|
-| SanDisk_SN64G_8.6_7E650771_202211 | SanDisk ($03) | SN64G | 64 GB | **A** | PASS |
-| SanDisk_SN128_8.0_F79E34F6_201912 | SanDisk ($03) | SN128 | 128 GB | **A** | PASS |
-| Longsys/Lexar_MSSD0_6.1_33549024_202411 | Lexar (Longsys $AD) | MSSD0 | 64 GB | **A** | PASS |
-| Longsys/Lexar_MSSD0_6.1_34490F1E_202504 | Lexar (Longsys $AD) | MSSD0 | 128 GB | **A** | PASS |
-| Samsung_JD1Y7_3.0_D27654A6_202512 | Samsung ($1B) | JD1Y7 | 128 GB | **A** | PASS |
-| Samsung_GD4QT_3.0_C0305565_201805 | Samsung ($1B) | GD4QT | 128 GB | **B** | PASS |
-| SanDisk_AGGCF_8.0_E05C352B_201707 | SanDisk ($03) | AGGCF | 128 GB | **B** | PASS |
-| SanDisk_AGGCE_8.0_DD1C1144_201703 | SanDisk ($03) | AGGCE | 64 GB | **B** | PASS |
-| GigastoneOEM_ASTC_2.0_00000F14_202306 | Gigastone (OEM $12) | ASTC | 64 GB | **B** | PASS |
-| SanDisk_SA16G_8.0_93E9C0A1_202511 | SanDisk ($03) | SA16G | 16 GB | **B** | PASS |
-| Transcend_00000_0.0_000001C9_202307 | Gigastone (Transcend $74) | 00000 | 32 GB | **C** | PASS |
-| Unknown_00000_0.0_0001B9D5_202109 | Gigastone (Shared OEM $9F) | 00000 | 8 GB | **C** | PASS |
-| BudgetOEM_SD16G_2.0_000003FB_202502 | Gigastone (Budget OEM $00) | SD16G | 16 GB | **C** | PASS |
-| Kingston_SD8GB_3.0_43F65DC9_201504 | Kingston ($41) | SD8GB | 8 GB | **C** | PASS |
-| SanDisk_SU08G_8.0_0AA81F11_201010 | Unknown (claims SanDisk $03) - **suspect counterfeit, needs re-characterization** | SU08G | 8 GB | **C** | PASS |
-| Samsung_00000_1.0_D9FB539C_201408 | **LIKELY COUNTERFEIT** — Samsung MID `$1B` with placeholder PNM `"00000"` (brand/PNM mismatch) | 00000 | 8 GB | **C** | PASS |
-| SanDisk_SS08G_3.0_DAAEE8AD_201509 | SanDisk ($03) - Taiwan | SS08G | 8 GB | **C** | PASS |
-| SharedOEM_SPCC_0.7_00940105_202507 | Silicon Power (Shared OEM $9F) | SPCC | 64 GB | **A** | PASS |
-| Longsys/Lexar_USD00_2.0_35841E2E_202507 | Amazon Basics (Longsys $AD) | USD00 | 64 GB | **A** | PASS |
-| SanDisk_SH32G_8.0_5BFECCD8_202508 | SanDisk ($03) | SH32G | 32 GB | **A** | PASS |
-| SanDisk_WX64G_8.0_EEBAD6C0_202403 | SanDisk ($03) — WD subsidiary | WX64G | 64 GB | **A** | PASS |
-| Phison_SD16G_3.0_01CD5CF5_201808 | PNY (Phison $27) | SD16G | 16 GB | **D** | PASS |
-| Phison_SD16G_3.0_DA00094B_201610 | Sony (Phison $27) - Taiwan | SD16G | 16 GB | **D** | PASS |
-| SanDisk_SU01G_8.0_006CD5B2_200706 | SanDisk ($03) — Industrial SDSC | SU01G | 1 GB | **E** | **FAIL** (v1.5.1, 350 MHz) |
-| Unknown_asdfg_2.2_000001F4_202512 | **CONFIRMED COUNTERFEIT** — MID $05 unknown, PNM "asdfg" (label "Lerdisk") | asdfg | 1 GB | **E (FAIL) / X (PASS 25/25)** | **External only** — Edge fails raw_sector_tests 1/14 (#3240 wedge); External passes all 25 suites 467/467. See lerdisk-asdfg-1gb.md for full External regression + benchmarks (350+250). |
-| Unknown_asdfg_2.2_00001680_202511 | **CONFIRMED COUNTERFEIT** — MID $05 unknown, PNM "asdfg" (label "Cloudisk"); silicon twin of Lerdisk | asdfg | 2 GB | **E (FAIL) / X (PASS 25/25)** | **External only** — same Edge-socket wedge as Lerdisk; External passes all 25 suites 467/467 in a single run. See cloudisk-asdfg-2gb.md for full External regression + benchmarks (350+250). |
+| Card ID | Label (what is printed on the card) | Manufacturer | Product | Capacity | Speed | Test Status |
+|---------|-------------------------------------|-------------|---------|----------|:-----:|-------------|
+| SanDisk_SN64G_8.6_7E650771_202211 | SanDisk Extreme 64GB U3 A2 microSD XC I V30 | SanDisk ($03) | SN64G | 64 GB | **A** | PASS |
+| SanDisk_SN128_8.0_F79E34F6_201912 | SanDisk 128GB Nintendo Switch microSD XC I | SanDisk ($03) | SN128 | 128 GB | **A** | PASS |
+| Longsys/Lexar_MSSD0_6.1_33549024_202411 | Lexar A1 V30 U3 64GB microSD XC (Red card) | Lexar (Longsys $AD) | MSSD0 | 64 GB | **A** | PASS |
+| Longsys/Lexar_MSSD0_6.1_34490F1E_202504 | Lexar PLAY A2 128GB microSD XC (Blue card) | Lexar (Longsys $AD) | MSSD0 | 128 GB | **A** | PASS |
+| Samsung_JD1Y7_3.0_D27654A6_202512 | Samsung Pro Endurance microSD XC I U3 V30 | Samsung ($1B) | JD1Y7 | 128 GB | **A** | PASS |
+| Samsung_GD4QT_3.0_C0305565_201805 | Samsung EVO Select microSD XC I U3 | Samsung ($1B) | GD4QT | 128 GB | **B** | PASS |
+| SanDisk_AGGCF_8.0_E05C352B_201707 | SanDisk Extreme PRO 128GB microSD XC I V30 U3 A1 | SanDisk ($03) | AGGCF | 128 GB | **B** | PASS |
+| SanDisk_AGGCE_8.0_DD1C1144_201703 | SanDisk Extreme PRO 64GB microSD XC I V30 U3 | SanDisk ($03) | AGGCE | 64 GB | **B** | PASS |
+| GigastoneOEM_ASTC_2.0_00000F14_202306 | Gigastone "Camera Plus" microSD XC I, A1 V30 U3 64GB | Gigastone (OEM $12) | ASTC | 64 GB | **B** | PASS |
+| SanDisk_SA16G_8.0_93E9C0A1_202511 | SanDisk Industrial microSD HC I, U1 C10, 16GB | SanDisk ($03) | SA16G | 16 GB | **B** | PASS |
+| Transcend_00000_0.0_000001C9_202307 | Gigastone 32GB microSD HC I A1 U1 (10) | Gigastone (Transcend $74) | 00000 | 32 GB | **C** | PASS |
+| Unknown_00000_0.0_0001B9D5_202109 | Gigastone 10x High Endurance 8GB MLC microSD HC I U1 | Gigastone (Shared OEM $9F) | 00000 | 8 GB | **C** | PASS |
+| BudgetOEM_SD16G_2.0_000003FB_202502 | Gigastone 10x High Endurance 16GB MLC microSD HC I U3 V30 4K | Gigastone (Budget OEM $00) | SD16G | 16 GB | **C** | PASS |
+| Kingston_SD8GB_3.0_43F65DC9_201504 | Kingston 8GB microSD HC I ui (10) "Taiwan" F(c)o | Kingston ($41) | SD8GB | 8 GB | **C** | PASS |
+| SanDisk_SU08G_8.0_0AA81F11_201010 | microSD HC 8GB (4) - Chinese text, no brand - Card #1 | Unknown (claims SanDisk $03) - **suspect counterfeit, needs re-characterization** | SU08G | 8 GB | **C** | PASS |
+| Samsung_00000_1.0_D9FB539C_201408 | Unlabeled 8GB microSD (Chinese text/no brand) - Card #2 | **LIKELY COUNTERFEIT** — Samsung MID `$1B` with placeholder PNM `"00000"` (brand/PNM mismatch) | 00000 | 8 GB | **C** | PASS |
+| SanDisk_SS08G_3.0_DAAEE8AD_201509 | SanDisk 8GB (4) microSD HC, Made in Taiwan | SanDisk ($03) - Taiwan | SS08G | 8 GB | **C** | PASS |
+| SharedOEM_SPCC_0.7_00940105_202507 | SP Elite microSD XC UHS-I U1 (10) | Silicon Power (Shared OEM $9F) | SPCC | 64 GB | **A** | PASS |
+| Longsys/Lexar_USD00_2.0_35841E2E_202507 | Amazon Basics microSD XC I (10) U3 A2 V30 | Amazon Basics (Longsys $AD) | USD00 | 64 GB | **A** | PASS |
+| SanDisk_SH32G_8.0_5BFECCD8_202508 | SanDisk MAX ENDURANCE microSD HC I U3 V30 (10) | SanDisk ($03) | SH32G | 32 GB | **A** | PASS |
+| SanDisk_WX64G_8.0_EEBAD6C0_202403 | Western Digital WD Purple QD101 microSD XC I U1 (10) 64GB | SanDisk ($03) — WD subsidiary | WX64G | 64 GB | **A** | PASS |
+| Phison_SD16G_3.0_01CD5CF5_201808 | PNY 16GB microSD HC I | PNY (Phison $27) | SD16G | 16 GB | **D** | PASS |
+| Phison_SD16G_3.0_DA00094B_201610 | Sony 16GB microSD HC (10) i U3 SR-16D, Made in Taiwan | Sony (Phison $27) - Taiwan | SD16G | 16 GB | **D** | PASS |
+| SanDisk_SU01G_8.0_006CD5B2_200706 | microSD 1GB — SanDisk Industrial SU series | SanDisk ($03) — Industrial SDSC | SU01G | 1 GB | **E** | **FAIL** (v1.5.1, 350 MHz) |
+| Unknown_asdfg_2.2_000001F4_202512 | microSD 1GB Class 4 — "Lerdisk" | **CONFIRMED COUNTERFEIT** — MID $05 unknown, PNM "asdfg" (label "Lerdisk") | asdfg | 1 GB | **E (FAIL) / X (PASS 25/25)** | **External only** — Edge fails raw_sector_tests 1/14 (#3240 wedge); External passes all 25 suites 467/467. See lerdisk-asdfg-1gb.md for full External regression + benchmarks (350+250). |
+| Unknown_asdfg_2.2_00001680_202511 | microSD 2GB Class 4 — "Cloudisk" | **CONFIRMED COUNTERFEIT** — MID $05 unknown, PNM "asdfg" (label "Cloudisk"); silicon twin of Lerdisk | asdfg | 2 GB | **E (FAIL) / X (PASS 25/25)** | **External only** — same Edge-socket wedge as Lerdisk; External passes all 25 suites 467/467 in a single run. See cloudisk-asdfg-2gb.md for full External regression + benchmarks (350+250). |
 
 ---
 
@@ -235,29 +235,29 @@ Cards tested with `diagnostic-tests/SD_speed_characterize.spin2` have measured i
 - **MEDIUM** = 100-500 KB/s (adequate for most embedded uses)
 - **LOW** = <100 KB/s (slow controller, SPI clock not the bottleneck)
 
-| Card | Manufacturer | Capacity | Throughput | Latency | Class | Max SPI |
-|------|-------------|----------|------------|---------|-------|---------|
-| Longsys_USD00 | Amazon Basics ($AD) | 64 GB | — | — | — | not yet tested |
-| SanDisk_SN64G | SanDisk ($03) | 64 GB | — | — | — | not yet tested |
-| SanDisk_SN128 | SanDisk ($03) | 128 GB | **780 KB/s** | 0.66 ms | HIGH | 25 MHz |
-| Longsys_MSSD0 | Lexar ($AD) | 64 GB | **1,059 KB/s** | 0.48 ms | HIGH | 25 MHz |
-| Samsung_GD4QT | Samsung ($1B) | 128 GB | **783 KB/s** | 0.65 ms | HIGH | 25 MHz |
-| SanDisk_AGGCF | SanDisk ($03) | 128 GB | — | — | — | not yet tested |
-| SanDisk_AGGCE | SanDisk ($03) | 64 GB | **866 KB/s** | 0.59 ms | HIGH | 25 MHz |
-| GigastoneOEM_ASTC | Gigastone ($12) | 64 GB | **944 KB/s** | 0.54 ms | HIGH | 25 MHz |
-| SanDisk_SA16G | SanDisk ($03) | 16 GB | **824 KB/s** | 0.62 ms | HIGH | 25 MHz |
-| Transcend_00000 | Gigastone ($74) | 32 GB | — | — | — | not yet tested |
-| Unknown_00000 | Gigastone ($9F) | 8 GB | — | — | — | not yet tested |
-| BudgetOEM_SD16G | Gigastone ($00) | 16 GB | **368 KB/s** | 1.39 ms | MEDIUM | 25 MHz |
-| Kingston_SD8GB | Kingston ($41) | 8 GB | — | — | — | not yet tested |
-| SanDisk_SU08G | Chinese #1 ($03) | 8 GB | — | — | — | not yet tested |
-| Samsung_00000 | Chinese #2 ($1B) | 8 GB | — | — | — | not yet tested |
-| SanDisk_SS08G | SanDisk Taiwan ($03) | 8 GB | **687 KB/s** | 0.75 ms | MED | 25 MHz |
-| SharedOEM_SPCC | Silicon Power ($9F) | 64 GB | **967 KB/s** | 0.53 ms | HIGH | 25 MHz |
-| SanDisk_SH32G | SanDisk ($03) | 32 GB | **~951 KB/s** | 0.54 ms | HIGH | 25 MHz |
-| SanDisk_WX64G | WD Purple ($03) | 64 GB | — | — | — | not yet tested |
-| Phison_SD16G (PNY) | PNY ($27) | 16 GB | **31.3 KB/s** | 16.0 ms | LOW | 25 MHz |
-| Phison_SD16G (Sony) | Sony ($27) | 16 GB | **714 KB/s** | 0.72 ms | MED | 25 MHz |
+| Card | Label (what is printed on the card) | Manufacturer | Capacity | Throughput | Latency | Class | Max SPI |
+|------|-------------------------------------|-------------|----------|------------|---------|-------|---------|
+| Longsys_USD00 | Amazon Basics microSD XC I (10) U3 A2 V30 | Amazon Basics ($AD) | 64 GB | — | — | — | not yet tested |
+| SanDisk_SN64G | SanDisk Extreme 64GB U3 A2 microSD XC I V30 | SanDisk ($03) | 64 GB | — | — | — | not yet tested |
+| SanDisk_SN128 | SanDisk 128GB Nintendo Switch microSD XC I | SanDisk ($03) | 128 GB | **780 KB/s** | 0.66 ms | HIGH | 25 MHz |
+| Longsys_MSSD0 | Lexar A1 V30 U3 64GB microSD XC (Red card) | Lexar ($AD) | 64 GB | **1,059 KB/s** | 0.48 ms | HIGH | 25 MHz |
+| Samsung_GD4QT | Samsung EVO Select microSD XC I U3 | Samsung ($1B) | 128 GB | **783 KB/s** | 0.65 ms | HIGH | 25 MHz |
+| SanDisk_AGGCF | SanDisk Extreme PRO 128GB microSD XC I V30 U3 A1 | SanDisk ($03) | 128 GB | — | — | — | not yet tested |
+| SanDisk_AGGCE | SanDisk Extreme PRO 64GB microSD XC I V30 U3 | SanDisk ($03) | 64 GB | **866 KB/s** | 0.59 ms | HIGH | 25 MHz |
+| GigastoneOEM_ASTC | Gigastone "Camera Plus" microSD XC I, A1 V30 U3 64GB | Gigastone ($12) | 64 GB | **944 KB/s** | 0.54 ms | HIGH | 25 MHz |
+| SanDisk_SA16G | SanDisk Industrial microSD HC I, U1 C10, 16GB | SanDisk ($03) | 16 GB | **824 KB/s** | 0.62 ms | HIGH | 25 MHz |
+| Transcend_00000 | Gigastone 32GB microSD HC I A1 U1 (10) | Gigastone ($74) | 32 GB | — | — | — | not yet tested |
+| Unknown_00000 | Gigastone 10x High Endurance 8GB MLC microSD HC I U1 | Gigastone ($9F) | 8 GB | — | — | — | not yet tested |
+| BudgetOEM_SD16G | Gigastone 10x High Endurance 16GB MLC microSD HC I U3 V30 4K | Gigastone ($00) | 16 GB | **368 KB/s** | 1.39 ms | MEDIUM | 25 MHz |
+| Kingston_SD8GB | Kingston 8GB microSD HC I ui (10) "Taiwan" F(c)o | Kingston ($41) | 8 GB | — | — | — | not yet tested |
+| SanDisk_SU08G | microSD HC 8GB (4) - Chinese text, no brand - Card #1 | Chinese #1 ($03) | 8 GB | — | — | — | not yet tested |
+| Samsung_00000 | Unlabeled 8GB microSD (Chinese text/no brand) - Card #2 | Chinese #2 ($1B) | 8 GB | — | — | — | not yet tested |
+| SanDisk_SS08G | SanDisk 8GB (4) microSD HC, Made in Taiwan | SanDisk Taiwan ($03) | 8 GB | **687 KB/s** | 0.75 ms | MED | 25 MHz |
+| SharedOEM_SPCC | SP Elite microSD XC UHS-I U1 (10) | Silicon Power ($9F) | 64 GB | **967 KB/s** | 0.53 ms | HIGH | 25 MHz |
+| SanDisk_SH32G | SanDisk MAX ENDURANCE microSD HC I U3 V30 (10) | SanDisk ($03) | 32 GB | **~951 KB/s** | 0.54 ms | HIGH | 25 MHz |
+| SanDisk_WX64G | Western Digital WD Purple QD101 microSD XC I U1 (10) 64GB | WD Purple ($03) | 64 GB | — | — | — | not yet tested |
+| Phison_SD16G (PNY) | PNY 16GB microSD HC I | PNY ($27) | 16 GB | **31.3 KB/s** | 16.0 ms | LOW | 25 MHz |
+| Phison_SD16G (Sony) | Sony 16GB microSD HC (10) i U3 SR-16D, Made in Taiwan | Sony ($27) | 16 GB | **714 KB/s** | 0.72 ms | MED | 25 MHz |
 
 **Tested: 12 of 23 cards**
 

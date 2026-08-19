@@ -183,7 +183,7 @@ Class 10, U1, V10, SPI 25 MHz  [formatted by P2FMTER]
 
 ### kingston-sd8gb-8gb
 
-**Label:** Kingston 8GB microSD HC I ui (10) "Taiwan"
+**Label:** Kingston 8GB microSD HC I ui (10) "Taiwan" F(c)o
 
 ```
 Kingston SD8GB SDHC 7GB [FAT32] SD 3.x rev3.0 SN:43F65DC9 2015/04
@@ -247,7 +247,7 @@ Class 10, U3, V0, SPI 25 MHz
 
 ### lerdisk-asdfg-1gb
 
-**Label:** "Lerdisk" 1GB Class 4 microSD (suspected counterfeit; silicon PNM `"asdfg"`)
+**Label:** microSD 1GB Class 4 — "Lerdisk" (suspected counterfeit; silicon PNM `"asdfg"`)
 
 ```
 Unknown asdfg SDSC 960MB [FAT32] SD 1.x rev2.2 SN:$0000_01F4 2025/12
@@ -255,6 +255,32 @@ Class 10, U1, V0, SPI 21 MHz  [P2FMTER]
 ```
 
 > SPI detuned by probe-fix (CSD claims 25 MHz; settled 21.875 MHz @ sysclk 350, 20.833 MHz @ sysclk 250). `cardWarnings() = $04` (`CW_NO_DATA_CRC`). Counterfeit classifier score 15.
+
+---
+
+### cloudisk-asdfg-2gb
+
+**Label:** microSD 2GB Class 4 — "Cloudisk" (confirmed counterfeit; silicon PNM `"asdfg"`, silicon twin of the Lerdisk)
+
+```
+Unknown asdfg SDSC 1GB [FAT32] SD 1.x rev2.2 SN:$0000_1680 2025/11
+Class 4, U0, V0, SPI 21 MHz  [P2FMTER]
+```
+
+> Silicon twin of the Lerdisk: same CID layout, sequential MDT and PSN, same probe-settled SPI ceiling, same dummy-CRC handling, same Edge-socket wedge. `cardWarnings() = $04` (`CW_NO_DATA_CRC`). Counterfeit classifier score 12-16. **External connector only** — see `cloudisk-asdfg-2gb.md`.
+
+---
+
+### sandisk-su01g-1gb
+
+**Label:** microSD 1GB — SanDisk Industrial SU series
+
+```
+SanDisk SU01G SDSC 1GB SD 2.0 rev8.0 SN:$006C_D5B2 2007/06
+Class 2, U0, V0, SPI 25 MHz
+```
+
+> Legitimate SDSC silicon (June 2007), unlike the two `asdfg` cards above — it sits in Rating E for its CSD v1.0 architecture, not for counterfeit indicators. **Not in our physical possession** (customer's card, Italy), so it cannot be re-run; entries for it are historical.
 
 ---
 

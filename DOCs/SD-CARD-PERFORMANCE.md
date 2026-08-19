@@ -13,6 +13,7 @@ Comprehensive card identification, compatibility, and performance rankings for t
 - [5. Tested Card Library](#5-tested-card-library)
 - [6. Performance Rankings](#6-performance-rankings)
 - [7. Key Observations](#7-key-observations)
+- [8. Socket Timing Differences](#8-socket-timing-differences)
 
 ---
 
@@ -362,7 +363,33 @@ Multi-sector operations carry 40% combined weight to reflect real embedded workl
 
 ## 7. Key Observations
 
-- **All cards max at 25 MHz SPI** regardless of speed class markings. CMD6 High Speed mode (50 MHz) switch fails on all tested cards.
+- **The driver runs every card at 25 MHz SPI by default**, regardless of speed
+  class markings. That is the SD specification's SPI-mode ceiling, and it is
+  where the driver clamps.
+
+- **CMD6 High Speed mode DOES work on many cards** — corrected 2026-08-18. This
+  section previously stated that the switch "fails on all tested cards". That was
+  wrong, and it had been wrong for some time: the claim came from an era when the
+  driver's own high-speed verification could not succeed. Of four modern cards
+  retested, **three negotiate high speed and hold it**; only one declines.
+
+  What you get, and what it costs:
+
+  | | Result |
+  |---|---|
+  | Clock reached | **43.75 MHz** at 350 MHz sysclk — not 50 MHz. The SPI clock is `sysclk / (2 x hp)`, and no integer divisor lands on 50 |
+  | Sequential reads | **Up to +47%** — measured on multi-block reads across three cards |
+  | Single-sector reads | Little or no gain. Card seek latency dominates, and the bus was never the limit |
+  | Writes | **Under investigation.** Two of three cards measured *slower* at high speed, one substantially so. Do not assume writes benefit |
+
+  **It is opt-in and it stays opt-in.** `attemptHighSpeed()` is gated behind
+  `SD_INCLUDE_SPEED` and the driver never negotiates high speed on its own. The
+  production speed bound remains 25 MHz. Given the write result above, automatic
+  negotiation is not something we are prepared to ship.
+
+  Use `isHighSpeedActive()` to ask whether the card is in high-speed mode and
+  `getSPIFrequency()` for the clock — they answer different questions, and on
+  most sysclk values the frequency is not 50 MHz even when the mode is active.
 
 - **Raw multi-sector reads are nearly identical across major-brand cards** (2,348–2,427 KB/s at 350 MHz for SanDisk/Samsung/Lexar/Amazon). Gigastone OEM controllers are slightly lower (2,090–2,134 KB/s). The SPI bus is the bottleneck for sustained reads.
 
@@ -397,10 +424,49 @@ Multi-sector operations carry 40% combined weight to reflect real embedded workl
 
 ---
 
+## 8. Socket Timing Differences
+
+Two physical sockets on the same P2 Edge bench — the module's onboard microSD
+socket and an external header-wired adapter socket — were characterized against
+each other on 2026-08-17 (13 runs, cards swapped between sockets to separate
+card effects from socket effects). The numbers below are **out-of-spec stress
+characterization**: the SD specification caps SPI at 25 MHz, and the boundaries
+were found by deliberately driving past it.
+
+| | Onboard (Edge) socket | External adapter socket |
+|---|---|---|
+| Command-path ceiling | **≥ 43.75 MHz** (clean at every frequency reachable at 350 MHz sysclk) | cliff in **(36.25, 37.50] MHz** — sharp, no degraded band |
+| Extra round-trip delay vs. onboard | — (reference) | **~3 ns class** (bounded 0 < Δt ≤ ~5.7 ns) |
+| Margin at production 25 MHz | ≥ 75% | ≥ 45% |
+
+What this means in practice:
+
+- **At the production 25 MHz both sockets carry wide margin** for every
+  mainstream card measured. The socket difference does not affect normal
+  operation with healthy cards.
+- **The difference is real and card-independent** — the same boundaries appeared
+  on four cards across two unrelated families (mainstream SDHC and
+  counterfeit-class SDSC), and physical card swaps moved nothing.
+- **Marginal cards feel the difference first.** A card whose own clock-to-output
+  timing is slow (measured on counterfeit-class SDSC silicon) loses its streamer
+  read alignment ~one frequency step earlier in the adapter socket than in the
+  onboard socket. A card that misbehaves in one socket and not the other is
+  reporting *its own* thin margin plus the socket delta — see the mechanism
+  section in `SD-CARD-DRIVER-THEORY.md` (Receive Alignment and Socket Timing)
+  and the per-card records in `DOCs/cards/`.
+
+Measurement conditions: 350 MHz sysclk (plus a 290–336 MHz sysclk ladder to
+place cells between the 350 MHz frequency grid points), sector reads scored by
+CRC and byte-compare against a low-speed reference, ±1 sysclk tick (2.857 ns)
+resolution. Campaign record: `DOCs/Plans/SOCKET-TIMING-CHARACTERIZATION-PLAN.md` §11.
+
+---
+
 ## Document History
 
 | Date | Change |
 |------|--------|
+| 2026-08-17 | Added section 8: socket timing differences (onboard vs. external adapter), from the socket characterization campaign |
 | 2026-02-25 | Added purchase recommendations with images; reordered sections; expanded to 15 benchmarked cards; added register markings and rank columns; merged 350/250 MHz ranking tables; added correlation analysis |
 | 2026-02-24 | Initial release — 11 benchmarked cards, 22-card library |
 

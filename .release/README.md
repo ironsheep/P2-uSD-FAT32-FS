@@ -144,6 +144,8 @@ The microSD add-on board connects to any 8-pin header group on the P2. Pins are 
 
 The default configuration uses base pin 56 (P2 Edge Module), giving pins P58-P61.
 
+> **Socket timing:** Two sockets wired to the same P2 can differ measurably in signal timing — on our bench, an external header-wired adapter adds a ~3 ns-class round-trip delay over the P2 Edge module's onboard socket. At the standard 25 MHz both carry wide margin, but a card that is itself timing-marginal may misbehave in one socket and work in the other. If you see socket-dependent card behavior, see the Socket Timing Differences section of the [Card Performance](DOCs/SD-CARD-PERFORMANCE.md) guide and the *Receive Alignment and Socket Timing* section of the [Theory of Operations](DOCs/SD-CARD-DRIVER-THEORY.md). Since v1.7.1 the read-path alignment sits at the centre of its measured passing band rather than the lower edge, which equalises read margin between sockets; socket-dependent behaviour can still occur on cards whose own timing is marginal, and one such case remains under investigation.
+
 ## Documentation
 
 | Document | Description |

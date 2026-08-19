@@ -502,6 +502,30 @@ The half-period is clamped to a minimum of 4 system clocks (the hardware minimum
 
 The driver starts at 400 kHz for card initialization (SD specification requirement), then `setOptimalSpeed()` switches to the card's maximum speed (up to 25 MHz) after init.
 
+**The production speed bound (v1.7.1).** User `setSPISpeed()` requests are clamped
+at the card's declared `TRAN_SPEED`, itself capped at the SD SPI-mode 25 MHz — and
+lifted to 50 MHz only while verified CMD6 high-speed mode is active. Internal speed
+changes (the 400 kHz init, `setOptimalSpeed()`, the high-speed path) are unaffected.
+
+The bound exists because above-spec operation was measured to produce **silent
+whole-sector write corruption** where the fixed write-path phase pad meets
+above-spec frequencies (see `SPI-PHASE-MARGIN-API.md`). The returned `actual_hz`
+reports the clamped truth rather than the request. Characterization tools lift the
+bound through `debugSetOverspeedAllowed()`.
+
+**High-speed mode does not reach 50 MHz.** The SPI clock is `clkfreq / (2 * hp)`
+with integer `hp`, so at 350 MHz sysclk a 50 MHz request resolves to hp=4 and an
+actual **43.75 MHz**. `isHighSpeedActive()` therefore reports the card's *mode*, not
+a clock threshold — a frequency comparison would answer FALSE at this project's own
+sysclk while high-speed mode was genuinely active. Use `getSPIFrequency()` for the
+clock and `isHighSpeedActive()` for the mode; they answer different questions.
+
+**Leaving high-speed mode is explicit.** The CMD6 switch is sticky at the card: a
+host that drops its clock without switching the card back strands the link, and
+every subsequent transfer fails until re-init. All four exits — the three
+verification-failure paths, a user `setSPISpeed()`, and `unmount()` — route through
+the same switch-back.
+
 ### Streamer DMA
 
 Sector transfers use the P2's streamer engine for hardware-accelerated bulk data movement. The streamer moves data between hub RAM and the SPI pins at the full SPI clock rate with no per-byte cog intervention, which is where the driver's 4–5x throughput advantage over a byte loop comes from.
@@ -563,6 +587,27 @@ What *drives* that variability is not established. P2KB describes a hub operatio
 Invariance is not merely argued — it was **measured on 2026-08-13**: sweeping the streamer's hub buffer through all eight long-aligned positions, on both the write and read paths, returned correct data at every point. See `DOCs/DRIVER-EVOLUTION-v1.6.0-to-v1.7.0.md` §4.7 and `DOCs/SPI-PHASE-MARGIN-API.md`.
 
 **The general lesson, which outlives this bug.** When a smart pin's timing is anchored by an instruction you execute, every instruction between that anchor and the dependent event is part of the timing contract. A hub-touching instruction in that window silently converts a timing constant into something that is not one. What *else* it then depends on can be genuinely hard to pin down — in this driver's case it was never identified, and the fault was observed exactly once despite the ordering being present in eighteen releases. The remedy does not require knowing: move the variable-latency instruction out of the window and the question stops mattering.
+
+### Receive Alignment and Socket Timing
+
+The read path's `align_delay` (the `WAITX` phase pad in the streamer read block above, computed as `hp` plus an offset that defaults to **+5** since v1.7.1) has the same character as `tx_align_delay`: it selects where, within the bit cell, the streamer samples MISO. A 2026-08-17 bench characterization campaign measured its passing band directly and produced three facts a reader of this driver should know.
+
+**The requirement rises with SPI frequency and with wiring delay.** The passing band's lower edge follows `align_delay ≥ hp + k`, where k grows as the SPI clock rises, because the card's clock-to-output delay (t_ODLY) plus the round-trip wire time consumes a growing fraction of the shrinking bit cell. When `align_delay` falls below the band, the streamer captures each bit one position early and the entire 512-byte payload arrives as a **one-bit right shift** — confirmed byte-for-byte on the bench (`$C1` stored, `$E0` received, uniformly across a whole sector). Slow-launching silicon (measured on a counterfeit-class SDSC card) exits the band at lower frequencies than mainstream cards; every card measured to date is inside the band at the production 25 MHz default.
+
+**The default now sits at the band's centre.** Through v1.7.0 the shipped
+`align_delay = hp + 0` sat at the band's *lower edge*. Five independent passing-band
+sweeps — two card families, both sockets, three frequencies — all centred on **+5**,
+and a later survey across four further controller families (SanDisk, Samsung,
+Longsys, Phison) found every one of them centred there too. The offset default moved
+to +5 in v1.7.1. One exception is carried: at hp=4 the positive offset is withheld,
+because +5 exceeds the whole bit period there and that cell's band has not been
+characterized in the card state where it actually occurs.
+
+**Two physical sockets on the same board differ measurably.** On the reference bench (P2 Edge module), the module's onboard microSD socket and an external header-wired adapter socket were characterized against each other with cards swapped between them to separate card effects from socket effects. The adapter's extra wiring consumes one additional alignment tick at 350 MHz sysclk — as a physical quantity, **between 0 and ~5.7 ns of additional round-trip delay, most likely ~3 ns** (the method quantizes to one 2.857 ns sysclk tick; state this number in nanoseconds, since the tick count it costs depends on sysclk). The same extra delay lowers the adapter's command-response ceiling: R1 responses arrive bit-slipped above ~37 MHz on the adapter (out-of-spec territory — production 25 MHz carries wide margin), while the onboard socket is clean at every frequency the driver can generate at 350 MHz sysclk.
+
+**CRC does not referee this failure on every card.** Cards in the dummy-data-CRC quirk class (`CW_NO_DATA_CRC`) return a constant in the CRC position, so a one-bit-shifted payload from such a card raises no CRC error — the corruption is silent. Detecting misalignment on these cards requires comparing a streamer read against a byte-by-byte smart-pin read of the same sector, which is how the characterization instruments (`diagnostic-tests/SD_socket_shmoo.spin2`, `SD_phase_sweep_test.spin2`) score them. This is why any alignment mitigation must be proactive (measure the band, sit inside it) rather than reactive to CRC errors.
+
+Measurement conditions for all numbers above: 350 MHz sysclk except where noted, sector reads scored by CRC compare and byte-compare against a low-speed reference, ±1 sysclk tick resolution. Full campaign record: `DOCs/Plans/SOCKET-TIMING-CHARACTERIZATION-PLAN.md` §11.
 
 ## Card Identification and Adaptive Timing
 
