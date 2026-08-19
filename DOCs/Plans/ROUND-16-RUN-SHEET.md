@@ -121,7 +121,7 @@ contract, not against output.
 
 | | |
 |---|---|
-| **Source SHA to run** | see below — verify with `git log --oneline -1 -- src/ diagnostic-tests/` |
+| **Source SHA to run** | `88fe9a3` — verify with `git log --oneline -1 -- src/ diagnostic-tests/` |
 | **Tree** | clean; six gates green |
 | **Resume at** | **Step 1, re-run in full** (driver + test changed) |
 
