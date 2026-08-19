@@ -1,0 +1,621 @@
+'' =================================================================================================
+''
+''   File....... SD_write_probe.spin2
+''   Purpose.... Write-path socket/timing characterization -- wedge-aware by design
+''   Author..... Stephen M Moraco
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... AUG 2026
+''   Updated.... 17 AUG 2026
+''
+'' =================================================================================================
+''
+'' The write-path half of the socket characterization campaign
+'' (DOCs/Plans/SOCKET-TIMING-CHARACTERIZATION-PLAN.md). The read path is characterized;
+'' this probe maps the WRITE path: frequency x tx_align_delay pad x write command
+'' (CMD25 multi-block vs CMD24 single-block) x socket. Every cell writes a NON-UNIFORM
+'' pattern (period 256, so any bit shift's absolute count is measurable from a dump)
+'' and reads it back at a known-safe slow read configuration -- failures attribute to
+'' the write, not to read margin.
+''
+'' WEDGE-AWARE STRUCTURE (bug #3240: the counterfeit asdfg SDSC class wedges its
+'' flash-commit pipeline on Edge-socket CMD24 writes; only a POWER CYCLE recovers).
+'' Cells are ordered safest-first, and the known wedge zone is quarantined:
+''
+''   Phase 1  ADAPTER socket, CMD25 grid then CMD24 grid  (wedge never observed here)
+''   Phase 2  EDGE socket, CMD25 only                     (tests the CMD25-safe hypothesis)
+''   Phase 3  EDGE socket, CMD24 -- THE WEDGE ZONE. Never runs by default. One cell
+''            per run, selected by a define, one power cycle budgeted per run:
+''              -D P3_SLOW   one CMD24 write at 12.5 MHz (hp=14)
+''              -D P3_PROD   one CMD24 write at 25.0 MHz (hp=7)
+''              -D P3_HIGH   one CMD24 write at 35.0 MHz (hp=5)
+''            The discriminator: a wedge at 12.5 MHz is frequency-INDEPENDENT
+''            (points at edge-rate/signal quality at the card's inputs); a wedge only
+''            at speed is timing-domain.
+''
+'' On any suspected wedge, an AUTOPSY runs before the session ends: what does the
+'' stuck controller still answer? (slow read attempt, re-init attempt, second read).
+'' Every status prints -- each power cycle should buy maximum information.
+''
+'' DESTRUCTIVE: writes scratch sectors at WRITE_SECTOR_BASE and above. Do not run
+'' against a card whose contents matter.
+''
+'' =================================================================================================
+
+CON
+
+     _CLKFREQ        = 350_000_000
+
+     ' P2 Edge module onboard microSD socket
+     EDGE_CS   = 60
+     EDGE_MOSI = 59
+     EDGE_MISO = 58
+     EDGE_SCK  = 61
+
+     ' External microSD adapter on header (base pin 16)
+     ADPT_CS   = 20
+     ADPT_MOSI = 19
+     ADPT_MISO = 18
+     ADPT_SCK  = 21
+
+     ' Frequency points (hp values; freq = clkfreq / (2*hp))
+     HP_SLOW          = 14                       ' 12.5 MHz
+     HP_PROD          = 7                        ' 25.0 MHz -- production default
+     HP_HIGH          = 5                        ' 35.0 MHz -- fastest cell both sockets pass on the cmd path
+     NUM_FREQS        = 3
+
+     ' tx_align_delay pad sweep: [2 .. 2+2*hp] covers one full SCK period of phase
+     PAD_MIN          = 2                        ' WAITX floor
+     TX_PAD_DEFAULT   = 4                        ' Driver's characterized default
+
+     HP_HS            = 4                        ' 43.75 MHz -- hp reached ONLY inside CMD6 high speed
+
+     ' Safe readback configuration (decouples write scoring from read margin)
+     READBACK_HP      = 14                       ' 12.5 MHz -- deep inside every measured read band
+
+     WRITE_SECTOR_BASE = 200_100                 ' Scratch area (freq-sweep convention)
+     CMD25_COUNT      = 2                        ' Sectors per multi-block write cell
+
+     ' Result codes printed per cell
+     R_PASS           = 0
+     R_WRITE_ERR      = 1
+     R_READBACK_ERR   = 2
+     R_DATA_MISMATCH  = 3
+
+' Same pragma set as the socket shmoo (known-good binary shape on both pin bases)
+#ifdef __SPINTOOLS__
+#define SD_INCLUDE_RAW
+#define SD_INCLUDE_REGISTERS
+#define SD_INCLUDE_SPEED
+#define SD_INCLUDE_DEBUG
+#elseifdef __FLEXSPIN__
+#define SD_INCLUDE_RAW
+#pragma exportdef SD_INCLUDE_RAW
+#define SD_INCLUDE_REGISTERS
+#pragma exportdef SD_INCLUDE_REGISTERS
+#define SD_INCLUDE_SPEED
+#pragma exportdef SD_INCLUDE_SPEED
+#define SD_INCLUDE_DEBUG
+#pragma exportdef SD_INCLUDE_DEBUG
+#else
+#pragma exportdef SD_INCLUDE_RAW
+#pragma exportdef SD_INCLUDE_REGISTERS
+#pragma exportdef SD_INCLUDE_SPEED
+#pragma exportdef SD_INCLUDE_DEBUG
+#endif
+
+OBJ
+    sd    : "micro_sd_fat32_fs"
+    utils : "isp_rt_utilities"
+
+DAT
+
+hpTable         long    HP_SLOW, HP_PROD, HP_HIGH
+
+' Write pattern + readback buffers (CMD25_COUNT sectors each)
+writeBuffer     byte    0[CMD25_COUNT * sd.SECTOR_SIZE]
+writeBuffer_guard byte  0[16]
+readBuffer      byte    0[CMD25_COUNT * sd.SECTOR_SIZE]
+readBuffer_guard byte   0[16]
+
+cidBuffer       byte    0[16]
+cidBuffer_guard byte    0[16]
+
+' Pins of the socket currently under test
+curCS           long    0
+curMOSI         long    0
+curMISO         long    0
+curSCK          long    0
+
+' Monotonic cell counter: unique scratch LBA + unique pattern seed per cell
+cellSeq         long    0
+
+' One full dual dump per socket phase, on the first data-mismatching cell
+phaseDumped     byte    0
+
+edgeName        byte    "EDGE (onboard)", 0
+adptName        byte    "ADAPTER (header, base 16)", 0
+
+
+PUB go() | status
+'' Entry: phases 1+2 by default; a P3_* define runs ONLY that one wedge-zone cell.
+
+    ' Characterization tool: lift the production speed bound (35 MHz cells are
+    ' deliberately above the ceiling; survives every stop()/re-init this session)
+    sd.debugSetOverspeedAllowed(true)
+
+    debug(" ")
+    debug("============================================================")
+    debug("  SD Write-Path Probe - socket x freq x tx pad x command")
+    debug("============================================================")
+    debug("  SYSCLK: ", udec_(clkfreq / 1_000_000), " MHz.  DESTRUCTIVE: scratch LBA ", udec_(WRITE_SECTOR_BASE), "+")
+    debug("  Readback config: hp=", udec_(READBACK_HP), " (", udec_(clkfreq / (READBACK_HP * 2) / 1_000), " kHz), default read alignment")
+    debug(" ")
+
+#ifdef P3_SLOW
+    status := \runPhase3(HP_SLOW)
+    if status < 0
+        debug("  (phase 3 ended by wedge -- see autopsy above)")
+#elseifdef P3_PROD
+    status := \runPhase3(HP_PROD)
+    if status < 0
+        debug("  (phase 3 ended by wedge -- see autopsy above)")
+#elseifdef P3_HIGH
+    status := \runPhase3(HP_HIGH)
+    if status < 0
+        debug("  (phase 3 ended by wedge -- see autopsy above)")
+#elseifdef EDGE_CMD24_SWEEP
+    ' The v1.7.0 tx-phase condition (Edge + CMD24 + full pad sweep) -- the one
+    ' region the default phases never re-test. HEALTHY CARDS ONLY in the Edge
+    ' socket: on the asdfg class this is wedge territory, use the P3_* arms.
+    status := \runEdgeCmd24Sweep()
+    if status < 0
+        debug("  (sweep ended by wedge -- see autopsy above)")
+#elseifdef HS_PAD_SWEEP
+    ' The hp=4 write pad, measured INSIDE verified high-speed mode. See the
+    ' method header for why this arm is structured write-all-then-read-all.
+    status := \runHighSpeedPadSweep()
+    if status < 0
+        debug("  (HS pad sweep ended by wedge -- see autopsy above)")
+#elseifdef DETECT_SELFTEST
+    runDetectSelftest()
+#else
+    ' status receives the abort payload when a wedge unwinds the phase runs
+    status := \runSafePhases()
+    if status < 0
+        debug("  (session ended early by wedge -- see autopsy above)")
+#endif
+
+    waitms(500)                                         ' Drain the debug FIFO -- final lines were truncating at END_SESSION
+    debug("END_SESSION")
+
+
+PRI runSafePhases() : status
+' Phases 1 and 2 -- everything outside the known wedge zone. Aborts on wedge.
+
+    ' PHASE 1: adapter, both commands (wedge never observed on this socket)
+    if beginSocket(1, @adptName, ADPT_CS, ADPT_MOSI, ADPT_MISO, ADPT_SCK)
+        runGrid(true)                                   ' CMD25 grid
+        runGrid(false)                                  ' CMD24 grid
+        sd.stop()
+        debug(" ")
+
+    ' PHASE 2: Edge, CMD25 ONLY (CMD24-on-Edge is the quarantined phase 3)
+    if beginSocket(0, @edgeName, EDGE_CS, EDGE_MOSI, EDGE_MISO, EDGE_SCK)
+        runGrid(true)                                   ' CMD25 grid
+        sd.stop()
+        debug(" ")
+
+    debug("  Phases 1-2 complete. Phase 3 (Edge CMD24 -- wedge zone) does not run")
+    debug("  by default: rebuild with -D P3_SLOW, -D P3_PROD or -D P3_HIGH for ONE")
+    debug("  cell per run, and budget one power cycle per run.")
+
+
+PRI beginSocket(socketIdx, pName, cs, mosi, miso, sck) : ok | status
+' Init the socket, print CID (self-labeling), reset the per-phase dump latch.
+
+    curCS := cs
+    curMOSI := mosi
+    curMISO := miso
+    curSCK := sck
+    phaseDumped := 0
+
+    debug("============================================================")
+    debug("  SOCKET PHASE: ", zstr_(pName))
+    debug("============================================================")
+
+    status := sd.initCardOnly(cs, mosi, miso, sck)
+    if status < 0
+        debug("  No card / init failed (status=", sdec_(status), ") -- socket skipped")
+        sd.stop()
+        return false
+
+    printCID()
+    debug("  hp  pad  cmd    result   (result: PASS, WRITE_ERR, READBACK_ERR, DATA_MISMATCH)")
+    debug("  --  ---  -----  ------")
+    ok := true
+
+
+PRI runGrid(useCmd25) | freqIdx, hp, pad
+' One command-type's full grid on the current socket: every freq x every pad.
+
+    repeat freqIdx from 0 to NUM_FREQS - 1
+        hp := hpTable[freqIdx]
+        repeat pad from PAD_MIN to PAD_MIN + (2 * hp)
+            runWriteCell(hp, pad, useCmd25)
+            if pad == PAD_MIN
+                ' Prove the knob reaches driver state (once per freq group)
+                debug("        (tx pad readback: ", udec_(sd.debugGetTxAlignDelay()), ")")
+
+    ' Restore the characterized default before leaving this grid
+    sd.debugSetTxAlignDelay(TX_PAD_DEFAULT)
+
+
+PRI runEdgeCmd24Sweep() | status
+' EDGE_CMD24_SWEEP arm: full CMD24 pad grid on the EDGE socket -- exactly the
+' condition where the v1.7.0 bench measured failing pads (== 1 mod 7 at hp=7:
+' pads 8, 15, 22, 29, band 2..7, default 4). If the probe's detection works,
+' those pads MUST fail here; every-pad-PASS at hp=7 on Edge CMD24 contradicts
+' the v1.7.0 record and demands reconciliation, not celebration.
+
+    debug("============================================================")
+    debug("  EDGE + CMD24 full pad sweep (the v1.7.0 tx-phase condition)")
+    debug("  Expected from the v1.7.0 record at hp=7: FAIL at pads 8 and 15")
+    debug("============================================================")
+
+    if not beginSocket(0, @edgeName, EDGE_CS, EDGE_MOSI, EDGE_MISO, EDGE_SCK)
+        return
+    runGrid(false)                                      ' CMD24 grid, Edge
+    sd.stop()
+
+
+PRI runHighSpeedPadSweep() | pad, idx, sector, diffs, firstDiff, hp, nPads, wrOk[16]
+' HS_PAD_SWEEP arm (added 2026-08-18): map the tx_align_delay band at hp=4, with
+' the card in VERIFIED CMD6 HIGH-SPEED MODE.
+'
+' WHY THIS ARM EXISTS. Round 10b found writes REGRESSING at 43.75 MHz -- PNY -64%,
+' Samsung -55% -- while reads gained up to +47%. 43.75 MHz is hp=4, and the write
+' pad has never been characterised there: the tooth was mapped at hp 5, 7 and 14
+' only, and at hp=5 the losing pads were 4 and 9 -- meaning the shipped default of
+' 4 sits ON the tooth at that frequency. Whether it also does at hp=4 is the
+' difference between "high speed is unusable for writes" and "high speed needs a
+' different pad".
+'
+' WHY WRITE-ALL-THEN-READ-ALL, and not the usual per-cell write+readback. Two
+' constraints collide at hp=4:
+'   1. hp=4 is reachable ONLY inside high-speed mode, so the card must be
+'      negotiated there first -- and setSPISpeed() EXITS high-speed mode (the
+'      driver rule added 2026-08-18), so a per-cell frequency set would silently
+'      drop us into default mode at an above-spec clock. That is exactly the
+'      error that made round 9c's band measurement inapplicable to production.
+'   2. The readback must happen at a slow, safe configuration to keep write
+'      scoring independent of read margin -- but a card in high-speed mode CANNOT
+'      be read slowly. That is the stranding condition behind the round-8a -7
+'      cascade.
+' Those two cannot both hold in one cell. So: negotiate once, write every pad to
+' its OWN sector while still in high speed, exit once, then read them all back at
+' the safe configuration and score. Every write in the sweep therefore happens in
+' an identical, verified card state, which per-pad renegotiation would not give.
+'
+' CMD24 (single-block) is used throughout: that is the command the v1.7.0 tooth
+' was characterised on.
+'
+' @local wrOk - Per-pad write status, indexed by (pad - PAD_MIN)
+' @local nPads - Number of pads swept, [2 .. 2+2*hp]
+
+    debug("============================================================")
+    debug("  HS PAD SWEEP -- tx_align_delay band at hp=4, INSIDE high-speed mode")
+    debug("============================================================")
+
+    if not beginSocket(0, @edgeName, EDGE_CS, EDGE_MOSI, EDGE_MISO, EDGE_SCK)
+        return
+
+    ' --- negotiate, and refuse to guess if the card will not go ---
+    if not sd.attemptHighSpeed()
+        debug("  CARD DECLINED high speed (ERROR(): ", sdec_(sd.error()), ")")
+        debug("  This arm is MEANINGLESS on a card that cannot reach hp=4. Not a failure -- run it")
+        debug("  only on a card round 9d showed negotiating (Lexar, Samsung EVO, PNY).")
+        sd.stop()
+        return
+
+    hp := sd.debugGetCurrentHp()
+    debug("  high speed ACTIVE: ", udec_(sd.getSPIFrequency() / 1000), " kHz, hp=", udec_(hp))
+    if hp <> HP_HS
+        debug("  >>> UNEXPECTED hp (wanted ", udec_(HP_HS), ") -- sysclk assumption broken, STOP and report <<<")
+        sd.stop()
+        return
+
+    nPads := (2 * hp) + 1
+    debug("  sweeping pads ", udec_(PAD_MIN), "..", udec_(PAD_MIN + (2 * hp)), " (one full SCK period), CMD24, one sector each")
+    debug(" ")
+
+    ' --- phase 1: all writes, still in high speed ---
+    repeat pad from PAD_MIN to PAD_MIN + (2 * hp)
+        sector := WRITE_SECTOR_BASE + ((pad - PAD_MIN) * CMD25_COUNT)
+        repeat idx from 0 to sd.SECTOR_SIZE - 1
+            writeBuffer[idx] := (idx * 251 + pad * 97) & $FF
+        sd.debugSetTxAlignDelay(pad)
+        wrOk[pad - PAD_MIN] := (sd.writeSectorRaw(sector, @writeBuffer) >= 0) ? 1 : 0
+        if wrOk[pad - PAD_MIN] == 0
+            debug("  pad ", udec_(pad), ": WRITE_ERR (", sdec_(sd.error()), ")")
+
+    ' --- exit high speed ONCE, then score everything at the safe configuration ---
+    sd.setSPISpeed(clkfreq / (READBACK_HP * 2) + 1)
+    debug("  high speed exited; reading back at ", udec_(sd.getSPIFrequency() / 1000), " kHz (hp=", udec_(READBACK_HP), ")")
+    debug(" ")
+    debug("  pad  result")
+    debug("  ---  ------")
+
+    repeat pad from PAD_MIN to PAD_MIN + (2 * hp)
+        sector := WRITE_SECTOR_BASE + ((pad - PAD_MIN) * CMD25_COUNT)
+        if wrOk[pad - PAD_MIN] == 0
+            debug("  ", udec_(pad), "    WRITE_ERR (not scored)")
+            next
+        bytefill(@readBuffer, 0, sd.SECTOR_SIZE)
+        if sd.readSectorsRaw(sector, 1, @readBuffer) <> 1
+            debug("  ", udec_(pad), "    READBACK_ERR (", sdec_(sd.error()), ")")
+            next
+        repeat idx from 0 to sd.SECTOR_SIZE - 1
+            writeBuffer[idx] := (idx * 251 + pad * 97) & $FF     ' regenerate the expectation
+        diffs := 0
+        firstDiff := -1
+        repeat idx from 0 to sd.SECTOR_SIZE - 1
+            if readBuffer[idx] <> writeBuffer[idx]
+                diffs++
+                if firstDiff < 0
+                    firstDiff := idx
+        if diffs > 0
+            debug("  ", udec_(pad), "    DATA_MISMATCH diffs=", udec_(diffs), " first at ", udec_(firstDiff), ...
+                  " exp=$", uhex_byte_(writeBuffer[firstDiff]), " got=$", uhex_byte_(readBuffer[firstDiff]))
+        else
+            debug("  ", udec_(pad), "    PASS")
+
+    debug(" ")
+    debug("  Report the PASSING BAND and its centre. The shipped default is pad ", udec_(TX_PAD_DEFAULT), ".")
+    debug("  A default that falls OUTSIDE the band explains round 10b's write regression.")
+    debug("  Every pad passing means the pad is NOT the cause and the regression is card-side.")
+    sd.stop()
+
+PRI runDetectSelftest() | status, idx, sawMismatch, sawWriteErr
+' DETECT_SELFTEST arm: prove the probe's failure reporting is REACHABLE, so a
+' green grid is evidence rather than decoration. Two provocations on the EDGE
+' socket card:
+'   1. Write a pattern, read it back, but compare against a DIFFERENT pattern --
+'      the comparator must report a mismatch through the real hardware path.
+'   2. Write to an absurd LBA (far beyond any card here) -- the write must error.
+' Verdict lines print PASS/FAIL for the INSTRUMENT, not the card.
+
+    debug("============================================================")
+    debug("  DETECTION SELF-TEST -- proving the failure paths fire")
+    debug("============================================================")
+
+    if not beginSocket(0, @edgeName, EDGE_CS, EDGE_MOSI, EDGE_MISO, EDGE_SCK)
+        return
+
+    ' Provocation 1: genuine write+readback, deliberately wrong expectation
+    repeat idx from 0 to sd.SECTOR_SIZE - 1
+        writeBuffer[idx] := (idx * 251) & $FF
+    sd.setSPISpeed(clkfreq / (HP_PROD * 2) + 1)
+    sd.debugSetTxAlignDelay(TX_PAD_DEFAULT)
+    sawMismatch := false
+    if sd.writeSectorRaw(WRITE_SECTOR_BASE, @writeBuffer) < 0
+        debug("  SELFTEST INCONCLUSIVE: setup write failed")
+    else
+        sd.setSPISpeed(clkfreq / (READBACK_HP * 2) + 1)
+        if sd.readSectorRaw(WRITE_SECTOR_BASE, @readBuffer) < 0
+            debug("  SELFTEST INCONCLUSIVE: setup readback failed")
+        else
+            repeat idx from 0 to sd.SECTOR_SIZE - 1
+                writeBuffer[idx] := (idx * 251 + 1) & $FF   ' Corrupt the expectation
+            repeat idx from 0 to sd.SECTOR_SIZE - 1
+                if readBuffer[idx] <> writeBuffer[idx]
+                    sawMismatch := true
+                    quit
+    debug("  1) wrong-expectation compare reports mismatch: ", zstr_(sawMismatch ? @"INSTRUMENT PASS" : @"INSTRUMENT FAIL"))
+
+    ' Provocation 2: absurd LBA -> the write path must surface an error
+    status := sd.writeSectorRaw($7FFF_FF00, @writeBuffer)
+    sawWriteErr := (status < 0)
+    debug("  2) absurd-LBA write returns error (status=", sdec_(status), "): ", zstr_(sawWriteErr ? @"INSTRUMENT PASS" : @"INSTRUMENT FAIL"))
+
+    if sawMismatch and sawWriteErr
+        debug("  SELFTEST VERDICT: detection paths PROVEN -- green grids are evidence")
+    else
+        debug("  SELFTEST VERDICT: DETECTION UNPROVEN -- do not cite green grids")
+    sd.stop()
+
+
+PRI runWriteCell(hp, pad, useCmd25) | sector, count, idx, status, readCt, diffs, firstDiff, result
+' One cell: set freq+pad, write the pattern, read back at the safe config, compare.
+' A failed write triggers the wedge check, which aborts the session if the card
+' is truly stuck.
+
+    count := useCmd25 ? CMD25_COUNT : 1
+    sector := WRITE_SECTOR_BASE + (cellSeq * CMD25_COUNT)
+    cellSeq++
+
+    ' Non-uniform pattern, unique per cell: byte i = (i*251 + seq*97) mod 256.
+    ' 251 is coprime with 256, so the sequence has period 256 -- a shifted stream
+    ' cannot alias onto itself and the absolute shift count is measurable.
+    repeat idx from 0 to (count * sd.SECTOR_SIZE) - 1
+        writeBuffer[idx] := (idx * 251 + cellSeq * 97) & $FF
+
+    sd.setSPISpeed(clkfreq / (hp * 2) + 1)
+    sd.debugSetTxAlignDelay(pad)
+
+    result := R_PASS
+    if useCmd25
+        if sd.writeSectorsRaw(sector, count, @writeBuffer) <> count
+            result := R_WRITE_ERR
+    else
+        if sd.writeSectorRaw(sector, @writeBuffer) < 0
+            result := R_WRITE_ERR
+
+    if result == R_WRITE_ERR
+        printCell(hp, pad, useCmd25, result, sd.error())
+        wedgeCheck()                                    ' aborts the session if stuck
+        return
+
+    ' Read back at the safe configuration -- failures now attribute to the write
+    sd.setSPISpeed(clkfreq / (READBACK_HP * 2) + 1)
+    bytefill(@readBuffer, 0, count * sd.SECTOR_SIZE)
+    utils.initGuard(@readBuffer_guard)
+    readCt := sd.readSectorsRaw(sector, count, @readBuffer)
+    utils.checkGuard(@readBuffer_guard, @"readBuffer guard")
+    if readCt <> count
+        printCell(hp, pad, useCmd25, R_READBACK_ERR, sd.error())
+        wedgeCheck()
+        return
+
+    diffs := 0
+    firstDiff := -1
+    repeat idx from 0 to (count * sd.SECTOR_SIZE) - 1
+        if readBuffer[idx] <> writeBuffer[idx]
+            diffs++
+            if firstDiff < 0
+                firstDiff := idx
+    if diffs > 0
+        printCell(hp, pad, useCmd25, R_DATA_MISMATCH, diffs)
+        debug("        first diff at ", udec_(firstDiff), ": exp=$", uhex_byte_(writeBuffer[firstDiff]), " got=$", uhex_byte_(readBuffer[firstDiff]))
+        if phaseDumped == 0
+            phaseDumped := 1
+            dumpMismatch(count)
+        return
+
+    printCell(hp, pad, useCmd25, R_PASS, 0)
+
+
+PRI printCell(hp, pad, useCmd25, result, detail)
+
+    case result
+        R_PASS:          debug("  ", udec_(hp), "  ", udec_(pad), "  ", zstr_(useCmd25 ? @"CMD25" : @"CMD24"), "  PASS")
+        R_WRITE_ERR:     debug("  ", udec_(hp), "  ", udec_(pad), "  ", zstr_(useCmd25 ? @"CMD25" : @"CMD24"), "  WRITE_ERR status=", sdec_(detail))
+        R_READBACK_ERR:  debug("  ", udec_(hp), "  ", udec_(pad), "  ", zstr_(useCmd25 ? @"CMD25" : @"CMD24"), "  READBACK_ERR status=", sdec_(detail))
+        R_DATA_MISMATCH: debug("  ", udec_(hp), "  ", udec_(pad), "  ", zstr_(useCmd25 ? @"CMD25" : @"CMD24"), "  DATA_MISMATCH diffs=", udec_(detail))
+
+
+PRI wedgeCheck() | status
+' After a failed write or readback: is the card merely unhappy, or WEDGED?
+' Not wedged -> return and let the sweep continue. Wedged -> autopsy, then abort
+' the whole session (the bench must power-cycle).
+
+    ' A slow read of a known-existing sector is the health probe
+    sd.setSPISpeed(clkfreq / (READBACK_HP * 2) + 1)
+    status := sd.readSectorRaw(0, @readBuffer)
+    if status == 0
+        debug("        (card still answers reads -- transient failure, sweep continues)")
+        return
+
+    debug("        read probe FAILED (status=", sdec_(status), ") -- attempting re-init")
+    sd.stop()
+    status := sd.initCardOnly(curCS, curMOSI, curMISO, curSCK)
+    if status == 0
+        debug("        re-init recovered the card -- sweep continues (NOTE: recoverable, not #3240)")
+        return
+
+    ' ---- AUTOPSY: the card is wedged. Learn everything before the power cycle. ----
+    debug(" ")
+    debug("  ############################################################")
+    debug("  ##  CARD WEDGED -- POWER CYCLE REQUIRED (bug #3240 class) ##")
+    debug("  ############################################################")
+    debug("  Autopsy (every probe below runs against the wedged card):")
+    debug("    re-init attempt returned: ", sdec_(status))
+    sd.stop()
+    status := sd.initCardOnly(curCS, curMOSI, curMISO, curSCK)
+    debug("    second re-init returned:  ", sdec_(status))
+    if status == 0
+        status := sd.readSectorRaw(0, @readBuffer)
+        debug("    post-re-init read:        ", sdec_(status))
+    sd.stop()
+    debug("  Record the cell that triggered this, power-cycle the rig, and resume")
+    debug("  from the next cell/run.")
+    abort -1
+
+
+PRI runPhase3(hp) | status, idx
+' THE WEDGE ZONE: one CMD24 write on the EDGE socket at one frequency. Runs alone
+' (never with phases 1-2) so a wedge costs exactly one power cycle and the
+' transcript carries exactly one datum: did THIS frequency wedge THIS card?
+
+    debug("============================================================")
+    debug("  PHASE 3 -- EDGE socket, CMD24, hp=", udec_(hp), " (", udec_(clkfreq / (hp * 2) / 1_000), " kHz)")
+    debug("  One write, then verify, then a second write, then autopsy probes.")
+    debug("============================================================")
+
+    if not beginSocket(0, @edgeName, EDGE_CS, EDGE_MOSI, EDGE_MISO, EDGE_SCK)
+        return
+
+    ' First CMD24 write at the target frequency, default pad
+    sd.debugSetTxAlignDelay(TX_PAD_DEFAULT)
+    runWriteCell(hp, TX_PAD_DEFAULT, false)
+
+    ' The wedge historically fires on operations AFTER the first write --
+    ' a second write plus a read is the minimal "subsequent operations" probe
+    debug("  -- second write + verify (the wedge classically bites here) --")
+    runWriteCell(hp, TX_PAD_DEFAULT, false)
+
+    debug("  -- post-cell health: slow read of sector 0 --")
+    sd.setSPISpeed(clkfreq / (READBACK_HP * 2) + 1)
+    status := sd.readSectorRaw(0, @readBuffer)
+    debug("     read sector 0: ", sdec_(status))
+    if status < 0
+        wedgeCheck()
+
+    debug("  PHASE 3 CELL COMPLETE, card healthy -- no wedge at this frequency.")
+    sd.stop()
+
+
+PRI printCID() | status, psn, mdtYear, mdtMonth
+
+    utils.initGuard(@cidBuffer_guard)
+    status := sd.readCIDRaw(@cidBuffer)
+    utils.checkGuard(@cidBuffer_guard, @"cidBuffer guard")
+    if status < 0
+        debug("  CID read FAILED (status=", sdec_(status), ")")
+        return
+
+    psn := (cidBuffer[9] << 24) | (cidBuffer[10] << 16) | (cidBuffer[11] << 8) | cidBuffer[12]
+    mdtYear := 2000 + ((cidBuffer[13] & $0F) << 4) + (cidBuffer[14] >> 4)
+    mdtMonth := cidBuffer[14] & $0F
+    debug("  Card: MID=$", uhex_byte_(cidBuffer[0]), " PNM='", lstr_(@cidBuffer[3], 5), "'")
+    debug("  >>> SERIAL PSN=$", uhex_long_(psn), "  mfg ", udec_(mdtYear), "/", udec_(mdtMonth), " <<<")
+
+
+PRI dumpMismatch(count) | row
+' Full dual dump of the first mismatching cell, exp/got interleaved. With the
+' period-256 pattern, any shift's absolute bit count is recoverable from this.
+
+    debug("      ---- full dump of first mismatching cell (exp = written pattern) ----")
+    repeat row from 0 to ((count * sd.SECTOR_SIZE) / 16) - 1
+        debug("      exp +", udec_(row * 16), ": ", uhex_byte_array_(@writeBuffer + row * 16, 16))
+        debug("      got +", udec_(row * 16), ": ", uhex_byte_array_(@readBuffer + row * 16, 16))
+    debug("      ---- end dump ----")
+
+con { license }
+
+{{
+  =================================================================================================
+
+  Terms of Use: MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this
+  software and associated documentation files (the "Software"), to deal in the Software
+  without restriction, including without limitation the rights to use, copy, modify,
+  merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies
+  or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+  INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+  HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+  CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+  OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+  =================================================================================================
+}}

@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 #
-# check_style.sh — audit .spin2 sources against DOCs/procedures/SPIN2-AUTHORING-GUIDE.md.
+# check_style.sh — audit .spin2 sources against the central Spin2 authoring guide
+# (~/.claude/skills-docs/guides/spin2-authoring-guide.md; this script is that
+# guide's named reference implementation).
 #
 # Project policy: all P2 code we produce conforms to that guide, and a release does
 # not ship with a finding outstanding.
@@ -411,7 +413,8 @@ echo "  This is TIER 1 only. What it cannot check is mostly TIER 2 -- agent-audi
 echo "  not \"a human read\": naming correspondence (2.2, 2.3), consistent base names"
 echo "  (2.1.3), same-name-same-description (2.5), CON grouping (3.5), doc-comment SYNC"
 echo "  (Part 4), magic-number judgement (5.7). Tier model and rule assignment:"
-echo "  DOCs/procedures/RELEASE-CHECKLIST.md section 2. Rules: SPIN2-AUTHORING-GUIDE.md."
+echo "  DOCs/procedures/RELEASE-CHECKLIST.md section 2. Rules: the central Spin2"
+echo "  authoring guide (~/.claude/skills-docs/guides/spin2-authoring-guide.md)."
 echo ""
 
 [[ $fails -gt 0 ]] && exit 1

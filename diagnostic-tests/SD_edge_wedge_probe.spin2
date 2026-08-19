@@ -1,0 +1,366 @@
+'' =================================================================================================
+''
+''   File....... SD_edge_wedge_probe.spin2
+''   Purpose.... Black-box differential diagnosis of the Edge-socket wedge (#3240)
+''   Author..... Stephen M Moraco
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... AUG 2026
+''   Updated.... 18 AUG 2026
+''
+'' =================================================================================================
+''
+'' WHY THIS TOOL EXISTS, AND WHY IT IS SHAPED THIS WAY
+''
+'' Two recently-purchased cards work in the external adapter and fail in the P2 Edge
+'' module socket. The Edge module socket CANNOT BE PROBED -- no logic analyzer access,
+'' physically. So this is not a measurement problem, it is differential diagnosis by
+'' INTERVENTION: change one thing, re-run, see whether the failure moves. Any hypothesis
+'' that requires seeing the signal is unfalsifiable here and is not on the list.
+''
+'' The whole timing domain has already been searched and came back empty. The socket
+'' timing campaign (SOCKET-SHMOO-RUN-NOTES.md) measured the socket delta, the read
+'' alignment bands, the tx phase teeth and the frequency cliffs; round 9a then showed the
+'' wedge is COMPLETELY UNCHANGED by the mitigation bundle those measurements produced.
+'' Round 5 could not trigger the wedge with raw single-sector writes at any frequency.
+''
+'' What round 9a did give us is the failure's SHAPE, and it does not look like a timing
+'' fault: mount #1 succeeds, twelve tests of ordinary operations succeed, then unmount()
+'' stalls about four seconds and returns -7, and the next mount() returns -8 (E_NO_CARD).
+'' Timing margin corrupts data. It does not make a card cease to exist. What unmount()
+'' does that nothing before it did is a WRITE BURST -- sync every dirty handle, then
+'' update FSInfo -- and write-plus-erase is the highest-current operation a card performs.
+''
+'' THE THREE QUESTIONS, in the order that partitions the hypothesis space fastest:
+''
+''   1. IS THE REPRODUCER RELIABLE?  Everything else depends on this. If the wedge is
+''      intermittent, one clean run after an intervention proves nothing, and we would
+''      spend the bench chasing noise. The default arm answers it by running the cycle
+''      repeatedly until it wedges or the count is exhausted.
+''
+''   2. IS IT SPEED-DEPENDENT?  The -D SPEED_400K arm is the highest-value single run in
+''      this tool. Nothing about edge rates, sampling margin, or setup/hold survives at
+''      400 kHz. If it STILL wedges there, timing and signal integrity are BOTH eliminated
+''      in one run and only power and protocol remain.
+''
+''   3. IS IT THE WRITE BURST?  The -D READ_ONLY arm never dirties a handle and suppresses
+''      the FSInfo update, so unmount has nothing to flush. If the wedge needs the write
+''      burst, this arm is clean and the current-draw hypothesis moves to the front.
+''
+'' ARMS (one per run; a wedge ends the session, so cells are not batched):
+''
+''   (none)          driver-computed speed, writes performed  -- the reliability arm
+''   -D SPEED_12M    same, clamped to 12.5 MHz
+''   -D SPEED_400K   same, clamped to 400 kHz                 -- the decisive arm
+''   -D READ_ONLY    driver speed, no writes before unmount
+''   -D SD_PINS_EXTERNAL   run the whole thing on the adapter -- the CONTROL. This socket
+''                   is where these cards work, so this arm must come back CLEAN. If it
+''                   wedges, the fault is not socket-specific and everything above is
+''                   the wrong frame.
+''
+'' WEDGE PROTOCOL: on a wedge the tool stops immediately, prints an autopsy (what the
+'' stuck controller still answers), and asks for a power cycle. It never continues past
+'' a wedge -- every cycle after one is meaningless.
+''
+'' DESTRUCTIVE: the default and speed arms write a scratch file. Run only on cards whose
+'' contents are expendable.
+''
+'' =================================================================================================
+
+CON
+
+    _CLKFREQ        = 350_000_000
+
+    ' SD card pin assignments
+    ' Default: P2 Edge module SD slot. Build with -D SD_PINS_EXTERNAL
+    ' to use the external SD header (base pin 16) -- the control arm.
+#ifdef SD_PINS_EXTERNAL
+    SD_CS   = 20
+    SD_MOSI = 19
+    SD_MISO = 18
+    SD_SCK  = 21
+#else
+    SD_CS   = 60
+    SD_MOSI = 59
+    SD_MISO = 58
+    SD_SCK  = 61
+#endif
+
+    ' Speed arm. 0 = leave the driver's computed safe speed alone.
+#ifdef SPEED_400K
+    SPEED_TARGET_HZ = 400_000
+#elseifdef SPEED_12M
+    SPEED_TARGET_HZ = 12_500_000
+#else
+    SPEED_TARGET_HZ = 0
+#endif
+
+    CYCLE_COUNT     = 8                 ' Mount/op/unmount cycles before declaring "no wedge"
+    BUFFER_SIZE     = 512
+    SCRATCH_PATTERN = $5A
+
+' Full driver features: setSPISpeed (SPEED), raw reads for the autopsy (RAW),
+' and the debug getters (DEBUG).
+#ifdef __SPINTOOLS__
+#define SD_INCLUDE_ALL
+#elseifdef __FLEXSPIN__
+#define SD_INCLUDE_ALL
+#pragma exportdef SD_INCLUDE_ALL
+#else
+#pragma exportdef SD_INCLUDE_ALL
+#endif
+
+OBJ
+    sd    : "micro_sd_fat32_fs"
+
+DAT
+
+scratchName     BYTE    "WEDGEPRB.BIN", 0
+workBuffer      BYTE    0[BUFFER_SIZE]
+rawBuffer       BYTE    0[BUFFER_SIZE]
+cid_pnm         BYTE    0[8]                    ' CID product name, extracted for the identity line
+
+PUB go() | cycle, verdict, wedged_at
+'' Run the wedge reproducer under one arm, stopping at the first wedge.
+
+    debug(" ")
+    debug("======================================================")
+    debug("  SD Edge-Socket Wedge Probe")
+    debug("======================================================")
+    debug("  SysClk: ", udec_(clkfreq / 1_000_000), " MHz")
+    showArm()
+    showCardIdentity()
+    debug(" ")
+
+    wedged_at := -1
+    repeat cycle from 1 to CYCLE_COUNT
+        debug("------------------------------------------------------")
+        debug("  CYCLE ", udec_(cycle), " of ", udec_(CYCLE_COUNT))
+        verdict := runCycle(cycle)
+        if verdict < 0
+            wedged_at := cycle
+            quit
+
+    debug(" ")
+    debug("======================================================")
+    if wedged_at < 0
+        debug("  RESULT: NO WEDGE in ", udec_(CYCLE_COUNT), " cycles under this arm.")
+        debug("  A clean arm is a RESULT, not a failed run -- report it as the answer.")
+    else
+        debug("  RESULT: WEDGED on cycle ", udec_(wedged_at), " of ", udec_(CYCLE_COUNT))
+        debug("  Cycles completed before the wedge: ", udec_(wedged_at - 1))
+        debug("  >>> POWER-CYCLE THE RIG before the next run. <<<")
+    debug("======================================================")
+    debug(" ")
+    debug("END_SESSION")
+
+PRI showArm()
+' Print which arm this binary is, so the transcript is self-labelling.
+
+#ifdef SD_PINS_EXTERNAL
+    debug("  SOCKET: EXTERNAL adapter (base 16) -- CONTROL ARM, expected CLEAN")
+#else
+    debug("  SOCKET: EDGE module (base 60) -- the socket under investigation")
+#endif
+
+#ifdef READ_ONLY
+    debug("  ARM: READ_ONLY -- no writes, FSInfo update suppressed at unmount")
+#else
+    debug("  ARM: writes performed before unmount (scratch file)")
+#endif
+
+    if SPEED_TARGET_HZ > 0
+        debug("  ARM: SPI clamped to ", udec_(SPEED_TARGET_HZ / 1000), " kHz")
+    else
+        debug("  ARM: driver-computed safe speed (no clamp)")
+
+PRI showCardIdentity() | cid[4], idx, psn
+' Print WHICH CARD is in the socket. Added 2026-08-18 after round 10c, where this
+' probe returned a null result and a SEPARATE identify run was needed to establish
+' which card had produced it. A null result from a wedge probe is only
+' interpretable if the transcript itself proves the card and socket -- the same
+' caveat was closed for SD_tx_phase_shmoo back in round 7.
+'
+' Uses initCardOnly + readCIDRaw so identity is available even on a card that
+' cannot mount a filesystem, which is exactly the state a wedged card is in.
+'
+' @local cid - 16-byte CID buffer
+' @local psn - Product serial number, CID bits [55:24]
+
+    if sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK) < 0
+        debug("  CARD: init FAILED -- identity unavailable (", sdec_(sd.ERROR()), ")")
+        sd.stop()
+        return
+
+    if sd.readCIDRaw(@cid) < 0
+        debug("  CARD: CID read FAILED -- identity unavailable")
+    else
+        psn := (BYTE[@cid][9] << 24) | (BYTE[@cid][10] << 16) | (BYTE[@cid][11] << 8) | BYTE[@cid][12]
+        repeat idx from 0 to 4
+            BYTE[@cid_pnm][idx] := BYTE[@cid][3 + idx]
+        BYTE[@cid_pnm][5] := 0
+        debug("  CARD: MID=$", uhex_byte_(BYTE[@cid][0]), " PNM='", zstr_(@cid_pnm), "' PSN=$", uhex_long_(psn))
+
+    sd.stop()
+
+PRI runCycle(cycle) : verdict | status, elapsed_ms, start_ms
+' One HEAVY mount / operate / unmount / remount cycle.
+'
+' REWRITTEN 2026-08-18 after round 10c, where the original cycle -- mount, one
+' 512-byte write, unmount -- came back 8/8 CLEAN on the Edge socket while the
+' known reproducer wedged the same card in the same socket minutes later. The
+' probe was too gentle; a null result from it meant nothing.
+'
+' What the known reproducer does that the old cycle did not, taken from
+' SD_RT_mount_tests (where 9a shows the wedge firing at test #13, INSIDE the
+' suite -- so a binary boundary is NOT required to trigger it):
+'   - freeSpace(), which scans the ENTIRE FAT -- by far the largest read burst
+'     in the sequence, and the one the old cycle omitted completely
+'   - volumeLabel() and a raw sector read, mixing filesystem and raw paths
+'   - file create / write / read / delete rather than a single bare write
+'   - repeated mount/unmount cycles and a double-mount inside one power-on
+'
+' This cycle now does all of that. It is deliberately a REPRODUCTION attempt,
+' not a bisection: get it to bite first, then find out which element matters.
+'
+' @param cycle - 1-based cycle number, for the transcript
+' @returns verdict - 0 if the cycle completed cleanly, negative if the card wedged
+
+    verdict := 0
+
+    status := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    if status < 0
+        if cycle == 1
+            ' On cycle 1 there is no previous cycle to blame. The identity probe
+            ' above ran initCardOnly() then stop() just before this, so a failure
+            ' here is far more likely a bad card, a bad seating, or that
+            ' stop()->mount() transition than the wedge under study. Say so
+            ' rather than mislabelling it, which would send the whole session
+            ' chasing the wrong thing.
+            debug("    mount FAILED on cycle 1: ", sdec_(status), " (", zstr_(errName(status)), ")")
+            debug("    NOT the wedge -- nothing has run yet. Check seating and card, and note that")
+            debug("    the identity probe did initCardOnly()+stop() immediately before this.")
+        else
+            debug("    mount FAILED: ", sdec_(status), " (", zstr_(errName(status)), ")  -- a wedge from the PREVIOUS cycle")
+        autopsy()
+        return -1
+
+    if SPEED_TARGET_HZ > 0
+        debug("    SPI set to ", udec_(sd.setSPISpeed(SPEED_TARGET_HZ) / 1000), " kHz")
+
+    ' --- the read-heavy half, present in every arm ---
+    debug("    label='", zstr_(sd.volumeLabel()), "'")
+    start_ms := GETMS()
+    debug("    freeSpace() = ", udec_(sd.freeSpace()), " sectors  (full FAT scan, ", udec_(GETMS() - start_ms), " ms)")
+    if sd.readSectorRaw(0, @rawBuffer) < 0
+        debug("    raw read of sector 0 FAILED: ", sdec_(sd.ERROR()))
+
+    ' --- double-mount, as the suite does ---
+    status := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    debug("    double-mount returned ", sdec_(status))
+
+#ifdef READ_ONLY
+    debug("    read-only arm: no writes this cycle")
+#else
+    doWriteBurst()
+#endif
+
+    start_ms := GETMS()
+    status := sd.unmount()
+    elapsed_ms := GETMS() - start_ms
+    debug("    unmount: status=", sdec_(status), "  elapsed=", udec_(elapsed_ms), " ms")
+    if status < 0
+        debug("    >>> WEDGE SIGNATURE: unmount returned an error <<<")
+        autopsy()
+        return -2
+    if elapsed_ms > 1000
+        debug("    >>> NOTE: unmount stalled over 1 s but RECOVERED -- near-miss, record it <<<")
+
+    ' The recorded failure surfaces one step later than unmount, so the remount is
+    ' part of the cycle rather than the start of the next one.
+    status := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    if status < 0
+        debug("    remount FAILED: ", sdec_(status), " (", zstr_(errName(status)), ")")
+        debug("    >>> WEDGE SIGNATURE: card gone after unmount <<<")
+        autopsy()
+        return -3
+    sd.unmount()
+    debug("    cycle ", udec_(cycle), " CLEAN")
+
+PRI doWriteBurst() | handle, written, bytesRead
+' The write half: create, write, close, reopen, read back, delete. The original
+' probe did a bare create+write+close; the reproducer's suite also reads files
+' back and deletes them, which exercises directory rewrite and FAT release --
+' both of which dirty sectors that the following unmount then has to flush.
+
+    sd.deleteFile(@scratchName)
+    handle := sd.createFileNew(@scratchName)
+    if handle < 0
+        debug("    createFileNew FAILED: ", sdec_(handle))
+        return
+    bytefill(@workBuffer, SCRATCH_PATTERN, BUFFER_SIZE)
+    written := sd.writeHandle(handle, @workBuffer, BUFFER_SIZE)
+    sd.closeFileHandle(handle)
+
+    handle := sd.openFileRead(@scratchName)
+    if handle >= 0
+        bytesRead := sd.readHandle(handle, @workBuffer, BUFFER_SIZE)
+        sd.closeFileHandle(handle)
+    sd.deleteFile(@scratchName)
+    debug("    write burst: wrote ", udec_(written), " read ", udec_(bytesRead), " then deleted")
+
+PRI autopsy() | status
+' What the stuck controller still answers. Each power cycle is expensive, so this
+' takes everything obtainable before asking for one.
+
+    debug("    --- AUTOPSY ---")
+    debug("      ERROR()          = ", sdec_(sd.ERROR()))
+    debug("      re-init attempt 1: ", sdec_(sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)))
+    status := sd.readSectorRaw(0, @rawBuffer)
+    debug("      raw read sector 0: ", sdec_(status))
+    debug("      re-init attempt 2: ", sdec_(sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)))
+    debug("    --- END AUTOPSY ---")
+
+PRI errName(code) : p_name
+' Name the codes this tool expects to see, so a transcript reads without a lookup.
+'
+' @param code - driver error code
+' @returns p_name - pointer to a short name
+
+    case code
+        -1: p_name := @str_timeout
+        -7: p_name := @str_io_error
+        -8: p_name := @str_no_card
+        other: p_name := @str_other
+
+DAT
+
+str_timeout     BYTE    "E_TIMEOUT", 0
+str_io_error    BYTE    "E_IO_ERROR", 0
+str_no_card     BYTE    "E_NO_CARD", 0
+str_other       BYTE    "see error table", 0
+
+CON { license }
+
+{{
+ -------------------------------------------------------------------------------------------------
+  MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+  associated documentation files (the "Software"), to deal in the Software without restriction,
+  including without limitation the rights to use, copy, modify, merge, publish, distribute,
+  sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies or
+  substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT
+  NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+  NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+  DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ -------------------------------------------------------------------------------------------------
+}}

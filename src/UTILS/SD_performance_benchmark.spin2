@@ -72,6 +72,23 @@ CON
     TEST_SECTOR     = 200_000           ' Safe test sector (away from FAT/data area)
     CID_PNM_LEN     = 5                 ' CID product name field length
 
+    ' BUS-CEILING ATTRIBUTION (added 2026-08-18)
+    ' A 512-byte sector is 4096 bits on a 1-bit SPI data line, so the bus can
+    ' never carry more than spi_freq / 8 bytes per second no matter how good the
+    ' card or the driver is. Every measured rate is reported as a percentage of
+    ' that ceiling, which makes "what is the limiting factor" a derived number
+    ' rather than a judgement:
+    '
+    '   near the ceiling -> the BUS is the limit; a faster card cannot help, and
+    '                       only a faster clock or more data lines (4-bit) will
+    '   far below it     -> the CARD is the limit; its internal latency dominates
+    '                       and neither a faster clock nor 4-bit will help much
+    '
+    ' These two thresholds are REPORTING boundaries chosen for legibility, not
+    ' physical constants. They label a continuum.
+    BUS_LIMITED_PCT  = 70               ' At or above: bus/driver bound
+    CARD_LIMITED_PCT = 30               ' Below: card-internal bound
+
 ' Enable full driver features for this utility
 #ifdef __SPINTOOLS__
 #define SD_INCLUDE_ALL
@@ -99,6 +116,14 @@ timings         LONG    0[ITERATIONS]
 ' Card identification buffer
 cid_buf         BYTE    0[16]
 
+' Write-verification read-back buffer (one sector at a time -- see verifyRawWrite)
+verifyBuf       BYTE    0[512]
+
+' Limiter verdict strings (see pctOfCeiling / limiterTag)
+str_bus_bound   BYTE    "BUS-bound", 0
+str_card_bound  BYTE    "CARD-bound", 0
+str_mixed       BYTE    "mixed", 0
+
 PUB go() | result, spi_hz
 '' Main entry point - runs comprehensive SD card performance benchmark.
 
@@ -114,9 +139,27 @@ PUB go() | result, spi_hz
     ' Mount the card first (for accurate cold-mount timing)
     result := runMountBenchmark()
     if result >= 0
+
+#ifdef HIGH_SPEED
+        ' HIGH-SPEED ARM (added 2026-08-18). Negotiate CMD6 high speed BEFORE any
+        ' measurement, so every number below is taken at the faster clock. This is
+        ' the explicit, opt-in form -- the driver does NOT do this at mount today.
+        ' The whole point of this arm is to measure whether it is worth making it
+        ' automatic, so the answer must not be assumed by the instrument.
+        '
+        ' A card that declines is not a failed run: it is one of the two outcomes,
+        ' and it is reported as such so the transcript is self-labelling.
+        if sd.attemptHighSpeed()
+            debug("  HIGH-SPEED ARM: negotiated, running at ", udec_(sd.getSPIFrequency() / 1000), " kHz")
+        else
+            debug("  HIGH-SPEED ARM: card DECLINED (ERROR(): ", sdec_(sd.ERROR()), ") -- numbers below are standard speed")
+#endif
+
         ' Show SPI frequency and volume info
         spi_hz := sd.getSPIFrequency()
         debug("  SPI Frequency: ", udec_(spi_hz / 1000), " kHz")
+        debug("  Bus ceiling at this clock: ", udec_(busCeilingKBps()), " KB/s (spi_freq / 8; 1 data line)")
+        debug("  Rates below are annotated [% of bus, limiter] -- see the tool header")
         showVolumeInfo()
 
         ' Identify card AFTER mount (reads CID via worker cog)
@@ -266,7 +309,7 @@ PRI runMultiSectorBenchmarks()
     runComparisonTest(MULTI_64)
 
 
-PRI runRawReadTest(count) | iter, start_ct, elapsed_ct, min_us, max_us, total_us, avg_us, kbps, size, readCt, ok
+PRI runRawReadTest(count) | iter, start_ct, elapsed_ct, min_us, max_us, total_us, avg_us, kbps, size, readCt, pct, ok
 ' Benchmark raw sector read at specified count.
 ' Works for both single-sector (count=1) and multi-sector operations.
 '
@@ -308,10 +351,49 @@ PRI runRawReadTest(count) | iter, start_ct, elapsed_ct, min_us, max_us, total_us
         else
             kbps := 0
 
-        debug("  ", udec_(count), " sector(s) (", udec_(size), "B): Min=", udec_(min_us), " Avg=", udec_(avg_us), " Max=", udec_(max_us), " us => ", udec_(kbps), " KB/s")
+        pct := pctOfCeiling(size, avg_us)
+        debug("  ", udec_(count), " sector(s) (", udec_(size), "B): Min=", udec_(min_us), " Avg=", udec_(avg_us), " Max=", udec_(max_us), " us => ", udec_(kbps), " KB/s  [", udec_(pct), "% of bus, ", zstr_(limiterTag(pct)), "]")
 
 
-PRI runRawWriteTest(count) | iter, start_ct, elapsed_ct, min_us, max_us, total_us, avg_us, kbps, size, written, ok
+PRI busCeilingKBps() : kbps
+' The transfer ceiling of the SPI bus at the CURRENT clock, in KB/s (KB = 1000,
+' matching the rate math everywhere else in this tool).
+'
+' One data line carries one bit per SCK, so the bus moves spi_freq / 8 bytes per
+' second. Nothing on the card side and nothing in the driver can exceed this --
+' it is the wall that 4-bit support exists to move.
+'
+' @returns kbps - bus ceiling in KB/s at the current SPI frequency
+
+  kbps := sd.getSPIFrequency() / 8 / 1000
+
+PRI pctOfCeiling(size, avg_us) : pct | kbps
+' Measured rate as a percentage of the bus ceiling. See the CON note.
+'
+' @param size - bytes moved per iteration
+' @param avg_us - average microseconds per iteration
+' @returns pct - percent of the bus ceiling actually achieved
+
+  if avg_us == 0
+    return 0
+  kbps := (size * 1000) / avg_us
+  pct := (kbps * 100) / (busCeilingKBps() #> 1)         ' #> 1 guards divide-by-zero
+
+PRI limiterTag(pct) : p_tag
+' The one-word verdict that goes with a percentage. Thresholds are reporting
+' boundaries, not physics -- see the CON note.
+'
+' @param pct - percent of bus ceiling
+' @returns p_tag - pointer to the verdict string
+
+  if pct >= BUS_LIMITED_PCT
+    p_tag := @str_bus_bound
+  elseif pct < CARD_LIMITED_PCT
+    p_tag := @str_card_bound
+  else
+    p_tag := @str_mixed
+
+PRI runRawWriteTest(count) | iter, start_ct, elapsed_ct, min_us, max_us, total_us, avg_us, kbps, size, written, pct, ok
 ' Benchmark raw sector write at specified count.
 ' Works for both single-sector (count=1) and multi-sector operations.
 '
@@ -350,8 +432,87 @@ PRI runRawWriteTest(count) | iter, start_ct, elapsed_ct, min_us, max_us, total_u
         else
             kbps := 0
 
-        debug("  ", udec_(count), " sector(s) (", udec_(size), "B): Min=", udec_(min_us), " Avg=", udec_(avg_us), " Max=", udec_(max_us), " us => ", udec_(kbps), " KB/s")
+        pct := pctOfCeiling(size, avg_us)
+        debug("  ", udec_(count), " sector(s) (", udec_(size), "B): Min=", udec_(min_us), " Avg=", udec_(avg_us), " Max=", udec_(max_us), " us => ", udec_(kbps), " KB/s  [", udec_(pct), "% of bus, ", zstr_(limiterTag(pct)), "]")
+        if verifyRawWrite(count) == 0
+            debug("    verify: ", udec_(size), " bytes match")
 
+
+PRI verifyRawWrite(count) : status | sec, idx, bad, first_bad, exp, got, was_hs
+' Read back what runRawWriteTest just wrote and compare it, byte for byte.
+'
+' WHY THIS EXISTS (2026-08-18). Round 10b measured writes getting dramatically
+' SLOWER in CMD6 high-speed mode -- PNY -64%, Samsung -55% -- with zero reported
+' errors. But "no errors" only meant no card REJECTIONS: nothing in this
+' benchmark had ever checked that the bytes on the card matched the bytes we
+' sent. Round 7b documented a driver-side tx phase that produces exactly that
+' failure -- silent whole-sector corruption the card accepts without complaint.
+' So until this check existed, "slower" and "corrupt" were indistinguishable in
+' the one measurement that mattered.
+'
+' RUN OUTSIDE THE TIMED REGION. Verification cost must not enter the throughput
+' figure, so this is called once after the timed loop, never per iteration.
+'
+' TWO-STAGE ON MISMATCH, and the order matters. The first read-back happens at
+' the CURRENT speed -- cheap, and no disturbance to card state in the common
+' case. But a mismatch there is ambiguous: a bad READ at hp=4 looks identical to
+' a bad WRITE. So a mismatch triggers a second read at a known-good speed, and
+' the two answers separate the cases:
+'   persists at safe speed -> the WRITE really did corrupt the card's contents
+'   clears at safe speed   -> the write was fine; the fast READ-BACK was wrong
+' Dropping to a safe speed exits high-speed mode (a hand-set clock always does),
+' which is why it is reserved for the mismatch path -- by then the run has found
+' what it came for and the remaining timings are forfeit anyway.
+'
+' @param count - Number of sectors runRawWriteTest just wrote
+' @returns status - 0 clean, -1 read-back-only fault, -2 confirmed write corruption
+' @local sec - Sector loop counter
+' @local bad - Mismatched byte count
+' @local first_bad - Byte offset of the first mismatch
+' @local was_hs - Whether high-speed mode was active before the safe-speed re-read
+
+    status := 0
+    bad := 0
+    first_bad := -1
+
+    repeat sec from 0 to count - 1
+        if sd.readSectorsRaw(TEST_SECTOR + sec, 1, @verifyBuf) <> 1
+            debug("  VERIFY: read-back FAILED at sector +", udec_(sec))
+            return -1
+        repeat idx from 0 to sd.SECTOR_SIZE - 1
+            exp := BYTE[@testBuffer][(sec * sd.SECTOR_SIZE) + idx]
+            got := BYTE[@verifyBuf][idx]
+            if exp <> got
+                bad++
+                if first_bad < 0
+                    first_bad := (sec * sd.SECTOR_SIZE) + idx
+                    debug("  VERIFY MISMATCH: offset ", udec_(first_bad), " expected $", uhex_byte_(exp), " got $", uhex_byte_(got))
+
+    if bad == 0
+        return 0
+
+    debug("  VERIFY: ", udec_(bad), " mismatched byte(s) at ", udec_(sd.getSPIFrequency() / 1000), " kHz -- re-reading at a trusted speed")
+
+    ' Stage two: was it the write, or the read-back?
+    was_hs := sd.isHighSpeedActive()
+    sd.setSPISpeed(25_000_000)
+    bad := 0
+    repeat sec from 0 to count - 1
+        if sd.readSectorsRaw(TEST_SECTOR + sec, 1, @verifyBuf) <> 1
+            debug("  VERIFY: safe-speed read-back ALSO failed -- cannot attribute")
+            return -1
+        repeat idx from 0 to sd.SECTOR_SIZE - 1
+            if BYTE[@testBuffer][(sec * sd.SECTOR_SIZE) + idx] <> BYTE[@verifyBuf][idx]
+                bad++
+
+    if bad > 0
+        debug("  >>> CONFIRMED WRITE CORRUPTION: ", udec_(bad), " byte(s) still wrong at 25 MHz <<<")
+        status := -2
+    else
+        debug("  >>> Write was CLEAN; the fast READ-BACK was at fault (HS active before: ", sdec_(was_hs), ") <<<")
+        status := -1
+
+    debug("  NOTE: speed was dropped to attribute this; high-speed mode is now OFF and later timings in this run are not comparable.")
 
 PRI runComparisonTest(count) | idx, start_ct, elapsed_ct, single_us, multi_us, size, improvement, readCt
 ' Compare N individual single-sector reads vs one multi-sector read.
@@ -413,7 +574,7 @@ PRI runFileLevelBenchmarks()
     sd.deleteFile(@testFile)
 
 
-PRI runFileWriteTest(size, p_label) | iter, handle, start_ct, elapsed_ct, min_us, max_us, total_us, avg_us, kbps, written, ok
+PRI runFileWriteTest(size, p_label) | iter, handle, start_ct, elapsed_ct, min_us, max_us, total_us, avg_us, kbps, written, pct, ok
 ' Benchmark file write: create + writeHandle + closeFileHandle.
 ' Measures the full cycle an application would perform.
 '
@@ -459,10 +620,11 @@ PRI runFileWriteTest(size, p_label) | iter, handle, start_ct, elapsed_ct, min_us
         else
             kbps := 0
 
-        debug("  ", zstr_(p_label), ": Min=", udec_(min_us), " Avg=", udec_(avg_us), " Max=", udec_(max_us), " us => ", udec_(kbps), " KB/s")
+        pct := pctOfCeiling(size, avg_us)
+        debug("  ", zstr_(p_label), ": Min=", udec_(min_us), " Avg=", udec_(avg_us), " Max=", udec_(max_us), " us => ", udec_(kbps), " KB/s  [", udec_(pct), "% of bus, ", zstr_(limiterTag(pct)), "]")
 
 
-PRI runFileReadTest(size, p_label) | iter, handle, start_ct, elapsed_ct, min_us, max_us, total_us, avg_us, kbps, bytesRead, ok
+PRI runFileReadTest(size, p_label) | iter, handle, start_ct, elapsed_ct, min_us, max_us, total_us, avg_us, kbps, bytesRead, pct, ok
 ' Benchmark file read: openFileRead + readHandle + closeFileHandle.
 ' Creates a file of the target size first, then times repeated reads.
 '
@@ -511,7 +673,8 @@ PRI runFileReadTest(size, p_label) | iter, handle, start_ct, elapsed_ct, min_us,
             else
                 kbps := 0
 
-            debug("  ", zstr_(p_label), ": Min=", udec_(min_us), " Avg=", udec_(avg_us), " Max=", udec_(max_us), " us => ", udec_(kbps), " KB/s")
+            pct := pctOfCeiling(size, avg_us)
+            debug("  ", zstr_(p_label), ": Min=", udec_(min_us), " Avg=", udec_(avg_us), " Max=", udec_(max_us), " us => ", udec_(kbps), " KB/s  [", udec_(pct), "% of bus, ", zstr_(limiterTag(pct)), "]")
     else
         debug("  ERROR: Could not create test file for read benchmark")
 
@@ -574,13 +737,39 @@ PRI runFileOpenCloseBenchmark() | iter, handle, start_ct, elapsed_ct, open_min, 
 
 ' UTILITY
 
-PRI fillBuffer(size, value)
-' Fill the test buffer with a byte value.
+PRI fillBuffer(size, seed)
+' Fill the test buffer with a SHIFT-DETECTABLE pattern.
+'
+' This was a bytefill() of one repeated value until 2026-08-18. A uniform buffer
+' is worthless for verification: a read (or write) shifted by a bit or a byte
+' reproduces a uniform pattern EXACTLY, including its CRC, so the corruption
+' this benchmark now checks for would compare equal and pass. That is not a
+' hypothetical -- it is the aliasing that blinded the socket shmoo's Path B in
+' round 6 (SOCKET-SHMOO-RUN-NOTES.md) until the reference sector was changed.
+'
+' The pattern varies within a sector AND between sectors, so a shift, a dropped
+' byte, and a wrong-sector read are all distinguishable, and the offset of a
+' shift is recoverable from a dump. The seed keeps different call sites writing
+' different content, as the old value argument did.
+'
+' Timing note: write duration is independent of data content, so this does not
+' affect the throughput being measured.
 '
 ' @param size - Number of bytes to fill
-' @param value - Byte value to fill with
+' @param seed - Per-call-site seed, keeps distinct sites distinguishable
 
-    bytefill(@testBuffer, value, size)
+    fillPattern(@testBuffer, size, seed)
+
+PRI fillPattern(p_buf, size, seed) | idx
+' Write the shift-detectable pattern into any buffer. See fillBuffer.
+'
+' @param p_buf - Destination buffer
+' @param size - Number of bytes
+' @param seed - Pattern seed
+' @local idx - Byte index
+
+    repeat idx from 0 to size - 1
+        BYTE[p_buf][idx] := (idx + (idx >> 8) + seed) & $FF
 
 con { license }
 

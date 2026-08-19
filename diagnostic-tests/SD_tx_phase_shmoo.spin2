@@ -51,6 +51,7 @@ OBJ
 VAR
     BYTE    tx_buf[512]
     BYTE    rx_buf[512]
+    BYTE    cid_buf[16]
     LONG    verdictA[PAD_MAX + 1]
     LONG    verdictB[PAD_MAX + 1]
 
@@ -69,6 +70,13 @@ PUB go() | result, pad, bandLo, bandHi, inBand, center
         waitms(500)
         debug("END_SESSION")
         return
+
+    ' Self-labeling (added 2026-08-18): the round-6 card-difference finding hinged
+    ' on WHICH card a tx characterization ran against -- print the serial so the
+    ' transcript carries its own card identity instead of session continuity.
+    if sd.readCIDRaw(@cid_buf) == 0
+        debug("  >>> SERIAL PSN=$", uhex_long_((cid_buf[9] << 24) | (cid_buf[10] << 16) | (cid_buf[11] << 8) | cid_buf[12]), ...
+            "  PNM='", lstr_(@cid_buf[3], 5), "' <<<")
 
     repeat pad from PAD_MIN to PAD_MAX
         sd.debugSetTxAlignDelay(pad)

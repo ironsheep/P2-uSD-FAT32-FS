@@ -1,0 +1,607 @@
+'' =================================================================================================
+''
+''   File....... SD_socket_shmoo.spin2
+''   Purpose.... Tier-1 socket timing characterization: frequency x sampling-mode x socket shmoo
+''   Author..... Stephen M Moraco
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... AUG 2026
+''   Updated.... 17 AUG 2026
+''
+'' =================================================================================================
+''
+'' Implements Tier 1 of DOCs/Plans/SOCKET-TIMING-CHARACTERIZATION-PLAN.md (section 4):
+'' one binary sweeps frequency x MISO sampling mode x socket and scores each cell by
+'' CRC and data-compare errors, so the integrated timing margin of each socket falls
+'' out as a two-curve shmoo (ON-edge %1_00111 vs PRE-edge %0_00111).
+''
+'' The sweep steps the SPI half-period (hp) directly, hp=14 down to hp=4, because hp is
+'' the real hardware quantum -- every step is a distinct achievable frequency
+'' (clkfreq/(2*hp)): 12.5 MHz up to 43.75 MHz at 350 MHz sysclk. A 1 MHz-step target
+'' table would collapse onto the same few hp values and hide where the boundary is.
+''
+'' Each cell reads the same reference sector twice over:
+''   Path A - debugReadSectorSlow(): every byte through the MISO smart pin
+''            (sp_transfer_8), so the cell's sampling mode governs ALL 512 data bytes.
+''            This is the curve the plan's data-valid-window question is about.
+''   Path B - readSectorRaw(): the production streamer-DMA path (its own alignment
+''            timing, auto-computed from hp). Scored at the same cell so a
+''            socket-timing failure names which mechanism it broke.
+'' Per read, three error classes: command/token failure (cmd), card-CRC vs
+'' calculated-CRC mismatch (crc), payload differs from the reference copy (data).
+''
+'' Socket phases run sequentially in ONE powered session (stop() -> initCardOnly() on
+'' the other pin base) so temperature and supply are common-mode across the whole
+'' matrix. Each phase prints the CID of the card it actually talked to -- transcripts
+'' are self-labeling; a card swap between runs is detected, not trusted to bench notes.
+'' A socket with no card (or failed init) is reported and skipped, so single-socket
+'' sessions produce a half-matrix instead of a fault.
+''
+'' READ-ONLY: this tool never writes the card.
+''
+'' Card placement protocol (plan section 4.1): populate both sockets, run, SWAP the two
+'' cards between sockets, run again. The 2x2 result separates the card contribution
+'' from the socket contribution.
+''
+'' =================================================================================================
+
+CON
+
+' Sysclk ladder: hp is clamped >= 4 by the driver, so the max SPI rate is
+' clkfreq/8 -- the way to place sweep cells BETWEEN the 350 MHz grid points is to
+' rebuild at a different sysclk (hp=4: 290->36.25, 300->37.5, 320->40, 336->42 MHz).
+' Select via run_test.sh -D SYSCLK_290 (etc.); default is 350 MHz.
+#ifdef SYSCLK_290
+     _CLKFREQ        = 290_000_000
+#elseifdef SYSCLK_300
+     _CLKFREQ        = 300_000_000
+#elseifdef SYSCLK_320
+     _CLKFREQ        = 320_000_000
+#elseifdef SYSCLK_336
+     _CLKFREQ        = 336_000_000
+#elseifdef SYSCLK_360
+     ' 360 MHz is 10 MHz PAST THE P2's RATED MAXIMUM -- a deliberate, bounded
+     ' overclock (Stephen, 2026-08-18) whose only purpose is placing hp=4 at
+     ' 45.0 MHz to chase the Edge socket's cmd ceiling (clean at 43.75, the
+     ' 350 MHz instrument limit). Light duty cycle, seconds-long run, no cooling
+     ' required. Do NOT go higher: near the silicon's reliability ceiling a cmd
+     ' failure stops being attributable to the socket. The sweep's slower cells
+     ' are the overclock control -- if THEY fail at this sysclk, the P2 itself
+     ' is unhappy and the run is discarded, not interpreted.
+     _CLKFREQ        = 360_000_000
+#else
+     _CLKFREQ        = 350_000_000
+#endif
+
+     ' P2 Edge module onboard microSD socket
+     EDGE_CS   = 60
+     EDGE_MOSI = 59
+     EDGE_MISO = 58
+     EDGE_SCK  = 61
+
+     ' External microSD adapter on header (base pin 16) -- LA-probeable
+     ADPT_CS   = 20
+     ADPT_MOSI = 19
+     ADPT_MISO = 18
+     ADPT_SCK  = 21
+
+     ' Sweep parameters
+     HP_MAX           = 14                       ' Slowest cell: 350/(2*14) = 12.5 MHz
+     HP_MIN           = 4                        ' Fastest cell: 350/(2*4) = 43.75 MHz (hardware floor)
+     NUM_HP           = HP_MAX - HP_MIN + 1      ' 11 frequency steps
+     NUM_MODES        = 2                        ' ON-edge, PRE-edge
+     NUM_PATHS        = 2                        ' Path A (smart pin), Path B (streamer)
+     NUM_SOCKETS      = 2                        ' Edge, adapter
+     READS_PER_CELL   = 8                        ' Reads per path per cell
+     ABORT_CONSEC     = 2                        ' Consecutive cmd failures that abort a path's cell
+     REF_SECTOR       = 1_000                    ' Reference sector (early data area, read-only)
+     REF_SPEED        = 2_000_000                ' Benign speed for reference capture (hp=87)
+
+     ' Result-grid sentinel values (grid holds total error reads per cell, else:)
+     CELL_NOT_RUN     = 255                      ' Cell never executed (socket absent / aborted)
+     CELL_ABORTED     = 254                      ' Cell aborted early on consecutive cmd failures
+
+' Same pragma set as SD_freq_sweep_tests (known-good binary shape on both pin bases)
+#ifdef __SPINTOOLS__
+#define SD_INCLUDE_RAW
+#define SD_INCLUDE_REGISTERS
+#define SD_INCLUDE_SPEED
+#define SD_INCLUDE_DEBUG
+#elseifdef __FLEXSPIN__
+#define SD_INCLUDE_RAW
+#pragma exportdef SD_INCLUDE_RAW
+#define SD_INCLUDE_REGISTERS
+#pragma exportdef SD_INCLUDE_REGISTERS
+#define SD_INCLUDE_SPEED
+#pragma exportdef SD_INCLUDE_SPEED
+#define SD_INCLUDE_DEBUG
+#pragma exportdef SD_INCLUDE_DEBUG
+#else
+#pragma exportdef SD_INCLUDE_RAW
+#pragma exportdef SD_INCLUDE_REGISTERS
+#pragma exportdef SD_INCLUDE_SPEED
+#pragma exportdef SD_INCLUDE_DEBUG
+#endif
+
+OBJ
+    sd    : "micro_sd_fat32_fs"
+    utils : "isp_rt_utilities"
+
+DAT
+
+' Reference copy of REF_SECTOR, captured per socket at REF_SPEED before the sweep
+refBuffer       byte    0[sd.SECTOR_SIZE]
+refBuffer_guard byte    0[16]
+
+' Per-read capture buffer
+cellBuffer      byte    0[sd.SECTOR_SIZE]
+cellBuffer_guard byte   0[16]
+
+' CID register capture (16 bytes)
+cidBuffer       byte    0[16]
+cidBuffer_guard byte    0[16]
+
+' Error-read totals per cell: [socket][hpIdx][mode][path], hpIdx = HP_MAX - hp.
+' Value = cmd+crc+data error reads (capped), or CELL_ABORTED / CELL_NOT_RUN.
+resultGrid      byte    CELL_NOT_RUN[NUM_SOCKETS * NUM_HP * NUM_MODES * NUM_PATHS]
+
+' Whether each socket phase produced a sweep (init + reference OK)
+socketRan       byte    0[NUM_SOCKETS]
+
+' Whether CRC scoring is live for the card in the current socket (0 for dummy-CRC
+' quirk cards -- their wire CRC never matches, so scoring it would poison every
+' cell total and the card could never report a clean boundary)
+crcActive       byte    0
+
+' One full-sector dual dump per socket phase, on the first data-mismatching read
+phaseDumped     byte    0
+
+' Reference sector actually chosen this phase (alias guard may move it off REF_SECTOR)
+refSector       long    0
+
+' Pins of the socket currently under test (for mid-sweep card re-init)
+curCS           long    0
+curMOSI         long    0
+curMISO         long    0
+curSCK          long    0
+
+' Socket phase names
+edgeName        byte    "EDGE (onboard)", 0
+adptName        byte    "ADAPTER (header, base 16)", 0
+
+
+PUB go() | socketIdx
+'' Main entry: run the full shmoo matrix on both sockets, then print the comparison.
+
+    ' This tool's whole purpose is above-ceiling characterization; lift the
+    ' production speed bound (survives every stop()/re-init this session)
+    sd.debugSetOverspeedAllowed(true)
+
+    debug(" ")
+    debug("============================================================")
+    debug("  SD Socket Timing Shmoo - Tier 1 characterization")
+    debug("============================================================")
+    debug("  SYSCLK: ", udec_(clkfreq / 1_000_000), " MHz")
+    debug("  Sweep: hp=", udec_(HP_MAX), " (", udec_(clkfreq / (HP_MAX * 2) / 1_000), " kHz) -> hp=", udec_(HP_MIN), " (", udec_(clkfreq / (HP_MIN * 2) / 1_000), " kHz)")
+    debug("  Modes: ON-edge (%1_00111) and PRE-edge (%0_00111)")
+    debug("  Per cell: ", udec_(READS_PER_CELL), " smart-pin reads (A) + ", udec_(READS_PER_CELL), " streamer reads (B) of sector ", udec_(REF_SECTOR))
+    debug("  Edge pins CS/MOSI/MISO/SCK: ", udec_(EDGE_CS), "/", udec_(EDGE_MOSI), "/", udec_(EDGE_MISO), "/", udec_(EDGE_SCK))
+    debug("  Adapter pins CS/MOSI/MISO/SCK: ", udec_(ADPT_CS), "/", udec_(ADPT_MOSI), "/", udec_(ADPT_MISO), "/", udec_(ADPT_SCK))
+    debug(" ")
+
+    runSocket(0, @edgeName, EDGE_CS, EDGE_MOSI, EDGE_MISO, EDGE_SCK)
+    runSocket(1, @adptName, ADPT_CS, ADPT_MOSI, ADPT_MISO, ADPT_SCK)
+
+    printComparison()
+
+    debug("END_SESSION")
+
+
+PRI runSocket(socketIdx, pName, cs, mosi, miso, sck) | status, hp, modeIdx, mode, freqHz, actualHz
+' Run the full hp x mode sweep on one socket. Absent card -> report and return.
+'
+' @param socketIdx - 0 = Edge, 1 = adapter (result-grid index)
+' @param pName - Socket display name
+' @param cs, mosi, miso, sck - Pin assignment for this socket
+
+    curCS := cs
+    curMOSI := mosi
+    curMISO := miso
+    curSCK := sck
+
+    debug("============================================================")
+    debug("  SOCKET PHASE: ", zstr_(pName))
+    debug("============================================================")
+
+    status := sd.initCardOnly(cs, mosi, miso, sck)
+    if status < 0
+        debug("  No card / init failed (status=", sdec_(status), ") -- socket skipped")
+        sd.stop()                                       ' Worker cog may hold the old pins; release it
+        debug(" ")
+        return
+
+    printCID()
+
+    phaseDumped := 0
+
+    if not captureReference()
+        debug("  Reference capture FAILED -- socket skipped")
+        sd.stop()
+        debug(" ")
+        return
+
+    socketRan[socketIdx] := 1
+
+    debug(" ")
+    ' 'err' = the read call returned a negative status -- which covers command/
+    ' token failures AND the driver's own CRC-retry exhaustion (an in-driver CRC
+    ' failure surfaces here as a status, not in the crc column; the per-failure
+    ' status line printed under the row is what disambiguates).
+    debug("  hp  freq_kHz  mode | A: err crc data | B: err crc data")
+    debug("  --  --------  ---- | --------------- | ---------------")
+
+    repeat hp from HP_MAX to HP_MIN
+        ' Request a frequency that lands exactly on this hp after the driver's
+        ' ceiling divide (+1 keeps exact-division cases from rounding to hp-1)
+        freqHz := clkfreq / (hp * 2) + 1
+        repeat modeIdx from 0 to NUM_MODES - 1
+            mode := (modeIdx == 0) ? 1 : 0              ' ON-edge first, then PRE-edge
+            actualHz := sd.setSPISpeed(freqHz)
+            if actualHz == 0
+                debug("  WARNING: setSPISpeed(", udec_(freqHz), ") FAILED at hp=", udec_(hp), " -- cell skipped")
+                next
+            if clkfreq / (actualHz * 2) <> hp
+                debug("  WARNING: hp=", udec_(hp), " requested but driver landed ", udec_(clkfreq / (actualHz * 2)))
+            sd.debugSetSampleMode(mode)
+            if not runCell(socketIdx, hp, modeIdx, mode, actualHz)
+                ' Card re-init after cell failure did not recover -- abort the sweep
+                debug("  Card re-init FAILED at hp=", udec_(hp), " -- socket sweep aborted")
+                sd.debugSetSampleMode(-1)
+                sd.stop()
+                printSocketSummary(socketIdx, pName)
+                debug(" ")
+                return
+
+    ' Restore driver defaults and release the socket
+    sd.debugSetSampleMode(-1)
+    sd.setSPISpeed(REF_SPEED)
+    sd.stop()
+
+    printSocketSummary(socketIdx, pName)
+    debug(" ")
+
+
+PRI printCID() | status, psn, mdtYear, mdtMonth
+' Read and print the CID of the card in the current socket (self-labeling transcript).
+' A matched same-model pair prints identical MID/OID/PNM -- the serial (PSN) and
+' manufacture date are what tell the two cards apart across the 2x2 swap runs.
+
+    utils.initGuard(@cidBuffer_guard)
+    status := sd.readCIDRaw(@cidBuffer)
+    utils.checkGuard(@cidBuffer_guard, @"cidBuffer guard")
+    if status < 0
+        debug("  CID read FAILED (status=", sdec_(status), ")")
+        return
+
+    ' CID layout: [0]=MID, [1..2]=OID, [3..7]=PNM (5 ASCII), [8]=PRV, [9..12]=PSN,
+    ' [13..14]=MDT (12 bits: 8-bit year offset from 2000, 4-bit month), [15]=CRC7
+    psn := (cidBuffer[9] << 24) | (cidBuffer[10] << 16) | (cidBuffer[11] << 8) | cidBuffer[12]
+    mdtYear := 2000 + ((cidBuffer[13] & $0F) << 4) + (cidBuffer[14] >> 4)
+    mdtMonth := cidBuffer[14] & $0F
+    debug("  Card: MID=$", uhex_byte_(cidBuffer[0]), " OID='", lstr_(@cidBuffer[1], 2), ...
+        "' PNM='", lstr_(@cidBuffer[3], 5), "' rev ", udec_(cidBuffer[8] >> 4), ".", udec_(cidBuffer[8] & $0F))
+    debug("  >>> SERIAL PSN=$", uhex_long_(psn), "  mfg ", udec_(mdtYear), "/", udec_(mdtMonth), " <<<")
+    debug("  CID raw: ", uhex_byte_array_(@cidBuffer, 16))
+
+
+PRI captureReference() : ok | status, matchesBefore, mismatches, idx
+' Choose a reference sector, capture it at a benign speed into refBuffer, confirm
+' the smart-pin slow path returns the identical payload, and check CRC liveness.
+'
+' ALIAS GUARD (added after round 4): a one-bit shift of a UNIFORM sector
+' reproduces itself -- data compare AND CRC both pass on shifted garbage, so
+' Path B verdicts are blind on such content (how the round-4 instrument
+' conflict happened: sector 1000 on a fresh card is all one byte). The sector
+' scan below requires shift-distinguishable content; sector 0 (MBR, ends
+' $55 $AA) is the final fallback since it always has structure.
+'
+' @returns ok - true when the reference is trustworthy and the sweep may proceed
+
+    sd.setSPISpeed(REF_SPEED)
+    sd.debugSetSampleMode(-1)
+
+    ' Pick the first shift-distinguishable sector: REF_SECTOR, then a window
+    ' above it, then sector 0 as the structured fallback
+    refSector := -1
+    repeat idx from REF_SECTOR to REF_SECTOR + 63
+        utils.initGuard(@refBuffer_guard)
+        status := sd.readSectorRaw(idx, @refBuffer)
+        utils.checkGuard(@refBuffer_guard, @"refBuffer guard")
+        if status < 0
+            debug("  Reference streamer read failed at sector ", udec_(idx), " (status=", sdec_(status), ")")
+            return false
+        if not refIsShiftBlind()
+            refSector := idx
+            quit
+    if refSector < 0
+        status := sd.readSectorRaw(0, @refBuffer)
+        if status < 0
+            debug("  Reference streamer read failed at sector 0 (status=", sdec_(status), ")")
+            return false
+        refSector := 0
+        if refIsShiftBlind()
+            debug("  WARNING: no shift-distinguishable sector found (", udec_(REF_SECTOR), "..+63, 0) --")
+            debug("           Path B data verdicts are BLIND to whole-bit shifts this phase")
+
+    matchesBefore := sd.getCRCMatchCount()
+    utils.initGuard(@refBuffer_guard)
+    status := sd.readSectorRaw(refSector, @refBuffer)
+    utils.checkGuard(@refBuffer_guard, @"refBuffer guard")
+    if status < 0
+        debug("  Reference streamer re-read failed (status=", sdec_(status), ")")
+        return false
+
+    utils.initGuard(@cellBuffer_guard)
+    status := sd.debugReadSectorSlow(refSector, @cellBuffer)
+    utils.checkGuard(@cellBuffer_guard, @"cellBuffer guard")
+    if status < 0
+        debug("  Reference smart-pin read failed (status=", sdec_(status), ")")
+        return false
+
+    mismatches := 0
+    repeat idx from 0 to sd.SECTOR_SIZE - 1
+        if cellBuffer[idx] <> refBuffer[idx]
+            mismatches++
+    if mismatches > 0
+        debug("  Reference reads DISAGREE at benign speed (", udec_(mismatches), " bytes) -- cannot sweep")
+        return false
+
+    crcActive := 1
+    if sd.getCRCMatchCount() == matchesBefore
+        crcActive := 0
+        debug("  WARNING: card returns dummy data CRC (quirk class) -- crc scoring is")
+        debug("           DISABLED for this phase: crc columns read 0 by construction,")
+        debug("           and crc is excluded from cell totals. cmd/data columns score.")
+
+    debug("  Reference sector ", udec_(refSector), " captured at ", udec_(sd.getSPIFrequency() / 1_000), " kHz; ", ...
+        zstr_(refIsShiftBlind() ? @"SHIFT-BLIND content" : @"shift-distinguishable"), "; paths agree")
+    ok := true
+
+
+PRI refIsShiftBlind() : blind | idx, prev, shifted
+' True when refBuffer is indistinguishable from a one-bit-right-shifted copy of
+' itself (for either shifted-in bit value) -- on such content a whole-bit
+' streamer misalignment produces byte-identical data AND a matching CRC.
+
+    repeat prev from 0 to 1                             ' Both shift-in polarities
+        blind := true
+        repeat idx from 0 to sd.SECTOR_SIZE - 1
+            shifted := ((idx == 0 ? (prev << 7) : (refBuffer[idx - 1] << 7)) | (refBuffer[idx] >> 1)) & $FF
+            if shifted <> refBuffer[idx]
+                blind := false
+                quit
+        if blind
+            return                                      ' Aliases under this polarity -> blind
+    blind := false
+
+
+PRI runCell(socketIdx, hp, modeIdx, mode, actualHz) : ok | aCmd, aCrc, aData, aBad, bCmd, bCrc, bData, bBad, abortedA, abortedB
+' Run one shmoo cell: READS_PER_CELL reads on each path at the current speed + mode.
+' Prints the cell row and stores the cell's BAD-READ COUNT (a read with any scored
+' error counts once, whatever the mix) in the result grid.
+'
+' @returns ok - false only when the card needed a re-init that failed (abort socket)
+
+    ok := true
+
+    abortedA := runPath(0, @aCmd, @aCrc, @aData, @aBad) ' Path A: smart-pin slow reads
+    abortedB := runPath(1, @bCmd, @bCrc, @bData, @bBad) ' Path B: streamer reads
+
+    debug("  ", udec_(hp), "  ", udec_(actualHz / 1_000), "  ", zstr_((mode == 1) ? @"ON  " : @"PRE "), " |    ", ...
+        udec_(aCmd), "   ", udec_(aCrc), "   ", udec_(aData), "  |    ", udec_(bCmd), "   ", udec_(bCrc), "   ", udec_(bData))
+
+    setGrid(socketIdx, hp, modeIdx, 0, abortedA ? CELL_ABORTED : aBad)
+    setGrid(socketIdx, hp, modeIdx, 1, abortedB ? CELL_ABORTED : bBad)
+
+    if aCmd > 0 or bCmd > 0
+        ' Any timed-out read can leave the card mid-transfer; re-init before the next cell
+        sd.stop()
+        if sd.initCardOnly(curCS, curMOSI, curMISO, curSCK) < 0
+            ok := false
+
+
+PRI runPath(path, pCmd, pCrc, pData, pBad) : aborted | iter, status, consec, detailShown, diffs, firstDiff, idx, readBad
+' Execute READS_PER_CELL reads on one path at the current speed/mode, scoring each.
+' crc is scored only while crcActive (dummy-CRC quirk cards never match by
+' construction and must not poison the totals).
+'
+' @param path - 0 = Path A (debugReadSectorSlow), 1 = Path B (readSectorRaw)
+' @param pCmd, pCrc, pData - Pointers to the three error-class counters (written here)
+' @param pBad - Pointer to the bad-read count (a read with >=1 scored error counts once)
+' @returns aborted - true when the path quit early on consecutive cmd failures
+
+    long[pCmd] := 0
+    long[pCrc] := 0
+    long[pData] := 0
+    long[pBad] := 0
+    consec := 0
+    detailShown := false
+
+    repeat iter from 1 to READS_PER_CELL
+        bytefill(@cellBuffer, 0, sd.SECTOR_SIZE)
+        utils.initGuard(@cellBuffer_guard)
+        if path == 0
+            status := sd.debugReadSectorSlow(refSector, @cellBuffer)
+        else
+            status := sd.readSectorRaw(refSector, @cellBuffer)
+        utils.checkGuard(@cellBuffer_guard, @"cellBuffer guard")
+
+        if status < 0
+            long[pCmd]++
+            long[pBad]++
+            consec++
+            ' Name the mechanism: -1 E_TIMEOUT = card never answered (outbound
+            ' SCK/MOSI suspect); -3 E_BAD_RESPONSE = answer arrived garbled
+            ' (return path suspect). Abort caps this at ABORT_CONSEC lines.
+            debug("      path", zstr_((path == 0) ? @"A" : @"B"), " cmd fail read#", udec_(iter), ": status=", sdec_(status))
+            if consec >= ABORT_CONSEC
+                aborted := true
+                quit                                    ' Cell is dead on this path; stop burning timeouts
+            next
+        consec := 0
+        readBad := false
+
+        if crcActive and (sd.getLastReceivedCRC() <> sd.getLastCalculatedCRC())
+            long[pCrc]++
+            readBad := true
+
+        diffs := 0
+        firstDiff := -1
+        repeat idx from 0 to sd.SECTOR_SIZE - 1
+            if cellBuffer[idx] <> refBuffer[idx]
+                diffs++
+                if firstDiff < 0
+                    firstDiff := idx
+        if diffs > 0
+            long[pData]++
+            readBad := true
+            if not detailShown
+                detailShown := true
+                debug("      path", zstr_((path == 0) ? @"A" : @"B"), " data diff: ", udec_(diffs), " bytes, first at ", udec_(firstDiff), ...
+                    " exp=$", uhex_byte_(refBuffer[firstDiff]), " got=$", uhex_byte_(cellBuffer[firstDiff]))
+            if phaseDumped == 0
+                ' Once per socket phase: full dual dump of the first mismatching
+                ' read, so a shift/rotation names itself from the whole stream
+                ' instead of one byte pair.
+                phaseDumped := 1
+                dumpMismatch()
+        if readBad
+            long[pBad]++
+
+
+PRI dumpMismatch() | row
+' Full dual dump of reference vs captured sector, 16 bytes per row, interleaved
+' so a bit/byte shift is visible by eye. 64 debug lines; fires once per phase.
+
+    debug("      ---- full dump of first mismatching read (exp = reference) ----")
+    repeat row from 0 to (sd.SECTOR_SIZE / 16) - 1
+        debug("      exp +", udec_(row * 16), ": ", uhex_byte_array_(@refBuffer + row * 16, 16))
+        debug("      got +", udec_(row * 16), ": ", uhex_byte_array_(@cellBuffer + row * 16, 16))
+    debug("      ---- end dump ----")
+
+
+PRI setGrid(socketIdx, hp, modeIdx, path, value)
+' Store one cell result. hpIdx runs 0 (hp=HP_MAX, slowest) to NUM_HP-1 (hp=HP_MIN).
+
+    resultGrid[((socketIdx * NUM_HP + (HP_MAX - hp)) * NUM_MODES + modeIdx) * NUM_PATHS + path] := value
+
+
+PRI getGrid(socketIdx, hp, modeIdx, path) : value
+
+    value := resultGrid[((socketIdx * NUM_HP + (HP_MAX - hp)) * NUM_MODES + modeIdx) * NUM_PATHS + path]
+
+
+PRI printSocketSummary(socketIdx, pName) | hp
+' Print the per-socket result grid: error reads per cell, all four mode/path columns.
+
+    debug(" ")
+    debug("  SUMMARY: ", zstr_(pName), "  (bad reads of ", udec_(READS_PER_CELL), " per path; 254=aborted, 255=not run)")
+    debug("  hp  freq_kHz  ON-A  ON-B  PRE-A  PRE-B")
+    debug("  --  --------  ----  ----  -----  -----")
+    repeat hp from HP_MAX to HP_MIN
+        debug("  ", udec_(hp), "  ", udec_(clkfreq / (hp * 2) / 1_000), "    ", ...
+            udec_(getGrid(socketIdx, hp, 0, 0)), "    ", udec_(getGrid(socketIdx, hp, 0, 1)), "    ", ...
+            udec_(getGrid(socketIdx, hp, 1, 0)), "     ", udec_(getGrid(socketIdx, hp, 1, 1)))
+
+
+PRI printComparison() | modeIdx, path, socketIdx, hpA, hpB
+' Cross-socket boundary comparison: for each mode/path, the fastest hp whose cell --
+' and every slower cell -- ran clean. Only meaningful when both sockets swept.
+
+    debug("============================================================")
+    debug("  SOCKET COMPARISON - clean boundary per mode/path")
+    debug("============================================================")
+
+    if socketRan[0] == 0 or socketRan[1] == 0
+        debug("  Only ", udec_(socketRan[0] + socketRan[1]), " socket(s) swept -- no comparison; see per-socket summaries above")
+        return
+
+    debug("  (boundary = fastest hp with this and every slower cell clean)")
+    debug("  mode/path   EDGE            ADAPTER")
+    repeat modeIdx from 0 to NUM_MODES - 1
+        repeat path from 0 to NUM_PATHS - 1
+            hpA := cleanBoundary(0, modeIdx, path)
+            hpB := cleanBoundary(1, modeIdx, path)
+            debug("  ", zstr_((modeIdx == 0) ? @"ON " : @"PRE"), " Path", zstr_((path == 0) ? @"A" : @"B"), "  ", ...
+                zstr_(boundaryStr(hpA, @boundA)), "  ", zstr_(boundaryStr(hpB, @boundB)))
+
+
+PRI cleanBoundary(socketIdx, modeIdx, path) : boundary | hp
+' Walk hp from slowest to fastest; boundary is the last hp before the first dirty cell.
+' Returns 0 when even the slowest cell is dirty (no clean operating point found).
+
+    boundary := 0
+    repeat hp from HP_MAX to HP_MIN
+        if getGrid(socketIdx, hp, modeIdx, path) <> 0
+            return
+        boundary := hp
+
+
+PRI boundaryStr(hp, pBuf) : pStr | khz
+' Format a boundary as "hp=N (NNNNN kHz)" into pBuf, or "none clean" for hp==0.
+
+    pStr := pBuf
+    if hp == 0
+        bytemove(pBuf, @"none clean     ", 16)
+        return
+    khz := clkfreq / (hp * 2) / 1_000
+    ' Compose "hp=NN NNNNN kHz" manually (diagnostic display only)
+    bytemove(pBuf, @"hp=", 3)
+    if hp > 9
+        byte[pBuf][3] := "0" + hp / 10
+        byte[pBuf][4] := "0" + hp // 10
+    else
+        byte[pBuf][3] := " "
+        byte[pBuf][4] := "0" + hp
+    byte[pBuf][5] := " "
+    byte[pBuf][6] := "0" + (khz / 10_000) // 10
+    byte[pBuf][7] := "0" + (khz / 1_000) // 10
+    byte[pBuf][8] := "0" + (khz / 100) // 10
+    byte[pBuf][9] := "0" + (khz / 10) // 10
+    byte[pBuf][10] := "0" + khz // 10
+    bytemove(pBuf + 11, @" kHz", 5)
+
+
+DAT
+' Scratch strings for boundary formatting (16 bytes each incl. terminator)
+boundA          byte    0[16]
+boundB          byte    0[16]
+
+con { license }
+
+{{
+  =================================================================================================
+
+  Terms of Use: MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this
+  software and associated documentation files (the "Software"), to deal in the Software
+  without restriction, including without limitation the rights to use, copy, modify,
+  merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies
+  or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+  INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+  HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+  CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+  OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+  =================================================================================================
+}}

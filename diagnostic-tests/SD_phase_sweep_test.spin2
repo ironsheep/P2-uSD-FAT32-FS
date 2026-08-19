@@ -27,8 +27,37 @@
 '' =================================================================
 
 CON
+' Sysclk selection (added 2026-08-17 for the socket-timing study): default stays
+' 250 MHz (@macca's failing case); -D SYSCLK_350 rebuilds at 350 MHz so the SPI
+' targets below land on the socket-shmoo grid (35.0 MHz = hp5, 29.17 MHz = hp6).
+#ifdef SYSCLK_350
+    _CLKFREQ        = 350_000_000
+#else
     _CLKFREQ        = 250_000_000               ' Configurable per build
+#endif
     _XTLFREQ        = 20_000_000
+
+' SPI speed override (added 2026-08-17): the sweep historically ran at whatever
+' speed initCardOnly settled, which cannot reach the region where the Lerdisk
+' asdfg card corrupts Path B (onset 29.17-35.0 MHz per the socket shmoo). Select
+' a target with -D SPI_35M / -D SPI_29M / -D SPI_25M; default (no define) keeps
+' the historical init-settled behavior.
+' -D SPI_43M (added 2026-08-18) targets hp=4 / 43.75 MHz at 350 MHz sysclk -- the
+' FLOOR CELL. Two production guards have to be lifted to measure it at all: the
+' speed bound (as with the other high arms) and the hp=4 floor-cell rule, which
+' otherwise collapses every positive offset to the same align value and yields a
+' flat, meaningless sweep. This arm lifts both. It is the only arm that does.
+#ifdef SPI_43M
+    SPI_TARGET_HZ   = 43_750_000
+#elseifdef SPI_35M
+    SPI_TARGET_HZ   = 35_000_000
+#elseifdef SPI_29M
+    SPI_TARGET_HZ   = 29_170_000
+#elseifdef SPI_25M
+    SPI_TARGET_HZ   = 25_000_000
+#else
+    SPI_TARGET_HZ   = 0                         ' 0 = leave at init-settled speed
+#endif
 
     ' SD card pin assignments
     ' Default: P2 Edge module SD slot. Build with -D SD_PINS_EXTERNAL
@@ -47,8 +76,9 @@ CON
     DEBUG_BAUD      = 2_000_000
 
     OFFSET_MIN      = -3                        ' Sweep range low
-    OFFSET_MAX      = 8                         ' Sweep range high
-    OFFSET_COUNT    = 12                        ' OFFSET_MAX - OFFSET_MIN + 1
+    OFFSET_MAX      = 16                        ' Sweep range high (widened 2026-08-17 with the
+                                                ' driver clamp, to reach the passing band's top)
+    OFFSET_COUNT    = 20                        ' OFFSET_MAX - OFFSET_MIN + 1
     MODE_COUNT      = 2                         ' pre-edge + on-edge
 
     PHASE_TEST_SECTOR = 0                       ' Sector swept on Path B (any readable sector)
@@ -100,6 +130,18 @@ PUB go() | mode, offset, status
     debug("  READ-ONLY: no writes to the card.")
     debug(" ")
 
+    ' Characterization tool: lift the production speed bound so the SPI_43M /
+    ' SPI_35M / SPI_29M override arms can exceed the card ceiling
+    sd.debugSetOverspeedAllowed(true)
+
+#ifdef SPI_43M
+    ' Floor cell only: lift the hp=4 rule so positive offsets actually take
+    ' effect. Without this the sweep reports every positive offset identically
+    ' and measures nothing. Production keeps the rule -- see the CON note above.
+    sd.debugSetAlignFloorRuleEnabled(false)
+    debug("  FLOOR-CELL ARM: hp=4 rule LIFTED for measurement (production keeps it)")
+#endif
+
     status := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
     if status < 0
         debug("FATAL: initCardOnly failed (", sdec_(status), ")")
@@ -107,6 +149,9 @@ PUB go() | mode, offset, status
         return
 
     debug("  initCardOnly OK. hp = ", udec_(sd.debugGetCurrentHp()))
+    if SPI_TARGET_HZ > 0
+        debug("  SPI override: requested ", udec_(SPI_TARGET_HZ / 1_000), " kHz, got ", ...
+            udec_(sd.setSPISpeed(SPI_TARGET_HZ) / 1_000), " kHz (hp = ", udec_(sd.debugGetCurrentHp()), ")")
     debug(" ")
     debug("============================================================")
     debug("  Per-cell sweep")
