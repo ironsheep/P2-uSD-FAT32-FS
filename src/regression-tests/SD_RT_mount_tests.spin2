@@ -66,7 +66,7 @@ sectorBuffer_guard BYTE 0[16]
 saveBuffer      BYTE    0[512]                          ' corruption group: pristine copy for restore
 saveBuffer_guard BYTE   0[16]
 
-PUB go() | result, pLabel, freeSpace, handle, bytesRead, vbrSec, fsiSec
+PUB go() | result, pLabel, freeSpace, handle, bytesRead, vbrSec, fsiSec, vMajor, vMinor, vPatch
 '' Main entry point for mount/unmount regression tests
 ''
 '' Tests SD card mount, unmount, and basic card operations
@@ -75,6 +75,33 @@ PUB go() | result, pLabel, freeSpace, handle, bytesRead, vbrSec, fsiSec
     debug("==============================================")
     debug("  SD Card Driver - Mount/Unmount Tests")
     debug("==============================================")
+
+    ' ----------------------------------
+    ' TEST GROUP: Driver identity
+    ' ----------------------------------
+    ' Runs FIRST and before any mount, deliberately: these are core methods that
+    ' must answer in every build, including one that never touches a card.
+    '
+    ' They are load-bearing beyond their size. Every performance figure in the card
+    ' catalog is stamped with what driverVersionString() returns, and a catalog
+    ' table states its provenance in one banner taken from that value -- so an
+    ' accessor that returned nothing, or disagreed with the constants, would
+    ' mislabel a whole sweep in a way that is indistinguishable from correct data
+    ' afterwards. tools/check_doc_version.sh checks the constants against the
+    ' string and the changelog statically; this checks that the accessors actually
+    ' deliver them at run time.
+    utils.startTestGroup(@"Driver identity")
+
+    utils.startTest(@"driverVersion() reports the build's version")
+    vMajor, vMinor, vPatch := sd.driverVersion()
+    utils.setCheckCountPerTest(3)
+    utils.evaluateSubValue(vMajor, @"major", sd.DRIVER_VERSION_MAJOR)
+    utils.evaluateSubValue(vMinor, @"minor", sd.DRIVER_VERSION_MINOR)
+    utils.evaluateSubValue(vPatch, @"patch", sd.DRIVER_VERSION_PATCH)
+    utils.showSubTestResults()
+
+    utils.startTest(@"driverVersionString() returns printable text")
+    utils.evaluateNotZero(sd.driverVersionString(), @"version string pointer")
 
     ' ----------------------------------
     ' TEST GROUP: Operations before mount

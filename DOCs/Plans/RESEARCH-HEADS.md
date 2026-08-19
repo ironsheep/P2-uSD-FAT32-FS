@@ -456,7 +456,7 @@ dispersion needs repeat runs before any delta is believed.
 ### Open
 
 - Two `run_regression.sh` timeout budgets are tuned to a 32GB card and do not clear a 119GB one (`mount_tests` 120s, `read_write_tests` 90s). Harness assumption, not a driver defect
-- Regression total is now **532**, not 530 — a run reporting 530 is a stale binary
+- Regression total is now **534** (532 after the speed-tests group, +2 for the driver-identity group added 2026-08-19). A run reporting 530 or 532 is a stale binary
 
 ### Doc pass — done 2026-08-18
 

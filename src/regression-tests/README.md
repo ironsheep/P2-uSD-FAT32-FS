@@ -10,7 +10,7 @@ Automated regression test suite for the P2 SD Card Driver. All tests execute on 
 
 | Test Suite | Description | Tests |
 |------------|-------------|-------|
-| **Mount Tests** | Card initialization, mounting, unmounting, pre/post-mount errors, double-mount, structural corruption (raw-patched MBR/VBR/FSInfo), RAW-mode gate | 43 |
+| **Mount Tests** | Card initialization, mounting, unmounting, pre/post-mount errors, double-mount, structural corruption (raw-patched MBR/VBR/FSInfo), RAW-mode gate, driver identity | 45 |
 | **File Operations** | Create, open, close, delete, rename, filename edge cases, cluster-0 lazy-allocation fixtures (V3 handle API) | 35 |
 | **Read/Write Tests** | Data integrity, sector/cluster boundaries, constant patterns, tellHandle/EOF, multi-cluster, large files | 49 |
 | **Directory Tests** | Directory listing, navigation, deep nesting, boundaries, many-file stress, stale cluster, cluster-0 chdir rejection | 33 |
@@ -21,7 +21,7 @@ Automated regression test suite for the P2 SD Card Driver. All tests execute on 
 | **Raw Sector Tests** | Direct sector read/write, large LBA addressing | 14 |
 | **Format Tests** | FAT32 structure validation, cross-OS compatibility | 57 |
 | **Subdirectory Ops Tests** | Cross-buffer cache coherence, empty files, subdir operations | 18 |
-| **Core Total** | | **331** |
+| **Core Total** | | **333** |
 
 ### Additional Test Suites
 
@@ -45,7 +45,7 @@ Automated regression test suite for the P2 SD Card Driver. All tests execute on 
 | **FAT Chain Tests** | Cross-boundary overwrite follows the FAT chain; mid-sector append preserves leading bytes | 2 |
 | **Write Integrity Tests** | Content written is content stored: byte-level verification against an independently generated pattern across sector boundaries (511/512/513, 1023/1024/1025), cluster boundaries derived from `clusterBytes()` at run time, three files written interleaved, and a raw multi-block round-trip that bypasses the file layer. Classifies a mismatch as SHIFTED-LATE / SHIFTED-EARLY / OTHER so a write-phase fault is named on sight | 13 |
 | | **Additional Total** | **256** |
-| | **Grand Total (28 suites)** | **587** |
+| | **Grand Total (28 suites)** | **589** |
 
 **How a test is counted.** One test is one *executed* `utils.startTest()` call — the same
 unit the framework prints as `* Test #N`. Every suite, including `SD_RT_multiblock_tests`

@@ -14,6 +14,13 @@ followed by a build without the step, which wedged both times.
 **The fix is now unconditional in `initCard()`** — no flag, every driver start
 (Stephen, 2026-08-19). Release is **v1.8.0**.
 
+> ## ▶ START AT THE RUN SHEET, NOT HERE
+>
+> **[ROUND-16-RUN-SHEET.md](ROUND-16-RUN-SHEET.md)** is the ordered bench pass —
+> one page, six steps, stop conditions. This file is the campaign *record*: 1600+
+> lines of accumulated round history, useful as background on a step and wrong to
+> work from directly.
+
 **Run next: ROUND 16 — certification, then the catalog sweep.**
 
 | Track | What | Why |
@@ -716,7 +723,7 @@ anything against your round-8 transcripts. All of it is compile-verified across
 
 | Change | Why it matters to you |
 |---|---|
-| `SD_RT_speed_tests`: new **High-Speed Mode Exits** group, **15 tests → 17** | **Regression totals move 530 → 532.** A 530 means a stale binary |
+| `SD_RT_speed_tests`: new **High-Speed Mode Exits** group, **15 tests → 17** | **Regression totals move 530 → 532 → 534** (+2 driver identity, 2026-08-19). Anything below 534 is a stale binary |
 | Driver: new **`debugSetAlignFloorRuleEnabled()`** [SD_INCLUDE_DEBUG] | Makes 9c possible at all; production behavior unchanged |
 | `SD_phase_sweep_test`: new **`-D SPI_43M`** arm | 9c's instrument. Lifts two production guards on purpose |
 
@@ -848,7 +855,7 @@ cd tools
 ./run_regression.sh
 ```
 
-**Expect 532/532, not 530/530.** `SD_RT_speed_tests` grew from 15 tests to 17
+**Expect 534/534, not 530/530 or 532/532.** `SD_RT_speed_tests` grew from 15 tests to 17
 this round (the High-Speed Mode Exits group), so the suite total moved with it.
 A run reporting 530 means the binary predates this round's tree — stop and say
 so rather than reading it as a pass.
@@ -1620,7 +1627,7 @@ cd tools
 ./run_regression.sh
 ```
 
-Expect **532/532**. Note the driver no longer prints a quiesce marker — the
+Expect **534/534**. Note the driver no longer prints a quiesce marker — the
 unconditional debug line was removed when the step became production, because
 production has no business printing on every mount. Build shape is the proof now:
 there is no other build.

@@ -28,7 +28,7 @@ This project provides a robust, high-performance SD card driver for the P2 micro
 - **Filesystem Repair**: Two tools sharing one four-pass engine — `audit` (read-only) and `fsck` (repairs)
 - **Multi-Cog Safe**: Dedicated worker cog with hardware lock serialization
 - **Per-Cog Working Directory**: Each cog maintains its own CWD for safe concurrent navigation
-- **Regression Tested**: 587 automated tests across 28 test suites, certified on two cluster geometries
+- **Regression Tested**: 589 automated tests across 28 test suites, certified on two cluster geometries
 
 ## Documentation
 
@@ -44,7 +44,7 @@ This project provides a robust, high-performance SD card driver for the P2 micro
 | **[FAT32 API Concepts](DOCs/Reference/FAT32-API-CONCEPTS-REFERENCE.md)** | FAT32 background for embedded developers |
 | **[Utilities Guide](DOCs/SD-CARD-UTILITIES.md)** | Standalone utility programs (format, audit, fsck, benchmark) |
 | **[Utility Internals](DOCs/Utils/)** | Theory of operations for each utility |
-| **[Regression Testing](src/regression-tests/README.md)** | Test infrastructure, 587 tests across 28 suites (as of v1.7.0) |
+| **[Regression Testing](src/regression-tests/README.md)** | Test infrastructure, 589 tests across 28 suites (as of v1.8.0) |
 | **[Example Programs](src/EXAMPLES/README.md)** | Compilable examples: read/write, data logger, directory walk, multi-cog |
 | **[Demo Shell](src/DEMO/README.md)** | Full-featured terminal shell with card formatting, filesystem repair, file management, and benchmarking |
 
@@ -147,7 +147,7 @@ P2-uSD-FAT32-FS/
 │   ├── DEMO/                       # Interactive demo application
 │   │   ├── SD_demo_shell.spin2        # Terminal shell (dir, cd, type, etc.)
 │   │   └── isp_serial_singleton.spin2 # Serial terminal driver
-│   └── regression-tests/          # Regression test suite (587 tests as of v1.7.0)
+│   └── regression-tests/          # Regression test suite (589 tests as of v1.8.0)
 │       ├── SD_RT_*_tests.spin2        # 28 test files (mount, file ops, seek, fatchain, write integrity, async, defrag, etc.)
 │       ├── isp_rt_utilities.spin2     # Shared test framework
 │       └── TestCard/                  # Test card setup and validation
