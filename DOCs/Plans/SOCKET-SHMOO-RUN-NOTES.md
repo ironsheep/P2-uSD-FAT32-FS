@@ -3167,3 +3167,34 @@ from these transcripts (supersede the session-1 mangled-key transcripts):
 
 Same silicon key `$12_ASTC_2.0` on both — one product, one silicon. A carries
 mkfs.fat, B carries P2FMTER. Next: step 2 (16d), Samsung EVO `$4AC8_5F42`.
+
+## BENCH PAUSED at step 2 — the 16d cell has no instrument arm
+
+**Observation** (protocol rule 2: proceeding needs a source change, so hand
+back). The 16d cell is "high speed negotiated via CMD6, then writes clocked at
+25 MHz". Searched for its implementation before seating the Samsung:
+
+- `SD_performance_benchmark`: the only speed arm is `#ifdef HIGH_SPEED`
+  (lines 174-187, added 2026-08-18) — negotiate, then measure EVERYTHING at
+  the negotiated clock. That is the round-11b cell, not the missing one. The
+  only post-negotiation `setSPISpeed(25_000_000)` is the verify-failure
+  attribution fallback (~line 643), unreachable in a healthy run.
+- `SD_speed_characterize`: no `attemptHighSpeed()` call anywhere; its ladder
+  is standard-mode and its CATALOG-ROW op is `random_read_1x512` — read-only.
+- No dedicated 16d instrument exists in `diagnostic-tests/` or `src/UTILS/`.
+- `run_test.sh -D <sym>` passes defines through (repeatable), so a build-time
+  arm slots straight into the existing invocation pattern.
+
+**Bench recommendation** (container decides): a second define in the benchmark
+(e.g. `HS_WRITES_AT_25`, valid only with `HIGH_SPEED`) that negotiates CMD6,
+then drops the clock to 25 MHz for the write measurements — or the simpler
+whole-run-at-25-inside-HS form, which still answers the attribution because
+both comparators already exist (10b: standard mode at 25; 11b: HS mode at
+43.75). Either way the transcript must record `isHighSpeedActive()` at start
+and end per the run sheet, and a `CATALOG-ROW`-visible marker of which arm ran
+(the harvester must not mix these rows into the standard tables).
+
+**State at pause:** tree clean at `78185bd` (source unchanged at `88fe9a3`).
+Run-sheet steps complete: 0 ✓ (plus clean re-identify of the retained pair),
+1 ✓ **534/534**. Edge socket EMPTY — Samsung EVO `$4AC8_5F42` staged but NOT
+seated. Bench resumes at step 2 when the container hands back an arm to run.
