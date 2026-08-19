@@ -1,0 +1,176 @@
+'' =================================================================================================
+''
+''   File....... SD_wedge_predecessor.spin2
+''   Purpose.... Bisect the Edge wedge: what is the SMALLEST predecessor session that arms it?
+''   Author..... Stephen M Moraco
+''               -- see below for terms of use
+''   E-mail..... stephen@ironsheep.biz
+''   Started.... AUG 2026
+''   Updated.... 19 AUG 2026
+''
+'' =================================================================================================
+''
+'' THE PROBLEM THIS SOLVES
+''
+'' We can now trigger the wedge on demand, but the predecessor that arms it is a whole
+'' regression suite -- dozens of operations. Saying "a driver session arms it" is true and
+'' nearly useless: the session contains card init, filesystem mount, directory reads, a FAT
+'' scan, an unmount, and a cog shutdown, and any one of them could be the trigger while the
+'' rest are bystanders.
+''
+'' This tool is the predecessor, with a dial on how much it does. Run one arm, reset, run
+'' the reproducer, and record wedged or clean. The SMALLEST arm that still wedges names the
+'' trigger. Everything above it is bystander.
+''
+'' THE LADDER, least activity first
+''
+''   -D P_NOTHING      touch nothing at all (control -- must be clean, or the tool is wrong)
+''   -D P_INIT         initCardOnly() only. Card init, no filesystem, worker cog left running
+''   -D P_INIT_STOP    initCardOnly() then stop() -- adds the cog shutdown
+''   -D P_MOUNT        mount() only, cog left running
+''   -D P_MOUNT_UNMOUNT  mount() then unmount()
+''   -D P_READ         mount(), read ONE sector, unmount() -- the smallest useful session
+''
+'' START AT P_INIT, NOT AT THE TOP. If card init alone arms it, the answer is immediate and
+'' the whole filesystem layer is exonerated in one run. Only escalate if an arm comes back
+'' clean.
+''
+'' WHY stop() IS ITS OWN RUNG
+''
+'' stop() halts the worker cog with COGSTOP, and a stopped cog releases its DIR bits -- so
+'' the SD pins go high-impedance at that moment. That is a float window occurring inside a
+'' running application, with no reset anywhere near it. If P_INIT_STOP wedges while P_INIT
+'' does not, the trigger is the float and not the card activity, and the driver has a
+'' defect it can actually fix: park the pins before halting the cog.
+''
+'' THE SIZE CONFOUND
+''
+'' Download time scales with binary size, and the download window is one of the variables
+'' under investigation. The DAT pad brings every arm of this tool into SD_RT_mount_tests'
+'' size class (~47 KB), so arms differ in what they DO and not in how long they take to
+'' arrive. Without it, a small arm coming back clean would be ambiguous.
+''
+'' =================================================================================================
+
+CON
+
+    _CLKFREQ        = 350_000_000
+
+#ifdef SD_PINS_EXTERNAL
+    SD_CS   = 20
+    SD_MOSI = 19
+    SD_MISO = 18
+    SD_SCK  = 21
+#else
+    SD_CS   = 60
+    SD_MOSI = 59
+    SD_MISO = 58
+    SD_SCK  = 61
+#endif
+
+    ' See the size-confound note above.
+    PAD_LONGS       = 2_550
+
+#ifdef __SPINTOOLS__
+#define SD_INCLUDE_RAW
+#define SD_INCLUDE_DEBUG
+#elseifdef __FLEXSPIN__
+#define SD_INCLUDE_RAW
+#pragma exportdef SD_INCLUDE_RAW
+#define SD_INCLUDE_DEBUG
+#pragma exportdef SD_INCLUDE_DEBUG
+#else
+#pragma exportdef SD_INCLUDE_RAW
+#pragma exportdef SD_INCLUDE_DEBUG
+#endif
+
+OBJ
+    sd    : "micro_sd_fat32_fs"
+
+DAT
+
+downloadPad     LONG    0[PAD_LONGS]            ' Ballast; see the size-confound note
+sectorBuf       BYTE    0[512]
+
+PUB go() | status
+
+'' Perform exactly one rung of predecessor activity, then exit.
+
+    debug(" ")
+    debug("======================================================")
+    debug("  SD Wedge Predecessor -- bisection rung")
+    debug("======================================================")
+
+#ifdef P_NOTHING
+    debug("  RUNG: P_NOTHING -- no driver object call, no pin touched")
+    debug("  This is the control. It must come back CLEAN; if it wedges, the")
+    debug("  reproducer is responding to something other than the predecessor.")
+
+#elseifdef P_INIT
+    debug("  RUNG: P_INIT -- initCardOnly() only. No filesystem. Cog left RUNNING,")
+    debug("  so the pins stay driven when this program ends.")
+    status := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    debug("    initCardOnly: ", sdec_(status))
+
+#elseifdef P_INIT_STOP
+    debug("  RUNG: P_INIT_STOP -- initCardOnly() then stop().")
+    debug("  stop() halts the worker cog, and a stopped cog releases its DIR bits,")
+    debug("  so the SD pins go HIGH-Z here -- a float window with no reset involved.")
+    status := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    debug("    initCardOnly: ", sdec_(status))
+    debug("    stop(): ", sdec_(sd.stop()))
+
+#elseifdef P_MOUNT
+    debug("  RUNG: P_MOUNT -- mount() only, cog left RUNNING")
+    status := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    debug("    mount: ", sdec_(status))
+
+#elseifdef P_MOUNT_UNMOUNT
+    debug("  RUNG: P_MOUNT_UNMOUNT -- mount() then unmount(), cog left RUNNING")
+    status := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    debug("    mount: ", sdec_(status))
+    debug("    unmount: ", sdec_(sd.unmount()))
+
+#elseifdef P_READ
+    debug("  RUNG: P_READ -- mount(), ONE raw sector read, unmount()")
+    status := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
+    debug("    mount: ", sdec_(status))
+    if status >= 0
+        debug("    readSectorRaw(0): ", sdec_(sd.readSectorRaw(0, @sectorBuf)))
+    debug("    unmount: ", sdec_(sd.unmount()))
+
+#else
+    debug("  NO RUNG SELECTED. Rebuild with one of:")
+    debug("    -D P_NOTHING  -D P_INIT  -D P_INIT_STOP")
+    debug("    -D P_MOUNT    -D P_MOUNT_UNMOUNT  -D P_READ")
+    debug("  Start at P_INIT; escalate only if an arm comes back clean.")
+#endif
+
+    debug(" ")
+    debug("  Rung complete. Run the reproducer next WITHOUT power-cycling.")
+    debug("END_SESSION")
+
+CON { license }
+
+{{
+ -------------------------------------------------------------------------------------------------
+  MIT License
+
+  Copyright (c) 2026 Iron Sheep Productions, LLC
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+  associated documentation files (the "Software"), to deal in the Software without restriction,
+  including without limitation the rights to use, copy, modify, merge, publish, distribute,
+  sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies or
+  substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT
+  NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+  NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+  DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ -------------------------------------------------------------------------------------------------
+}}

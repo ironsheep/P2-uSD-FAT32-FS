@@ -23,7 +23,7 @@ two counterfeits are 11a's subject.
 
 | Head | Next action | Where | Blocked? |
 |---|---|---|---|
-| **H1 · Edge wedge** | **14a** can a wedged card be RECOVERED without power? Then **14b/c** float-after-session | bench | no |
+| **H1 · Edge wedge** | **14a** recovery ladder, **14b** bisect the predecessor, **14c/d** float-after-session | bench | no |
 | **H2 · High-speed performance** | Nothing at the bench. Decide the read/write asymmetry policy | container | no |
 | **H3 · Catalog integrity** | Build instruments to emit the new format; run variance before instance variance | container | no |
 | **H4 · Release** | §8 numbers writable now. **14a could unblock the version decision without a root cause** | container | version: **yes — H1** |
@@ -155,8 +155,29 @@ unseparated.
    the card into SPI mode until power loss, and a card in SPI mode reads a
    floating CS very differently from one still in native SD mode. That single
    mechanism fits every row of the table above.
-3. **14c — the same float with CS held high.** If CS is it, a board-level pull-up
+3. **14b — bisect the predecessor.** `SD_wedge_predecessor` runs one rung of
+   activity, download-size-matched to the reproducer within 22 bytes. The smallest
+   rung that still wedges names the trigger; everything above it is bystander.
+   Watch `P_INIT_STOP`: `stop()` halts the worker cog with `COGSTOP`, and a
+   stopped cog releases its DIR bits, so **the pins go high-Z there — a float
+   window inside a running application, no reset involved.** If that rung wedges
+   while `P_INIT` does not, the driver has a defect it can fix by parking the pins
+   before halting the cog.
+4. **14c/d — the same float with CS held high.** If CS is it, a board-level pull-up
    is a fix needing no driver change.
+
+### Why prevention alone can never be the answer
+
+A user can reset the board at any moment, including mid-transaction, so no
+tidy-up-at-unmount can be relied on to have run. **Recovery at mount is therefore
+mandatory regardless of what causes the wedge** — which is why 14a leads. A
+prevention measure (parking pins at `stop()`, a CS pull-up) reduces incidence and
+is worth having, but it cannot close the defect on its own.
+
+**Note on `unmount()` returning the card to a safe mode:** the SD command set has
+no documented way to leave SPI mode once entered — it is understood to persist
+until power is removed, which is consistent with everything observed here. That
+should be confirmed against the SD specification before any fix relies on it.
 4. Then the ladder (400 kHz, read-only), finally meaningful now a reproducer exists.
 5. Bench-supply swap if anything points back at power.
 

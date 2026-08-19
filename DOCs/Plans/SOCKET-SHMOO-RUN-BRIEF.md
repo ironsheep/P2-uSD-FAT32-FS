@@ -6,16 +6,16 @@
 
 ## ⟹ CURRENT STATE + WHAT TO RUN NEXT (updated 2026-08-19, round 14 queued)
 
-Round 13 bounded the wedge condition tightly. Status per head:
+Round 13 bounded the wedge condition. Status per head:
 `DOCs/Plans/RESEARCH-HEADS.md`.
 
-**Run next: ROUND 14 — one isolation experiment, and the question nobody has asked.**
+**Run next: ROUND 14.** Three tracks; the first two are the high-value ones.
 
 | Track | What | Why |
 |---|---|---|
-| **14a** | Can the card be RECOVERED without power? | Never tested. If yes, the release stops depending on root cause |
-| **14b** | Float the pins after a driver session, **without a reset** | The one order never varied — 13a floated a virgin card, not a driven one |
-| **14c** | Same float, but CS held high | If CS is the mechanism, a board-level pull-up is a fix |
+| **14a** | Can a wedged card be RECOVERED without power? | Never tested. If yes, the release stops depending on root cause |
+| **14b** | **Bisect the predecessor** — what is the smallest session that arms it? | "A driver session arms it" names a whole suite. This names the operation |
+| **14c/d** | Float the pins after a session, no reset (+ a CS-high variant) | The one order never varied |
 
 ## What this tool does
 
@@ -1146,7 +1146,49 @@ never receive looks exactly like a dead one.
 
 **Any rung succeeding is the most valuable result available this round.**
 
-### 14b — float the pins after a driver session, with no reset
+### 14b — bisect the predecessor: which operation actually arms it?
+
+**Why this is the highest-information run available.** We can trigger the wedge on
+demand, but the predecessor that arms it is an entire regression suite — card
+init, filesystem mount, directory reads, a FAT scan, an unmount, a cog shutdown.
+"A driver session arms it" is true and nearly useless, because any one of those
+could be the trigger while the rest are bystanders.
+
+`SD_wedge_predecessor.spin2` is that session with a dial on it. Every arm is
+download-size-matched to the reproducer — **47,327 to 47,369 bytes against
+`SD_RT_mount_tests`' 47,347** — so the arms differ in what they *do* and not in how
+long they take to arrive.
+
+```bash
+cd tools
+# POWER-CYCLE, run ONE rung, then the reproducer -- no power cycle between:
+./run_test.sh ../diagnostic-tests/SD_wedge_predecessor.spin2 -t 60 -D P_INIT
+./run_test.sh ../src/regression-tests/SD_RT_mount_tests.spin2 -t 120
+```
+
+**Start at `P_INIT` and escalate only if an arm comes back clean.** If card init
+alone arms it, the answer arrives in one run and the entire filesystem layer is
+exonerated.
+
+| Rung | Predecessor does | If this is the first to wedge |
+|---|---|---|
+| `P_NOTHING` | nothing at all | control — **must be clean**, or the reproducer is responding to something else |
+| `P_INIT` | `initCardOnly()`, cog left running | card initialisation alone arms it; filesystem exonerated |
+| `P_INIT_STOP` | `initCardOnly()` then `stop()` | **the cog shutdown is the trigger, not the card activity** — see below |
+| `P_MOUNT` | `mount()`, cog left running | filesystem mount adds something init does not |
+| `P_MOUNT_UNMOUNT` | `mount()` + `unmount()` | the unmount is implicated |
+| `P_READ` | `mount()` + one sector read + `unmount()` | a data transfer is required |
+
+**`P_INIT_STOP` is the rung to watch.** `stop()` halts the worker cog with
+`COGSTOP`, and a stopped cog releases its DIR bits — so the SD pins go
+high-impedance right there, inside a running application, with no reset anywhere
+near it. If `P_INIT_STOP` wedges while `P_INIT` does not, the trigger is the float
+rather than the card activity, and the driver has a defect it can fix directly:
+park the pins before halting the cog.
+
+Power-cycle before every rung. One rung per power-on.
+
+### 14c — float the pins after a driver session, with no reset
 
 **Round 13a's conclusion needs one qualification.** It ran a 49.7 KB pin-silent
 binary as predecessor, stayed clean, and concluded the reset, the float window and
@@ -1175,9 +1217,9 @@ to the reset-and-download window — and then mounts again.
 - **Clean** → floating after a driver session is *not* it either, and something
   else about the reset matters
 
-### 14c — the same float, with CS held high
+### 14d — the same float, with CS held high
 
-Only if 14b wedges. Same sequence, but CS is **driven high** throughout the float
+Only if 14c wedges. Same sequence, but CS is **driven high** throughout the float
 while the other three go high-Z — which is what a board-level pull-up would do.
 
 ```bash
@@ -1192,7 +1234,8 @@ cd tools
 ### Bring back for round 14
 
 14a: the rung reached, each rung's status, and the post-recovery read result.
-14b/14c: wedged or clean, and on which cycle. As always the identity line, and the
+14b: the rung reached and whether each wedged — the SMALLEST wedging rung is the
+result. 14c/14d: wedged or clean, and on which cycle. As always the identity line, and the
 `unmount()` / `mount()` #2 codes.
 
 **Standing rules:** a study returning "nothing here" is a result; and do not
