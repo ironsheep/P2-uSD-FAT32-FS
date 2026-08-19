@@ -62,6 +62,29 @@ function field(line, name,   m, rest) {
     return rest
 }
 
+function numfield(line, name,   raw) {
+    # A numeric field, validated before it is trusted.
+    #
+    # WHY THIS EXISTS (2026-08-19). The first build of the emitters printed these
+    # through debug()`s formatters, which digit-group longs for human eyes:
+    # "kbps=2_500", "sysclk=350_000_000". awk`s implicit "+0" parses "2_500" as 2
+    # and "350_000_000" as 350 -- so a whole swept catalog would have carried
+    # numbers silently truncated to their leading digits, with nothing anywhere
+    # looking wrong. A grouped value is now a hard error rather than a quiet
+    # miscount: the emitters were fixed, and this makes the fix enforceable
+    # against any old log or any future regression of the same kind.
+    raw = field(line, name)
+    if (raw == "") return ""
+    if (raw !~ /^-?[0-9]+$/) {
+        printf "REFUSING: field %s=\"%s\" is not a plain integer.\n", name, raw > "/dev/stderr"
+        print  "  Digit-grouped or sigil-doubled values silently truncate when parsed." > "/dev/stderr"
+        print  "  This log predates the 2026-08-19 emitter fix -- re-run the instrument." > "/dev/stderr"
+        bad_numeric = 1
+        return ""
+    }
+    return raw + 0
+}
+
 /CATALOG-CARD:/ {
     drv     = field($0, "drv")
     mid     = field($0, "mid")
@@ -101,8 +124,8 @@ function field(line, name,   m, rest) {
     if (instr == "random_access") {
         # Keyed by card AND landed clock: SD_speed_characterize walks a speed
         # ladder, so one card legitimately produces several rows in one run.
-        key = card SUBSEP field($0, "landed_hz")
-        kbps = field($0, "kbps") + 0
+        key = card SUBSEP numfield($0, "landed_hz")
+        kbps = numfield($0, "kbps") + 0
         if (!(key in cap_seen)) {
             cap_seen[key] = 1
             cap_order[++cap_n] = key
@@ -115,14 +138,14 @@ function field(line, name,   m, rest) {
         cap_runs[key]++
         cap_card[key]    = card
         cap_silicon[key] = silicon
-        cap_mean[key]    = field($0, "mean_us")
-        cap_min[key]     = field($0, "min_us")
-        cap_max[key]     = field($0, "max_us")
-        cap_landed[key]  = field($0, "landed_hz")
-        cap_iters[key]   = field($0, "iters")
+        cap_mean[key]    = numfield($0, "mean_us")
+        cap_min[key]     = numfield($0, "min_us")
+        cap_max[key]     = numfield($0, "max_us")
+        cap_landed[key]  = numfield($0, "landed_hz")
+        cap_iters[key]   = numfield($0, "iters")
     } else if (instr == "throughput") {
-        key = card SUBSEP field($0, "op") SUBSEP field($0, "bytes")
-        kbps = field($0, "kbps") + 0
+        key = card SUBSEP field($0, "op") SUBSEP numfield($0, "bytes")
+        kbps = numfield($0, "kbps") + 0
         if (!(key in thr_seen)) {
             thr_seen[key] = 1
             thr_order[++thr_n] = key
@@ -144,16 +167,21 @@ function field(line, name,   m, rest) {
         thr_card[key]    = card
         thr_silicon[key] = silicon
         thr_op[key]      = field($0, "op")
-        thr_bytes[key]   = field($0, "bytes")
-        thr_avg[key]     = field($0, "avg_us")
-        thr_pct[key]     = field($0, "pct_bus")
+        thr_bytes[key]   = numfield($0, "bytes")
+        thr_avg[key]     = numfield($0, "avg_us")
+        thr_pct[key]     = numfield($0, "pct_bus")
         thr_lim[key]     = field($0, "limiter")
-        thr_spi[key]     = field($0, "spi_hz")
+        thr_spi[key]     = numfield($0, "spi_hz")
     }
     next
 }
 
 END {
+    if (bad_numeric) {
+        print "" > "/dev/stderr"
+        print "No table emitted: at least one numeric field could not be trusted." > "/dev/stderr"
+        exit 1
+    }
     nver = 0
     for (v in versions) { nver++; onever = v }
     if (nver == 0) {

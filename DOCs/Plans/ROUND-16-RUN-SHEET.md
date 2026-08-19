@@ -18,11 +18,70 @@ hands back; the container agent makes every change and writes the resume below;
 the bench agent picks up from there. The two share one working tree, which is why
 the rules are specific.
 
+### Who owns which files
+
+| Path | Owner | Bench may edit? |
+|---|---|---|
+| `src/**`, `diagnostic-tests/**` | container | **never** |
+| `DOCs/Plans/SOCKET-SHMOO-RUN-NOTES.md` | **bench** — it is the bench's output | yes, freely |
+| `DOCs/Plans/ROUND-16-RUN-SHEET.md`, other plans, `tools/**` | container | no |
+| `tools/logs/**` | bench | yes (gitignored) |
+
+### Pristine tree
+
+**A run starts from a committed tree, every time.** `run_regression.sh` enforces
+this and has already caught it once — the bench aborted a sweep in the compile
+phase because uncommitted notes made the banner unprovable. That abort was
+correct behaviour, not a mishap.
+
+So the bench's order is: **write notes → commit notes → start the run.** Never
+write notes while a run is in flight and never during a pause that the container
+is about to act on. `git status --short` must be empty when the container picks
+up, because a container editing around unknown modifications is the fastest way
+to lose an afternoon.
+
+Build artifacts (`*.bin`, `*.p2asm`, `logs/`) are gitignored, so compiling and
+capturing never dirties the tree. Pristine is achievable, which is why it is
+required.
+
+### Hard stop — pause and hand back, do not continue
+
+**Any of these, immediately:**
+
+1. **Any regression test failure.** Zero tolerance; no failure is "pre-existing".
+   Continuing past one runs every later suite on an uncertified driver.
+2. **Anything that would require editing source to proceed** — including a CON
+   value a step seems to want changed. Hand back and ask; the container makes it
+   a build-time option instead.
+3. **Data corruption anywhere** — a verify mismatch, `CONFIRMED WRITE CORRUPTION`,
+   a CRC error that is not the card's documented dummy-CRC quirk.
+4. **An instrument contradicting its own documented behaviour** — a landed clock
+   that differs from the request, a key line that does not match the canonical
+   form, a count that cannot be reconciled. The instrument may be lying, and a
+   lying instrument invalidates everything measured after it.
+5. **A card wedging or needing an unplanned power cycle.** That is #3240's
+   signature and it is supposed to be fixed.
+6. **A step's precondition failing** — `check_doc_version.sh` non-zero, the source
+   SHA not matching the resume, a card that will not identify.
+7. **Anything irreversible about to happen on incomplete information** — most
+   sharply, a one-shot card being measured or deployed before its identity is
+   captured. Those transcripts cannot be recreated.
+
+**Continue and record (not a stop):** a card cleanly declining high speed; run-to-run
+variance; a documented dummy-CRC card scoring zero CRCs. These are outcomes, not faults.
+
+### The judgement calls that are NOT the bench's
+
+Diagnose freely and recommend — the round 16a analysis was exactly right and saved
+a cycle. But the **decision** stays with the container: whether a failure is
+test-side or driver-side, whether an expected value may change, and whether a
+finding blocks the release. Those are judged against source and documented
+contract, not against output.
+
 **When the bench pauses, it hands back:**
 
 1. **A clean tree, or an exact statement of what is dirty.** `git status --short`
-   in the handback. A container agent building on an unknown working tree is the
-   fastest way to lose an afternoon.
+   in the handback.
 2. **The observation, not the verdict.** Exact suite, exact test name, expected vs
    got, and the surrounding transcript lines. **Do not pre-classify a failure as
    "a test bug"** — test-side versus driver-side is the judgement that decides
@@ -62,33 +121,73 @@ the rules are specific.
 
 | | |
 |---|---|
-| **Source SHA to run** | `9f22a44` — verify with `git log --oneline -1 -- src/ diagnostic-tests/` |
+| **Source SHA to run** | see below — verify with `git log --oneline -1 -- src/ diagnostic-tests/` |
 | **Tree** | clean; six gates green |
-| **Resume at** | **Step 1, from the top** |
+| **Resume at** | **Step 1, re-run in full** (driver + test changed) |
 
-**Why step 1 restarts:** the driver changed twice since the last run began — the
-`Driver identity` test group (mount_tests, +2 tests) and the high-speed
-verify-mismatch error-code fix. A certification run that spans a source change is
-not a certification.
+### Container hand-back, session 1 → 2
 
-**Changed since the last bench pickup:**
+**Both work items are done, and one of them was a near miss.**
 
-- **FIXED, driver:** `do_attempt_high_speed()` verify-MISMATCH branch set no error
-  code, so a card corrupting data at 50 MHz reported `FALSE` + `ERROR() == SUCCESS`
-  — which `attemptHighSpeed()`'s contract defines as "the card declined". Now
-  `E_IO_ERROR`, matching all four sibling exits. *(This was the bench agent's
-  find — correctly classified as driver-side.)*
-- **ADDED, tests:** `Driver identity` group in `SD_RT_mount_tests`. **Expect 534,
-  not 532.**
-- **NOT COVERED:** the mismatch path cannot be reached by injection — the hooks
-  force read *failures*, not a read that succeeds with wrong bytes. Punch-listed
-  with a recommended `setTestCorruptReadAfter()` facility. Decision pending.
+**Item A — Test #8 fixed. Your classification was right, and I verified it against
+the contract independently before touching anything.** `attemptHighSpeed()`
+documents three outcomes; the test modelled two and called the third a defect. It
+now uses the capability answer already in hand: a card that said it *can* and then
+did not must carry an error code; a card that said it *cannot* is a clean decline
+and must not. **Sub-check count is unchanged, so the total is still 534.**
 
-**⚠ OUTSTANDING — container is blocked on this:** the bench reported **1 regression
-failure** whose identity has not been passed back. It has not been classified or
-fixed. Hand back the suite, test name, expected vs got, and transcript lines.
+The driver half of item A was **already fixed before your handback arrived**
+(`9f22a44`) — same defect, found independently. All five failure exits in
+`do_attempt_high_speed()` now set `hs_query_error`. Punch-listed and changelogged.
+The path still cannot be reached by injection; the recommended
+`setTestCorruptReadAfter()` facility is punch-listed, decision pending.
 
----
+**Item B — all three emitters fixed, and this one nearly cost the sweep.** Your
+diagnosis was exact. Confirmed from the transcripts: `$$AD`, `$3584_1E2E` inside a
+key, `mdt=2_02507`, `sysclk=350_000_000`. The grouping was the dangerous part —
+`awk`'s `+0` reads `kbps=2_500` as **2**, so a swept catalog would have carried
+numbers truncated to their leading digits with nothing looking wrong anywhere.
+
+All machine lines in `SD_card_identify`, `SD_performance_benchmark` and
+`SD_speed_characterize` are now composed with `fmt.sFormatStr*` and emitted as one
+plain string, per the demo-shell precedent you cited. PNM trailing spaces trimmed.
+Human-readable lines keep `debug()`'s formatters — grouping helps a reader.
+
+**Plus a hardening you did not ask for:** `harvest_catalog.sh` now *refuses* a
+non-integer numeric field instead of silently coercing it. A grouped value is a
+hard error naming the field and telling you to re-run the instrument. The fix
+stopped this instance; the guard stops the class.
+
+### Verify on hardware before trusting the sweep
+
+Your resume step 3 is right and now has a sharper acceptance test:
+
+```bash
+./run_test.sh ../src/UTILS/SD_card_identify.spin2
+./harvest_catalog.sh logs/SD_card_identify_<newest>.log
+```
+
+Expect `SILICON-KEY: $AD_USD00_2.0` and
+`CARD-ID: $AD_USD00_2.0_35841E2E_202507` — single `$`, contiguous hex, `YYYYMM`.
+The harvester should report a clean parse. **If it refuses a field, stop** — that
+is item B not fully fixed, and it must be right before any one-shot capture.
+
+### Then
+
+1. Re-run **step 1** in full (Amazon Basics still seated). Expect **534/534**.
+2. Re-identify both retained 64 GB cards for clean record-source transcripts
+   (records owed for `$0000_0E2F` and the 32 GB `$0000_01C7`).
+3. Continue at **step 2** (16d, Samsung EVO `$4AC8_5F42`).
+
+### Noted from your session
+
+- The unconditional CMD12 quiesce passed its first full-suite exposure, 27 suites,
+  every mount, two mid-sweep reformats, 23/23 closing audit. That is the release's
+  headline fix certified in practice.
+- One-shot population corrected to 6 cards; purchase provenance recorded.
+- Aborting the sweep because uncommitted notes made the banner unprovable was
+  **correct behaviour**, and it is now written into the protocol above rather than
+  left as a judgement call.
 
 ## Before you start
 

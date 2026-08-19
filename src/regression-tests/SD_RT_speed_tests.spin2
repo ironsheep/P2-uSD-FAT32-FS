@@ -218,12 +218,29 @@ PUB go() | result, handle, spiFreq, maxSpeed, hsActive, cmd6Sup, hsCap, hsResult
     ' a clock threshold, so it holds at every sysclk (high speed is 43_750_000 Hz at 350 MHz --
     ' the old frequency-threshold implementation answered FALSE there while the mode was active).
     if hsResult == false
-      ' FALSE alone is ambiguous by the driver's own contract: "the card declined" and
-      ' "the card could not be asked" both return FALSE, and only ERROR() separates them.
-      ' Without the second check a broken query passes as a polite decline.
+      ' FALSE alone is ambiguous by the driver's own contract, and the contract has
+      ' THREE outcomes, not two:
+      '   TRUE                -> high speed is active
+      '   FALSE + SUCCESS     -> the card declined; it does not offer the feature
+      '   FALSE + error code  -> the query, the switch, or the verification FAILED
+      '
+      ' This test asserted FALSE => SUCCESS unconditionally, which models only the
+      ' first two and calls the third a defect. Round 16a found it on the Amazon
+      ' Basics 64GB: that card ADVERTISES CMD6 capability (the preceding test reads
+      ' hsCap TRUE with no error) but its switch fails -- behaviour its card record
+      ' has documented since characterization. The driver returned FALSE +
+      ' E_IO_ERROR exactly as documented and rolled back cleanly, and the test
+      ' called it a failure.
+      '
+      ' The capability answer already in hand is what disambiguates: a card that
+      ' said it CAN and then did not is a failure and must carry an error code; a
+      ' card that said it cannot is a clean decline and must not.
       utils.setCheckCountPerTest(2)
       utils.evaluateSubBool(hsActive == false, @"HS inactive after failure", true)
-      utils.evaluateSubValue(errCode, @"card declined, query did not fail", sd.SUCCESS)
+      if hsCap
+        utils.evaluateSubBool(errCode <> sd.SUCCESS, @"capable card that did not switch reports an error", true)
+      else
+        utils.evaluateSubValue(errCode, @"card declined cleanly, no error", sd.SUCCESS)
     else
       utils.setCheckCountPerTest(2)
       utils.evaluateSubBool(hsActive, @"HS mode active after success", true)

@@ -97,6 +97,7 @@ CON
 
 OBJ
   sd : "micro_sd_fat32_fs"
+  fmt : "isp_mem_strings"                                        ' machine key lines: debug() grouping corrupts them
 
 VAR
   ' Random number generator state
@@ -130,6 +131,11 @@ VAR
   long  card_capacity_mb
   long  cmd6_supported
   long  hs_mode_active
+
+  ' Line buffer + trimmed PNM for the machine-readable key lines. Built with
+  ' sFormatStr, never debug()'s formatters -- see emitCatalogCard.
+  byte  keyBuf[200]
+  byte  pnmKey[8]
 
   ' Buffers
   byte  read_buf[sd.SECTOR_SIZE]
@@ -324,29 +330,8 @@ PRI displayCardInfo() | cid[4], sectors, cap_mb, psn, mdt_year, mdt_month
     debug("  Card: MID=$", uhex_byte_(cid.byte[0]), " OID='", lstr_(@cid.byte[1], 2), ...
         "' PNM='", lstr_(@cid.byte[3], 5), "' rev ", udec_(cid.byte[8] >> 4), ".", udec_(cid.byte[8] & $0F))
     debug("  >>> SERIAL PSN=$", uhex_long_(psn), "  mfg ", udec_(mdt_year), "/", udec_(mdt_month), " <<<")
-    debug("  SILICON-KEY: $", uhex_byte_(cid.byte[0]), "_", lstr_(@cid.byte[3], 5), "_", ...
-        udec_(cid.byte[8] >> 4), ".", udec_(cid.byte[8] & $0F))
-    ' Month is zero-padded to two digits: the existing catalog Card IDs are
-    ' YYYYMM (e.g. ..._201408), and an unpadded single-digit month would make
-    ' 2024/1 and 2024/11 collide as "20241".
-    if mdt_month < 10
-      debug("  CARD-ID: $", uhex_byte_(cid.byte[0]), "_", lstr_(@cid.byte[3], 5), "_", ...
-          udec_(cid.byte[8] >> 4), ".", udec_(cid.byte[8] & $0F), "_", uhex_long_(psn), "_", ...
-          udec_(mdt_year), "0", udec_(mdt_month))
-    else
-      debug("  CARD-ID: $", uhex_byte_(cid.byte[0]), "_", lstr_(@cid.byte[3], 5), "_", ...
-          udec_(cid.byte[8] >> 4), ".", udec_(cid.byte[8] & $0F), "_", uhex_long_(psn), "_", ...
-          udec_(mdt_year), udec_(mdt_month))
     debug("  CID raw: ", uhex_byte_array_(@cid, 16))
-
-    ' MACHINE-PARSEABLE IDENTITY. Every CATALOG-ROW line in this run belongs to
-    ' the card named here -- the harvester associates rows with the most recent
-    ' CATALOG-CARD, so no row has to repeat or string-format the identity.
-    debug("CATALOG-CARD: tool=speed_characterize drv=", zstr_(sd.driverVersionString()), ...
-        " mid=$", uhex_byte_(cid.byte[0]), " pnm=", lstr_(@cid.byte[3], 5), ...
-        " prv=", udec_(cid.byte[8] >> 4), ".", udec_(cid.byte[8] & $0F), ...
-        " psn=$", uhex_long_(psn), " mdt=", udec_(mdt_year), "/", udec_(mdt_month), ...
-        " sysclk=", udec_(clkfreq))
+    emitCatalogCard(cid.byte[0], cid.byte[8], psn, mdt_year, mdt_month, @cid.byte[3])
   else
     debug("  CID: Read failed")
 
@@ -568,7 +553,46 @@ PRI runSingleSectorTest(iterations, p_ok, p_crc_err, p_timeout) | iter, sector, 
     if (iter // 2500) == 0 and iter > 0
       debug("      Progress: ", udec_(iter))
 
-PRI reportRandomAccess(level, iterations) | total_ms, kbps, mean_us, hundredths
+PRI emitCatalogCard(mid, prv, psn, mdt_year, mdt_month, p_pnm) | nLen
+' Emit the canonical keys and the machine-parseable identity for this card.
+'
+' BUILT AS A STRING, NOT PRINTED WITH debug()'s FORMATTERS (2026-08-19, first
+' light). debug() formats for a human at a terminal, and three of its habits
+' corrupt a machine key: uhex_* emit their own "$" (giving "$$AD"), longs are
+' digit-grouped ("$3584_1E2E", "350_000_000"), and udec_ groups anything >= 1000
+' so a 2025/7 date rendered "2_02507". The grouping is the dangerous one --
+' harvest_catalog.sh reads numbers with awk`s "+0", and awk parses "2_500" as 2,
+' so every rate and timing in a swept catalog would have been silently truncated.
+'
+' @param mid - CID manufacturer ID byte
+' @param prv - CID product revision byte (packed major/minor nibbles)
+' @param psn - Product serial number
+' @param mdt_year - Manufacture year
+' @param mdt_month - Manufacture month
+' @param p_pnm - Pointer to the 5-character product name inside the CID
+' @local nLen - Characters placed by the first format call, for appending
+
+  ' Trim the CID's space padding: a trailing space inside a key would make two
+  ' spellings of one card.
+  bytemove(@pnmKey, p_pnm, 5)
+  pnmKey[5] := 0
+  repeat while pnmKey[0] <> 0 and pnmKey[strsize(@pnmKey) - 1] == " "
+    pnmKey[strsize(@pnmKey) - 1] := 0
+
+  fmt.sFormatStr4(@keyBuf, 200, @"  SILICON-KEY: $%.2x_%s_%d.%d", mid, @pnmKey, prv >> 4, prv & $0F)
+  debug(zstr_(@keyBuf))
+
+  nLen := fmt.sFormatStr4(@keyBuf, 200, @"  CARD-ID: $%.2x_%s_%d.%d", mid, @pnmKey, prv >> 4, prv & $0F)
+  fmt.sFormatStr3(@BYTE[@keyBuf][nLen], 200 - nLen, @"_%.8x_%d%.2d", psn, mdt_year, mdt_month)
+  debug(zstr_(@keyBuf))
+
+  nLen := fmt.sFormatStr5(@keyBuf, 200, @"CATALOG-CARD: tool=speed_characterize drv=%s mid=$%.2x pnm=%s prv=%d.%d", ...
+      sd.driverVersionString(), mid, @pnmKey, prv >> 4, prv & $0F)
+  fmt.sFormatStr4(@BYTE[@keyBuf][nLen], 200 - nLen, @" psn=$%.8x mdt=%d/%d sysclk=%d", ...
+      psn, mdt_year, mdt_month, clkfreq)
+  debug(zstr_(@keyBuf))
+
+PRI reportRandomAccess(level, iterations) | total_ms, kbps, mean_us, hundredths, nLen
 ' Report the random-access throughput and latency just measured by Phase 2.
 '
 ' THIS IS THE CATALOG'S "CARD CAPABILITY (RANDOM ACCESS)" MEASUREMENT. Until
@@ -620,10 +644,13 @@ PRI reportRandomAccess(level, iterations) | total_ms, kbps, mean_us, hundredths
 
   ' Machine-parseable twin of the block above. Additive: the human-readable form
   ' stays, because a bench session reads these live and a harvester reads them after.
-  debug("CATALOG-ROW: instr=random_access op=random_read_1x512 iters=", udec_(iterations), ...
-      " kbps=", udec_(kbps), " mean_us=", udec_(mean_us), ...
-      " min_us=", udec_(last_run_min_us), " max_us=", udec_(last_run_max_us), ...
-      " req_hz=", udec_(speed_hz[level]), " landed_hz=", udec_(landed_hz[level]))
+  ' Plain digits only -- see emitCatalogCard. Every field here is read
+  ' numerically by harvest_catalog.sh.
+  nLen := fmt.sFormatStr4(@keyBuf, 200, @"CATALOG-ROW: instr=random_access op=random_read_1x512 iters=%d kbps=%d mean_us=%d min_us=%d", ...
+      iterations, kbps, mean_us, last_run_min_us)
+  fmt.sFormatStr3(@BYTE[@keyBuf][nLen], 200 - nLen, @" max_us=%d req_hz=%d landed_hz=%d", ...
+      last_run_max_us, speed_hz[level], landed_hz[level])
+  debug(zstr_(@keyBuf))
   debug(" ")
 
 PRI runMultiSectorTest(iterations, sectors_per_read, p_ok, p_crc_err, p_timeout) | iter, start_sector, status

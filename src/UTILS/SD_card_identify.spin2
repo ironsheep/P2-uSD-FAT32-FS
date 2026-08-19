@@ -55,8 +55,14 @@ CON
 
 OBJ
     sd    : "micro_sd_fat32_fs"
+    fmt   : "isp_mem_strings"                    ' machine-readable key lines (see emitCatalogKeys)
 
 DAT
+
+    ' Line buffer for the machine-readable key lines. Built with sFormatStr
+    ' rather than debug()'s formatters -- see emitCatalogKeys for why.
+    keyBuf        BYTE    0[160]
+    pnmKey        BYTE    0[8]
 
     ' Sector buffer for MBR/VBR reads
     sect_buf      BYTE    0[512]
@@ -172,33 +178,60 @@ PRI displayCardID() | sd.cid_t cid, sd.scr_t scr, ...
     ' Line 3: CSD claim + driver warning flags (for analysis)
     debug("L3: CSD claims TRAN_SPEED = ", udec_(sd.getCardMaxSpeed() / 1_000_000), " MHz; cardWarnings() = ", uhex_byte_(sd.cardWarnings()))
 
-    ' CANONICAL KEYS + MACHINE-PARSEABLE IDENTITY (2026-08-19).
-    '
-    ' The designator above is for a human. These lines are the catalog's keys, in
-    ' the same shape SD_performance_benchmark and SD_speed_characterize emit, so a
-    ' new card record is built from a transcript rather than retyped from one.
-    ' That matters most here: this tool is what runs when two physically identical
-    ' units have to be told apart, and its output becomes their card records.
-    '
-    ' The MID stays hex -- mapping it to a manufacturer is a lookup CARD-CATALOG.md
-    ' owns in one place, and it is not a function ($9F is two different brands).
-    debug("  SILICON-KEY: $", uhex_byte_(cid.mid), "_", lstr_(@pnm, 5), "_", ...
-        udec_(cid.prv >> 4), ".", udec_(cid.prv & $0F))
-    ' Month zero-padded: unpadded, 2024/1 and 2024/11 both render "20241".
-    if mdtMonth < 10
-        debug("  CARD-ID: $", uhex_byte_(cid.mid), "_", lstr_(@pnm, 5), "_", ...
-            udec_(cid.prv >> 4), ".", udec_(cid.prv & $0F), "_", uhex_long_(psn), "_", ...
-            udec_(mdtYear), "0", udec_(mdtMonth))
-    else
-        debug("  CARD-ID: $", uhex_byte_(cid.mid), "_", lstr_(@pnm, 5), "_", ...
-            udec_(cid.prv >> 4), ".", udec_(cid.prv & $0F), "_", uhex_long_(psn), "_", ...
-            udec_(mdtYear), udec_(mdtMonth))
-    debug("CATALOG-CARD: tool=card_identify drv=", zstr_(sd.driverVersionString()), ...
-        " mid=$", uhex_byte_(cid.mid), " pnm=", lstr_(@pnm, 5), ...
-        " prv=", udec_(cid.prv >> 4), ".", udec_(cid.prv & $0F), ...
-        " psn=$", uhex_long_(psn), " mdt=", udec_(mdtYear), "/", udec_(mdtMonth), ...
-        " sysclk=", udec_(clkfreq), " spi_hz=", udec_(spiHz))
+    emitCatalogKeys(cid.mid, cid.prv, psn, mdtYear, mdtMonth, spiHz, @pnm)
 
+
+PRI emitCatalogKeys(mid, prv, psn, mdtYear, mdtMonth, spiHz, p_pnm) | nLen
+' Emit the catalog's machine-readable key lines.
+'
+' WHY THESE ARE BUILT AS STRINGS, not printed with debug()'s formatters
+' (2026-08-19, first light). debug() formats for a HUMAN reading a terminal, and
+' three of its habits corrupt a machine key:
+'   uhex_byte_/uhex_long_ emit their own "$"      -> "$$AD"
+'   longs are digit-grouped with underscores       -> "$3584_1E2E", "350_000_000"
+'   udec_ groups anything >= 1000                  -> a 2025/7 date became "2_02507"
+' The grouping is the dangerous one: harvest_catalog.sh reads numeric fields with
+' awk`s "+0", and awk parses "2_500" as 2. Every rate, timing and clock in a swept
+' catalog would have been silently truncated to its leading digits.
+'
+' So machine lines are composed here and emitted as a single plain string. A
+' machine-readable format must not be at the mercy of a display formatter.
+' Human-readable lines above keep debug()'s formatters -- grouping helps there.
+'
+' Format follows src/DEMO/SD_demo_shell.spin2: %.2x / %.8x are exact-width hex
+' with no sigil, %d is a plain integer, %.2d zero-pads the month.
+'
+' @param mid - CID manufacturer ID byte
+' @param prv - CID product revision byte (packed major/minor nibbles)
+' @param psn - CID product serial number
+' @param mdtYear - Manufacture year
+' @param mdtMonth - Manufacture month
+' @param spiHz - Settled SPI clock
+' @param p_pnm - Pointer to the 5-character product name
+' @local nLen - Characters placed by the first format call, for appending
+
+    ' The PNM is space-padded in the CID ("ASTC "), and a trailing space inside a
+    ' key would make two spellings of one card. Trim a copy for key use only.
+    bytemove(@pnmKey, p_pnm, 5)
+    pnmKey[5] := 0
+    repeat while pnmKey[0] <> 0 and pnmKey[strsize(@pnmKey) - 1] == " "
+        pnmKey[strsize(@pnmKey) - 1] := 0
+
+    fmt.sFormatStr4(@keyBuf, 160, @"  SILICON-KEY: $%.2x_%s_%d.%d", ...
+        mid, @pnmKey, prv >> 4, prv & $0F)
+    debug(zstr_(@keyBuf))
+
+    nLen := fmt.sFormatStr4(@keyBuf, 160, @"  CARD-ID: $%.2x_%s_%d.%d", ...
+        mid, @pnmKey, prv >> 4, prv & $0F)
+    fmt.sFormatStr3(@BYTE[@keyBuf][nLen], 160 - nLen, @"_%.8x_%d%.2d", ...
+        psn, mdtYear, mdtMonth)
+    debug(zstr_(@keyBuf))
+
+    nLen := fmt.sFormatStr5(@keyBuf, 160, @"CATALOG-CARD: tool=card_identify drv=%s mid=$%.2x pnm=%s prv=%d.%d", ...
+        sd.driverVersionString(), mid, @pnmKey, prv >> 4, prv & $0F)
+    fmt.sFormatStr5(@BYTE[@keyBuf][nLen], 160 - nLen, @" psn=$%.8x mdt=%d/%d sysclk=%d spi_hz=%d", ...
+        psn, mdtYear, mdtMonth, clkfreq, spiHz)
+    debug(zstr_(@keyBuf))
 
 PRI getSDSpecVersion(^sd.scr_t p_scr) : p_version | sdSpec, spec3, spec4, specX
 ' Decode SD spec version from SCR register.

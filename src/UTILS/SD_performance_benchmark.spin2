@@ -116,6 +116,7 @@ CON
 
 OBJ
     sd    : "micro_sd_fat32_fs"
+    fmt   : "isp_mem_strings"           ' machine-readable key lines: debug() digit-grouping corrupts them
 
 DAT
 
@@ -134,6 +135,11 @@ currentRun      LONG    1
 
 ' Card identification buffer
 cid_buf         BYTE    0[16]
+
+' Line buffer + trimmed PNM for the machine-readable key lines. Built with
+' sFormatStr, never debug()'s formatters -- see the note in identifyCard.
+keyBuf          BYTE    0[200]
+pnmKey          BYTE    0[8]
 
 ' Write-verification read-back buffer (one sector at a time -- see verifyRawWrite)
 verifyBuf       BYTE    0[512]
@@ -290,30 +296,9 @@ PRI identifyCard() : bIdentified | psn, mdt_year, mdt_month
         debug("  Card: MID=$", uhex_byte_(cid_buf[0]), " OID='", lstr_(@cid_buf[1], 2), ...
             "' PNM='", lstr_(@cid_buf[3], CID_PNM_LEN), "' rev ", udec_(cid_buf[8] >> 4), ".", udec_(cid_buf[8] & $0F))
         debug("  >>> SERIAL PSN=$", uhex_long_(psn), "  mfg ", udec_(mdt_year), "/", udec_(mdt_month), " <<<")
-        debug("  SILICON-KEY: $", uhex_byte_(cid_buf[0]), "_", lstr_(@cid_buf[3], CID_PNM_LEN), "_", ...
-            udec_(cid_buf[8] >> 4), ".", udec_(cid_buf[8] & $0F))
-        ' Month is zero-padded to two digits: the existing catalog Card IDs are
-        ' YYYYMM (e.g. ..._201408), and an unpadded single-digit month would make
-        ' 2024/1 and 2024/11 collide as "20241".
-        if mdt_month < 10
-            debug("  CARD-ID: $", uhex_byte_(cid_buf[0]), "_", lstr_(@cid_buf[3], CID_PNM_LEN), "_", ...
-                udec_(cid_buf[8] >> 4), ".", udec_(cid_buf[8] & $0F), "_", uhex_long_(psn), "_", ...
-                udec_(mdt_year), "0", udec_(mdt_month))
-        else
-            debug("  CARD-ID: $", uhex_byte_(cid_buf[0]), "_", lstr_(@cid_buf[3], CID_PNM_LEN), "_", ...
-                udec_(cid_buf[8] >> 4), ".", udec_(cid_buf[8] & $0F), "_", uhex_long_(psn), "_", ...
-                udec_(mdt_year), udec_(mdt_month))
         debug("  CID raw: ", uhex_byte_array_(@cid_buf, 16))
 
-        ' MACHINE-PARSEABLE IDENTITY. Every CATALOG-ROW line below this one
-        ' belongs to the card named here -- the harvester associates rows with
-        ' the most recent CATALOG-CARD, which is why no row has to repeat the
-        ' identity or format it into a string.
-        debug("CATALOG-CARD: tool=performance_benchmark drv=", zstr_(sd.driverVersionString()), ...
-            " mid=$", uhex_byte_(cid_buf[0]), " pnm=", lstr_(@cid_buf[3], CID_PNM_LEN), ...
-            " prv=", udec_(cid_buf[8] >> 4), ".", udec_(cid_buf[8] & $0F), ...
-            " psn=$", uhex_long_(psn), " mdt=", udec_(mdt_year), "/", udec_(mdt_month), ...
-            " sysclk=", udec_(clkfreq), " spi_hz=", udec_(sd.getSPIFrequency()))
+        emitCatalogCard(psn, mdt_year, mdt_month)
         bIdentified := true
     else
         debug("  Could not read the card ID register")
@@ -440,7 +425,49 @@ PRI runRawReadTest(count) | iter, start_ct, elapsed_ct, min_us, max_us, total_us
         emitCatalogRow(string("raw_read"), size, avg_us, min_us, max_us, kbps, pct)
 
 
-PRI emitCatalogRow(p_op, bytes_moved, avg_us, min_us, max_us, kbps, pct)
+PRI emitCatalogCard(psn, mdt_year, mdt_month) | nLen
+' Emit the canonical keys and the machine-parseable identity for this card.
+'
+' BUILT AS A STRING, NOT PRINTED WITH debug()'s FORMATTERS (2026-08-19, first
+' light). debug() formats for a human at a terminal, and three of its habits
+' corrupt a machine key: uhex_* emit their own "$" (giving "$$AD"), longs are
+' digit-grouped ("$3584_1E2E", "350_000_000"), and udec_ groups anything >= 1000
+' so a 2025/7 date rendered "2_02507". The grouping is the dangerous one --
+' harvest_catalog.sh reads numbers with awk`s "+0", and awk parses "2_500" as 2,
+' so every rate and timing in a swept catalog would have been silently truncated.
+'
+' Every CATALOG-ROW line after this one belongs to the card named here; the
+' harvester associates rows with the most recent CATALOG-CARD.
+'
+' @param psn - Product serial number
+' @param mdt_year - Manufacture year
+' @param mdt_month - Manufacture month
+' @local nLen - Characters placed by the first format call, for appending
+
+    ' Trim the CID's space padding: a trailing space inside a key would make two
+    ' spellings of one card.
+    bytemove(@pnmKey, @cid_buf[3], CID_PNM_LEN)
+    pnmKey[CID_PNM_LEN] := 0
+    repeat while pnmKey[0] <> 0 and pnmKey[strsize(@pnmKey) - 1] == " "
+        pnmKey[strsize(@pnmKey) - 1] := 0
+
+    fmt.sFormatStr4(@keyBuf, 200, @"  SILICON-KEY: $%.2x_%s_%d.%d", ...
+        cid_buf[0], @pnmKey, cid_buf[8] >> 4, cid_buf[8] & $0F)
+    debug(zstr_(@keyBuf))
+
+    nLen := fmt.sFormatStr4(@keyBuf, 200, @"  CARD-ID: $%.2x_%s_%d.%d", ...
+        cid_buf[0], @pnmKey, cid_buf[8] >> 4, cid_buf[8] & $0F)
+    fmt.sFormatStr3(@BYTE[@keyBuf][nLen], 200 - nLen, @"_%.8x_%d%.2d", ...
+        psn, mdt_year, mdt_month)
+    debug(zstr_(@keyBuf))
+
+    nLen := fmt.sFormatStr5(@keyBuf, 200, @"CATALOG-CARD: tool=performance_benchmark drv=%s mid=$%.2x pnm=%s prv=%d.%d", ...
+        sd.driverVersionString(), cid_buf[0], @pnmKey, cid_buf[8] >> 4, cid_buf[8] & $0F)
+    fmt.sFormatStr5(@BYTE[@keyBuf][nLen], 200 - nLen, @" psn=$%.8x mdt=%d/%d sysclk=%d spi_hz=%d", ...
+        psn, mdt_year, mdt_month, clkfreq, sd.getSPIFrequency())
+    debug(zstr_(@keyBuf))
+
+PRI emitCatalogRow(p_op, bytes_moved, avg_us, min_us, max_us, kbps, pct) | nLen
 ' Emit one machine-parseable row for the catalog harvester.
 '
 ' WHY THIS EXISTS (2026-08-19). Catalog numbers have always been transcribed from
@@ -464,11 +491,13 @@ PRI emitCatalogRow(p_op, bytes_moved, avg_us, min_us, max_us, kbps, pct)
 ' @param kbps - Throughput in KB/s (KB = 1000)
 ' @param pct - Percent of the bus ceiling at the current clock
 
-  debug("CATALOG-ROW: instr=throughput run=", udec_(currentRun), " op=", zstr_(p_op), ...
-      " bytes=", udec_(bytes_moved), ...
-      " avg_us=", udec_(avg_us), " min_us=", udec_(min_us), " max_us=", udec_(max_us), ...
-      " kbps=", udec_(kbps), " pct_bus=", udec_(pct), " limiter=", zstr_(limiterTag(pct)), ...
-      " spi_hz=", udec_(sd.getSPIFrequency()))
+  ' Plain digits only -- see emitCatalogCard for why debug()'s formatters cannot
+  ' be used here. Every field below is read numerically by harvest_catalog.sh.
+  nLen := fmt.sFormatStr5(@keyBuf, 200, @"CATALOG-ROW: instr=throughput run=%d op=%s bytes=%d avg_us=%d min_us=%d", ...
+      currentRun, p_op, bytes_moved, avg_us, min_us)
+  fmt.sFormatStr5(@BYTE[@keyBuf][nLen], 200 - nLen, @" max_us=%d kbps=%d pct_bus=%d limiter=%s spi_hz=%d", ...
+      max_us, kbps, pct, limiterTag(pct), sd.getSPIFrequency())
+  debug(zstr_(@keyBuf))
 
 PRI busCeilingKBps() : kbps
 ' The transfer ceiling of the SPI bus at the CURRENT clock, in KB/s (KB = 1000,
