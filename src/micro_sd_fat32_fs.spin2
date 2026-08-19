@@ -7582,7 +7582,14 @@ PRI initCard() : bSuccess | timeout, resp, card_version, acmd41_arg, got_respons
   ' Harmless on a card that is idle -- CMD12 with nothing to stop is a no-op that
   ' returns an error bit we deliberately ignore. There is no state here to get
   ' wrong, which is why it can sit unconditionally ahead of CMD0 if it proves out.
-  DEBUG[CH_INIT]("    [initCard] Step 3.9: CMD12 quiesce (experimental)")
+  ' UNCONDITIONAL print while this is an experimental -D arm, so a transcript
+  ' PROVES which build produced it. Round 15b's five clean runs rest on the
+  ' operator having passed the right -D: the two builds differ by 20 bytes and the
+  ' captured log records neither the size nor any marker, so nothing in the
+  ' transcript distinguished them. The result stands on its interleaved controls,
+  ' but it should not have needed to. Drop this line if the step becomes the
+  ' default -- production has no business printing on every mount.
+  debug("    [initCard] CMD12 quiesce ACTIVE (SD_INIT_QUIESCE build)")
   cmd(CMD12, 0)
   pinh(cs)                                                                      '  deselect
   sp_transfer_8($FF)                                                            '  NCS recovery clocks (SD spec)

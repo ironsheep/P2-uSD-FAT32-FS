@@ -23,10 +23,10 @@ two counterfeits are 11a's subject.
 
 | Head | Next action | Where | Blocked? |
 |---|---|---|---|
-| **H1 · Edge wedge** | **15a** — flip the P59 △ DIP switch to stop the boot ROM touching the card, re-run the reproducer | bench | no |
-| **H2 · High-speed performance** | Nothing at the bench. Decide the read/write asymmetry policy | container | no |
+| **H1 · Edge wedge** | 🔑 **Root cause found AND a fix proven.** Decide whether `SD_INIT_QUIESCE` becomes the default, then certify | container → bench | **decision — Stephen** |
+| **H2 · High-speed performance** | Decide the read/write asymmetry policy | container | no |
 | **H3 · Catalog integrity** | Build instruments to emit the new format; run variance before instance variance | container | no |
-| **H4 · Release** | **Recovery FAILED (14a)** — v1.7.1 is not unblocked that way. Decision now: detect-and-document, or accept | container | **yes — Stephen** |
+| **H4 · Release** | **Unblocked if the quiesce ships.** Then doc pass close-out + version decision | container | follows H1 |
 
 **A method rule this campaign has now paid for twice — measure in the state that
 ships, not the state that is convenient.** Reference-content aliasing (round 6)
@@ -125,6 +125,30 @@ socket. Wedge is invariant: `mount()` #2 returns `-8`, raw init then fails.
 
 **A driver session that touches the SD pins (reads suffice), then a P2 reset, then
 another driver session. Latched in the card; cleared only by removing power.**
+
+### 🔑 FIX PROVEN (round 15b): CMD12 quiesce before CMD0
+
+**Five clean warm runs across two power cycles, each pair followed by the
+unmodified build run warm on the same card with no power cycle — which wedged both
+times.** So neither pair can be explained by the wedge having gone quiet, which was
+the failure mode the brief specifically warned about.
+
+Switches were left in the **wedging** configuration throughout, so the boot
+sequence ran exactly as it does in the failing case. **CMD12 does not prevent the
+boot-time conversation; it aborts the data-transfer state that conversation leaves
+behind.** A card mid-transfer is streaming, not listening — CMD0 sent into that
+stream is data, which is precisely the observed `E_NO_CARD` after five retries.
+
+It is also the retrospective explanation for round 14a: a multiple-block read
+continues until told to stop, so 102,400 extra clocks only fed it. The ladder never
+sent the one command that would have reached the card.
+
+**Verification gap, now closed for future runs.** The two builds differ by 20 bytes
+and the captured log recorded neither the size nor any marker — the debug line was
+`DEBUG[CH_INIT]`, which `mount_tests` compiles out. Nothing in the transcript
+distinguished a quiesce build from a plain one; the result rests on the interleaved
+controls, which is strong but should not have been necessary. The step now prints
+unconditionally while it remains an experimental arm.
 
 ### 🔑 ROOT CAUSE FOUND (round 15a): boot-time SD access
 

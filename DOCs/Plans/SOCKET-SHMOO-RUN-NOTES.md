@@ -1260,8 +1260,10 @@ user-affecting.**
 > boot ROM) and explains why round 14a found no recovery: the card is wedged
 > before our first instruction runs. ⚠ **Not yet attributed** — `P59 = up`
 > disables flash boot AND SD boot, and this board runs a flash program each reset;
-> the discriminator is P61 up + P59 float. **15b (CMD12 quiesce) not yet run** and
-> is the remaining shot at a shippable fix.
+> the discriminator is P61 up + P59 float.
+> 🔑 **15b: CMD12 QUIESCE WORKS — a shippable fix**, proven in 2 pairs (5 clean
+> runs, 2 power cycles) each with a same-session control that wedged. Default OFF;
+> enabling it is a container-side call that now rests on controlled evidence.
 > See the Round 15 section at the end.
 >
 > ✅ **ROUND 14 COMPLETE (2026-08-19)** — 🔑 **`initCardOnly()` ALONE arms the
@@ -1531,6 +1533,10 @@ on three of the five. Options and their trade-offs are in Round 7b.
 | `SD_RT_mount_tests_260819-013742/-013752/-014017/-014028.log` (+ a 3rd warm) | **R15a SD boot OFF — 43/43 CLEAN warm, 4 runs, 2 power cycles** |
 | `SD_RT_mount_tests_260819-014205.log` | R15a switches restored — flash banner PRESENT, cold clean |
 | `SD_RT_mount_tests_260819-014222.log` | **R15a switches restored — WEDGE RETURNS 19/24, `-7`/`-8`** |
+| `SD_RT_mount_tests_260819-015035/-015053.log` | **R15b pair 1 quiesce — cold + warm CLEAN, SD boot enabled** |
+| `SD_RT_mount_tests_260819-015120.log` | **R15b pair 1 CONTROL — unmodified warm WEDGED same session** |
+| `SD_RT_mount_tests_260819-015220/-015230/-015241.log` | **R15b pair 2 quiesce — 3 runs CLEAN** |
+| `SD_RT_mount_tests_260819-015257.log` | **R15b pair 2 CONTROL — unmodified warm WEDGED** |
 
 ---
 
@@ -2809,17 +2815,54 @@ is now clear and evidence-backed rather than open-ended:
   access** — no mainstream card has ever wedged in this campaign
 
 That is a narrow, precisely stateable incompatibility rather than a blanket
-warning. **15b (CMD12 quiesce) is the remaining shot at a shippable fix** and was
-not reached this session.
+warning — though with 15b passing, a documented incompatibility is now the
+fallback position rather than the expected one.
 
-## 15b — NOT RUN this session
+## 15b — 🔑 CMD12 QUIESCE WORKS. A shippable fix, proven twice with controls.
 
-The CMD12-before-CMD0 quiesce arm (`-D SD_INIT_QUIESCE`, default OFF in the
-driver) remains outstanding. Its premise is unaffected by the attribution question
-above: whichever actor leaves the card mid-transfer, a card in a data-transfer
-state is streaming rather than listening, CMD0 sent into that stream is data, and
-Part 1 Physical Layer §4.3 designates CMD12 as the way to abort it. It is the one
-candidate that would work **on any board, with no switch and no user action**.
+`-D SD_INIT_QUIESCE` (default OFF in the driver), **switches left in the wedging
+config — SD boot ENABLED, flash banner present in every transcript**, so the boot
+sequence ran exactly as it does in the failing case.
+
+| | Pair 1 | Pair 2 |
+|---|---|---|
+| quiesce, cold | **43/43** | **43/43** |
+| quiesce, **warm** | **43/43 CLEAN** | **43/43 CLEAN** |
+| quiesce, warm again | — | **43/43 CLEAN** |
+| **unmodified, warm (control)** | **19/24 WEDGED**, `-7`/`-8` | **19/24 WEDGED**, `-7`/`-8` |
+
+**Five clean quiesce runs across two power cycles.** In *both* pairs the
+unmodified build was run warm immediately afterward, on the same card with no
+power cycle, and **wedged both times** — so neither pair can be explained by the
+wedge having gone quiet. The brief's own warning ("a fix that is really just a
+quiet day proves nothing") is answered directly.
+
+### What this confirms about the mechanism
+
+Nothing about the board changed — the boot sequence still talks to the card on
+every reset. So **CMD12 is not preventing the boot-time conversation; it is
+aborting the data-transfer state that conversation leaves behind.**
+
+A card left mid-transfer is **streaming, not listening**. CMD0 sent into that
+stream is data, not a command — precisely the observed failure mode: five CMD0
+retries, no response, `E_NO_CARD`. Part 1 Physical Layer §4.3: *"All data read
+commands can be aborted any time by the stop command (CMD12). The data transfer
+will terminate and the card will return to the Transfer State."*
+
+**It also explains round 14a's total recovery failure.** A multiple-block read
+continues until it is told to stop, so 102_400 extra clocks in either CS polarity
+only fed the stream. The recovery ladder never sent the one command that would
+have reached it.
+
+### Why this matters for v1.7.1
+
+15a identified the cause but explicitly **could not ship** — users cannot be
+required to set a DIP switch. **15b works on any board, with no switch and no user
+action.** The driver quiesces the card itself.
+
+The arm is **default OFF**, so shipped behaviour is unchanged until the container
+side decides to enable it. That decision is now backed by two controlled
+demonstrations rather than a hypothesis.
 
 # Round 15 — hand-back summary
 
@@ -2827,7 +2870,7 @@ candidate that would work **on any board, with no switch and no user action**.
 |---|---|---|
 | 15a | Is boot-time SD access the trigger? | **YES.** 4 warm runs clean with it disabled; wedge returns immediately when re-enabled. Toggle proven both directions |
 | — | Which actor — boot ROM or flash program? | **NOT YET SEPARATED.** `P59 = up` disables both. Discriminator identified (P61 up + P59 float) but needs the DIP mapping |
-| 15b | Can CMD12 quiesce the card? | **NOT RUN** — the remaining shot at a shippable fix |
+| 15b | Can CMD12 quiesce the card? | **YES — 5 clean runs, 2 pairs, each with a same-session control that wedged.** A shippable fix needing no switch and no user action |
 
 ## Container-side items from round 15
 
@@ -2837,8 +2880,11 @@ candidate that would work **on any board, with no switch and no user action**.
 2. **Attribute it: boot ROM or flash program.** Run P61 up + P59 floating — flash
    boot runs, SD boot does not. Needs the Edge DIP position mapping, which the
    bench would not guess at.
-3. **15b is the release-relevant run.** CMD12 quiesce is the only identified fix
-   that works on any board without user action. Bench is ready to run it.
+3. **15b PASSED — enable it.** CMD12 quiesce is proven on hardware: 5 clean runs
+   across 2 power cycles with SD boot enabled, and the unmodified build wedged
+   immediately after each pair on the same card. It is **default OFF** in the
+   driver; turning it on is a container-side decision that now rests on controlled
+   evidence. **This is the fix that unblocks v1.7.1.**
 4. **The incompatibility can now be stated precisely** if no fix lands: marginal
    or counterfeit card **and** a board with boot-time SD access enabled. Not a
    blanket warning.
@@ -2848,5 +2894,14 @@ candidate that would work **on any board, with no switch and no user action**.
 
 ## Bench scope
 
-15a complete, both directions, 8 runs plus a switch-state verification. 15b not
-run. No card written; nothing to reformat.
+15a complete, both directions, 8 runs plus a switch-state verification. **15b
+complete — 2 pairs, 5 quiesce runs, 2 controls.** No card written; nothing to
+reformat.
+
+**Bench incident, for the record:** between 15a and 15b the P2 stopped answering
+`Prop_Chk` while the USB port still enumerated (`No Propeller v2 device found`).
+Cause was external — something else on the host was talking to the board. Cleared
+by a power cycle; no data affected, nothing needed re-running. Worth noting
+because the symptom is identical to the known PropPlug failure mode AND to a
+no-serial-window boot-switch setting (`P61 = up` with `P59 = down`); check all
+three, in that order.
