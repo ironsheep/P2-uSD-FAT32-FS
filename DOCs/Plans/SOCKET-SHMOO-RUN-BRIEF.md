@@ -4,22 +4,22 @@
 **Authored:** 2026-08-17, container side.
 **Plan:** `DOCs/Plans/SOCKET-TIMING-CHARACTERIZATION-PLAN.md` (results so far: §11).
 
-## ⟹ CURRENT STATE + WHAT TO RUN NEXT (updated 2026-08-19, round 15 queued)
+## ⟹ CURRENT STATE + WHAT TO RUN NEXT (updated 2026-08-19, round 16 queued)
 
-Round 14 eliminated recovery, exonerated the filesystem layer, and refuted both
-float orders. The surviving condition is `initCardOnly()` + a P2 reset + another
-driver session — and a third card-visible effect of the reset has now been
-identified that no experiment has touched: **the boot ROM talks to the card.**
+🔑 **Round 15a found the root cause: boot-time SD access wedges the card.** Four
+warm runs clean with it disabled, wedge back immediately when re-enabled, toggled
+both directions. The card is wedged before our first instruction executes — which
+is also why no recovery exists.
 
-**Run next: ROUND 15 — two runs, and the second one is a candidate FIX.**
+**Run next: ROUND 16.**
 
-| Track | What | Cost |
+| Track | What | Why |
 |---|---|---|
-| **15a** | Flip the **P59 △** DIP switch so the ROM never touches the card | one switch, no code |
-| **15b** | `-D SD_INIT_QUIESCE` — send **CMD12** before CMD0 in init | one rebuild, driver change already written and gated |
+| **16a** | `-D SD_INIT_QUIESCE` at **normal** switch settings | The only identified fix that works on a board we do not control. Carried over from 15b, not run |
+| **16b** | Erase or replace the flash program, keep flash boot ON | Separates a **general Edge exposure** from an artefact of this bench's flash |
 
-15b matters more than 15a: it is the only candidate that could work on a board we
-do not control.
+16b decides how large this defect actually is, so it decides what the release has
+to say.
 
 ## What this tool does
 
@@ -1366,3 +1366,57 @@ Switch position for every run, cold/warm, `mount_tests` pass/fail, and the
 
 **Standing rules:** a study returning "nothing here" is a result; and do not
 diagnose from hypotheses — send the transcript and say what surprised you.
+
+## ROUND 16 — the fix, and how big the problem really is (added 2026-08-19)
+
+### 16a — CMD12 quiesce (carried over from 15b, still unrun)
+
+Unchanged from the round 15 section: build with `-D SD_INIT_QUIESCE` at **normal**
+switch settings (boot-time SD access ENABLED — we want the wedge condition present)
+and run cold then warm. Also run the unmodified build warm in the same session, so
+a clean result cannot be a quiet day.
+
+This is the release-relevant run. If the driver can quiesce the card itself, no
+user action and no board change is needed.
+
+### 16b — is this a general Edge exposure, or this bench's flash program?
+
+**The hand-back's attribution question is half-answered by its own data.** It
+proposes running P61 up + P59 float to separate the boot ROM from the flash
+program — but **that is the configuration that has been wedging all along**
+(switches `1-2 up, 3-4 down` are exactly P61 up, P59 floating), and SD boot is not
+part of that boot pattern. The ROM's **SD-boot** path never ran. It is exonerated.
+
+That leaves two candidates, and the second is not in the hand-back's list:
+
+**(a) The boot ROM's *flash* traffic on shared pins.** On the Edge, P58-P61 serve
+both flash and microSD **with CLK and CS swapped** — P60 is flash CLK but microSD
+CS, P61 is flash CS but microSD CLK. So while the ROM reads flash, the card sees
+**its own chip-select toggling at flash clock rate**. Every flash boot does this.
+**This would be a general P2 Edge exposure**, not specific to this bench.
+
+**(b) The flash-resident program** — the `* Hi! from FLASH *` banner. Not ours; it
+turns up in `src/DEMO/logs/` transcripts from March. If that program touches the SD
+card, it is the culprit and the problem is an artefact of what happens to be in
+this board's flash.
+
+**The difference decides the release wording.** (a) means every Edge user with
+flash boot enabled is exposed. (b) means almost nobody is.
+
+**The run:** erase the flash program, or replace it with something that provably
+never touches P58-P61, and **leave flash boot ON**. Then the usual cold/warm pair.
+
+- **Still wedges** → (a). The ROM's flash-interface traffic is the mechanism, and
+  this is a general Edge exposure worth documenting prominently
+- **Clean** → (b). The flash program did it, and the scope collapses to boards
+  running SD-touching code from flash
+
+**Cheaper first step, costing no bench time: ask what is actually in that flash.**
+If it is a hello-world that never touches the SD pins, (a) follows by elimination
+and 16b can be skipped.
+
+### Bring back for round 16
+
+16a: cold/warm for both the quiesce build and the unmodified build, same session.
+16b: what was in flash, what replaced it, and the cold/warm result with flash boot
+still enabled.

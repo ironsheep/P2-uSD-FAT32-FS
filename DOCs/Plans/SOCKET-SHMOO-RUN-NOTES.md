@@ -1251,6 +1251,19 @@ user-affecting.**
 
 # Hand-back — consolidated, all rounds
 
+> 🔑 **ROUND 15 — ROOT CAUSE IDENTIFIED (2026-08-19).** The #3240 wedge is caused
+> by **boot-time SD access**, not by anything the driver does. With it disabled,
+> **4 warm runs came back clean across 2 power cycles**; re-enabling it brought the
+> wedge back immediately — **toggle proven in both directions on one card in one
+> session**. This resolves the standing paradox (a reset was necessary yet both of
+> its card-visible effects were refuted — the third thing a reset does is run the
+> boot ROM) and explains why round 14a found no recovery: the card is wedged
+> before our first instruction runs. ⚠ **Not yet attributed** — `P59 = up`
+> disables flash boot AND SD boot, and this board runs a flash program each reset;
+> the discriminator is P61 up + P59 float. **15b (CMD12 quiesce) not yet run** and
+> is the remaining shot at a shippable fix.
+> See the Round 15 section at the end.
+>
 > ✅ **ROUND 14 COMPLETE (2026-08-19)** — 🔑 **`initCardOnly()` ALONE arms the
 > wedge** (control clean, size-matched): the filesystem layer is exonerated and
 > the search collapses to CMD0/CMD8/ACMD41/CMD58. ⛔ **A wedged card is NOT
@@ -1514,6 +1527,10 @@ on three of the five. Options and their trade-offs are in Round 7b.
 | `SD_wedge_predecessor` `P_INIT` + `SD_RT_mount_tests_260818-231212.log` | **R14b `initCardOnly()` alone WEDGES — filesystem exonerated** |
 | `SD_wedge_predecessor` `P_NOTHING` + `SD_RT_mount_tests_260818-231838.log` | R14b control — CLEAN 43/43 |
 | `SD_edge_wedge_probe_260818-231954.log` | **R14c FLOAT_BETWEEN — 8/8 clean; float-after-session refuted** |
+| `SD_null_predecessor_260819-013648.log` | R15a switch-state check — flash banner ABSENT, boot-time access off |
+| `SD_RT_mount_tests_260819-013742/-013752/-014017/-014028.log` (+ a 3rd warm) | **R15a SD boot OFF — 43/43 CLEAN warm, 4 runs, 2 power cycles** |
+| `SD_RT_mount_tests_260819-014205.log` | R15a switches restored — flash banner PRESENT, cold clean |
+| `SD_RT_mount_tests_260819-014222.log` | **R15a switches restored — WEDGE RETURNS 19/24, `-7`/`-8`** |
 
 ---
 
@@ -2694,3 +2711,142 @@ container-side work and the bench did not improvise one.
 its control, 14c complete (8 cycles), 14d not run by gate. Four power cycles. No
 card written beyond the probe's own scratch file, which it deletes; nothing to
 reformat.
+
+---
+
+# Round 15 — 🔑 ROOT CAUSE IDENTIFIED: boot-time SD access wedges the card (run 2026-08-19)
+
+One card throughout: **Lerdisk `asdfg` `$0000_01F4`, Edge socket**, adapter empty.
+
+## 15a — the wedge disappears with boot-time SD access disabled, and returns when it is re-enabled
+
+| Switch setting | Flash banner | Cold | Warm |
+|---|---|---|---|
+| **`1,3` up** (P59 pulled up) | **absent** | 43/43 | **43/43 CLEAN — 4 warm runs across 2 power cycles** |
+| **`1-2` up, `3-4` down** (as before) | **present** | 43/43 | **19/24 WEDGED**, `unmount()` `-7`, `mount()` #2 `-8` |
+
+**Every previous warm run in this campaign wedged on the first attempt. With
+boot-time SD access disabled, four consecutive warm runs came back clean**, then
+the wedge returned immediately when the switches went back.
+
+**The toggle was demonstrated in BOTH directions in one session on one card.** A
+single-direction result would not have distinguished "we fixed it" from "the card
+had a quiet day" — and this campaign has already produced two conclusions that
+inverted under re-measurement, so the reverse control was run deliberately.
+
+### Switch state was verified empirically, not assumed
+
+P2KB (`p2kbArchBootPatternSelection`, Hardware Manual 2022-11-01) documents
+`P59 = up` -> *"Program from serial within 60 s window; no flash or microSD card
+boot"*, with P60/P61 both "any". Since that pattern disables **flash** boot too,
+the `* Hi! from FLASH *` banner is an observable proxy for the switch state:
+
+- `1,3` up -> banner **absent** (boot-time access off) — confirmed by running the
+  pin-silent null predecessor, which round 13a proved does not arm the wedge
+- `1-2` up, `3-4` down -> banner **present** (boot-time access on)
+
+The switch numbering was never guessed; the banner was read out of each transcript.
+
+## Why this explains everything the previous four rounds could not
+
+**The damage is done before our code runs.** That single fact resolves the
+standing paradox — a reset was necessary, yet both of its card-visible effects
+(pin float in both orders, download duration) were independently refuted. The
+third thing a reset does is **run the boot ROM**, and on this board the boot
+sequence talks to the SD card at RCFAST (20-30 MHz) before any user instruction
+executes.
+
+It also explains **round 14a**: no recovery rung worked because the driver never
+had a chance. By the time our first instruction ran, the card was already wedged.
+
+And it fits every row of the elimination table, including the two that most
+constrained the space — in-binary cycles stay clean because no reset intervenes,
+and `P_INIT` wedges because our init runs *before* a boot-time SD conversation
+that then follows it.
+
+## ⚠ NOT YET ATTRIBUTED: boot ROM vs the flash program
+
+**Both settings changed two things at once.** `P59 = up` disables **flash boot as
+well as SD boot**, and this board runs a user program in flash on every reset
+(`* Hi! from FLASH *`). So the culprit is **either**:
+
+- the **boot ROM's own SD conversation** (ROM initialises the card in SPI mode,
+  mounts FAT32, looks for a boot file, falls back to serial), **or**
+- the **flash program** touching the card
+
+Both are boot-time, both fit every observation. **Round 15 identifies the layer,
+not yet the actor.**
+
+### The discriminator, from the same P2KB table
+
+**P61 up with P59 floating** -> *"Program from serial within 100 ms, OR boot from
+flash"*: flash boot **runs**, SD boot **does not**.
+
+- Warm run **clean** in that config -> the **boot ROM** is the culprit
+- Warm run **wedges** -> the **flash program** is the culprit
+
+The bench did not run this, because it requires knowing which physical DIP
+positions correspond to `FLASH` (P61) and the `△`/`▽` pair (P59). P2KB documents
+the labels but not their mapping to positions 1-4, and a wrong setting would
+silently produce a meaningless result. **Note the open possibility:** if
+`1-2 up, 3-4 down` already *is* P61-up-with-P59-floating, then the discriminator
+has effectively already run and the answer would be "the flash program" — but that
+turns entirely on the mapping and is not asserted here.
+
+## What this does and does not deliver for v1.7.1
+
+**It is a diagnostic, not a fix.** Users cannot be required to set a DIP switch —
+booting from SD is a legitimate configuration the driver must work in, and users
+have their own boards.
+
+Combined with round 14a (**no in-driver recovery exists** — five rungs including
+102_400 clocks in both CS polarities, all `-8`), the shape of the release decision
+is now clear and evidence-backed rather than open-ended:
+
+- the wedge is **triggered before our code runs**
+- it is **not recoverable** by anything the driver can do afterwards
+- it needs a **marginal/counterfeit card** *and* **a board with boot-time SD
+  access** — no mainstream card has ever wedged in this campaign
+
+That is a narrow, precisely stateable incompatibility rather than a blanket
+warning. **15b (CMD12 quiesce) is the remaining shot at a shippable fix** and was
+not reached this session.
+
+## 15b — NOT RUN this session
+
+The CMD12-before-CMD0 quiesce arm (`-D SD_INIT_QUIESCE`, default OFF in the
+driver) remains outstanding. Its premise is unaffected by the attribution question
+above: whichever actor leaves the card mid-transfer, a card in a data-transfer
+state is streaming rather than listening, CMD0 sent into that stream is data, and
+Part 1 Physical Layer §4.3 designates CMD12 as the way to abort it. It is the one
+candidate that would work **on any board, with no switch and no user action**.
+
+# Round 15 — hand-back summary
+
+| Study | Question | Answer |
+|---|---|---|
+| 15a | Is boot-time SD access the trigger? | **YES.** 4 warm runs clean with it disabled; wedge returns immediately when re-enabled. Toggle proven both directions |
+| — | Which actor — boot ROM or flash program? | **NOT YET SEPARATED.** `P59 = up` disables both. Discriminator identified (P61 up + P59 float) but needs the DIP mapping |
+| 15b | Can CMD12 quiesce the card? | **NOT RUN** — the remaining shot at a shippable fix |
+
+## Container-side items from round 15
+
+1. **Root cause is boot-time SD access.** Four rounds of elimination end here. The
+   card is wedged before our first instruction executes, which is also why no
+   recovery exists (14a).
+2. **Attribute it: boot ROM or flash program.** Run P61 up + P59 floating — flash
+   boot runs, SD boot does not. Needs the Edge DIP position mapping, which the
+   bench would not guess at.
+3. **15b is the release-relevant run.** CMD12 quiesce is the only identified fix
+   that works on any board without user action. Bench is ready to run it.
+4. **The incompatibility can now be stated precisely** if no fix lands: marginal
+   or counterfeit card **and** a board with boot-time SD access enabled. Not a
+   blanket warning.
+5. **P2KB gap worth filing:** `p2kbArchBootPatternSelection` records the Edge
+   `FLASH` and `△`/`▽` switch labels but not their DIP positions, and flags P60's
+   pull-up source as "verification pending". Both cost us a run this session.
+
+## Bench scope
+
+15a complete, both directions, 8 runs plus a switch-state verification. 15b not
+run. No card written; nothing to reformat.

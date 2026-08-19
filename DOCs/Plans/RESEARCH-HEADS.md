@@ -126,57 +126,58 @@ socket. Wedge is invariant: `mount()` #2 returns `-8`, raw init then fails.
 **A driver session that touches the SD pins (reads suffice), then a P2 reset, then
 another driver session. Latched in the card; cleared only by removing power.**
 
-### What survives after round 14 — and the gap in the elimination table
+### 🔑 ROOT CAUSE FOUND (round 15a): boot-time SD access
 
-The surviving condition is **`initCardOnly()` + a P2 reset + another driver
-session**. A reset is necessary, yet both of its *card-visible* effects — floating
-pins in either order, and download duration — are independently refuted.
+**The card is wedged before our first instruction executes.** With boot-time SD
+access disabled (`P59 = up`), four consecutive warm runs came back clean; the wedge
+returned immediately when the switches went back. Toggled in both directions in one
+session, on one card — deliberately, because this campaign has already produced two
+conclusions that inverted under re-measurement.
 
-**There is a third thing a reset does that nothing has tested: the boot ROM talks
-to the SD card.** Per `p2kbArchSdCardBoot` and `p2kbArchBootPatternSelection`, the
-ROM reads its boot pattern from P59/P60/P61 on every reset; **P60 pulled up selects
-SD boot, and P60 is our CS pin** — which the SD spec's internal 50 kΩ CS pull-up
-would assert whenever a card is seated. On that pattern the ROM initialises the
-card in SPI mode, mounts FAT32, hunts for a boot file, and falls back to serial —
-all under RCFAST, before any user code runs.
+That resolves the standing paradox. A reset was necessary, yet both of its
+card-visible effects were refuted; the third thing a reset does is **run the boot
+sequence**, which on this board talks to the SD card at RCFAST before any user code
+runs. It also explains round 14a: no recovery rung worked because the driver never
+had a chance.
 
-**Model: our driver's init leaves the card in a state that the ROM's next SD-boot
-attempt turns into a wedge.** It fits every row on record:
+### Attribution — the bench's own data already answers half of it
 
-| Sequence | Order | Observed |
-|---|---|---|
-| cold | ROM → ours | clean ✓ |
-| null-binary predecessor (13a) | ROM → ROM → ours | clean ✓ |
-| `P_INIT` predecessor (14b) | ROM → **ours** → ROM → ours | **wedge** ✓ |
-| in-binary cycles (14c, probe) | ours → ours, no ROM | clean ✓ |
-| 120 s powered idle (13b) | ours → idle → ROM → ours | **wedge** ✓ |
+The hand-back lists the culprit as *either* the boot ROM's SD conversation *or* the
+flash-resident program, and proposes running **P61 up + P59 float** to separate
+them. **That configuration is the one that has been wedging all along** — switches
+`1-2 up, 3-4 down` are exactly P61 up with P59 floating, and SD boot is not in that
+boot pattern at all.
 
-It also explains why no recovery works: the damage is done before our code runs.
+**So the ROM's *SD-boot* path is already exonerated.** It never ran. But that
+leaves two candidates, not one, and the second is not in the hand-back's list:
 
-**Round 15a tests it with one DIP switch.** `P59 = up` selects "no flash or microSD
-card boot" while keeping the serial window — on the Edge that is the `△` switch.
-Flip it, re-run the reproducer, then flip it back and confirm the wedge returns.
+**(a) The ROM's *flash* traffic on shared pins.** On the Edge, P58-P61 are shared
+between flash and microSD **with CLK and CS swapped**:
 
-**But the switch is a diagnostic, not a fix** (Stephen): we cannot require a board
-setting from users, and booting from SD is a legitimate configuration the driver
-has to work in.
+| Pin | Flash role | microSD role | Our driver |
+|---|---|---|---|
+| P60 | **CLK** | **DAT3/CS** | CS |
+| P61 | **CS** | **CLK** | SCK |
 
-### 15b — the fix that could work on a board we do not control
+So while the ROM reads flash, our card sees **its own chip-select toggling at flash
+clock rate** with data on MOSI — repeated spurious selections. This happens on every
+flash boot, and it is a general P2 Edge exposure, not specific to this bench.
 
-If the ROM leaves the card mid-transfer, our init should quiesce it before use.
-**A card in a data-transfer state is not listening for commands — it is
-streaming**, so CMD0 sent into that stream is data, not a command. That is exactly
-the observed failure (five CMD0 retries, no response, `E_NO_CARD`), and it explains
-why 14a's ladder failed: a multiple-block read runs until told to stop, so extra
-clocks only fed it.
+**(b) The flash-resident program** (`* Hi! from FLASH *` — not ours; it appears in
+`src/DEMO/logs/` transcripts from March) touching the SD card itself.
 
-Part 1 §4.3: *"All data read commands can be aborted any time by the stop command
-(CMD12). The data transfer will terminate and the card will return to the Transfer
-State."* **`initCard()` has never sent CMD12**, and neither did the recovery ladder.
+The distinction matters enormously for the release: **(a) affects every Edge board
+with flash boot enabled; (b) is an artefact of what happens to be in this board's
+flash.**
 
-A gated step is in the driver now — `-D SD_INIT_QUIESCE`, **default OFF** so shipped
-behaviour is unchanged until it proves out. If the warm run comes back clean, the
-driver fixes this itself with no user action, and the release is unblocked.
+### The discriminator that actually separates them
+
+Not a boot-pattern change — **replace or erase the flash program**, keeping flash
+boot ON. Wedges still → (a), the ROM's flash-interface traffic. Clean → (b), the
+program.
+
+Cheaper still, and it costs no bench time: **ask what is in flash.** If it is a
+hello-world that never touches the SD pins, (a) is the answer by elimination.
 
 **Superseded hypotheses, kept so they are not re-proposed:** Round 11's hand-back
 proposes the **cross-binary boundary** — the reproducer is two downloads with a
