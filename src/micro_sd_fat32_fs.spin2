@@ -7555,6 +7555,40 @@ PRI initCard() : bSuccess | timeout, resp, card_version, acmd41_arg, got_respons
   ' Sends: 0x40 0x00 0x00 0x00 0x00 0x95
   ' Expected R1: 0x01 (in idle state)
   ' ============================================
+#ifdef SD_INIT_QUIESCE
+  ' ============================================
+  ' STEP 3.9 (EXPERIMENTAL, -D SD_INIT_QUIESCE): quiesce a card that a PREVIOUS
+  ' bus master may have left mid-transfer.
+  '
+  ' We are not the only thing that talks to this card. On every P2 reset the boot
+  ' ROM reads its boot pattern from P59/P60/P61, and P60 pulled up selects SD boot
+  ' -- P60 being our CS pin, which the card's own internal 50 kOhm CS pull-up
+  ' asserts whenever a card is seated. On that pattern the ROM initialises the card
+  ' in SPI mode, mounts FAT32, hunts for a boot file, and gives up. It runs under
+  ' RCFAST, before any user code, and nothing guarantees it terminated cleanly.
+  '
+  ' A card left in a data-transfer state is not listening for commands -- it is
+  ' streaming. CMD0 sent into that stream is data, not a command, which is exactly
+  ' the observed failure: five CMD0 retries, no response, E_NO_CARD. And more
+  ' clocking cannot fix it, because a multiple-block read continues until it is
+  ' told to stop; clocking only feeds it. (Measured: 102_400 clocks in each CS
+  ' polarity recovered nothing.)
+  '
+  ' CMD12 is the command the specification designates for this. Part 1 Physical
+  ' Layer, section 4.3: "All data read commands can be aborted any time by the stop
+  ' command (CMD12). The data transfer will terminate and the card will return to
+  ' the Transfer State."
+  '
+  ' Harmless on a card that is idle -- CMD12 with nothing to stop is a no-op that
+  ' returns an error bit we deliberately ignore. There is no state here to get
+  ' wrong, which is why it can sit unconditionally ahead of CMD0 if it proves out.
+  DEBUG[CH_INIT]("    [initCard] Step 3.9: CMD12 quiesce (experimental)")
+  cmd(CMD12, 0)
+  pinh(cs)                                                                      '  deselect
+  sp_transfer_8($FF)                                                            '  NCS recovery clocks (SD spec)
+  waitms(CMD_RETRY_DELAY_MS)
+#endif
+
   DEBUG[CH_INIT]("    [initCard] Step 4: CMD0 (GO_IDLE_STATE)...")
   resp := 0
   got_response := false

@@ -153,9 +153,30 @@ attempt turns into a wedge.** It fits every row on record:
 
 It also explains why no recovery works: the damage is done before our code runs.
 
-**Round 15 tests it with one DIP switch.** `P59 = up` selects "no flash or microSD
+**Round 15a tests it with one DIP switch.** `P59 = up` selects "no flash or microSD
 card boot" while keeping the serial window — on the Edge that is the `△` switch.
 Flip it, re-run the reproducer, then flip it back and confirm the wedge returns.
+
+**But the switch is a diagnostic, not a fix** (Stephen): we cannot require a board
+setting from users, and booting from SD is a legitimate configuration the driver
+has to work in.
+
+### 15b — the fix that could work on a board we do not control
+
+If the ROM leaves the card mid-transfer, our init should quiesce it before use.
+**A card in a data-transfer state is not listening for commands — it is
+streaming**, so CMD0 sent into that stream is data, not a command. That is exactly
+the observed failure (five CMD0 retries, no response, `E_NO_CARD`), and it explains
+why 14a's ladder failed: a multiple-block read runs until told to stop, so extra
+clocks only fed it.
+
+Part 1 §4.3: *"All data read commands can be aborted any time by the stop command
+(CMD12). The data transfer will terminate and the card will return to the Transfer
+State."* **`initCard()` has never sent CMD12**, and neither did the recovery ladder.
+
+A gated step is in the driver now — `-D SD_INIT_QUIESCE`, **default OFF** so shipped
+behaviour is unchanged until it proves out. If the warm run comes back clean, the
+driver fixes this itself with no user action, and the release is unblocked.
 
 **Superseded hypotheses, kept so they are not re-proposed:** Round 11's hand-back
 proposes the **cross-binary boundary** — the reproducer is two downloads with a

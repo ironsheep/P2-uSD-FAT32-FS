@@ -8,14 +8,18 @@
 
 Round 14 eliminated recovery, exonerated the filesystem layer, and refuted both
 float orders. The surviving condition is `initCardOnly()` + a P2 reset + another
-driver session — and the reset's two known card-visible effects are both refuted.
+driver session — and a third card-visible effect of the reset has now been
+identified that no experiment has touched: **the boot ROM talks to the card.**
 
-**Run next: ROUND 15 — one DIP switch.** There is a third thing a reset does that
-no experiment has touched, and the Edge module has a switch that turns it off.
+**Run next: ROUND 15 — two runs, and the second one is a candidate FIX.**
 
 | Track | What | Cost |
 |---|---|---|
-| **15a** | Flip the **P59 △ (up)** DIP switch, re-run the reproducer | one switch, no code, no soldering |
+| **15a** | Flip the **P59 △** DIP switch so the ROM never touches the card | one switch, no code |
+| **15b** | `-D SD_INIT_QUIESCE` — send **CMD12** before CMD0 in init | one rebuild, driver change already written and gated |
+
+15b matters more than 15a: it is the only candidate that could work on a board we
+do not control.
 
 ## What this tool does
 
@@ -1304,13 +1308,56 @@ cd tools
 Run the pair twice to be sure, power-cycling between. Then **flip the switch back**
 and confirm the wedge returns — a fix that cannot be un-fixed is not yet proven.
 
-### If it is confirmed
+### What 15a can and cannot deliver
 
-The immediate practical consequence is guidance rather than a code change: a P2
-board that uses SD as *data storage* rather than boot media should set P59 up, and
-the driver's documentation should say so. It would also mean this exposure is not
-specific to our driver — any P2 application holding an SD card through a reset has
-it.
+**It is a diagnostic, not a fix.** We cannot require users to set a DIP switch —
+booting from SD is a legitimate configuration our driver has to work in, and users
+have their own boards. So 15a's value is identification only: if the wedge
+disappears with SD boot off, we know what we are fighting.
+
+### 15b — CMD12 before CMD0: the fix that could work on any board
+
+If the ROM is leaving the card mid-transfer, our init should be able to quiesce it
+before use — and there is a specific, spec-designated way to do that which nothing
+has yet tried.
+
+**A card left in a data-transfer state is not listening for commands; it is
+streaming.** CMD0 sent into that stream is data, not a command — which is exactly
+the observed failure: five CMD0 retries, no response, `E_NO_CARD`. It also explains
+why round 14a's recovery ladder failed: a multiple-block read continues until it is
+told to stop, so 102,400 extra clocks in either polarity only fed it.
+
+Part 1 Physical Layer §4.3, verbatim: *"All data read commands can be aborted any
+time by the stop command (CMD12). The data transfer will terminate and the card
+will return to the Transfer State."*
+
+`initCard()` has never sent CMD12, and neither did the recovery ladder. A gated
+step is now in the driver — **default OFF**, so shipped behaviour is unchanged
+until this proves out.
+
+```bash
+# POWER-CYCLE. Normal switch settings (SD boot ENABLED -- we want the ROM to run):
+cd tools
+./run_test.sh ../src/regression-tests/SD_RT_mount_tests.spin2 -t 120 -D SD_INIT_QUIESCE   # cold
+./run_test.sh ../src/regression-tests/SD_RT_mount_tests.spin2 -t 120 -D SD_INIT_QUIESCE   # warm -- THE QUESTION
+```
+
+- **Warm run CLEAN** → the driver can quiesce the card itself, on any board, with
+  no switch and no user action. That is a shippable fix and it unblocks the release
+- **Warm run WEDGED** → CMD12 is not sufficient; the card is stuck in a way the
+  stop command does not reach, and 15a's result tells us whether the ROM is even
+  the right suspect
+
+Run both cold and warm, twice. Also run the **unmodified** build warm in the same
+session to confirm the wedge is still reproducing that day — a fix that is really
+just a quiet day proves nothing.
+
+### If the ROM is confirmed but CMD12 does not help
+
+Then the honest position is a documented incompatibility, narrower than it first
+looks: it needs a *marginal or counterfeit* card **and** a board with SD boot
+enabled. No mainstream card has ever wedged. That is a scope worth stating
+precisely rather than a blanket warning.
 
 ### Bring back for round 15
 
