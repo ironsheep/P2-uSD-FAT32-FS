@@ -8,7 +8,7 @@
 ''               -- see below for terms of use
 ''   E-mail..... stephen@ironsheep.biz
 ''   Started.... 2023
-''   Updated.... 12 AUG 2026
+''   Updated.... 19 AUG 2026
 ''
 '' =================================================================================================
 
@@ -81,6 +81,26 @@
 OBJ ' special stack need determination and checking
   stackUtils    : "isp_stack_check"
 #endif
+
+CON ' ---- Driver Version ----
+  ' The version of THIS driver, readable at runtime by any consumer.
+  '
+  ' WHY IT EXISTS (2026-08-19). Every performance figure in the card catalog is a
+  ' measurement of this driver, not of the card alone -- the align default, the
+  ' production speed bound and the init sequence have all moved numbers. Until now
+  ' nothing in the code carried a version, so no measurement could name the driver
+  ' that produced it, and "did we lose performance between releases" was
+  ' unanswerable from the documents. Characterization tools stamp these values into
+  ' their transcripts so a table can state its provenance in one line.
+  '
+  ' CORE, deliberately: not behind any SD_INCLUDE_* flag, because a core-only build
+  ' must still be able to identify itself.
+  '
+  ' KEEP IN STEP WITH CHANGELOG.md -- tools/check_doc_version.sh fails the build
+  ' gate if the newest changelog heading and these three numbers disagree.
+  DRIVER_VERSION_MAJOR = 1
+  DRIVER_VERSION_MINOR = 8
+  DRIVER_VERSION_PATCH = 0
 
 CON ' flags
   F_NEWDIR   = decod 1
@@ -967,10 +987,43 @@ DAT  ' ---- Singleton Control ----
         msg_ws_busy_final       BYTE "Final busy timeout - card still programming", 0
         msg_ws_cmd13_failed     BYTE "CMD13 status check FAILED", 0
 
+        ' Printable form of DRIVER_VERSION_MAJOR.MINOR.PATCH, for tools that stamp
+        ' the driver version into a transcript banner. Held as text rather than
+        ' formatted at each call site so every consumer prints it identically.
+        ' tools/check_doc_version.sh checks this string against the three constants
+        ' and against the newest CHANGELOG.md heading.
+        str_driver_version                      BYTE    "1.8.0", 0
+
 CON ' ---- Lifecycle ----
 
 PUB null()
 '' This is not a top-level object - placeholder to indicate driver must be instantiated as OBJ.
+
+PUB driverVersion() : major, minor, patch
+'' Report this driver's version as three numbers.
+''
+'' Present in EVERY build, including core-only, so any consumer can identify the
+'' driver it is linked against. Characterization tools stamp this into their
+'' transcripts: a throughput figure is a measurement of the driver as much as of
+'' the card, and before this existed no measurement could name the driver that
+'' produced it.
+''
+'' @returns major - Major version (breaking API changes)
+'' @returns minor - Minor version (added capability)
+'' @returns patch - Patch version (fixes only)
+
+  major := DRIVER_VERSION_MAJOR
+  minor := DRIVER_VERSION_MINOR
+  patch := DRIVER_VERSION_PATCH
+
+PUB driverVersionString() : p_version
+'' Report this driver's version as printable text, e.g. "1.8.0".
+''
+'' The companion to driverVersion() for the common case -- printing a banner.
+''
+'' @returns p_version - Pointer to a zero-terminated version string
+
+  p_version := @str_driver_version
 
 PUB start(_cs, _mosi, _miso, _sck) : workerCogId
 '' Start worker cog (singleton) - initialize SD card driver and launch dedicated worker cog.

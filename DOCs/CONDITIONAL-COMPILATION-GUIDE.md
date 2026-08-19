@@ -57,6 +57,7 @@ With no feature flags, the driver provides all standard filesystem operations:
 - `deleteFile()` / `renameFile()` / `moveFile()`
 - `makeDirectory()` / `changeDirectory()` / `readDirectory()`
 - `fileSize()` / `freeSpace()` / `sectorsPerCluster()` / `error()`
+- `driverVersion()` / `driverVersionString()` — present in every build, including this one, so a core-only driver can still identify itself
 
 This is sufficient for the vast majority of applications. The example programs (`src/EXAMPLES/`) use no feature flags at all.
 

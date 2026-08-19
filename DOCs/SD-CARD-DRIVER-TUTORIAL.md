@@ -1497,7 +1497,9 @@ These methods are always available in the core driver (no feature flags required
 | `getManufacturerID()` | Card manufacturer ID byte |
 | `getReadTimeout()` | Read timeout in ms |
 | `getWriteTimeout()` | Write timeout in ms |
-| `isHighSpeedActive()` | True if running at 50 MHz |
+| `isHighSpeedActive()` | True while the card is in CMD6 high-speed mode (a mode, not a clock threshold) |
+| `driverVersion()` | Driver version as three numbers (major, minor, patch) |
+| `driverVersionString()` | Driver version as printable text, e.g. `"1.8.0"` |
 
 ### Utilities
 | Method | Description |

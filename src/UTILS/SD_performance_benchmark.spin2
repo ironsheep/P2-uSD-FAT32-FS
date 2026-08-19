@@ -55,6 +55,21 @@ CON
     ' Test parameters
     ITERATIONS      = 10                ' Number of iterations per test
 
+    ' REPEAT RUNS -- measure RUN variance before INSTANCE variance.
+    '
+    ' Round 11b measured the same physical PNY card moving by up to 3x between
+    ' rounds, with 6x dispersion inside a single measurement loop, while its
+    ' high-speed numbers repeated to 0.3%. So a difference between two cards means
+    ' nothing until the run-to-run spread of one card is known. Set this above 1
+    ' and the whole measurement set repeats on the mounted card; every emitted
+    ' CATALOG-ROW carries its run number, so the spread is visible in the harvested
+    ' table as a range rather than averaged away.
+    '
+    ' Measurement ORDER may matter too -- the first run of a card can differ from
+    ' later ones -- which is a second reason the runs are reported separately
+    ' instead of being folded together here.
+    REPEAT_RUNS     = 1                 ' Passes over the full measurement set
+
     ' Test sizes (in bytes)
     SIZE_512B       = 512
     SIZE_4KB        = 4096
@@ -113,6 +128,10 @@ testBuffer      BYTE    0[BUFFER_SIZE]
 ' Statistics arrays
 timings         LONG    0[ITERATIONS]
 
+' Which pass over the measurement set is running (1..REPEAT_RUNS). Stamped into
+' every CATALOG-ROW so repeat runs stay distinguishable after harvesting.
+currentRun      LONG    1
+
 ' Card identification buffer
 cid_buf         BYTE    0[16]
 
@@ -124,7 +143,7 @@ str_bus_bound   BYTE    "BUS-bound", 0
 str_card_bound  BYTE    "CARD-bound", 0
 str_mixed       BYTE    "mixed", 0
 
-PUB go() | result, spi_hz
+PUB go() | result, spi_hz, runIdx
 '' Main entry point - runs comprehensive SD card performance benchmark.
 
     debug(" ")
@@ -132,8 +151,14 @@ PUB go() | result, spi_hz
     debug("  SD Card Performance Benchmark v2.0")
     debug("======================================================")
     debug(" ")
+    ' The DRIVER version, not this tool's. Throughput is a property of the driver
+    ' as much as of the card -- the align default, the production speed bound and
+    ' the init sequence have all moved these numbers between releases -- so a
+    ' transcript that does not name the driver cannot be placed in a catalog table.
+    debug("Driver version: ", zstr_(sd.driverVersionString()))
     debug("SysClk: ", udec_(clkfreq / 1_000_000), " MHz")
     debug("Iterations per test: ", udec_(ITERATIONS))
+    debug("Repeat runs: ", udec_(REPEAT_RUNS))
     debug(" ")
 
     ' Mount the card first (for accurate cold-mount timing)
@@ -171,26 +196,44 @@ PUB go() | result, spi_hz
             debug("  WARNING: Could not read CID")
         debug(" ")
 
-        ' === RAW SINGLE-SECTOR BENCHMARKS ===
-        debug(" ")
-        debug("------------------------------------------------------")
-        debug("  RAW SINGLE-SECTOR (1x512B per operation)")
-        debug("------------------------------------------------------")
-        runSingleSectorBenchmarks()
+        ' === THE MEASUREMENT SET, repeated REPEAT_RUNS times ===
+        ' Repeats happen inside one mount, on one card, so what varies between
+        ' passes is the card and the driver -- not the mount, the socket or the
+        ' operator. That is the run variance the instance experiment has to be
+        ' compared against.
+        repeat runIdx from 1 to REPEAT_RUNS
+            ' Published to DAT so emitCatalogRow can stamp it without threading the
+            ' run number through four reporters. A method-local drives the loop
+            ' deliberately: Spin2 documents the FROM..TO loop variable as local to
+            ' the REPEAT block, so a DAT symbol in that position is not a contract
+            ' this instrument should rest its provenance stamp on.
+            currentRun := runIdx
+            if REPEAT_RUNS > 1
+                debug(" ")
+                debug("######################################################")
+                debug("  RUN ", udec_(currentRun), " of ", udec_(REPEAT_RUNS))
+                debug("######################################################")
 
-        ' === RAW MULTI-SECTOR BENCHMARKS ===
-        debug(" ")
-        debug("------------------------------------------------------")
-        debug("  RAW MULTI-SECTOR (CMD18/CMD25 bulk transfers)")
-        debug("------------------------------------------------------")
-        runMultiSectorBenchmarks()
+            ' === RAW SINGLE-SECTOR BENCHMARKS ===
+            debug(" ")
+            debug("------------------------------------------------------")
+            debug("  RAW SINGLE-SECTOR (1x512B per operation)")
+            debug("------------------------------------------------------")
+            runSingleSectorBenchmarks()
 
-        ' === FILE-LEVEL BENCHMARKS ===
-        debug(" ")
-        debug("------------------------------------------------------")
-        debug("  FILE-LEVEL (handle API, includes FAT overhead)")
-        debug("------------------------------------------------------")
-        runFileLevelBenchmarks()
+            ' === RAW MULTI-SECTOR BENCHMARKS ===
+            debug(" ")
+            debug("------------------------------------------------------")
+            debug("  RAW MULTI-SECTOR (CMD18/CMD25 bulk transfers)")
+            debug("------------------------------------------------------")
+            runMultiSectorBenchmarks()
+
+            ' === FILE-LEVEL BENCHMARKS ===
+            debug(" ")
+            debug("------------------------------------------------------")
+            debug("  FILE-LEVEL (handle API, includes FAT overhead)")
+            debug("------------------------------------------------------")
+            runFileLevelBenchmarks()
 
         ' Unmount with timing
         debug(" ")
@@ -216,20 +259,61 @@ PUB go() | result, spi_hz
 
 ' CARD IDENTIFICATION
 
-PRI identifyCard() : bIdentified | mid, pnm[2]
+PRI identifyCard() : bIdentified | psn, mdt_year, mdt_month
 ' Identify card by reading CID (call after mount).
-' Displays MID, product name, and raw CID bytes.
+'
+' THE IDENTITY BLOCK IS THE ROW KEY. Catalog rows are per physical instance,
+' keyed by the full Card ID, and grouped by SILICON KEY = MID_PNM_PRV. The MID is
+' printed as hex rather than a brand name on purpose: mapping MID to a
+' manufacturer is a lookup the CATALOG owns in one place, and an instrument
+' carrying its own copy would go stale silently. Brand does not predict
+' controller in any case -- Gigastone-branded cards in this project's own drawer
+' carry three different MIDs.
+'
+' Until 2026-08-19 this printed MID and the 5-character product name only, which
+' cannot distinguish two cards of the same model. The PSN can.
+'
+' CID layout: [0]=MID, [1..2]=OID, [3..7]=PNM (5 ASCII), [8]=PRV, [9..12]=PSN,
+' [13..14]=MDT (12 bits: 8-bit year offset from 2000, 4-bit month), [15]=CRC7
+'
+' @returns bIdentified - TRUE if the CID was read
+' @local psn - Product serial number, the field that distinguishes two same-model cards
+' @local mdt_year - Manufacture year, decoded from the 12-bit MDT field
+' @local mdt_month - Manufacture month
 
     bIdentified := false
     if sd.readCIDRaw(@cid_buf) >= 0
-        ' Extract MID and product name
-        mid := cid_buf[0]
-        bytemove(@pnm, @cid_buf + 3, CID_PNM_LEN)
-        pnm.byte[CID_PNM_LEN] := 0
+        psn := (cid_buf[9] << 24) | (cid_buf[10] << 16) | (cid_buf[11] << 8) | cid_buf[12]
+        mdt_year := 2000 + ((cid_buf[13] & $0F) << 4) + (cid_buf[14] >> 4)
+        mdt_month := cid_buf[14] & $0F
 
-        debug("  MID: ", uhex_byte_(mid), "  Product: ", zstr_(@pnm))
-        debug("  CID: ", uhex_byte_(cid_buf[0]), " ", uhex_byte_(cid_buf[1]), " ", uhex_byte_(cid_buf[2]), " ", uhex_byte_(cid_buf[3]), " ", uhex_byte_(cid_buf[4]), " ", uhex_byte_(cid_buf[5]), " ", uhex_byte_(cid_buf[6]), " ", uhex_byte_(cid_buf[7]))
-        debug("       ", uhex_byte_(cid_buf[8]), " ", uhex_byte_(cid_buf[9]), " ", uhex_byte_(cid_buf[10]), " ", uhex_byte_(cid_buf[11]), " ", uhex_byte_(cid_buf[12]), " ", uhex_byte_(cid_buf[13]), " ", uhex_byte_(cid_buf[14]), " ", uhex_byte_(cid_buf[15]))
+        debug("  Card: MID=$", uhex_byte_(cid_buf[0]), " OID='", lstr_(@cid_buf[1], 2), ...
+            "' PNM='", lstr_(@cid_buf[3], CID_PNM_LEN), "' rev ", udec_(cid_buf[8] >> 4), ".", udec_(cid_buf[8] & $0F))
+        debug("  >>> SERIAL PSN=$", uhex_long_(psn), "  mfg ", udec_(mdt_year), "/", udec_(mdt_month), " <<<")
+        debug("  SILICON-KEY: $", uhex_byte_(cid_buf[0]), "_", lstr_(@cid_buf[3], CID_PNM_LEN), "_", ...
+            udec_(cid_buf[8] >> 4), ".", udec_(cid_buf[8] & $0F))
+        ' Month is zero-padded to two digits: the existing catalog Card IDs are
+        ' YYYYMM (e.g. ..._201408), and an unpadded single-digit month would make
+        ' 2024/1 and 2024/11 collide as "20241".
+        if mdt_month < 10
+            debug("  CARD-ID: $", uhex_byte_(cid_buf[0]), "_", lstr_(@cid_buf[3], CID_PNM_LEN), "_", ...
+                udec_(cid_buf[8] >> 4), ".", udec_(cid_buf[8] & $0F), "_", uhex_long_(psn), "_", ...
+                udec_(mdt_year), "0", udec_(mdt_month))
+        else
+            debug("  CARD-ID: $", uhex_byte_(cid_buf[0]), "_", lstr_(@cid_buf[3], CID_PNM_LEN), "_", ...
+                udec_(cid_buf[8] >> 4), ".", udec_(cid_buf[8] & $0F), "_", uhex_long_(psn), "_", ...
+                udec_(mdt_year), udec_(mdt_month))
+        debug("  CID raw: ", uhex_byte_array_(@cid_buf, 16))
+
+        ' MACHINE-PARSEABLE IDENTITY. Every CATALOG-ROW line below this one
+        ' belongs to the card named here -- the harvester associates rows with
+        ' the most recent CATALOG-CARD, which is why no row has to repeat the
+        ' identity or format it into a string.
+        debug("CATALOG-CARD: tool=performance_benchmark drv=", zstr_(sd.driverVersionString()), ...
+            " mid=$", uhex_byte_(cid_buf[0]), " pnm=", lstr_(@cid_buf[3], CID_PNM_LEN), ...
+            " prv=", udec_(cid_buf[8] >> 4), ".", udec_(cid_buf[8] & $0F), ...
+            " psn=$", uhex_long_(psn), " mdt=", udec_(mdt_year), "/", udec_(mdt_month), ...
+            " sysclk=", udec_(clkfreq), " spi_hz=", udec_(sd.getSPIFrequency()))
         bIdentified := true
     else
         debug("  Could not read the card ID register")
@@ -353,7 +437,38 @@ PRI runRawReadTest(count) | iter, start_ct, elapsed_ct, min_us, max_us, total_us
 
         pct := pctOfCeiling(size, avg_us)
         debug("  ", udec_(count), " sector(s) (", udec_(size), "B): Min=", udec_(min_us), " Avg=", udec_(avg_us), " Max=", udec_(max_us), " us => ", udec_(kbps), " KB/s  [", udec_(pct), "% of bus, ", zstr_(limiterTag(pct)), "]")
+        emitCatalogRow(string("raw_read"), size, avg_us, min_us, max_us, kbps, pct)
 
+
+PRI emitCatalogRow(p_op, bytes_moved, avg_us, min_us, max_us, kbps, pct)
+' Emit one machine-parseable row for the catalog harvester.
+'
+' WHY THIS EXISTS (2026-08-19). Catalog numbers have always been transcribed from
+' transcripts by hand, and the result is visible in the documents: three different
+' row labels across eras for the same measurement ("Read (1x512B)" / "RAW read
+' 1x512B" / "Read 1 sector"), and six cards whose measured data never reached the
+' summary table at all. A prefixed, fixed-shape line makes the table a
+' transformation of the log rather than a retyping of it.
+'
+' ADDITIVE ONLY. The human-readable line above each of these is unchanged -- this
+' is a second rendering of the same numbers, not a replacement, because the
+' transcripts are read by people during a bench session and by scripts afterwards.
+'
+' Identity is NOT repeated per row; rows inherit the most recent CATALOG-CARD line.
+'
+' @param p_op - Pointer to the traffic-type label, e.g. "raw_read"
+' @param bytes_moved - Bytes per iteration
+' @param avg_us - Mean microseconds per iteration
+' @param min_us - Fastest iteration
+' @param max_us - Slowest iteration
+' @param kbps - Throughput in KB/s (KB = 1000)
+' @param pct - Percent of the bus ceiling at the current clock
+
+  debug("CATALOG-ROW: instr=throughput run=", udec_(currentRun), " op=", zstr_(p_op), ...
+      " bytes=", udec_(bytes_moved), ...
+      " avg_us=", udec_(avg_us), " min_us=", udec_(min_us), " max_us=", udec_(max_us), ...
+      " kbps=", udec_(kbps), " pct_bus=", udec_(pct), " limiter=", zstr_(limiterTag(pct)), ...
+      " spi_hz=", udec_(sd.getSPIFrequency()))
 
 PRI busCeilingKBps() : kbps
 ' The transfer ceiling of the SPI bus at the CURRENT clock, in KB/s (KB = 1000,
@@ -434,6 +549,7 @@ PRI runRawWriteTest(count) | iter, start_ct, elapsed_ct, min_us, max_us, total_u
 
         pct := pctOfCeiling(size, avg_us)
         debug("  ", udec_(count), " sector(s) (", udec_(size), "B): Min=", udec_(min_us), " Avg=", udec_(avg_us), " Max=", udec_(max_us), " us => ", udec_(kbps), " KB/s  [", udec_(pct), "% of bus, ", zstr_(limiterTag(pct)), "]")
+        emitCatalogRow(string("raw_write"), size, avg_us, min_us, max_us, kbps, pct)
         if verifyRawWrite(count) == 0
             debug("    verify: ", udec_(size), " bytes match")
 
@@ -622,6 +738,7 @@ PRI runFileWriteTest(size, p_label) | iter, handle, start_ct, elapsed_ct, min_us
 
         pct := pctOfCeiling(size, avg_us)
         debug("  ", zstr_(p_label), ": Min=", udec_(min_us), " Avg=", udec_(avg_us), " Max=", udec_(max_us), " us => ", udec_(kbps), " KB/s  [", udec_(pct), "% of bus, ", zstr_(limiterTag(pct)), "]")
+        emitCatalogRow(string("file_write"), size, avg_us, min_us, max_us, kbps, pct)
 
 
 PRI runFileReadTest(size, p_label) | iter, handle, start_ct, elapsed_ct, min_us, max_us, total_us, avg_us, kbps, bytesRead, pct, ok
@@ -675,6 +792,7 @@ PRI runFileReadTest(size, p_label) | iter, handle, start_ct, elapsed_ct, min_us,
 
             pct := pctOfCeiling(size, avg_us)
             debug("  ", zstr_(p_label), ": Min=", udec_(min_us), " Avg=", udec_(avg_us), " Max=", udec_(max_us), " us => ", udec_(kbps), " KB/s  [", udec_(pct), "% of bus, ", zstr_(limiterTag(pct)), "]")
+            emitCatalogRow(string("file_read"), size, avg_us, min_us, max_us, kbps, pct)
     else
         debug("  ERROR: Could not create test file for read benchmark")
 

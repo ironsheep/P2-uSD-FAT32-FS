@@ -3,6 +3,54 @@
 The standard sequence for adding a card to the catalog or re-characterizing an
 existing entry. All steps run from `tools/` via `run_test.sh`.
 
+## The two tables, and the rule that keeps them apart
+
+The catalog publishes performance in **two tables that are never merged**:
+
+| Table | Instrument | What it measures |
+|---|---|---|
+| Card capability (random access) | `diagnostic-tests/SD_speed_characterize.spin2` | The **card**. Random single-sector reads pay full internal seek latency, so cards spread ~38x |
+| Driver throughput by traffic type | `src/UTILS/SD_performance_benchmark.spin2` | The **driver**. Sequential and file traffic, where the bus limits and cards nearly converge |
+
+**Never compare a number from one against a number from the other.** They ran
+different workloads. A comparison across instruments shows a large gain or loss
+that is purely an instrument change, and a single mixed table is exactly how the
+old catalog produced rows that were not comparable to each other. When you need a
+before/after, the comparator is a **same-instrument, same-session** arm.
+
+**Rows are harvested, not transcribed.** Both instruments emit `CATALOG-CARD` and
+`CATALOG-ROW` lines. `tools/harvest_catalog.sh` turns a set of logs into the
+Markdown tables:
+
+```bash
+./harvest_catalog.sh logs/SD_speed_characterize_*.log logs/SD_performance_benchmark_*.log
+```
+
+Hand-transcription is what produced three different row labels for one
+measurement across eras, and six cards whose data never reached the summary at
+all. It also refuses to emit a table spanning two driver versions.
+
+**Every run stamps the driver version.** `driverVersionString()` goes into both
+instruments' output and into the harvested banner, because throughput is a
+property of the driver as much as of the card.
+
+## Run variance is measured BEFORE instance variance
+
+One physical card has been measured moving up to **3x between rounds**, with 6x
+dispersion inside a single measurement loop, while another arm on the same card
+repeated to 0.3%. So:
+
+1. **Repeat one card several times first.** Set `REPEAT_RUNS` in
+   `SD_performance_benchmark.spin2` above 1; every emitted row carries its run
+   number and the harvested table shows the spread as a **range, never an
+   average**.
+2. **Only then compare instances.** Comparing five cards of one model before the
+   run-to-run spread is known attributes run noise to units.
+3. **Order may matter.** A card's first run can differ from its later ones, so
+   record the order runs were taken in.
+4. **Any card showing wide dispersion needs repeat runs before a delta is
+   believed** — including a delta against a previous release.
+
 ## Prerequisites
 
 - Card physically inserted in the target socket
@@ -85,12 +133,33 @@ the catalog conflates "slow card" with "card the driver had to detune."
 - Output: every CID/CSD/SCR/OCR/MBR/VBR field, marked `[USED]` or `[INFO]`
 - Ends with `END_CHARACTERIZATION` (not `END_SESSION`); the script will
   timeout, but the data is complete in `tools/logs/`
-- **NOTE:** `SD_card_characterize` uses `initCardOnly()`. Running it
-  immediately after another tool that did a full `mount()` + `unmount()` may
-  fail to init on some cards — workaround is power-cycling the P2 Edge board
-  before this step. Tracking as bug `#3240`.
+- **Was bug `#3240`, fixed in v1.8.0.** `SD_card_characterize` uses
+  `initCardOnly()`, and running it after another tool that had used the card
+  used to fail to init until the board was power-cycled. The cause was the boot
+  sequence leaving the card mid-transfer on boards where the microSD socket
+  shares pins with the boot flash; card initialisation now issues a
+  stop-transmission command first. **No power cycle is needed between steps on
+  v1.8.0 or later.**
 
-### 3. Performance benchmark — first sysclk (350 MHz)
+### 3. Card capability — random access
+
+```bash
+./run_test.sh ../diagnostic-tests/SD_speed_characterize.spin2 -t 300
+```
+
+- Populates the **card capability (random access)** table. This step was missing
+  from the procedure until 2026-08-19, which is why that table was never
+  systematically filled.
+- Walks a speed ladder and, at each level that passes, reports random-access
+  throughput and latency from Phase 2's 10,000 random single-sector reads.
+- **This tool lifts the production speed bound** (`debugSetOverspeedAllowed`) so
+  it can probe above the card ceiling, and says so unconditionally in its own
+  transcript. It also prints the **LANDED** clock read back from the driver at
+  each level, not a predicted one — a level whose landed clock differs from the
+  request is flagged in place, and its numbers belong to the landed clock.
+- Read the `CATALOG-ROW: instr=random_access` lines, or harvest them.
+
+### 4. Performance benchmark — first sysclk (350 MHz)
 
 ```bash
 ./run_test.sh ../src/UTILS/SD_performance_benchmark.spin2 -t 180
@@ -104,7 +173,7 @@ the catalog conflates "slow card" with "card the driver had to detune."
   annotate the benchmark entry per the "Rule: record actual SPI clock" above
   (e.g., `350@22M` instead of bare `350`).
 
-### 4. Performance benchmark — second sysclk (250 MHz)
+### 5. Performance benchmark — second sysclk (250 MHz)
 
 ```bash
 # Edit _CLKFREQ from 350_000_000 to 250_000_000 in:
@@ -121,20 +190,39 @@ the catalog conflates "slow card" with "card the driver had to detune."
   the convention; mismatched assumptions are how throughput comparisons go
   silently wrong.
 
-### 5. Annotate
+### 6. Annotate
 
 - Update `DOCs/cards/CARD-REFERENCE.md` with the 2-line designator
-- Update `DOCs/cards/CARD-CATALOG.md` with the entry
 - Add per-card data sheet `DOCs/cards/<vendor>-<pnm>-<size>.md` with full data
+- **Do NOT hand-type performance rows into `CARD-CATALOG.md`.** Run
+  `./harvest_catalog.sh` over the session's logs and paste its output under the
+  matching heading. Register and identity data is still entered by hand — it is a
+  card property, it never stales, and it carries no version banner.
 - Mark the `Benchmark` column with `350+250` (or other sysclk pair if used)
+
+## Full-catalog sweep (release gate)
+
+A release that touches the I/O path re-sweeps every working card, because every
+published figure is a measurement of the driver that produced it. This is a
+**gate for v1.8.0**, set by Stephen on 2026-08-19: nothing ships until the catalog
+carries numbers taken on the shipping driver.
+
+The sweep is roughly one afternoon for the whole drawer, which is why the tables
+are pristine — one banner naming the driver version, no per-row provenance and no
+exception table. That trade only holds if the sweep actually gets run.
+
+Before starting, confirm `./check_doc_version.sh` passes: it verifies the driver's
+version constant, its printable string and the newest changelog heading all agree.
+A sweep run under a stale constant mislabels every row it produces, and the
+mislabelling is indistinguishable from correct data afterwards.
 
 ## Optional / situational steps
 
 - **Counterfeit / dummy-CRC cards**: also capture `cardWarnings()` value and
   any `probeSpiCeiling` debug output. The card-catalog quirks table records
   the SCK ceiling (clean) and forced-corruption (fail) bounds.
-- **Edge-vs-external comparison**: when SI margin is suspected, re-run steps 3
-  and 4 in both sockets. Differences > a few % point at SI sensitivity.
+- **Edge-vs-external comparison**: when SI margin is suspected, re-run steps 4
+  and 5 in both sockets. Differences > a few % point at SI sensitivity.
 - **Multi-card-position runs**: if running multiple cards in sequence, power-
   cycle the P2 Edge between cards (serial-download reset does not drop SD VCC).
 
@@ -153,5 +241,6 @@ SCK would slightly understate throughput for no good reason.
 |------|---:|---|
 | `SD_card_identify` | 350 MHz | One-shot register read; aligned with benchmark sysclks (exact 25 MHz SCK) |
 | `SD_card_characterize` | 350 MHz | One-shot register dump; aligned with benchmark sysclks (exact 25 MHz SCK) |
+| `SD_speed_characterize` | 350 MHz | Capability table instrument; was 270 MHz, which landed 22.5 MHz for a 25 MHz request |
 | `SD_performance_benchmark` | 350 MHz | Edit to 250_000_000 for the low-sysclk catalog row |
 | Regression suites | 350 MHz | Standardized across all `SD_RT_*_tests.spin2` |

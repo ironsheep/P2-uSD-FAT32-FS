@@ -9,7 +9,8 @@ that has a bench-side action queued; container-side actions proceed between
 sessions. Settled findings move down into each head's running list and stay
 there, so the history accumulates without cluttering the decision surface.
 
-**Last updated:** 2026-08-18, container work for H1 and H2 complete; round 11 queued.
+**Last updated:** 2026-08-19, H3's container work complete — the sweep instruments
+are built and the two-table format is defined. Round 16 queued.
 
 **Round 11 run sheet:** `DOCs/Plans/SOCKET-SHMOO-RUN-BRIEF.md`, section ROUND 11.
 Card selection is coordinated there — 11b and 11c are meaningless on a card that
@@ -27,7 +28,7 @@ root-caused fix for a months-old defect plus a public API contract change.
 | Head | Next action | Where | Blocked? |
 |---|---|---|---|
 | **H1 · Edge wedge** | ✅ **Root-caused and FIXED.** CMD12 quiesce is unconditional in `initCard()`. Needs full regression to certify | bench | no |
-| **H3 · Catalog integrity** | 🔴 **RELEASE GATE.** Full catalog performance sweep — tomorrow's effort. **v1.8.0 does not ship before it** | bench | no |
+| **H3 · Catalog integrity** | 🔴 **RELEASE GATE.** Full catalog performance sweep. **Container work is DONE — the instruments are built.** | bench | no |
 | **H2 · High-speed performance** | Decide the read/write asymmetry policy | container | no |
 | **H4 · Release** | Blocked on H3's sweep, not on H1. Then doc close-out and tag | container | **yes — H3** |
 
@@ -363,14 +364,30 @@ Comparing a new benchmark number against a catalog row can show a large **fake**
 gain that is purely an instrument change. Always compare same-instrument; a
 same-session standard-speed arm is the only safe comparator.
 
+### Container work — DONE 2026-08-19
+
+Everything the sweep needed before it could run is built. The sweep can now be run
+once instead of twice.
+
+- [x] **Driver version constant** `DRIVER_VERSION_MAJOR/MINOR/PATCH` + `driverVersion()` / `driverVersionString()`, core (not behind any feature flag), stamped into both instruments' output. `tools/check_doc_version.sh` gates it against `CHANGELOG.md` and the printable string; the gate was proven to fire on both mismatch cases, not assumed to
+- [x] **Two-table format defined** in `CARD-CATALOG.md`, empty-but-shaped. Limiter attribution on the benchmark table only; rows per instance keyed by full Card ID, grouped by silicon key
+- [x] **Machine-parseable output.** Both instruments emit `CATALOG-CARD` / `CATALOG-ROW` lines; `tools/harvest_catalog.sh` renders the tables. It refuses to emit a table spanning two driver versions
+- [x] **Repeat-run support** (`REPEAT_RUNS`) in the benchmark, run number stamped per row; the harvester aggregates repeats as **range + count, never an average**, and no longer silently keeps only the last run
+- [x] **Full identity block** in both instruments — MID/OID/PNM/PRV/PSN/MDT, silicon key and Card ID. Any sweep run on the Samsung EVO now settles the PSN discrepancy as a side effect
+- [x] `CATALOG-PROCEDURE.md` rewritten: the two-table rule, run-variance-before-instance-variance, order effects, harvest-don't-transcribe, and the release-gate section
+- [x] Card count corrected to 26
+
+### Two defects found and fixed while building it
+
+- [x] **`SD_speed_characterize` had no throughput measurement at all.** The catalog described the metric and named this tool as its source, but a grep across every `.spin2` showed the only utility printing KB/s was `SD_performance_benchmark`. The published capability rows could not be reproduced by anything we shipped. Phase 2 already did the 10,000 random reads; it is now timed and reported
+- [x] **`SD_speed_characterize` would have reported a false green.** It requests up to 50 MHz but never called `debugSetOverspeedAllowed()`, so since v1.8.0's `clampUserSpeed()` every level above 25 MHz would land at 25 MHz — and the tool computed its "Actual" column locally from the target, so it would have printed "45 MHz PASSED" over hardware running 25 MHz. It now lifts the guard, says so unconditionally in its own transcript, and reports the **landed** clock read back from the driver
+- [x] Its sysclk moved 270 -> 350 MHz. At 270 a 25 MHz request landed 22.5 MHz, which would make its figures incomparable with the rest of the catalog. The shortfall was invisible until the tool started reporting the landed clock
+
 ### Next
 
-1. **Stephen's two decisions** (top of page)
-2. Restructure into clearly-named per-instrument tables, each row carrying date + driver-commit provenance
-3. Add the six missing cards; fix the card count (26, not 23)
-4. Add a driver version constant and stamp it into benchmark output
-5. Confirm whether PNY's 31.3 is a write metric
-6. Resolve the Samsung EVO serial discrepancy — catalog row says PSN `C0305565`, its record says `4AC85F42`, round 9 measured `$4AC8_5F42`. Two units, or a transcription error? It is a benchmark card, so it matters
+1. **Run the sweep** (round 16c) — the gate
+2. Confirm whether PNY's 31.3 is a write metric
+3. Resolve the Samsung EVO serial discrepancy — catalog row says PSN `C0305565`, its record says `4AC85F42`, round 9 measured `$4AC8_5F42`. Two units, or a transcription error? Any sweep run on it answers this now
 
 ### ⚠ Design change forced by round 11b
 

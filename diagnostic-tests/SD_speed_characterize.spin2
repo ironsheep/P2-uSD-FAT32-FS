@@ -6,7 +6,7 @@
                -- see below for terms of use
    E-mail..... stephen@ironsheep.biz
    Started.... FEB 2026
-   Updated.... 01 MAR 2026
+   Updated.... 19 AUG 2026
 
    Uses CRC-16 verification to detect transmission errors.
 
@@ -22,10 +22,30 @@
      P2 SPI clock = SYSCLK / (2 * half_period), where half_period is integer.
      This shows how close we get to target vs actual achievable frequency.
 
+   Requested vs LANDED frequency:
+     The clock a level runs at is read back from the driver after the request,
+     never predicted. Two things move it away from the target -- the integer
+     half-period divide, and clampUserSpeed(), which since v1.8.0 holds user
+     requests at the card ceiling. This tool lifts that bound deliberately (and
+     says so in its own transcript) because probing above it is the whole point.
+     A level whose landed clock differs from the prediction is flagged in place.
+
+   Throughput and latency:
+     Phase 2's 10,000 random single-sector reads are timed, and the result is
+     reported as KB/s and mean latency. That measurement is the source for the
+     catalog's "card capability (random access)" table.
+
 ================================================================================================= }}
 
 CON
-  _clkfreq  = 270_000_000                                       ' 270 MHz system clock
+  ' 350 MHz, matching every other catalog instrument. The choice is not cosmetic:
+  ' the driver's half-period is an integer number of sysclks, so only sysclks that
+  ' are a multiple of 2 x target land the target exactly. At the previous 270 MHz
+  ' a request for 25 MHz landed 22.5 MHz, which would make this tool's
+  ' random-access figures incomparable with the rest of the catalog -- and the
+  ' shortfall was invisible until this tool started reporting the LANDED clock.
+  ' See DOCs/cards/CATALOG-PROCEDURE.md, "Sysclk choices".
+  _clkfreq  = 350_000_000                                       ' 350 MHz: lands exactly 25 MHz SCK
 
   ' SD card pin assignments
   ' Default: P2 Edge module SD slot. Build with -D SD_PINS_EXTERNAL
@@ -84,7 +104,8 @@ VAR
 
   ' Test statuss per speed level
   long  speed_hz[NUM_SPEED_LEVELS]
-  long  actual_hz[NUM_SPEED_LEVELS]
+  long  actual_hz[NUM_SPEED_LEVELS]                             ' PREDICTED from the half-period formula
+  long  landed_hz[NUM_SPEED_LEVELS]                             ' MEASURED: what the driver actually reports after the request
   long  delta_pct_x10[NUM_SPEED_LEVELS]                         ' Delta % x 10 for one decimal
   long  half_period[NUM_SPEED_LEVELS]
   long  phase1_ok[NUM_SPEED_LEVELS]
@@ -97,6 +118,13 @@ VAR
   long  phase3_crc_err[NUM_SPEED_LEVELS]
   long  phase3_timeout[NUM_SPEED_LEVELS]
   long  level_passed[NUM_SPEED_LEVELS]
+
+  ' Timing of the most recent runSingleSectorTest() call. Written there, read by
+  ' its caller. Held as module state rather than four more out-parameters because
+  ' the parameter list is already at the edge of legibility.
+  long  last_run_total_us                                       ' Sum of the timed read calls only
+  long  last_run_min_us                                         ' Fastest single read in that run
+  long  last_run_max_us                                         ' Slowest single read in that run
 
   ' Card info
   long  card_capacity_mb
@@ -139,6 +167,24 @@ PUB main() | status, level, max_passed_level
     repeat  ' Halt
 
   debug("Card mounted successfully.")
+  debug(" ")
+
+  ' LIFT THE PRODUCTION SPEED BOUND -- and announce it, unconditionally.
+  '
+  ' v1.8.0 added clampUserSpeed(), which holds user setSPISpeed() requests at
+  ' min(TRAN_SPEED, 25 MHz) unless verified high-speed mode is active. This tool
+  ' exists to probe ABOVE that bound, so it must lift the guard -- otherwise every
+  ' level from 27 MHz up would silently land at 25 MHz and report a pass that means
+  ' nothing.
+  '
+  ' The print is not conditional and never becomes conditional. Three times this
+  ' campaign a transcript could not prove which build produced it, most recently
+  ' when the CMD12 quiesce arm's own marker was on a debug channel the suite
+  ' compiled out. A run that alters the driver's guards states that in its own
+  ' output or its numbers cannot be attributed.
+  sd.debugSetOverspeedAllowed(true)
+  debug(">>> PRODUCTION SPEED BOUND LIFTED (debugSetOverspeedAllowed) <<<")
+  debug("    Requests above the card ceiling reach the hardware in this run.")
   debug(" ")
 
   ' Display card information
@@ -194,15 +240,22 @@ PRI initSpeedArray() | idx
     level_passed[idx] := false
 
 PRI calculateTimingAccuracy() | idx, target, hp, actual, delta
-' Calculate half_period, actual frequency, and delta for each test speed.
-' Shows timing accuracy achievable with P2 integer clock division.
+' Calculate half_period, PREDICTED frequency, and delta for each test speed.
+' Shows the timing accuracy achievable with P2 integer clock division.
+'
+' This is arithmetic, not measurement. It predicts what the driver's own
+' half-period formula will produce for each target; it cannot see the production
+' speed bound, and it is not evidence of what any level actually ran at. The
+' landed clock is read back from the driver in testSpeedLevel().
 
   ' Calculate half_period, actual frequency, and delta for each speed
   ' This shows timing accuracy achievable with P2 integer clock division
   debug(" ")
   debug("Timing Accuracy Analysis (SYSCLK=", udec_(clkfreq/1_000_000), " MHz):")
+  debug("  PREDICTED from the half-period formula. The clock each level actually")
+  debug("  runs at is read back from the driver and printed per level as LANDED.")
   debug("------------------------------------------------")
-  debug("| Target  | HalfPer | Actual  | Delta %  |")
+  debug("| Target  | HalfPer | Predict | Delta %  |")
   debug("|---------|---------|---------|----------|")
 
   repeat idx from 0 to NUM_SPEED_LEVELS - 1
@@ -240,19 +293,60 @@ PRI calculateTimingAccuracy() | idx, target, hp, actual, delta
   debug("------------------------------------------------")
   debug(" ")
 
-PRI displayCardInfo() | cid[4], mid, sectors, cap_mb
-' Display card information including manufacturer ID and capacity.
+PRI displayCardInfo() | cid[4], sectors, cap_mb, psn, mdt_year, mdt_month
+' Display card information: the full identity block, then capacity and clock.
+'
+' THE IDENTITY BLOCK IS THE ROW KEY. Catalog rows are per physical instance,
+' keyed by the full Card ID, and grouped by SILICON KEY = MID_PNM_PRV. Both are
+' printed here in raw form -- hex MID rather than a brand name -- deliberately:
+' the manufacturer name is a lookup the CATALOG owns, in one place, and an
+' instrument that carried its own copy of that table would go stale silently.
+' Brand does not predict controller in any case: Gigastone-branded cards in this
+' project's own drawer carry three different MIDs.
+'
+' Format follows SD_socket_shmoo's block, which was adopted so that a transcript
+' could prove which card produced it without a separate identify run.
+'
+' @local psn - Product serial number, the field that distinguishes two same-model cards
+' @local mdt_year - Manufacture year, decoded from the 12-bit MDT field
+' @local mdt_month - Manufacture month
 
   debug("Card Information:")
   debug("------------------------------------------------")
 
-  ' Read CID
+  ' Read CID.
+  ' Layout: [0]=MID, [1..2]=OID, [3..7]=PNM (5 ASCII), [8]=PRV, [9..12]=PSN,
+  ' [13..14]=MDT (12 bits: 8-bit year offset from 2000, 4-bit month), [15]=CRC7
   if sd.readCIDRaw(@cid) == sd.SUCCESS
-    mid := cid.byte[0]
-    debug("  Manufacturer ID: $", uhex_byte_(mid))
-    debug("  Product: ", uhex_byte_(cid.byte[3]), " ")
-    debug(uhex_byte_(cid.byte[4]), " ", uhex_byte_(cid.byte[5]))
-    debug(" ", uhex_byte_(cid.byte[6]), " ", uhex_byte_(cid.byte[7]))
+    psn := (cid.byte[9] << 24) | (cid.byte[10] << 16) | (cid.byte[11] << 8) | cid.byte[12]
+    mdt_year := 2000 + ((cid.byte[13] & $0F) << 4) + (cid.byte[14] >> 4)
+    mdt_month := cid.byte[14] & $0F
+    debug("  Card: MID=$", uhex_byte_(cid.byte[0]), " OID='", lstr_(@cid.byte[1], 2), ...
+        "' PNM='", lstr_(@cid.byte[3], 5), "' rev ", udec_(cid.byte[8] >> 4), ".", udec_(cid.byte[8] & $0F))
+    debug("  >>> SERIAL PSN=$", uhex_long_(psn), "  mfg ", udec_(mdt_year), "/", udec_(mdt_month), " <<<")
+    debug("  SILICON-KEY: $", uhex_byte_(cid.byte[0]), "_", lstr_(@cid.byte[3], 5), "_", ...
+        udec_(cid.byte[8] >> 4), ".", udec_(cid.byte[8] & $0F))
+    ' Month is zero-padded to two digits: the existing catalog Card IDs are
+    ' YYYYMM (e.g. ..._201408), and an unpadded single-digit month would make
+    ' 2024/1 and 2024/11 collide as "20241".
+    if mdt_month < 10
+      debug("  CARD-ID: $", uhex_byte_(cid.byte[0]), "_", lstr_(@cid.byte[3], 5), "_", ...
+          udec_(cid.byte[8] >> 4), ".", udec_(cid.byte[8] & $0F), "_", uhex_long_(psn), "_", ...
+          udec_(mdt_year), "0", udec_(mdt_month))
+    else
+      debug("  CARD-ID: $", uhex_byte_(cid.byte[0]), "_", lstr_(@cid.byte[3], 5), "_", ...
+          udec_(cid.byte[8] >> 4), ".", udec_(cid.byte[8] & $0F), "_", uhex_long_(psn), "_", ...
+          udec_(mdt_year), udec_(mdt_month))
+    debug("  CID raw: ", uhex_byte_array_(@cid, 16))
+
+    ' MACHINE-PARSEABLE IDENTITY. Every CATALOG-ROW line in this run belongs to
+    ' the card named here -- the harvester associates rows with the most recent
+    ' CATALOG-CARD, so no row has to repeat or string-format the identity.
+    debug("CATALOG-CARD: tool=speed_characterize drv=", zstr_(sd.driverVersionString()), ...
+        " mid=$", uhex_byte_(cid.byte[0]), " pnm=", lstr_(@cid.byte[3], 5), ...
+        " prv=", udec_(cid.byte[8] >> 4), ".", udec_(cid.byte[8] & $0F), ...
+        " psn=$", uhex_long_(psn), " mdt=", udec_(mdt_year), "/", udec_(mdt_month), ...
+        " sysclk=", udec_(clkfreq))
   else
     debug("  CID: Read failed")
 
@@ -304,14 +398,27 @@ PRI testSpeedLevel(level) : passed | target_hz, ok, crc_err, timeout, delta
   debug("Testing: ", udec_(target_hz / 1_000_000), " MHz")
   debug("----------------------------------------")
 
-  ' Set SPI speed
+  ' Set SPI speed, then ASK THE DRIVER WHAT IT ACTUALLY GOT.
+  '
+  ' The request and the result are two different things. clampUserSpeed() can hold
+  ' the request below what was asked, and the half-period is an integer divide of
+  ' sysclk, so the landed clock is rarely exactly the target. Reporting the
+  ' locally-predicted figure -- which this tool did until 2026-08-19 -- makes a
+  ' clamped run indistinguishable from an honest one: it would print "45 MHz
+  ' PASSED" over hardware running at 25 MHz.
   sd.setSPISpeed(target_hz)
+  landed_hz[level] := sd.getSPIFrequency()
 
   ' Display timing info
   delta := delta_pct_x10[level]
-  debug("  Target: ", udec_(target_hz / 1_000_000), " MHz")
-  debug("  Actual: ", udec_(actual_hz[level] / 1_000_000), ".")
-  debug(udec_((actual_hz[level] / 100_000) // 10), " MHz")
+  debug("  Target:  ", udec_(target_hz / 1_000_000), " MHz")
+  debug("  Predict: ", udec_(actual_hz[level] / 1_000_000), ".")
+  debug(udec_((actual_hz[level] / 100_000) // 10), " MHz (half-period formula)")
+  debug("  LANDED:  ", udec_(landed_hz[level] / 1_000_000), ".")
+  debug(udec_((landed_hz[level] / 100_000) // 10), " MHz (driver reports)")
+  if landed_hz[level] <> actual_hz[level]
+    debug("  *** LANDED FREQUENCY DIFFERS FROM PREDICTION -- this level was NOT run at the target ***")
+    debug("      Every result below is a measurement of ", udec_(landed_hz[level] / 1000), " kHz, not ", udec_(target_hz / 1000), " kHz.")
   debug("  HalfPeriod: ", udec_(half_period[level]), " clocks")
   if delta >= 0
     debug("  Delta: +", udec_(delta/10), ".", udec_(delta//10), "%")
@@ -366,6 +473,11 @@ PRI testSpeedLevel(level) : passed | target_hz, ok, crc_err, timeout, delta
     else
       debug("  Phase 2: PASSED")
 
+      ' Phase 2 IS the random-access measurement -- 10,000 single-sector reads at
+      ' random offsets is exactly the workload the catalog's card-capability table
+      ' describes. Report it here rather than running it a second time.
+      reportRandomAccess(level, PHASE2_ITERATIONS)
+
       ' Phase 3: Multi-sector reads
       debug(" ")
       debug("  Phase 3: ", udec_(PHASE3_ITERATIONS), " x ")
@@ -385,29 +497,59 @@ PRI testSpeedLevel(level) : passed | target_hz, ok, crc_err, timeout, delta
       else
         debug("  Phase 3: PASSED")
         debug(" ")
-        debug("  *** ", udec_(target_hz / 1_000_000), " MHz PASSED ***")
+        debug("  *** ", udec_(target_hz / 1_000_000), " MHz REQUESTED, ", udec_(landed_hz[level] / 1000), " kHz LANDED: PASSED ***")
         passed := true
 
   level_passed[level] := passed
 
-PRI runSingleSectorTest(iterations, p_ok, p_crc_err, p_timeout) | iter, sector, status, recv_crc, calc_crc
-' Run single-sector read tests with CRC verification.
+PRI runSingleSectorTest(iterations, p_ok, p_crc_err, p_timeout) | iter, sector, status, recv_crc, calc_crc, start_ct, elapsed_us
+' Run single-sector read tests with CRC verification, timing each read.
+'
+' TIMING SCOPE, and why it is drawn this tightly. Only the readSectorRaw() call
+' is inside the timed region. The random-sector draw, the two CRC getter calls
+' and the progress prints are all outside it -- a debug() line costs milliseconds
+' over a 2 Mbaud link, which on a fast card is several reads' worth, and four of
+' them inside a 10,000-iteration loop would be a visible tax on the headline
+' number. What this measures is exactly what its name says: single-sector reads
+' at random offsets.
+'
+' Per-iteration microsecond conversion matches SD_performance_benchmark's math
+' deliberately, so the two instruments' figures are at least dimensionally
+' comparable. Accumulating raw clocks instead would overflow a 32-bit long on a
+' slow card -- the PNY's 16 ms mean latency over 10,000 reads is 160 seconds,
+' which is 4.3e10 clocks at 270 MHz.
+'
+' Writes last_run_total_us / last_run_min_us / last_run_max_us for the caller.
 '
 ' @param iterations - Number of read iterations
 ' @param p_ok - Pointer to store successful read count
 ' @param p_crc_err - Pointer to store CRC error count
 ' @param p_timeout - Pointer to store timeout count
+' @local start_ct - Cycle counter at the start of one read
+' @local elapsed_us - Duration of one read, in microseconds
 
   long[p_ok] := 0
   long[p_crc_err] := 0
   long[p_timeout] := 0
+
+  last_run_total_us := 0
+  last_run_min_us := $7FFF_FFFF                                 ' Same sentinel SD_performance_benchmark uses
+  last_run_max_us := 0
 
   repeat iter from 1 to iterations
     ' Get random sector within test range
     sector := getRandomTestSector()
 
     ' Read sector (returns SUCCESS=0 on success, negative on failure)
+    start_ct := getct()
     status := sd.readSectorRaw(sector, @read_buf)
+    elapsed_us := (getct() - start_ct) / (clkfreq / 1_000_000)
+
+    last_run_total_us += elapsed_us
+    if elapsed_us < last_run_min_us
+      last_run_min_us := elapsed_us
+    if elapsed_us > last_run_max_us
+      last_run_max_us := elapsed_us
 
     if status == sd.SUCCESS
       ' Read succeeded - check CRC match
@@ -425,6 +567,64 @@ PRI runSingleSectorTest(iterations, p_ok, p_crc_err, p_timeout) | iter, sector, 
     ' Progress every 2500
     if (iter // 2500) == 0 and iter > 0
       debug("      Progress: ", udec_(iter))
+
+PRI reportRandomAccess(level, iterations) | total_ms, kbps, mean_us, hundredths
+' Report the random-access throughput and latency just measured by Phase 2.
+'
+' THIS IS THE CATALOG'S "CARD CAPABILITY (RANDOM ACCESS)" MEASUREMENT. Until
+' 2026-08-19 the catalog described this metric -- "10,000 random single-sector
+' reads at 25 MHz SPI, throughput = sectors read / elapsed time" -- and named this
+' tool as its source, but no instrument in the tree emitted a throughput figure at
+' all. The published rows could not be reproduced by anything we shipped.
+'
+' Random reads pay the card's full internal seek latency on every operation, which
+' is why this number separates cards so widely (roughly 38x across our drawer)
+' while sequential multi-block figures nearly converge. It answers "how good is
+' this card", where SD_performance_benchmark answers "how good is this driver".
+' The two are NOT comparable and must never share a table.
+'
+' KB = 1000 here, matching SD_performance_benchmark's rate math.
+'
+' @param level - Index into the speed arrays, for the landed-clock stamp
+' @param iterations - Reads performed, for the per-read average
+' @local total_ms - Timed total in milliseconds (us would overflow the byte product)
+' @local mean_us - Mean latency per read, microseconds
+' @local hundredths - Fractional millisecond digits, for zero-padded display
+
+  debug(" ")
+  debug("  RANDOM-ACCESS THROUGHPUT (", udec_(iterations), " single-sector reads at random offsets)")
+
+  if last_run_total_us <= 0
+    debug("    No timing captured -- nothing to report")
+    return
+
+  ' Rate in KB/s. Divide the microsecond total down to milliseconds FIRST: the
+  ' byte product (10,000 x 512 x 1000) overflows a signed 32-bit long.
+  total_ms := last_run_total_us / 1000
+  if total_ms > 0
+    kbps := (iterations * sd.SECTOR_SIZE) / total_ms
+  else
+    kbps := 0
+
+  mean_us := last_run_total_us / iterations
+  hundredths := (mean_us // 1000) / 10
+
+  debug("    Landed clock:  ", udec_(landed_hz[level] / 1000), " kHz")
+  debug("    Elapsed:       ", udec_(total_ms), " ms (timed reads only)")
+  debug("    Throughput:    ", udec_(kbps), " KB/s")
+  if hundredths < 10
+    debug("    Mean latency:  ", udec_(mean_us), " us (", udec_(mean_us / 1000), ".0", udec_(hundredths), " ms)")
+  else
+    debug("    Mean latency:  ", udec_(mean_us), " us (", udec_(mean_us / 1000), ".", udec_(hundredths), " ms)")
+  debug("    Spread:        min ", udec_(last_run_min_us), " us, max ", udec_(last_run_max_us), " us")
+
+  ' Machine-parseable twin of the block above. Additive: the human-readable form
+  ' stays, because a bench session reads these live and a harvester reads them after.
+  debug("CATALOG-ROW: instr=random_access op=random_read_1x512 iters=", udec_(iterations), ...
+      " kbps=", udec_(kbps), " mean_us=", udec_(mean_us), ...
+      " min_us=", udec_(last_run_min_us), " max_us=", udec_(last_run_max_us), ...
+      " req_hz=", udec_(speed_hz[level]), " landed_hz=", udec_(landed_hz[level]))
+  debug(" ")
 
 PRI runMultiSectorTest(iterations, sectors_per_read, p_ok, p_crc_err, p_timeout) | iter, start_sector, status
 ' Run multi-sector read tests (CMD18 bulk transfers).
@@ -493,9 +693,9 @@ PRI displaySummary(max_passed_level) | level
   debug(" ")
   if max_passed_level >= 0
     debug("========================================")
-    debug("  RECOMMENDED MAX: ", udec_(speed_hz[max_passed_level] / 1_000_000), " MHz")
-    debug("  Actual: ", udec_(actual_hz[max_passed_level] / 1_000_000), ".")
-    debug(udec_((actual_hz[max_passed_level]/100_000)//10), " MHz")
+    debug("  RECOMMENDED MAX: ", udec_(speed_hz[max_passed_level] / 1_000_000), " MHz requested")
+    debug("  Landed: ", udec_(landed_hz[max_passed_level] / 1_000_000), ".")
+    debug(udec_((landed_hz[max_passed_level]/100_000)//10), " MHz -- this is the clock that passed")
     debug("========================================")
   else
     debug("WARNING: No speeds passed!")

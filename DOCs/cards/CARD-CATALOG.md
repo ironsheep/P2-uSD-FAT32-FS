@@ -221,57 +221,101 @@ Cards being investigated in `COUNTERFEIT-ASDFG-SDSC-INVESTIGATION.md` that will 
 
 ---
 
-## Internal Throughput Summary
+## Performance
 
-Cards tested with `diagnostic-tests/SD_speed_characterize.spin2` have measured internal throughput data. This reflects the card's internal flash/controller performance, NOT the SPI bus speed.
+Performance figures live in **two tables that are never merged**, named by the
+question each answers. They come from two different instruments measuring two
+different things, and a row from one compared against a row from the other shows
+a large gain or loss that is purely an instrument change.
 
-**Test Methodology:**
-- 10,000 random single-sector reads at 25 MHz SPI
-- CRC-16 verification on every read
-- Throughput = sectors read / elapsed time
+> **Both tables are being repopulated.** Every figure previously published here
+> predated the v1.8.0 align-offset change, the production speed bound and the
+> card-quiesce fix, and the old single table silently mixed both instruments under
+> one heading. The rows are generated from a full sweep rather than hand-edited --
+> see [CATALOG-PROCEDURE.md](CATALOG-PROCEDURE.md).
 
-**Performance Class Definitions:**
-- **HIGH** = >500 KB/s (fast controller, suitable for demanding applications)
-- **MEDIUM** = 100-500 KB/s (adequate for most embedded uses)
-- **LOW** = <100 KB/s (slow controller, SPI clock not the bottleneck)
+**How rows are produced.** Both instruments emit `CATALOG-CARD` and `CATALOG-ROW`
+lines; `tools/harvest_catalog.sh` turns a set of sweep logs into the Markdown
+below. Do not hand-edit rows -- re-harvest. The script refuses to emit a table
+whose rows came from more than one driver version, because a pristine table states
+its provenance in one banner and cannot do that for a mixed set.
 
-| Card | Label (what is printed on the card) | Manufacturer | Capacity | Throughput | Latency | Class | Max SPI |
-|------|-------------------------------------|-------------|----------|------------|---------|-------|---------|
-| Longsys_USD00 | Amazon Basics microSD XC I (10) U3 A2 V30 | Amazon Basics ($AD) | 64 GB | — | — | — | not yet tested |
-| SanDisk_SN64G | SanDisk Extreme 64GB U3 A2 microSD XC I V30 | SanDisk ($03) | 64 GB | — | — | — | not yet tested |
-| SanDisk_SN128 | SanDisk 128GB Nintendo Switch microSD XC I | SanDisk ($03) | 128 GB | **780 KB/s** | 0.66 ms | HIGH | 25 MHz |
-| Longsys_MSSD0 | Lexar A1 V30 U3 64GB microSD XC (Red card) | Lexar ($AD) | 64 GB | **1,059 KB/s** | 0.48 ms | HIGH | 25 MHz |
-| Samsung_GD4QT | Samsung EVO Select microSD XC I U3 | Samsung ($1B) | 128 GB | **783 KB/s** | 0.65 ms | HIGH | 25 MHz |
-| SanDisk_AGGCF | SanDisk Extreme PRO 128GB microSD XC I V30 U3 A1 | SanDisk ($03) | 128 GB | — | — | — | not yet tested |
-| SanDisk_AGGCE | SanDisk Extreme PRO 64GB microSD XC I V30 U3 | SanDisk ($03) | 64 GB | **866 KB/s** | 0.59 ms | HIGH | 25 MHz |
-| GigastoneOEM_ASTC | Gigastone "Camera Plus" microSD XC I, A1 V30 U3 64GB | Gigastone ($12) | 64 GB | **944 KB/s** | 0.54 ms | HIGH | 25 MHz |
-| SanDisk_SA16G | SanDisk Industrial microSD HC I, U1 C10, 16GB | SanDisk ($03) | 16 GB | **824 KB/s** | 0.62 ms | HIGH | 25 MHz |
-| Transcend_00000 | Gigastone 32GB microSD HC I A1 U1 (10) | Gigastone ($74) | 32 GB | — | — | — | not yet tested |
-| Unknown_00000 | Gigastone 10x High Endurance 8GB MLC microSD HC I U1 | Gigastone ($9F) | 8 GB | — | — | — | not yet tested |
-| BudgetOEM_SD16G | Gigastone 10x High Endurance 16GB MLC microSD HC I U3 V30 4K | Gigastone ($00) | 16 GB | **368 KB/s** | 1.39 ms | MEDIUM | 25 MHz |
-| Kingston_SD8GB | Kingston 8GB microSD HC I ui (10) "Taiwan" F(c)o | Kingston ($41) | 8 GB | — | — | — | not yet tested |
-| SanDisk_SU08G | microSD HC 8GB (4) - Chinese text, no brand - Card #1 | Chinese #1 ($03) | 8 GB | — | — | — | not yet tested |
-| Samsung_00000 | Unlabeled 8GB microSD (Chinese text/no brand) - Card #2 | Chinese #2 ($1B) | 8 GB | — | — | — | not yet tested |
-| SanDisk_SS08G | SanDisk 8GB (4) microSD HC, Made in Taiwan | SanDisk Taiwan ($03) | 8 GB | **687 KB/s** | 0.75 ms | MED | 25 MHz |
-| SharedOEM_SPCC | SP Elite microSD XC UHS-I U1 (10) | Silicon Power ($9F) | 64 GB | **967 KB/s** | 0.53 ms | HIGH | 25 MHz |
-| SanDisk_SH32G | SanDisk MAX ENDURANCE microSD HC I U3 V30 (10) | SanDisk ($03) | 32 GB | **~951 KB/s** | 0.54 ms | HIGH | 25 MHz |
-| SanDisk_WX64G | Western Digital WD Purple QD101 microSD XC I U1 (10) 64GB | WD Purple ($03) | 64 GB | — | — | — | not yet tested |
-| Phison_SD16G (PNY) | PNY 16GB microSD HC I | PNY ($27) | 16 GB | **31.3 KB/s** | 16.0 ms | LOW | 25 MHz |
-| Phison_SD16G (Sony) | Sony 16GB microSD HC (10) i U3 SR-16D, Made in Taiwan | Sony ($27) | 16 GB | **714 KB/s** | 0.72 ms | MED | 25 MHz |
+**Keys.** Rows are per physical instance, keyed by full **Card ID**
+(`MID_PNM_PRV_PSN_YYYYMM`), and grouped by **silicon key** = `MID_PNM_PRV`
+(e.g. `$27_SD16G_3.0`). The MID stays hex: mapping it to a manufacturer is not a
+function -- `$9F` appears in this drawer as both a Silicon Power and a
+Gigastone-branded card -- so the name is decoration applied from
+[Known Manufacturer IDs](#known-manufacturer-ids-heuristic), which this document
+owns in one place. **Brand does not predict controller**: Gigastone-branded cards
+here carry three different MIDs.
 
-**Tested: 12 of 23 cards**
+**Repeat runs show as a range, never an average.** One physical card has been
+measured moving up to 3x between rounds. An average over runs reports a confident
+single number for a measurement that is not stable, and hides the dispersion the
+repeat run existed to expose. The `Runs` column says how many passes a row spans.
 
-**Key Observations:**
-1. **Lexar V30 U3 64GB** - **Fastest card tested** (1,059 KB/s), 12% faster than SP Elite
-2. **Silicon Power Elite 64GB** - Very fast (967 KB/s), CMD12 anomaly handled by driver tolerance
-3. **Gigastone Camera Plus 64GB** - Very fast (944 KB/s), excellent value
-4. **SanDisk Extreme PRO 64GB** - High performance (866 KB/s), professional line
-5. **SanDisk Industrial 16GB** - High performance (824 KB/s), industrial/embedded grade
-6. **Samsung EVO Select 128GB** - High performance (783 KB/s), nearly identical to SanDisk
-7. **SanDisk Nintendo Switch 128GB** - High performance (780 KB/s), designed for gaming
-8. **Gigastone High Endurance 16GB** - Medium performance (368 KB/s), MLC flash endurance focus
-9. **PNY 16GB** - Slow internal controller (31 KB/s); runs reliably at 25 MHz SPI but throughput limited by internal latency
-10. All tested cards max out at 25 MHz SPI (CMD6 High Speed switch fails on all)
+---
+
+### Card capability (random access)
+
+**Instrument:** `diagnostic-tests/SD_speed_characterize.spin2`
+**Workload:** 10,000 single-sector reads at random offsets, CRC-16 verified.
+
+This is a property of the **card**. Every read pays the controller's full internal
+seek latency, which is why these figures spread roughly 38x across our drawer while
+sequential figures nearly converge. **Random access separates cards.**
+
+No limiter attribution column appears here: this metric is card-bound for every
+card by construction, so the column would carry one constant answer.
+
+<!-- harvested: tools/harvest_catalog.sh --capability -->
+
+| Silicon key | Card ID | Reads | Landed clock | Throughput | Runs | Mean latency | Min | Max |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| _(awaiting sweep)_ | | | | | | | | |
+
+---
+
+### Driver throughput by traffic type
+
+**Instrument:** `src/UTILS/SD_performance_benchmark.spin2`
+**Workload:** raw single-sector, raw multi-sector (CMD18/CMD25) and file-level
+handle traffic, at several sizes, writes verified byte-for-byte.
+
+This is what an application actually gets from **this driver**. On sequential
+multi-block traffic the bus does the limiting and cards nearly converge.
+**The benchmark separates drivers.**
+
+Limiter attribution belongs on this table only. Each rate is expressed as a
+percentage of the bus ceiling -- one data line carries one bit per SCK, so nothing
+can exceed `spi_freq / 8` bytes per second -- which turns "what is the limiting
+factor" into a derived number rather than a judgement. `BUS-bound` means a faster
+card cannot help and only a faster clock or 4-bit transfers would; `CARD-bound`
+means the card's internal latency dominates and neither would help much.
+
+<!-- harvested: tools/harvest_catalog.sh --throughput -->
+
+| Silicon key | Card ID | Traffic | Bytes | SPI | Throughput | Runs | % of bus | Limiter |
+|---|---|---|---:|---:|---:|---:|---:|---|
+| _(awaiting sweep)_ | | | | | | | | |
+
+---
+
+### Register and identity data is exempt
+
+Everything in the register tables above -- CID, CSD, SCR, capacity, quirks -- is a
+property of the card. It does not stale when the driver changes and carries no
+provenance requirement. Only performance data is driver-dependent, which is why
+only performance data lives under a version banner.
+
+### A caveat for anyone reading this as a buying guide
+
+Performance here stratifies by something **a buyer cannot see before purchase**:
+MID, PNM and PRV live in the CID register and are not printed on the card or the
+packaging. SKUs are silently re-sourced between production runs, so two cards with
+the same label and the same part number can carry different controllers. The honest
+form of any claim from this table is "these specific cards, purchased then,
+measured this" -- never "buy brand X".
 
 ---
 
@@ -528,5 +572,5 @@ SCR: [8 bytes hex]
 ---
 
 *Catalog created: 2026-01-20*
-*Last updated: 2026-05-25*
-*Cards cataloged: 23 (individual card pages in [DOCs/cards/](cards/))*
+*Last updated: 2026-08-19*
+*Cards cataloged: 26 (individual card pages in [DOCs/cards/](cards/))*

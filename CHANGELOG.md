@@ -71,6 +71,13 @@ behave alike, and high-speed mode can be left without stranding the card.
 
 ### New Features
 
+- **The driver can now report its own version.** `driverVersion()` returns the
+  major, minor and patch numbers; `driverVersionString()` returns them as
+  printable text. Both are available in every build, including a core-only one
+  with no feature flags set. Performance figures depend on the driver that
+  produced them as much as on the card, so a measurement or a log can now name
+  the driver it came from.
+
 - **`debugSetOverspeedAllowed()`** and **`debugSetAlignFloorRuleEnabled()`**
   (`SD_INCLUDE_DEBUG`) lift the two production guards described above for
   characterization work. Documented in `DOCs/SPI-PHASE-MARGIN-API.md`. Production

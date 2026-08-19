@@ -1040,7 +1040,9 @@ All structs are packed (Spin2 default) with offsets matching their respective ha
 | `getReadTimeout() : ms` | Read timeout from CSD |
 | `getWriteTimeout() : ms` | Write timeout from CSD |
 | `eraseBlockSectors() : sectors` | Erase block size from CSD (32=SDSC, 128=SDHC/SDXC typical) |
-| `isHighSpeedActive() : bool` | True if running at 50 MHz |
+| `isHighSpeedActive() : bool` | True while the CARD is in CMD6 high-speed mode (a mode, not a clock threshold -- at 350 MHz sysclk high speed is 43.75 MHz) |
+| `driverVersion() : major, minor, patch` | This driver's version as three numbers |
+| `driverVersionString() : pStr` | This driver's version as printable text, e.g. `"1.8.0"` |
 
 **Utilities:**
 
