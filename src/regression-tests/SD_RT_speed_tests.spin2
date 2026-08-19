@@ -213,8 +213,10 @@ PUB go() | result, handle, spiFreq, maxSpeed, hsActive, cmd6Sup, hsCap, hsResult
     debug("   attemptHighSpeed: ", sdec_(hsResult), " isHSActive: ", sdec_(hsActive), " ERROR(): ", sdec_(errCode))
     debug("   SPI freq before: ", udec_(spiFreq), " Hz, after: ", udec(sd.getSPIFrequency()), " Hz")
     ' If attemptHighSpeed failed, isHighSpeedActive must be false
-    ' If attemptHighSpeed succeeded, frequency should have increased
-    ' Note: isHighSpeedActive() requires spi_freq >= 50 MHz which needs _CLKFREQ >= 200 MHz
+    ' If attemptHighSpeed succeeded, the mode must read as active AND the clock must have risen.
+    ' The mode check is the point of this test: isHighSpeedActive() reports the CARD's mode, not
+    ' a clock threshold, so it holds at every sysclk (high speed is 43_750_000 Hz at 350 MHz --
+    ' the old frequency-threshold implementation answered FALSE there while the mode was active).
     if hsResult == false
       ' FALSE alone is ambiguous by the driver's own contract: "the card declined" and
       ' "the card could not be asked" both return FALSE, and only ERROR() separates them.
@@ -223,6 +225,8 @@ PUB go() | result, handle, spiFreq, maxSpeed, hsActive, cmd6Sup, hsCap, hsResult
       utils.evaluateSubBool(hsActive == false, @"HS inactive after failure", true)
       utils.evaluateSubValue(errCode, @"card declined, query did not fail", sd.SUCCESS)
     else
+      utils.setCheckCountPerTest(2)
+      utils.evaluateSubBool(hsActive, @"HS mode active after success", true)
       utils.evaluateSubBool(sd.getSPIFrequency() > spiFreq, @"freq increased after HS", true)
 
     ' Test: Read/write integrity after high-speed attempt
@@ -247,8 +251,15 @@ PUB go() | result, handle, spiFreq, maxSpeed, hsActive, cmd6Sup, hsCap, hsResult
             printSurveyCoords()                         ' failure only -- green transcript unchanged
         utils.evaluateBool(result, @"data integrity post-HS", true)
     else
+        ' NOT card-specific, and not skippable. This branch was scored as a PASS until
+        ' 2026-08-18, which is why the sticky-CMD6 defect survived two certification
+        ' rounds wearing a green mark: leaving high-speed mode by hand-setting the clock
+        ' stranded the card on high-speed output timing, and every operation after it
+        ' returned E_IO_ERROR. A failure to create the file here IS the failure this
+        ' test exists to catch.
         debug("  createFileNew failed after HS: ", sdec_(handle))
-        utils.evaluateBool(true, @"data integrity post-HS", true)  ' Skip - card-specific
+        printSurveyCoords()
+        utils.evaluateBool(false, @"data integrity post-HS", true)
 
     ' Test: getSPIFrequency() reflects HS state
     utils.startTest(@"getSPIFrequency() reflects HS state")
@@ -334,6 +345,56 @@ PUB go() | result, handle, spiFreq, maxSpeed, hsActive, cmd6Sup, hsCap, hsResult
     writeTimeout := sd.getWriteTimeout()
     debug("   Write timeout: ", udec(writeTimeout), " ms")
     utils.evaluateRange(writeTimeout, @"write timeout", 1, 30000)
+
+    ' ======================================================================
+    ' TEST GROUP: High-Speed Mode Exits
+    ' ======================================================================
+    ' Added 2026-08-18. The CMD6 high-speed switch is STICKY at the card: a host
+    ' that leaves high speed without switching the card back strands the link and
+    ' every following operation fails with E_IO_ERROR. There are FOUR ways out of
+    ' high-speed mode, and until this group existed only the three failure paths
+    ' had any coverage at all -- the two exits below are the ones a working card
+    ' actually takes, and both were shipped untested.
+    utils.startTestGroup(@"High-Speed Mode Exits")
+
+    ' Test: setSPISpeed() exits high-speed mode
+    ' Asserts the MODE changed, not merely that operations still work. Test #9
+    ' proves the absence of an E_IO_ERROR, which a card tolerant of the mismatch
+    ' would also produce -- this proves the driver actually left the mode.
+    utils.startTest(@"setSPISpeed() exits high-speed mode")
+    hsResult := sd.attemptHighSpeed()
+    if hsResult
+        utils.setCheckCountPerTest(2)
+        utils.evaluateSubBool(sd.isHighSpeedActive(), @"HS active before exit", true)
+        sd.setSPISpeed(computedSpeed)
+        utils.evaluateSubBool(sd.isHighSpeedActive(), @"HS cleared by setSPISpeed", false)
+    else
+        ' Card declined high speed -- the exit cannot be exercised on this card.
+        ' Recorded as a skip with its reason visible, never as a silent pass.
+        debug("   card declined HS (ERROR(): ", sdec_(sd.ERROR()), ") -- exit not exercisable here")
+        utils.evaluateBool(sd.isHighSpeedActive() == false, @"HS inactive when declined", true)
+
+    ' Test: unmount() exits high-speed mode, and the card is usable after remount
+    ' The card cannot be interrogated for its own mode, so the proof is indirect
+    ' and deliberately end-to-end: if unmount left the card in high-speed timing,
+    ' the remount below re-inits at default timing against a high-speed card and
+    ' the file operation fails.
+    utils.startTest(@"unmount() leaves the card in default speed mode")
+    hsResult := sd.attemptHighSpeed()
+    sd.unmount()
+    if sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK) < 0
+        debug("   remount FAILED after HS unmount: ", sdec_(sd.ERROR()))
+        utils.evaluateBool(false, @"card usable after HS unmount", true)
+    else
+        utils.setCheckCountPerTest(2)
+        utils.evaluateSubBool(sd.isHighSpeedActive(), @"HS clear after remount", false)
+        sd.deleteFile(@spTestFile3)                                             ' Test #12 left this file behind; createFileNew would return E_FILE_EXISTS
+        handle := sd.createFileNew(@spTestFile3)
+        if handle >= 0
+            sd.closeFileHandle(handle)
+        else
+            debug("   createFileNew after HS unmount failed: ", sdec_(handle))
+        utils.evaluateSubBool(handle >= 0, @"file op works after HS unmount", true)
 
     ' ======================================================================
     ' Cleanup and Summary

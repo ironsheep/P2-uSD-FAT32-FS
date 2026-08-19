@@ -599,6 +599,24 @@ DAT  ' ---- Singleton Control ----
         freespace_error                         LONG    0                        ' Companion to do_freespace(): set when the FAT scan did not complete
         hs_supported                            LONG    0                        ' Companion to probeHighSpeed(): the ANSWER, once the status says it was obtained
         hs_query_error                          LONG    0                        ' Companion to the high-speed capability queries: set when the card could not be ASKED
+
+        ' HIGH-SPEED MODE STATE (2026-08-18). TRUE if and only if the CARD is in
+        ' CMD6 high-speed mode. Set at the ONE point where the switch is verified
+        ' (do_attempt_high_speed); cleared at the ONE point that switches the card
+        ' back (applyDefaultSpeedMode). Nothing else may write it.
+        '
+        ' This exists because the mode cannot be inferred from the host clock. The
+        ' old test -- spi_freq >= 50_000_000 -- is false at every sysclk that cannot
+        ' land on exactly 50 MHz, including this project's own 350 MHz default where
+        ' high speed resolves to hp=4 / 43_750_000 Hz. Two consumers read that literal
+        ' (isHighSpeedActive, clampUserSpeed) and both answered "not high speed" while
+        ' the card was in high-speed mode.
+        '
+        ' Declared unconditionally although only [SD_INCLUDE_SPEED] code can set it:
+        ' isHighSpeedActive() is compiled in every build, and in a build without the
+        ' speed feature this stays 0 forever -- correct by construction, since there
+        ' is then no way into high-speed mode at all.
+        hs_mode_active                          LONG    0                        ' TRUE while the card is in CMD6 high-speed mode
         advance_cluster_error                   LONG    0                        ' Companion to writeAdvanceCluster(): E_IO_ERROR vs E_DISK_FULL when it returns FALSE
         search_io_status                        LONG    0                        ' Companion to searchDirectory(): SUCCESS, or E_IO_ERROR when FALSE means "could not look" not "not there"
         search_parent_sec                       LONG    0                        ' Companion to searchDirectory(): first sector of the directory the final component was scanned in
@@ -722,23 +740,25 @@ DAT  ' ---- Singleton Control ----
 
         ' PHASE 3 -- Adaptive Path B alignment tuning (streamer DMA align_delay)
         ' align_delay_offset is added to spi_period (= hp) at every streamer-burst
-        ' site to produce the actual WAITX value before XINIT. Default 0 preserves
-        ' current align_delay = hp behavior, giving byte-identical output at
-        ' sysclk=350 MHz default-settings regression.
+        ' site to produce the actual WAITX value before XINIT.
         '
-        ' Why default 0 (not -2 as some earlier draft notes suggested):
-        '   (i)  preserves byte-identical pre-Phase-3 behavior under regression;
-        '   (ii) per p2kbArchIoPinTiming the host-side I/O ring round trip is
-        '        5-6 sysclks (smart-pin output 1.5-3 sysclks plus registered
-        '        input 3-4 sysclks), so the optimal offset post-Phase-1.5 is
-        '        at POSITIVE values in the +5 to +7 range, not negative;
-        '   (iii) the production default is set after the empirical sweep tells
-        '        us the actual optimum per card class.
+        ' Default 5, baked in from the 2026-08-17/18 socket-timing campaign
+        ' (DOCs/Plans/SOCKET-SHMOO-RUN-NOTES.md rounds 4 + 7c): five independent
+        ' passing-band sweeps -- two card families (mainstream SDHC and asdfg-class
+        ' SDSC), both sockets, three frequencies -- ALL center on +5, matching the
+        ' p2kbArchIoPinTiming prediction of +5..+7 (host I/O ring round trip of
+        ' 5-6 sysclks). The narrowest measured band is [+1..+9] (35 MHz); the old
+        ' default 0 sat ON or OUTSIDE the lower edge at elevated frequencies and
+        ' one tick from it on the adapter socket at 29 MHz.
+        '
+        ' hp=4 floor-cell rule: positive offsets are withheld at spi_period = 4
+        ' (see effectiveAlignDelay) -- the floor cell keeps historical align = hp,
+        ' because the band was measured at hp = 5..7 only and +5 there exceeds the
+        ' bit period, breaking the CMD6 high-speed verify read (round 8a).
         '
         ' Floor: align_delay must be >= 2 (cog needs at least 2 sysclks to execute
-        ' WAITX before XINIT). At hp=4 with align_delay_offset=-2 this lands
-        ' exactly on the floor; below that the floor clamp engages.
-        align_delay_offset                      LONG    0                        ' Signed integer; sweep range [-3, +8]
+        ' WAITX before XINIT); the floor clamp engages in effectiveAlignDelay.
+        align_delay_offset                      LONG    5                        ' Signed integer; accepted range [-8, +16]
 
         ' LAYOUT-INVARIANCE FIX (2026-08-12) -- TX streamer phase pad.
         ' tx_align_delay is the WAITX value between the SCK counter reset
@@ -756,7 +776,32 @@ DAT  ' ---- Singleton Control ----
         ' fails at pads 8, 15, 22, 29; all 24 other measured points pass (three shmoo
         ' runs, SD_tx_phase_shmoo). Default 4 = maximal mod-7 distance (3) from the
         ' cliff on both sides; the old floor value 2 sat one sysclk from it.
+        '
+        ' 2026-08-18 five-card survey (SOCKET-SHMOO-RUN-NOTES.md round 7b): the
+        ' losing phase is DRIVER-SIDE -- every affected card fails at identical
+        ' pads (three of five affected; the other two tolerate the marginal
+        ' phase). The losing residue MOVES with hp (pads 8,22 at hp=14; 8,15 at
+        ' hp=7; 4,9 at hp=5), so distance-from-cliff computed at one frequency
+        ' does not transfer to another: at hp=5 this default LANDS ON the losing
+        ' phase. That configuration is unreachable in production -- the user
+        ' speed path clamps at the card ceiling (see clampUserSpeed) -- and any
+        ' future change that raises SPI speed must re-derive this pad for its hp.
         tx_align_delay                          LONG    4                        ' Sysclks; sweep range [2, 2+2*hp]
+
+        ' PRODUCTION SPEED BOUND (2026-08-18, Stephen: above-ceiling SPI is
+        ' "diagnostic / developer only"). Consumed by clampUserSpeed at the
+        ' CMD_SET_SPI_SPEED handler; set ONLY by debugSetOverspeedAllowed
+        ' [SD_INCLUDE_DEBUG]. Zero = production behavior (clamped).
+        overspeed_allowed                       BYTE    0                        ' 1 = diagnostics may exceed the card ceiling
+
+        ' FLOOR-CELL RULE ESCAPE (2026-08-18). The hp=4 rule in effectiveAlignDelay
+        ' withholds positive align offsets at that cell because its passing band was
+        ' never measured -- which also makes the cell unmeasurable, since a sweep
+        ' there would see every positive offset collapse to the same align value.
+        ' This knob lets a characterization tool lift the rule to MEASURE the band;
+        ' production keeps it. Set ONLY by debugSetAlignFloorRuleEnabled.
+        floor_rule_disabled                     BYTE    0                        ' 1 = apply offsets at hp=4 too (characterization)
+        BYTE    0[2]                                                             ' pad to long boundary
 
         ' FILESYSTEM STATE (moved from VAR)
         fat_sec                                 LONG    0                        ' Starting sector of FAT
@@ -2254,8 +2299,12 @@ PUB attemptHighSpeed() : hs_ok
 '' the verification failed. Without that split, a card with SPI trouble reports "high speed
 '' not supported" and sends you diagnosing the wrong thing.
 ''
-'' @returns hs_ok - TRUE if 50 MHz active, FALSE if not (see ERROR() for whether the card
-''                  declined or could not be asked)
+'' On success the SPI clock is raised toward 50 MHz; the frequency actually reached
+'' is the nearest achievable one for the current sysclk (43_750_000 Hz at 350 MHz),
+'' so read getSPIFrequency() for the clock and isHighSpeedActive() for the mode.
+''
+'' @returns hs_ok - TRUE if high-speed mode is active, FALSE if not (see ERROR() for
+''                  whether the card declined or could not be asked)
 
   if cog_id == -1
     set_error(E_NOT_MOUNTED)                            ' Could not ask at all -- do not report it as "no"
@@ -2304,9 +2353,17 @@ PUB setSPISpeed(freq) : actual_hz
 '' Set SPI clock frequency. Routes through worker cog which owns the SPI pins.
 '' Frequency is rounded to nearest achievable value based on P2 clock divider.
 ''
+'' Requests are BOUNDED at the card's declared ceiling (TRAN_SPEED, capped at
+'' the SD SPI-mode 25 MHz; 50 MHz while verified CMD6 high-speed mode is
+'' active). Above-ceiling operation is diagnostic-only -- characterized silent
+'' write corruption exists above spec -- and the returned actual_hz reports the
+'' clamped truth. Diagnostic tools may lift the bound via
+'' debugSetOverspeedAllowed() [SD_INCLUDE_DEBUG].
+''
 '' @param freq - Target SPI frequency in Hz
-'' @returns actual_hz - Actual frequency achieved (may differ due to divider rounding),
-''                      or 0 if the speed could not be set (see ERROR())
+'' @returns actual_hz - Actual frequency achieved (may differ due to divider
+''                      rounding or the production ceiling), or 0 if the speed
+''                      could not be set (see ERROR())
 
   if cog_id <> -1
     if send_command(CMD_SET_SPI_SPEED, freq, 0, 0, 0) == SUCCESS
@@ -2367,11 +2424,20 @@ PUB eraseBlockSectors() : sectors
   sectors := card_erase_block_sectors
 
 PUB isHighSpeedActive() : active
-'' Check if high-speed mode is active (running at 50 MHz).
+'' Check whether the CARD is in CMD6 high-speed mode -- entered by a verified
+'' attemptHighSpeed(), left by a later setSPISpeed() or by unmount().
 ''
-'' @returns active - TRUE if running at 50 MHz or higher
+'' This reports the card's MODE, not a clock threshold. The actual SPI frequency
+'' in high-speed mode depends on sysclk (350 MHz sysclk yields 43_750_000 Hz, not
+'' 50_000_000), so asking "is the clock at least 50 MHz" answered FALSE on most
+'' sysclks while high-speed mode was genuinely active. Use getSPIFrequency() for
+'' the clock; use this for the mode.
+''
+'' Always FALSE in a build without [SD_INCLUDE_SPEED] -- there is no way in.
+''
+'' @returns active - TRUE if the card is in high-speed mode
 
-  active := spi_freq >= 50_000_000
+  active := hs_mode_active
 
 CON ' ---- Debug / Diagnostics [SD_INCLUDE_DEBUG] ----
 
@@ -2752,25 +2818,27 @@ PUB debugSetAlignDelayOffset(offset)
 '' to execute WAITX before XINIT). At hp=4 with offset=-2 this lands exactly
 '' on the floor.
 ''
-'' Range: caller may pass [-8, +8]. Out-of-range values are silently ignored.
+'' Range: caller may pass [-8, +16]. Out-of-range values are silently ignored.
+'' The upper limit covers one full bit period (2*hp ticks; 14 at the production
+'' hp=7) so a passing-band sweep can find the band's UPPER edge -- the 2026-08-17
+'' socket characterization found every offset up to the previous +8 limit passing,
+'' leaving the band top unmeasured.
 ''
 '' @param offset - signed integer offset added to spi_period
 
-  if offset < -8 or offset > 8
+  if offset < -8 or offset > 16
     return                                                                  '  silently ignore invalid input
   align_delay_offset := offset
 
 PUB debugGetEffectiveAlignDelay() : delay
 '' DIAGNOSTIC ONLY: return the streamer-DMA align_delay value that will be
-'' used on the next streamer-driven sector transfer (Path B). Computed as
-'' spi_period plus align_delay_offset, clamped to a minimum of 2 (the WAITX
-'' floor). Production applications must NOT call this.
+'' used on the next streamer-driven sector transfer (Path B) -- the shared
+'' effectiveAlignDelay() computation, including the hp=4 floor-cell rule and
+'' the WAITX floor of 2. Production applications must NOT call this.
 ''
 '' @returns delay - the effective WAITX value in sysclks
 
-  delay := spi_period + align_delay_offset
-  if delay < 2
-    delay := 2
+  delay := effectiveAlignDelay()
 
 PUB debugSetTxAlignDelay(pad)
 '' DIAGNOSTIC ONLY: set the WAITX phase pad used between the SCK counter
@@ -2797,6 +2865,35 @@ PUB debugGetTxAlignDelay() : pad
 '' @returns pad - configured tx_align_delay in sysclks
 
   pad := tx_align_delay
+
+PUB debugSetOverspeedAllowed(enabled)
+'' DIAGNOSTIC ONLY: allow setSPISpeed() targets above the production ceiling
+'' (the card's TRAN_SPEED capped at the SD SPI-mode 25 MHz). The socket-timing
+'' campaign measured silent whole-sector write corruption above spec -- the
+'' tx_align_delay losing phase moves with hp and lands on the default at
+'' hp=5 / 35 MHz (SOCKET-SHMOO-RUN-NOTES.md round 7b) -- so above-ceiling
+'' operation is reserved for characterization tools that know the map.
+'' Production applications must NOT call this.
+''
+'' @param enabled - nonzero allows above-ceiling targets; 0 restores the bound
+
+  overspeed_allowed := (enabled <> 0) ? 1 : 0
+
+PUB debugSetAlignFloorRuleEnabled(enabled)
+'' DIAGNOSTIC ONLY: enable or disable the hp=4 floor-cell rule (see
+'' effectiveAlignDelay). The rule withholds positive align offsets at
+'' spi_period = 4, where the passing band has never been measured -- which also
+'' makes that cell impossible to sweep, since every positive offset collapses to
+'' the same effective align value. A characterization tool disables the rule to
+'' MEASURE the band; production applications must NOT call this.
+''
+'' Disabling it re-enables the configuration that broke the CMD6 high-speed
+'' verify read in round 8a. That is the point -- the sweep is looking for where
+'' the edges are -- but nothing outside a characterization run should be here.
+''
+'' @param enabled - nonzero keeps the production rule; 0 lifts it for measurement
+
+  floor_rule_disabled := (enabled <> 0) ? 0 : 1
 
 #endif                                                  ' SD_INCLUDE_DEBUG (Phase 2/3 diagnostic tuning APIs)
 
@@ -3425,7 +3522,17 @@ PRI fs_worker() | cur_cmd
         pb_status := hs_query_error
 
       CMD_SET_SPI_SPEED:
-        applySPISpeed(pb_param0)
+        ' A hand-set clock takes the card OUT of high-speed mode first. The CMD6
+        ' switch is sticky at the card: dropping the host clock while the card
+        ' stays on high-speed output timing strands the link and every following
+        ' transfer fails with E_IO_ERROR until re-init. High speed is entered by
+        ' attemptHighSpeed() and left by touching the clock -- a rule, not a
+        ' frequency threshold, because a threshold is another literal to get wrong
+        ' at the next sysclk. The clamp then measures against the default-mode
+        ' ceiling, which is the mode the card is now actually in.
+        if hs_mode_active
+          applyDefaultSpeedMode()
+        applySPISpeed(clampUserSpeed(pb_param0))
         pb_data0 := spi_freq
         pb_status := SUCCESS
 #endif
@@ -4154,6 +4261,17 @@ PRI do_unmount() : status | sync_status, close_status
   updateFSInfo()
   if fsinfo_error < 0 AND status == SUCCESS
     status := fsinfo_error
+
+#ifdef SD_INCLUDE_SPEED
+  ' Leave the card in the mode we found it in. The CMD6 high-speed switch is
+  ' sticky at the CARD -- it does not follow our host clock down and it does not
+  ' end when we let go -- so a card unmounted in high-speed mode is handed to
+  ' whoever comes next in a mode they never asked for. This is the last moment
+  ' we still own it. (Guarded: applyDefaultSpeedMode is [SD_INCLUDE_SPEED] code,
+  ' and hs_mode_active can only be TRUE in such a build.)
+  if hs_mode_active
+    applyDefaultSpeedMode()
+#endif
 
   ' From this moment the card belongs to the user (may be pulled or swapped).
   ' No cache may keep describing it: a stale tag surviving into the next
@@ -5987,6 +6105,34 @@ PRI do_read_sd_status(p_buf) : status
 
 #ifdef SD_INCLUDE_SPEED
 
+PRI clampUserSpeed(freq) : hz
+' Production speed bound (2026-08-18, Stephen: above-ceiling SPI is "diagnostic /
+' developer only"). Applied ONLY to user setSPISpeed() requests -- internal
+' speed changes (init 400 kHz, setOptimalSpeed, the CMD6 high-speed path) are
+' unaffected.
+'
+' Ceiling: the card's declared TRAN_SPEED capped at the SD SPI-mode 25 MHz,
+' lifted to 50 MHz only while verified CMD6 high-speed mode is active. The
+' 2026-08-17/18 socket campaign measured silent whole-sector write corruption
+' where the fixed tx_align_delay phase pad meets above-spec frequencies (losing
+' phase at pads 4,9 at hp=5 / 35 MHz on three of five cards; see
+' DOCs/Plans/SOCKET-SHMOO-RUN-NOTES.md round 7b) -- nothing at or below the
+' ceiling can reach that configuration. Characterization tools re-enable the
+' full range via debugSetOverspeedAllowed() [SD_INCLUDE_DEBUG].
+'
+' @param freq - Requested SPI frequency in Hz
+' @returns hz - The request, clamped to the production ceiling unless overridden
+
+  hz := freq
+  if overspeed_allowed
+    return
+  if hs_mode_active                                     ' Verified high-speed mode active
+    hz := hz <# 50_000_000
+  elseif card_max_speed_hz > 0
+    hz := hz <# (card_max_speed_hz <# 25_000_000)
+  else
+    hz := hz <# 25_000_000                              ' Card not identified yet: SPI-mode ceiling
+
 PRI do_attempt_high_speed() : hs_ok | idx, mismatch
 ' Internal attempt high-speed mode - queries, switches, and verifies at 50 MHz.
 ' Runs on worker cog where smart pins are configured.
@@ -6028,6 +6174,7 @@ PRI do_attempt_high_speed() : hs_ok | idx, mismatch
       ' Switch to high-speed mode
       DEBUG[CH_HSPEED]("  [do_attempt_high_speed] Failed to switch to high-speed")
       hs_query_error := E_IO_ERROR
+      applyDefaultSpeedMode()                           ' Card state unknown after a failed switch -- force default mode
     else
       ' Set 50 MHz SPI clock
       applySPISpeed(50_000_000)
@@ -6039,6 +6186,7 @@ PRI do_attempt_high_speed() : hs_ok | idx, mismatch
         DEBUG[CH_HSPEED]("  [do_attempt_high_speed] Verify read FAILED at 50 MHz - falling back to 25 MHz")
         hs_query_error := E_IO_ERROR
         applySPISpeed(25_000_000)                       ' An unverified 50 MHz link must not stay active
+        applyDefaultSpeedMode()                         ' ...and neither may the CARD stay in high-speed mode
       else
         ' Compare dir_buf (safe-speed baseline) vs buf (50 MHz re-read) long-by-long
         mismatch := 0
@@ -6050,9 +6198,11 @@ PRI do_attempt_high_speed() : hs_ok | idx, mismatch
           DEBUG[CH_HSPEED]("  [do_attempt_high_speed] VERIFICATION FAILED - ", udec_(mismatch), " long mismatches")
           DEBUG[CH_HSPEED]("  [do_attempt_high_speed] Falling back to 25 MHz")
           applySPISpeed(25_000_000)
+          applyDefaultSpeedMode()                       ' Card must not stay in high-speed mode either
           sec_in_buf := -1                              ' buf holds the suspect-speed bytes -- must not stay cached as valid
         else
           DEBUG[CH_HSPEED]("  [do_attempt_high_speed] VERIFIED - 50 MHz high-speed mode ACTIVE")
+          hs_mode_active := true                        ' The ONE place the card enters high-speed mode
           hs_ok := true
 
     ' Invalidate dir cache since we borrowed dir_buf as the baseline copy
@@ -7317,6 +7467,13 @@ PRI initCard() : bSuccess | timeout, resp, card_version, acmd41_arg, got_respons
   DEBUG[CH_INIT]("    [initCard] Step 1: Power-on delay (100ms)...")
   waitms(POWER_ON_DELAY_MS)
 
+  ' We have not switched THIS card's speed mode, so our record must not claim we
+  ' have -- a stale TRUE surviving a card swap would make the next unmount issue
+  ' a CMD6 switch-back to a card that was never switched. Nothing here inspects
+  ' the card's own mode: a card left in high-speed mode by a previous session
+  ' without a power cycle is a separate, uncharacterized case.
+  hs_mode_active := false
+
   ' ============================================
   ' STEP 2: Configure SPI pins and slow clock
   ' Spec: Use 100-400 kHz during initialization
@@ -7750,9 +7907,7 @@ PRI readSector(sector, buf_type) : status | _sck, _miso, data, loop_ctr, timeout
     if ($4000_0000 // spi_period) == 0                                          ' Exact division (power-of-2 hp)?
       xfrq -= 1                                                                 ' Match write-path NCO fix: ensure 1-cycle late rollover
     init_phase := $4000_0000                                                    ' Sample mid-bit for stability
-    align_delay := spi_period + align_delay_offset                              ' Phase 3: tunable streamer phase
-    if align_delay < 2                                                          '  WAITX floor (cog needs 2 sysclks min)
-      align_delay := 2
+    align_delay := effectiveAlignDelay()                                        ' Phase 3: tunable streamer phase (hp=4 rule inside)
 
     ' CRC RETRY LOOP: Re-read on CRC mismatch (industry standard practice)
     ' Card has no CRC-error state - it just sees another CMD17 on retry
@@ -7943,9 +8098,7 @@ PRI readSectors(start_sector, count, p_buffer) : sectors_read | _sck, _miso, p_b
     if ($4000_0000 // spi_period) == 0                                          ' Exact division (power-of-2 hp)?
       xfrq -= 1                                                                 ' Match write-path NCO fix: ensure 1-cycle late rollover
     init_phase := $4000_0000                                                    ' Sample mid-bit for stability
-    align_delay := spi_period + align_delay_offset                              ' Phase 3: tunable streamer phase
-    if align_delay < 2                                                          '  WAITX floor (cog needs 2 sysclks min)
-      align_delay := 2
+    align_delay := effectiveAlignDelay()                                        ' Phase 3: tunable streamer phase (hp=4 rule inside)
 
     ' Send CMD23 (SET_BLOCK_COUNT) if card supports it (verified at init by probeCmd23)
     last_cmd18_fail := 0                                                        ' Clear failure path
@@ -9350,6 +9503,28 @@ PRI identifyCard() | cid[4], csd[4]
     card_read_timeout_ms := 100                         ' Safe defaults
     card_write_timeout_ms := 500
 
+PRI effectiveAlignDelay() : delay
+' The ONE computation of the read-streamer WAITX phase pad, shared by both
+' burst sites and the diagnostic getter.
+'
+' hp=4 FLOOR-CELL RULE (2026-08-18): positive offsets do NOT apply at
+' spi_period = 4 -- that cell keeps the historical align = hp behavior. The
+' campaign's passing bands were measured at hp = 5..7 (all centered +5); at
+' hp = 4 the +5 default would exceed the whole bit period (2*hp = 8 sysclks)
+' and was measured breaking the CMD6 high-speed verify read (round 8a,
+' SD_RT_speed_tests). hp = 4 arises at the 50 MHz high-speed request and at
+' low-sysclk 25 MHz configurations (e.g. 200 MHz sysclk) -- both keep their
+' long-certified historical alignment until the floor cell's band is
+' characterized. Negative (diagnostic) offsets still apply, floored at the
+' WAITX minimum of 2.
+
+  if spi_period >= 5 or floor_rule_disabled
+    delay := spi_period + align_delay_offset
+  else
+    delay := spi_period + (align_delay_offset <# 0)     ' hp=4: positive offsets withheld
+  if delay < 2
+    delay := 2                                          ' WAITX floor (cog needs 2 sysclks min)
+
 PRI setOptimalSpeed()
 ' Set SPI speed based on card identification.
 ' Called after identifyCard() to configure optimal SPI clock.
@@ -9445,6 +9620,28 @@ PRI applyHighSpeed() : status | cmd6_status[16]
       status := E_BAD_RESPONSE
     else
       DEBUG[CH_HSPEED]("  [applyHighSpeed] Successfully switched to high-speed mode")
+
+PRI applyDefaultSpeedMode() | cmd6_status[16]
+' Switch the card BACK to default-speed mode (CMD6 switch, function group 1 = 0).
+' Used by the high-speed fallback paths: the CMD6 switch is STICKY at the card,
+' so a host that abandons high speed must switch the card back or every
+' subsequent read arrives on high-speed output timing and fails with a -7
+' cascade until re-init (latent since the HS feature shipped; exposed 2026-08-18
+' by the round-8a regression when the align-default change briefly made the
+' 50 MHz verify read fail deterministically -- SD_RT_speed_tests #9/#12).
+'
+' The card receives commands on the host->card path regardless of its own
+' output-timing mode, so the switch takes effect even when its RESPONSE cannot
+' be read cleanly -- issueCMD6's status is deliberately not consulted here;
+' there is no recovery decision to make on it, and the caller has already
+' recorded the failure that brought us here.
+'
+' This is the ONE place the card leaves high-speed mode, so it is also the one
+' place hs_mode_active is cleared. Every exit from high speed routes here --
+' the three failed-switch/failed-verify paths, a user speed change, and unmount.
+
+  issueCMD6($80FFFFF0, @cmd6_status)
+  hs_mode_active := false
 
 #endif
 
