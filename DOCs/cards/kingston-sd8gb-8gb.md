@@ -1,6 +1,6 @@
 # Card: Kingston 8GB SDHC
 
-**Label:** Kingston 8GB microSD HC I ui (10) "Taiwan" F(c)o
+**Label:** [`kingston-microsd-hc-8gb`](CARD-LABELS.md#kingston-microsd-hc-8gb) — printed text is mastered there, not here
 **Unique ID:** `Kingston_SD8GB_3.0_43F65DC9_201504`
 **Test Date:** 2026-02-02 (characterization)
 

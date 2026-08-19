@@ -1,6 +1,6 @@
 # Card: SanDisk 8GB SDHC (Taiwan)
 
-**Label:** SanDisk 8GB (4) microSD HC, Made in Taiwan
+**Label:** [`sandisk-microsd-hc-8gb-taiwan`](CARD-LABELS.md#sandisk-microsd-hc-8gb-taiwan) — printed text is mastered there, not here
 **Unique ID:** `SanDisk_SS08G_3.0_DAAEE8AD_201509`
 **Test Date:** 2026-03-17 (characterization + benchmark)
 

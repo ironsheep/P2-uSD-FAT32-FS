@@ -1,6 +1,13 @@
 # SD Card Quick Reference — Canonical 2-Line Designators
 
-Every SD card in the project has a canonical 2-line designator derived from register data and the physical label. This file is the single source of truth — the designator block for each card must be character-for-character identical everywhere it appears (card files, CARD-CATALOG.md, Reference/BENCHMARK-RESULTS.md).
+Every SD card in the project has a canonical 2-line designator derived from register data and the physical label. This file is the single source of truth **for the designator** — the designator block for each card must be character-for-character identical everywhere it appears (card files, CARD-CATALOG.md, Reference/BENCHMARK-RESULTS.md).
+
+> **It is not the source for the printed label text.** That is mastered in
+> [CARD-LABELS.md](CARD-LABELS.md), because label text is read under a microscope
+> and hand-entered once, then referenced. Any label wording here is a **cache** of
+> the master; `tools/check_card_labels.sh` fails if a single character diverges.
+> Register-derived content is unaffected — it is a card property and is read by an
+> instrument, not by a person.
 
 **Line 1** — Identity & Filesystem (from CID, CSD, OCR, SCR, MBR registers):
 ```

@@ -1,6 +1,6 @@
 # Card: SanDisk MAX Endurance 32GB SDHC
 
-**Label:** SanDisk MAX ENDURANCE microSD HC I U3 V30 (10)
+**Label:** [`sandisk-max-endurance-32gb`](CARD-LABELS.md#sandisk-max-endurance-32gb) — printed text is mastered there, not here
 **Unique ID:** `SanDisk_SH32G_8.0_5BFECCD8_202508`
 **Test Date:** 2026-02-18
 

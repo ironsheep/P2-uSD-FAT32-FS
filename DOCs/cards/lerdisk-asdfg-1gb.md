@@ -1,6 +1,6 @@
 # Card: "Lerdisk" 1 GB SDSC (counterfeit twin of Cloudisk asdfg)
 
-**Label:** microSD 1GB Class 4 — "Lerdisk" (suspected counterfeit; silicon PNM `"asdfg"`)
+**Label:** [`lerdisk-microsd-1gb-class4`](CARD-LABELS.md#lerdisk-microsd-1gb-class4) — printed text is mastered there, not here
 **Unique ID:** `Unknown_asdfg_2.2_000001F4_202512`
 **Initial Test Date:** 2026-05-24 (Edge socket, P2 Edge module)
 **External Re-characterization:** 2026-05-27 (External SD header, P2 Edge module)

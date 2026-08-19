@@ -1,6 +1,6 @@
 # Card: Samsung EVO Select 128GB SDXC
 
-**Label:** Samsung EVO Select microSD XC I U3
+**Label:** [`samsung-evo-select-128gb`](CARD-LABELS.md#samsung-evo-select-128gb) — printed text is mastered there, not here
 **Unique ID:** `Samsung_GD4QT_3.0_C0305565_201805`
 **Test Date:** 2026-02-02 (characterization)
 

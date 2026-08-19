@@ -1,6 +1,6 @@
 # Card: SanDisk SU01G 1 GB SDSC (Industrial, June 2007)
 
-**Label:** microSD 1GB — SanDisk Industrial SU series
+**Label:** [`sandisk-industrial-su-1gb`](CARD-LABELS.md#sandisk-industrial-su-1gb) — printed text is mastered there, not here
 **Unique ID:** `SanDisk_SU01G_8.0_006CD5B2_200706`
 **Test Date:** 2026-05-05 (characterization on @macca's hardware)
 **Reporter:** @macca (field user)

@@ -1,6 +1,6 @@
 # Card: "Chinese Made" #2 8GB SDHC (Samsung inside)
 
-**Label:** Unlabeled 8GB microSD (Chinese text/no brand) - Card #2
+**Label:** [`unbranded-chinese-8gb-card2`](CARD-LABELS.md#unbranded-chinese-8gb-card2) — printed text is mastered there, not here
 **Unique ID:** `Samsung_00000_1.0_D9FB539C_201408`
 **Test Date:** 2026-02-02 (characterization)
 

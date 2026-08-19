@@ -120,6 +120,12 @@ This section documents ALL fields available from SD card registers and indicates
 
 ## Summary Table
 
+> **Label text is not mastered here.** The `Label` column is a **cache** of
+> [CARD-LABELS.md](CARD-LABELS.md), kept inline because this table has to be
+> scannable at a glance. Edit the master, never this column;
+> `tools/check_card_labels.sh` fails if a single character diverges.
+
+
 **Speed Rating Key** (based on register values, not marketing claims):
 - **A** = Video-optimized (CCC=$DB7 with Classes 1+11 for sustained writes)
 - **B** = Fast (Premium brand, SD 4.xx spec, 25 MHz)
@@ -247,7 +253,9 @@ function -- `$9F` appears in this drawer as both a Silicon Power and a
 Gigastone-branded card -- so the name is decoration applied from
 [Known Manufacturer IDs](#known-manufacturer-ids-heuristic), which this document
 owns in one place. **Brand does not predict controller**: Gigastone-branded cards
-here carry three different MIDs.
+here carry four different MIDs (`$00`, `$12`, `$74`, `$9F`), and the same
+silicon key can carry different labels: `Phison_SD16G_3.0` appears in this drawer
+as both a PNY and a Sony card.
 
 **Repeat runs show as a range, never an average.** One physical card has been
 measured moving up to 3x between rounds. An average over runs reports a confident

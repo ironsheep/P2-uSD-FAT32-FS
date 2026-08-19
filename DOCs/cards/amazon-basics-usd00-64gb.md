@@ -1,6 +1,6 @@
 # Card: Amazon Basics 64GB SDXC
 
-**Label:** Amazon Basics microSD XC I (10) U3 A2 V30
+**Label:** [`amazon-basics-xc-64gb`](CARD-LABELS.md#amazon-basics-xc-64gb) — printed text is mastered there, not here
 **Unique ID:** `Longsys/Lexar_USD00_2.0_35841E2E_202507`
 **Test Date:** 2026-02-17 (initial characterization)
 

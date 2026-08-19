@@ -1,6 +1,6 @@
 # Card: Western Digital WD Purple QD101 64GB SDXC
 
-**Label:** Western Digital WD Purple QD101 microSD XC I U1 (10) 64GB
+**Label:** [`wd-purple-qd101-64gb`](CARD-LABELS.md#wd-purple-qd101-64gb) — printed text is mastered there, not here
 **Unique ID:** `SanDisk_WX64G_8.0_EEBAD6C0_202403`
 **Test Date:** 2026-02-17 (initial characterization)
 

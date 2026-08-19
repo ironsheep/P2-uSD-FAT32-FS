@@ -1,6 +1,6 @@
 # Card: Lexar Blue MicroSD XC A2 128GB
 
-**Label:** Lexar PLAY A2 128GB microSD XC (Blue card)
+**Label:** [`lexar-play-a2-128gb`](CARD-LABELS.md#lexar-play-a2-128gb) — printed text is mastered there, not here
 **Unique ID:** `Unknown_MSSD0_6.1_34490F1E_202504`
 **Test Date:** 2026-02-14 (characterization)
 

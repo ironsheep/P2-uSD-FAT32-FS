@@ -1,6 +1,6 @@
 # Card: Gigastone "Camera Plus" 64GB SDXC
 
-**Label:** Gigastone "Camera Plus" microSD XC I, A1 V30 U3 64GB
+**Label:** [`gigastone-camera-plus-64gb`](CARD-LABELS.md#gigastone-camera-plus-64gb) — printed text is mastered there, not here
 **Unique ID:** `GigastoneOEM_ASTC_2.0_00000F14_202306`
 **Test Date:** 2026-02-25 (characterization + benchmark)
 

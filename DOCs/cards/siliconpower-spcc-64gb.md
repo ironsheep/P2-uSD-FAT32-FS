@@ -1,6 +1,6 @@
 # Card: Silicon Power Elite MicroSD XC 64GB
 
-**Label:** SP Elite microSD XC UHS-I U1 (10)
+**Label:** [`sp-elite-64gb`](CARD-LABELS.md#sp-elite-64gb) — printed text is mastered there, not here
 **Unique ID:** `SharedOEM_SPCC_0.7_00940105_202507`
 **Test Date:** 2026-03-06 (benchmark + CMD12/CMD23 analysis)
 

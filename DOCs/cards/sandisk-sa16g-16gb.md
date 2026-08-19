@@ -1,6 +1,6 @@
 # Card: SanDisk Industrial 16GB SDHC
 
-**Label:** SanDisk Industrial microSD HC I, U1 C10, 16GB
+**Label:** [`sandisk-industrial-16gb`](CARD-LABELS.md#sandisk-industrial-16gb) — printed text is mastered there, not here
 **Unique ID:** `SanDisk_SA16G_8.0_93E9C0A1_202511`
 **Test Date:** 2026-02-25 (characterization + speed characterization + benchmark)
 

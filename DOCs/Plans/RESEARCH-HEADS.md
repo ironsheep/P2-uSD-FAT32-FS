@@ -78,7 +78,7 @@ speed than the write — states which state it was taken in, or it does not coun
 **Buying-guide caveat, to carry into whatever the catalog publishes:** the
 property stratifies by something a buyer cannot see before purchase. MID/PNM/PRV
 live in the CID register. Brand does not predict controller — Gigastone-branded
-cards in our own drawer carry three different MIDs — and SKUs get silently
+cards in our own drawer carry four different MIDs — and SKUs get silently
 re-sourced between production runs. So the honest form is "these specific cards,
 purchased then, measured this", never "buy brand X".
 

@@ -1,6 +1,6 @@
 # Card: Gigastone "High Endurance" 16GB SDHC MLC
 
-**Label:** Gigastone 10x High Endurance 16GB MLC microSD HC I U3 V30 4K
+**Label:** [`gigastone-high-endurance-16gb`](CARD-LABELS.md#gigastone-high-endurance-16gb) — printed text is mastered there, not here
 **Unique ID:** `BudgetOEM_SD16G_2.0_000003FB_202502`
 **Test Date:** 2026-02-25 (characterization + benchmark)
 

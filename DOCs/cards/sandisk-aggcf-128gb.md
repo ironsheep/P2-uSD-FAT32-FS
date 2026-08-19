@@ -1,6 +1,6 @@
 # Card: SanDisk Extreme PRO 128GB SDXC
 
-**Label:** SanDisk Extreme PRO 128GB microSD XC I V30 U3 A1
+**Label:** [`sandisk-extreme-pro-128gb`](CARD-LABELS.md#sandisk-extreme-pro-128gb) — printed text is mastered there, not here
 **Unique ID:** `SanDisk_AGGCF_8.0_E05C352B_201707`
 **Test Date:** 2026-02-25
 

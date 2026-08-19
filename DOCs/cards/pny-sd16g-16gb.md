@@ -1,6 +1,6 @@
 # Card: PNY 16GB SDHC
 
-**Label:** PNY 16GB microSD HC I
+**Label:** [`pny-microsd-hc-16gb`](CARD-LABELS.md#pny-microsd-hc-16gb) — printed text is mastered there, not here
 **Unique ID:** `Phison_SD16G_3.0_01CD5CF5_201808`
 **Test Date:** 2026-02-17 (re-characterization + re-benchmark)
 

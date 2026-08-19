@@ -1,6 +1,6 @@
 # Card: "Chinese Made" #1 8GB SDHC (claims SanDisk)
 
-**Label:** microSD HC 8GB (4) - Chinese text, no brand - Card #1
+**Label:** [`unbranded-chinese-8gb-card1`](CARD-LABELS.md#unbranded-chinese-8gb-card1) — printed text is mastered there, not here
 **Unique ID:** `SanDisk_SU08G_8.0_0AA81F11_201010`
 **Test Date:** 2026-02-02 (characterization)
 

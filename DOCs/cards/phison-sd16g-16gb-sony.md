@@ -1,6 +1,6 @@
 # Card: Sony SR-16UY 16GB SDHC (Taiwan)
 
-**Label:** Sony 16GB microSD HC (10) i U3 SR-16D, Made in Taiwan
+**Label:** [`sony-sr-16d-16gb`](CARD-LABELS.md#sony-sr-16d-16gb) — printed text is mastered there, not here
 **Unique ID:** `Phison_SD16G_3.0_DA00094B_201610`
 **Test Date:** 2026-03-17 (characterization + benchmark)
 
