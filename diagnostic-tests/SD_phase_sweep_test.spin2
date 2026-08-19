@@ -47,7 +47,9 @@ CON
 ' speed bound (as with the other high arms) and the hp=4 floor-cell rule, which
 ' otherwise collapses every positive offset to the same align value and yields a
 ' flat, meaningless sweep. This arm lifts both. It is the only arm that does.
-#ifdef SPI_43M
+#ifdef SPI_43M_HS
+    SPI_TARGET_HZ   = 0                         ' negotiated, not set -- see the HS block below
+#elseifdef SPI_43M
     SPI_TARGET_HZ   = 43_750_000
 #elseifdef SPI_35M
     SPI_TARGET_HZ   = 35_000_000
@@ -140,6 +142,33 @@ PUB go() | mode, offset, status
     ' and measures nothing. Production keeps the rule -- see the CON note above.
     sd.debugSetAlignFloorRuleEnabled(false)
     debug("  FLOOR-CELL ARM: hp=4 rule LIFTED for measurement (production keeps it)")
+#endif
+
+#ifdef SPI_43M_HS
+    ' THE READ BAND AT hp=4, INSIDE VERIFIED HIGH-SPEED MODE (added 2026-08-19).
+    '
+    ' Why a separate arm from SPI_43M. That arm reaches 43.75 MHz by SETTING the
+    ' clock, which leaves the card in DEFAULT speed mode driven above spec. hp=4
+    ' occurs in production only inside high-speed mode, where the card's own
+    ' output timing is different by definition -- so the band SPI_43M measures
+    ' does not transfer to the case that actually ships. Round 9c measured that
+    ' band and it was mistakenly read as deciding the production exemption; it
+    ' does not.
+    '
+    ' No speed change is needed during this sweep, which is what makes it
+    ' possible at all: Path B compares the streamer read against
+    ' debugReadSectorSlow() at the SAME clock, and the slow path's smart-pin
+    ' sampling is hardware-synchronised to SCK and unaffected by align_delay.
+    ' Round 8b measured that byte-by-byte path clean at hp=4, so the reference is
+    ' trustworthy here.
+    sd.debugSetAlignFloorRuleEnabled(false)
+    if not sd.attemptHighSpeed()
+        debug("  HS ARM: card DECLINED high speed (ERROR(): ", sdec_(sd.error()), ")")
+        debug("  This arm is MEANINGLESS without hp=4. Not a failure -- use a card that negotiates.")
+        debug("END_SESSION")
+        return
+    debug("  HS ARM: high speed ACTIVE at ", udec_(sd.getSPIFrequency() / 1000), " kHz, hp=", udec_(sd.debugGetCurrentHp()))
+    debug("  HS ARM: hp=4 floor rule LIFTED for measurement (production keeps it)")
 #endif
 
     status := sd.initCardOnly(SD_CS, SD_MOSI, SD_MISO, SD_SCK)

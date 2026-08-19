@@ -1251,6 +1251,16 @@ user-affecting.**
 
 # Hand-back — consolidated, all rounds
 
+> ✅ **ROUND 11 COMPLETE (2026-08-18)** — **11c mapped the hp=4 write cell at last**:
+> not a band but periodic teeth at ≡ 2 (mod 4), and **the shipped default pad 4
+> PASSES**, so the pad is not the cause and high speed is correctness-clear.
+> 11b: the write regression is **SLOW, not corrupt** (12/12 verifies match), and
+> round 10's PNY regression is **corrected — it was card variance**. 11a: the
+> rebuilt probe is **still 8/8 clean** while the suite pair wedges the same card,
+> so the gate failed and the ladder was not run. ⚠ The corruption is
+> **bit-smearing (`exp | exp>>1`), not a one-bit shift**.
+> See the Round 11 section at the end.
+>
 > ✅ **ROUND 10 COMPLETE (2026-08-18)** — 10b: the 75% clock increase gives
 > **+47% reads on all three cards but REGRESSES writes on two of three** (worst
 > −64%), and 43.75 MHz is hp=4, the one cell whose *write* pad was never
@@ -1453,6 +1463,12 @@ on three of the five. Options and their trade-offs are in Round 7b.
 | `SD_edge_wedge_probe_260818-162159.log` | R10c step 1 CONTROL, adapter — 8/8 clean |
 | `SD_edge_wedge_probe_260818-162425.log` | **R10c step 2, EDGE — 8/8 CLEAN; probe does not reproduce** |
 | `SD_RT_mount_tests_260818-162715.log` + `SD_RT_raw_sector_tests_260818-162718.log` | **R10c control — 9a pair still wedges same card; unmount `0` this time** |
+| `SD_edge_wedge_probe_260818-174340.log` | **R11a rebuilt probe, EDGE — 8/8 CLEAN; gate FAILED** |
+| `SD_RT_mount_tests_260818-174421.log` + `SD_RT_raw_sector_tests_260818-174423.log` | R11a control — suite pair wedges same card 40 s later |
+| `SD_performance_benchmark_260818-175602/-175644.log` | R11b Samsung — regression reproduces (−52%), all verifies match |
+| `SD_performance_benchmark_260818-180316/-180336.log` | R11b Lexar — gains everywhere, all verifies match |
+| `SD_performance_benchmark_260818-181751/-181822.log` | **R11b PNY — regression NOT reproducible; std arm varies 3x** |
+| `SD_write_probe_260818-182055.log` (+3 identical repeats) | **R11c hp=4 write teeth ≡ 2 (mod 4); default pad 4 PASSES** |
 
 ---
 
@@ -1846,10 +1862,12 @@ negotiated high speed and ran at **43_750 kHz**, banner-confirmed.
 | **Samsung EVO 128GB** `$4AC8_5F42` | gain on large, **−15%** single-sector | **−55%** 1-sector, **−28%** 8-sector |
 | **PNY 16GB** `$01CD_5CF5` | gain everywhere, to **+47%** | **−64%**, **−60%**, −22%, −13% |
 
-**Reads gain on all three cards. Writes regress on two of three.** That is more
-specific than "workload-dependent", and it is the shape of the result rather than
-noise: the regressions reproduce across several independent traffic types within
-each affected card's single run.
+**Reads gain on all three cards. Writes regress on two of three.** ⚠ **CORRECTED
+in round 11b: only ONE of the two is reproducible.** The Samsung's regression
+repeats (−55% then −52%); the **PNY's does not** — its 25 MHz write numbers moved
+by up to 3x between runs and the regression inverted into a small gain, so it is
+card variance, not a high-speed effect. The correct statement is **one of three
+confirmed, one refuted as noise, one clean**. See round 11b.
 
 ### Per-card detail
 
@@ -1996,3 +2014,172 @@ PSN/PNM the same way.
 10a is closed (dead card). 10b is complete, 6 runs, 3 cards. 10c is stopped at
 step 2 by decision, with steps 3-4 pending a probe that reproduces. No card lost;
 one card found dead on arrival.
+
+---
+
+# Round 11 — reproduce the wedge, and settle the write regression (run 2026-08-18)
+
+## 11a — ⛔ GATE NOT PASSED: the rebuilt probe still does not reproduce the wedge
+
+| | Rebuilt probe | Known suite pair, 40 s later |
+|---|---|---|
+| Result | **8/8 CLEAN** | **WEDGED** |
+| `unmount()` | `status=0`, 2–9 ms every cycle | **`-7`** |
+| `mount()` #2 | never failed | **`-8`** |
+| `raw_sector_tests` | — | **0/1**, `ERROR: Card init failed!` |
+| `mount_tests` | — | 19 pass / 24 fail |
+
+Transcript-confirmed: `SOCKET: EDGE module (base 60)`,
+`CARD: MID=$05 PNM='asdfg' PSN=$0000_01F4`. **The identity gap flagged in round 10
+is closed** — the probe prints its own identity now, so this null result stands
+without a separate identify run.
+
+**Per the brief's own rule, the ladder was NOT run.** `-D SPEED_400K` and
+`-D READ_ONLY` are untouched. An intervention tested against a non-reproducing
+reproducer yields clean arms that mean nothing.
+
+**What the rebuild bought, and what it did not.** The heavier cycle is genuinely
+heavier — `freeSpace()` performs a real full FAT scan (~1_120 ms per cycle),
+plus `volumeLabel()`, a raw sector read, a double-mount, and
+create/write/read/delete. It still does not wedge. **"Not enough work per cycle"
+is therefore largely eliminated as the explanation.**
+
+**The one structural difference the rebuild did not address:** the known
+reproducer **crosses a binary boundary** — `mount_tests` and `raw_sector_tests`
+are two separate downloads with a P2 reset between them and no power cycle. The
+probe is a single binary looping internally. That is now the most conspicuous
+surviving candidate. Flagged as the untested variable, **not** asserted as the
+mechanism.
+
+This run's `unmount()` returned `-7`, consistent with the intermittency correction
+made in round 10 — the tally is now `-7`, `-7`, `0`, `-7` across four runs.
+
+Logs: `SD_edge_wedge_probe_260818-174340.log`,
+`SD_RT_mount_tests_260818-174421.log`, `SD_RT_raw_sector_tests_260818-174423.log`.
+
+## 11b — the high-speed write regression is SLOW, not CORRUPT
+
+**Twelve verify checks across three cards and both arms: every one `bytes match`.**
+No `CONFIRMED WRITE CORRUPTION`, no attribution re-read triggered anywhere, so all
+timings in every run are comparable.
+
+The regression is real where it reproduces, and the data lands intact:
+
+| Card | 10b | 11b | Verdict |
+|---|---|---|---|
+| **Samsung** `$4AC8_5F42` | −55% 1-sector write | **−52%** (404 -> 192 KB/s) | **REPRODUCIBLE** |
+| **Lexar** `$3354_9024` | gains everywhere | gains everywhere (64-sec read 2_296 -> 3_372, +47%) | **REPRODUCIBLE** |
+| **PNY** `$01CD_5CF5` | −64%, −60% | **+6%, +5%** | ⚠ **NOT ESTABLISHED** |
+
+### ⚠ CORRECTION to round 10b: the PNY regression was card variance
+
+Same card, same bench, hours apart:
+
+| PNY raw write | 10b std | 11b std | 10b HS | 11b HS |
+|---|---|---|---|---|
+| 1 sector | 142 | **48** | 51 | **51** |
+| 8 sectors | 927 | **351** | 368 | **369** |
+| 32 sectors | 938 | **663** | 730 | **732** |
+| 64 sectors | 1_325 | **1_025** | 1_154 | **1_157** |
+
+**The high-speed numbers reproduce to within 0.3%. The 25 MHz numbers moved by up
+to 3x.** In 11b the standard arm is *slower* than high speed at every write size,
+so the −64% / −60% regression inverts into a small gain. The card's within-run
+dispersion says the same: `Min=13_430 Avg=20_079 Max=79_407` on a 512-byte file
+write, `Min=163_135 Avg=211_371 Max=585_262` on 32KB — 6x and 3.6x spreads inside
+a single measurement loop. That is controller housekeeping, not a bus effect.
+
+**Round 10's "writes regress on two of three cards" overstates the evidence.** The
+correct statement is **one of three confirmed, one refuted as noise, one clean**.
+Corrected in the round 10 section in place.
+
+Logs: Samsung `-175602`/`-175644`, Lexar `-180316`/`-180336`, PNY `-181751`/`-181822`.
+
+## 11c — the hp=4 write pad: the tooth is MAPPED, and the shipped default is SAFE
+
+Samsung `$4AC8_5F42`, `high speed ACTIVE: 43_750 kHz, hp=4`, readback at 12.5 MHz.
+**Run four times; byte-identical every time**, including the exact expected/got
+values at each failing pad.
+
+| pad | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 |
+|---|---|---|---|---|---|---|---|---|---|
+| result | **FAIL** | PASS | **PASS** | PASS | **FAIL** | PASS | PASS | PASS | **FAIL** |
+
+### The brief asked for a "passing band and its centre" — that model does not fit
+
+**There is no contiguous band.** Failures land at pads **2, 6, 10**: a strict
+**period of 4**, i.e. failing pads ≡ **2 (mod 4)** at hp=4. Every failure is
+`diffs=496` of 512, `first at offset 0`.
+
+This is the round-7b sawtooth signature, **measured at hp=4 for the first time** —
+the cell that has been the campaign's one uncharacterised hole since round 8 is
+now closed. The period tracks hp again, but the phase offset is **2**, where hp=7
+gave losing pads 8/15/22/29 (≡ **1** mod 7). The model now has a fourth point to
+fit; why the offset differs is a container-side question, not a bench claim.
+
+### Two answers fall out directly
+
+1. **The shipped default pad 4 PASSES** (4 mod 4 = 0), two pads clear of the
+   nearest tooth on either side. A user running verified high speed at the default
+   is **not** exposed to this corruption — which is exactly what 11b's twelve
+   clean verifies independently showed. Two instruments, same conclusion.
+2. **The pad is therefore NOT the cause of the write slowdown.** By the brief's own
+   decision rule, the Samsung's reproducible −52% is **card-side behaviour in
+   high-speed mode**. Combined with 11b, the write path at 43.75 MHz is
+   **slow but sound**.
+
+### ⚠ The corruption is bit-SMEARING, not a bit-shift
+
+Derived arithmetically from the repeated data, not proposed as a mechanism. At
+every failing pad the corrupted byte is exactly `exp | (exp >> 1)`:
+
+| pad | expected | got | `exp \| (exp>>1)` |
+|---|---|---|---|
+| 2 | `$C2` | `$E3` | `$C2 \| $61` = `$E3` ✓ |
+| 6 | `$46` | `$67` | `$46 \| $23` = `$67` ✓ |
+| 10 | `$CA` | `$EF` | `$CA \| $65` = `$EF` ✓ |
+
+Three for three, stable across four runs. **Every `1` bit also appears in the
+next-lower bit position** — the signature of a bit held or sampled across an extra
+half-clock, not of the stream sliding by one position. A true one-bit shift would
+give `exp >> 1` with a carry-in, and it does not. **The campaign has described
+this failure family as a "one-bit shift" since the round-6 aliasing work; on this
+cell the data says otherwise.** Handed over as a measurement.
+
+Log: `SD_write_probe_260818-182055.log` plus three byte-identical repeats.
+
+# Round 11 — hand-back summary
+
+| Study | Question | Answer |
+|---|---|---|
+| 11a | Does the rebuilt probe reproduce the wedge? | **No — gate failed.** 8/8 clean while the suite pair wedges the same card. Ladder not run |
+| 11b | Is the HS write regression slow or corrupt? | **SLOW.** 12/12 verifies match. Plus the PNY regression is **not reproducible** — round 10 overstated it |
+| 11c | What is the hp=4 write pad band? | **Not a band — periodic teeth at ≡ 2 (mod 4).** Shipped default pad 4 is SAFE; the pad is not the cause |
+
+## Container-side items from round 11
+
+1. **The hp=4 cell is now fully characterised and the shipped default is safe
+   there.** Read band `[2..8]` centre +5 (round 9c), write teeth at ≡ 2 (mod 4)
+   with default pad 4 passing (11c). **The round-8 hp=4 exemption question and the
+   round-10 write-regression blocker are both answerable now**, and neither blocks
+   the high-speed decision on correctness grounds.
+2. **The high-speed speed decision is now correctness-clear**: reads gain up to
+   +47% on every card tested, writes are proven byte-correct at the default pad,
+   and the only reproducible write slowdown (Samsung, −52%) is card-side. What
+   remains is a product decision about how users reach the mode, not a safety one.
+3. **`exp | (exp >> 1)` — revisit the "one-bit shift" language** in the campaign
+   docs and in `DOCs/SD-CARD-DRIVER-THEORY.md` if it appears there. The corruption
+   on this cell smears bits; it does not shift the stream.
+4. **The wedge probe needs to cross a binary boundary** (11a). Heavier workload is
+   now ruled out as the missing ingredient; two downloads with a reset between them
+   is the conspicuous untested difference. Until the probe reproduces, the ladder
+   cannot discriminate anything.
+5. **Round 10b's "two of three cards" claim is corrected** to one of three; the PNY
+   is a variance case, and any future benchmark comparison on that card needs
+   repeat runs before a delta is believed.
+
+## Bench scope
+
+11a stopped at the gate by the brief's own rule. 11b complete (6 runs, 3 cards,
+12 verifies). 11c complete and repeated 4x. The Samsung's raw scratch sectors at
+LBA 200/100+ were overwritten by 11c and the card was reformatted afterward.

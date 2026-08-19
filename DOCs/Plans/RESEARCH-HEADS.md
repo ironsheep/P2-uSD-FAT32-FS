@@ -23,10 +23,10 @@ two counterfeits are 11a's subject.
 
 | Head | Next action | Where | Blocked? |
 |---|---|---|---|
-| **H1 · Edge wedge** | ✅ built — probe rebuilt (heavy cycle + identity print). **Bench: round 11a**, and it is a GATE: if it still does not reproduce, stop, do not run the ladder | bench | no |
-| **H2 · High-speed performance** | ✅ built — write verification in the benchmark, and `-D HS_PAD_SWEEP` for the hp=4 pad. **Bench: rounds 11b + 11c** | bench | no |
-| **H3 · Catalog integrity** | Decisions settled. Build the instruments (version stamp, silicon key, table format); the sweep populates the tables | container, then bench | no |
-| **H4 · Release** | Doc pass ✅ mostly done (see head). Remaining: PERFORMANCE §8 final numbers, plan §11 append — both want round 11 data | container | version number: **yes — H1** |
+| **H1 · Edge wedge** | **12a** cold-power-on run splits two hypotheses (free, no new code), then **12b** bad-pin prefix | bench | no |
+| **H2 · High-speed performance** | **12c** hp=4 pad on two more cards (the map is n=1), **12d** read band inside HS mode. Then the read/write asymmetry policy | bench | no |
+| **H3 · Catalog integrity** | Build instruments to emit the new format. **Design change:** run-to-run variance must be measured before instance variance | container | no |
+| **H4 · Release** | Doc pass done. §8 numbers + plan §11 append want round 12 | container | version: **yes — H1** |
 
 **Decisions SETTLED by Stephen, 2026-08-18:**
 
@@ -89,7 +89,9 @@ before any intervention result can be believed.
 - [x] Not socket-agnostic — external adapter is 8/8 clean under the same probe (10c step 1)
 - [x] The twins are indistinguishable: identical counts, codes, failure point (9a)
 - [x] `SD_edge_wedge_probe`'s cycle is **too gentle** — 8/8 clean on Edge while the 9a suite pair wedged the same card minutes later (10c)
-- [x] **Correction:** the `-7` unmount is INTERMITTENT (`-7`, `-7`, `0`), not a stable new behaviour. Round 9's "free discriminator" claim was wrong; todo #3265's instrumentation is still needed
+- [x] **Correction:** the `-7` unmount is INTERMITTENT — tally now `-7`, `-7`, `0`, `-7` across four runs. Round 9's "free discriminator" claim was wrong; todo #3265's instrumentation is still needed, and must run enough repetitions to see both outcomes
+- [x] **"Not enough work per cycle" is largely eliminated** (11a). The rebuilt probe does a real ~1,120 ms FAT scan, double-mount and file create/write/read/delete per cycle and still returns 8/8 clean while the suite pair wedges the same card 40 s later
+- [x] The probe now prints its own card identity, so a null result stands without a separate identify run
 
 ### Known reproducer
 
@@ -98,13 +100,22 @@ socket. Wedge is invariant: `mount()` #2 returns `-8`, raw init then fails.
 
 ### Next
 
-1. **Rebuild the probe.** Three gaps, all mine: workload far heavier than
-   mount/512B-write/unmount; the **cross-binary transition** (two downloads, no
-   power cycle) which the probe never exercises at all; and printing card
-   PSN/PNM so a null result is interpretable without a separate identify run.
-2. Re-establish reliability — is the wedge deterministic once the probe bites?
-3. Then and only then the ladder: 400 kHz (decisive — nothing about edge rates or
-   setup/hold survives there), then read-only (splits write-burst from protocol).
+**Two hypotheses, and they make opposite predictions.** Round 11's hand-back
+proposes the **cross-binary boundary** — the reproducer is two downloads with a
+reset between them, the probe is one binary looping. But the wedge fires at
+**test #13 inside `mount_tests`**, before any boundary is crossed, which argues
+the trigger is in that suite's own prefix — most conspicuously its two
+**deliberately-wrong-pin `mount()` calls**, which the probe has never made.
+
+Nobody has run `mount_tests` alone from a cold power-on, so the two are still
+unseparated.
+
+1. **12a — cold power-on, `mount_tests` alone, three times.** Free, no new code,
+   and it decides which hypothesis to pursue. Wedges cold → trigger is inside the
+   suite → 12b. Clean cold → a preceding binary is required → cross-binary.
+2. **12b — `-D BAD_PIN_PREFIX`** (built), only if 12a wedges cold.
+3. Only once the probe reproduces: the ladder — 400 kHz (decisive), then
+   read-only.
 4. Bench-supply swap if the write burst is implicated.
 
 ### Parked
@@ -127,31 +138,30 @@ have to do to turn that into real performance — and where does it hurt?
 - [x] **Reads gain on all three cards tested, up to +47%** (10b)
 - [x] **Writes regress on two of three, worst −64%** (10b) — reproduces across several traffic types within each affected card
 - [x] Blanket auto-negotiate-at-mount is therefore **not viable** — it would hand most cards a large write regression
-- [x] The write slowdown is **uniform, not occasional**: PNY min/avg/max went 2,601/3,599/12,303 µs → 9,631/9,966/11,213 µs. The *best* case got 3.7× worse while the worst case improved
+- [x] **The writes are byte-CORRECT at high speed** (11b) — 24 verify checks across three cards and both arms, all clean. Slow, not corrupt
+- [x] **The hp=4 write pad is mapped** (11c): teeth at `≡ 2 (mod 4)`, i.e. pads 2/6/10. **The shipped default of 4 passes**, two pads clear either side. The pad is not the cause of the slowdown
+- [x] **CORRECTION to 10b:** writes regress on **one of three** cards, not two. The PNY's −64% did not reproduce — its standard-arm numbers moved up to 3× between rounds while its high-speed numbers repeated to 0.3%, and it shows 6× dispersion inside a single measurement loop. Card variance, not a bus effect
+- [x] The hp=4 write corruption is **bit-smearing** (`exp | exp>>1`), the opposite of the read path's true one-bit shift with carry-in. Different path, different mechanism — do not conflate them
 
 ### Open questions
 
-- **Slower, or corrupt?** The benchmark does **not verify what it writes** — no readback, no compare. Zero errors means no *rejections*, not no *corruption*. Round 7b's tx tooth produced exactly this kind of silent whole-sector corruption, so it cannot be ruled out by this data.
-- **The hp=4 hole.** 43.75 MHz is hp=4. The `tx_align_delay` tooth was mapped at hp 5, 7 and 14 only; hp=4 has never been characterised on the **write** side. The read side was measured in 9c — but in *default* mode, not inside high-speed mode, which is a different card state.
-- **What policy replaces "always negotiate"?** Candidates: asymmetric (high speed for reads, standard for writes), per-card gating, or negotiate-then-measure.
+- **The hp=4 pad map is n=1.** It cleared the shipped default, and the tooth is expressed by only three of five cards surveyed while its residue moves with hp. A single-card map carrying a safety conclusion is the same evidence base that made the v1.7.0 characterization wrong. **12c** repeats it on the other two high-speed-capable cards.
+- **The hp=4 READ band has still never been measured inside high-speed mode.** Round 9c set the clock instead of negotiating, which leaves the card in default mode above spec. The exemption is known *safe* empirically — 11b's high-speed reads were clean and gained up to 47% — but whether it is *optimal* is unmeasured. **12d**.
+- **What policy replaces "always negotiate"?** Now a product question rather than a safety one. Candidates: asymmetric (high speed for reads, standard for writes), per-card gating, or negotiate-then-measure.
 
-### Reading of the evidence, held loosely
+### That reading held up
 
-The uniform slowdown with a *tightened* distribution and zero rejections is the
-wrong signature for a phase/tooth fault, which produces variance and corruption.
-It looks more like these controllers genuinely behave differently for writes once
-CMD6 high speed is engaged. **But the unverified-write gap means this reading
-cannot be trusted yet** — that is why write verification is this head's next
-action rather than the tx pad sweep.
+The signature argued against a phase fault and for card-side behaviour. Both
+follow-ups agreed: writes verify byte-clean, and the pad at hp=4 is two clear of
+the nearest tooth. The one reproducible regression (Samsung, −52%) is card-side
+behaviour in high-speed mode.
 
 ### Next
 
-1. **Write-verification arm in the benchmark.** Gates the interpretation of
-   everything above. Until it exists, "slower" and "corrupt" are indistinguishable.
-2. `tx_align_delay` sweep at **hp=4, inside verified high-speed mode**.
-3. Read-side: phase sweep at hp=4 **inside high-speed mode** — 9c measured
-   default mode only, so the floor-cell exemption is still undecided.
-4. Then choose the adaptation policy and implement it.
+1. **12c** — hp=4 pad on the Lexar and PNY, to take the map off n=1.
+2. **12d** — hp=4 read band inside high-speed mode (`-D SPI_43M_HS`, built).
+3. Then choose the adaptation policy. Correctness is established; what remains is
+   how a user reaches the mode given reads gain and writes do not.
 
 ---
 
@@ -188,6 +198,23 @@ same-session standard-speed arm is the only safe comparator.
 4. Add a driver version constant and stamp it into benchmark output
 5. Confirm whether PNY's 31.3 is a write metric
 6. Resolve the Samsung EVO serial discrepancy — catalog row says PSN `C0305565`, its record says `4AC85F42`, round 9 measured `$4AC8_5F42`. Two units, or a transcription error? It is a benchmark card, so it matters
+
+### ⚠ Design change forced by round 11b
+
+The planned noise-floor experiment — 5 instances of one Gigastone model — assumed
+**run-to-run** variance was small enough to ignore, so that differences between
+instances could be read as instance variance. Round 11b refutes that assumption:
+the PNY's standard-arm write numbers moved by up to **3x between rounds on the
+same physical card**, with 6x dispersion inside a single measurement loop, while
+its high-speed numbers repeated to 0.3%.
+
+**So run variance must be measured before instance variance.** Repeat one card
+several times first; only then does comparing five instances mean anything.
+Without that, the instance experiment would attribute run noise to units.
+
+Two smaller consequences for the sweep: measurement **order** may matter (the
+first run of a card can differ from later ones), and any card showing wide
+dispersion needs repeat runs before any delta is believed.
 
 ### Bench-side items
 

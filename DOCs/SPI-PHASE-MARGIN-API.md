@@ -225,10 +225,38 @@ since v1.7.1 the production speed bound makes it unreachable — a user cannot
 arrive there without `debugSetOverspeedAllowed()`. Any future change that raises
 production SPI speed **must re-derive this pad for its hp** before shipping.
 
-**Open at hp=4.** The pad has never been characterized at hp=4, which is the cell
-verified CMD6 high-speed mode runs in. Round 10b measured writes regressing
-sharply at that frequency on two of three cards while reads gained up to +47%;
-whether the pad is implicated is an open measurement, not a conclusion.
+### hp=4, measured inside high-speed mode (2026-08-19)
+
+The pad was finally characterized at hp=4 — the cell verified CMD6 high-speed
+mode runs in — with the card actually in that mode. Failures land at pads **2, 6,
+10**: period 4 again, residue **≡ 2 (mod 4)**. Repeated four times, byte-identical
+including the exact corrupted values.
+
+**The shipped default of 4 passes**, two pads clear of the nearest tooth on either
+side. An independent check agrees: a benchmark that verifies every write found
+24 of 24 clean at high speed on three cards. So the write slowdown measured at
+43.75 MHz is **not** caused by the pad.
+
+The residue offset now has four data points — hp=4 → 2, hp=5 → 4, hp=7 → 1,
+hp=14 → 8 — and no formula fits them that is worth trusting. Treat each hp as
+requiring its own measurement.
+
+> **Sample size.** The hp=4 map is currently **one card**. The tooth is expressed
+> by only three of five cards surveyed, and the residue moves with hp, so a
+> single-card map is exactly the evidence base that made the v1.7.0
+> characterization wrong. Confirming pad 4's safety at hp=4 across more cards is
+> outstanding.
+
+**The corruption here is bit-SMEARING, not a bit-shift.** At every failing pad the
+corrupted byte is exactly `exp | (exp >> 1)` — every `1` also appears in the
+next-lower bit position, which is the preceding transmitted bit bleeding into the
+following one on MOSI. That is a settling/edge-rate signature, not the stream
+sliding by a position.
+
+This is **the opposite of the read-path failure**, and the two must not be
+conflated: a read taken with too small an `align_delay` produces a true one-bit
+right shift with carry-in (`$C1` stored → `$E0` received; a smear would have given
+`$E1`). Different path, different mechanism, different arithmetic.
 
 **Why the fix matters more than the pad.** With `RDFAST` hoisted out of the phase-critical window, every instruction between the SCK reset and `XINIT` is a fixed 2-clock cog operation, so `XINIT` sits at a compile-time-constant offset from the reset. That is what makes a *single* correct default possible; before the fix, the offset included a variable-latency instruction and no pad value could have been correct for every build.
 

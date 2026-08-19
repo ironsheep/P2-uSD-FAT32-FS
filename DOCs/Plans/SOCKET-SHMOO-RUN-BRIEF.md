@@ -4,34 +4,19 @@
 **Authored:** 2026-08-17, container side.
 **Plan:** `DOCs/Plans/SOCKET-TIMING-CHARACTERIZATION-PLAN.md` (results so far: §11).
 
-## ⟹ CURRENT STATE + WHAT TO RUN NEXT (updated 2026-08-18, round 11 queued)
+## ⟹ CURRENT STATE + WHAT TO RUN NEXT (updated 2026-08-19, round 12 queued)
 
-Round 10 is complete. Work now runs as **parallel research heads** — status and
-per-head history live in `DOCs/Plans/RESEARCH-HEADS.md`, which is the document to
-read first. This brief carries the bench procedure for whatever each head has
-queued.
+Round 11 is complete. Status per head: `DOCs/Plans/RESEARCH-HEADS.md` — read it
+first. This brief carries the bench procedure.
 
-**Run next: ROUND 11.** Full run sheet at the end of this brief.
+**Run next: ROUND 12.** Full run sheet at the end.
 
-| Track | What | Cards |
+| Track | What | Why |
 |---|---|---|
-| **11a** | Wedge probe, REBUILT to actually reproduce | Lerdisk 1GB, Cloudisk 2GB |
-| **11b** | Write **verification** at high speed — is the 10b regression slow, or corrupt? | Lexar Red, Samsung EVO, PNY |
-| **11c** | `tx_align_delay` band at **hp=4, inside high-speed mode** | same three, high-speed capable only |
-
-**Card selection rule for 11b/11c:** these arms are meaningless on a card that
-cannot negotiate high speed. Round 9d established which can:
-
-| Card | High speed? | In 11b/11c? |
-|---|---|---|
-| Lexar Red 64GB | yes, 43.75 MHz | **yes** — gained on writes in 10b, the counter-example |
-| Samsung EVO Select 128GB | yes, 43.75 MHz | **yes** — regressed −55% |
-| PNY 16GB | yes, 43.75 MHz | **yes** — regressed −64%, the worst case |
-| SanDisk MAX Endurance 32GB | **declines** | no — cannot reach hp=4 |
-| Lerdisk 1GB / Cloudisk 2GB | decline (SD 1.x) | no — and they are 11a's subject |
-
-Do not re-run rounds 1-10; those sections are method reference and
-output-interpretation keys.
+| **12a** | Does `mount_tests` wedge from a COLD power-on? | One run, no new code, and it decides which of two hypotheses the wedge lives in |
+| **12b** | Wedge probe with `-D BAD_PIN_PREFIX` | The one thing the reproducer does that the probe never has |
+| **12c** | hp=4 write pad on **two more cards** | The map that cleared the shipped default is currently n=1 |
+| **12d** | hp=4 read band **inside high-speed mode** | Never measured in the card state where hp=4 actually occurs |
 
 ## What this tool does
 
@@ -939,3 +924,101 @@ traffic type, both arms — rate, `% of bus`, limiter, and every verify line.
 **Standing rules:** a study returning "nothing here" is a result, not a failed
 run; and do not diagnose from hypotheses — send the transcript and say what
 surprised you.
+
+## ROUND 12 — close the sample-size gaps, and split the wedge hypothesis (added 2026-08-19)
+
+### 12a — does `mount_tests` wedge from a cold power-on? (do this first, it is free)
+
+**The gap.** In round 11a the probe ran first and `mount_tests` wedged 40 seconds
+later. In round 9a it also followed other work. **Nobody has run `mount_tests`
+alone, immediately after a power cycle.** So we do not know whether the wedge
+needs a preceding binary at all.
+
+That matters because round 11's hand-back proposes the cross-binary boundary as
+the leading candidate — but the wedge fires at **test #13 inside `mount_tests`**
+(`unmount()` returns `-7`, then `mount()` #2 returns `-8` at #15), which is before
+any boundary is crossed. The two readings make opposite predictions, and one run
+separates them.
+
+```bash
+# POWER-CYCLE THE RIG FIRST. Lerdisk 1GB in EDGE. Nothing else in between.
+cd tools
+./run_test.sh ../src/regression-tests/SD_RT_mount_tests.spin2 -t 120
+```
+
+- **Wedges cold** → the trigger is inside `mount_tests`. Proceed to 12b
+- **Clean cold** → a preceding binary is required, the cross-binary hypothesis is
+  right, and 12b is not the next move. Report and stop
+
+Because the `-7` is intermittent (tally so far `-7`, `-7`, `0`, `-7`), **run this
+three times, power-cycling between each**. A single clean run is not evidence.
+
+### 12b — the bad-pin prefix (only if 12a wedges cold)
+
+**The one thing `mount_tests` does that the probe never has.** Before the mount
+whose unmount then fails, it calls `mount()` twice on deliberately wrong pins —
+`mount(60, 10, 58, 15)` and `mount(60, 59, 20, 16)`, its "Pin offset validation"
+group. Both are rejected with `E_BAD_PIN_CONFIG`, but whether the driver touches
+any pin before rejecting is exactly the question: smart pins configured on the
+wrong pins, or the card partially clocked, is a card-visible event this probe has
+never reproduced.
+
+```bash
+cd tools
+./run_test.sh ../diagnostic-tests/SD_edge_wedge_probe.spin2 -t 300 -D BAD_PIN_PREFIX
+```
+
+Wedges → the trigger is identified and the ladder finally becomes meaningful.
+Clean → bad pins are eliminated, and the remaining prefix difference is the
+pre-mount error-path group.
+
+### 12c — the hp=4 write pad on two more cards
+
+**Why this is not optional.** Round 11c mapped the hp=4 teeth to `≡ 2 (mod 4)` and
+found the shipped pad 4 safe — **on one card**. The tooth is expressed by only
+three of five cards surveyed, and the residue moves with hp. A single-card map is
+exactly the evidence base that made the v1.7.0 characterization wrong, and this
+one is currently carrying a safety conclusion.
+
+```bash
+cd tools
+# Lexar Red 64GB, then PNY 16GB -- the other two cards that negotiate high speed:
+./run_test.sh ../diagnostic-tests/SD_write_probe.spin2 -t 300 -D HS_PAD_SWEEP
+```
+
+**DESTRUCTIVE** (scratch sectors at LBA 200,100+). Bring back each card's failing
+pads. Same residue on all three → the map is a driver property and pad 4 is
+established safe. A different residue on any card, or pad 4 failing anywhere →
+the single fixed pad is not sufficient at hp=4, and that lands directly on the
+high-speed decision.
+
+### 12d — the hp=4 read band inside high-speed mode
+
+Round 9c measured the hp=4 read band by **setting** the clock to 43.75 MHz, which
+leaves the card in default speed mode driven above spec. hp=4 occurs in production
+only inside high-speed mode, where the card's own output timing differs. The band
+that ships has therefore never been measured in the state it ships in.
+
+```bash
+cd tools
+./run_test.sh ../diagnostic-tests/SD_phase_sweep_test.spin2 -t 300 -D SYSCLK_350 -D SPI_43M_HS
+```
+
+New arm: it negotiates high speed rather than setting a clock, and sweeps without
+changing speed at all (Path B compares the streamer against the byte-by-byte path
+at the same clock, and that path was measured clean at hp=4). The banner must read
+`HS ARM: high speed ACTIVE` — if it does not, the wrong binary is running.
+
+Run on all three high-speed-capable cards. The question: does the band centre at
++5 as it does everywhere else, and **is the exemption's `align = hp` inside it?**
+The exemption is already known safe empirically — round 11b's high-speed reads
+were clean and gained up to 47% — so this decides whether it is also *optimal*.
+
+### Bring back for round 12
+
+12a: wedged or clean, on each of three cold runs. 12b: same, plus the bad-pin
+mount return codes. 12c: the failing pads per card. 12d: the band per card and
+whether `align = hp` falls inside it.
+
+**Standing rules:** a study returning "nothing here" is a result; and do not
+diagnose from hypotheses — send the transcript and say what surprised you.

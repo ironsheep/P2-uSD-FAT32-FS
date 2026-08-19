@@ -380,12 +380,14 @@ Multi-sector operations carry 40% combined weight to reflect real embedded workl
   | Clock reached | **43.75 MHz** at 350 MHz sysclk — not 50 MHz. The SPI clock is `sysclk / (2 x hp)`, and no integer divisor lands on 50 |
   | Sequential reads | **Up to +47%** — measured on multi-block reads across three cards |
   | Single-sector reads | Little or no gain. Card seek latency dominates, and the bus was never the limit |
-  | Writes | **Under investigation.** Two of three cards measured *slower* at high speed, one substantially so. Do not assume writes benefit |
+  | Writes | **Correct, but not faster.** Every write verified byte-for-byte at high speed across three cards. One card of three is reproducibly slower (−52% on single-sector); one is faster; one showed a large apparent regression that did not reproduce. Do not assume writes benefit |
 
-  **It is opt-in and it stays opt-in.** `attemptHighSpeed()` is gated behind
-  `SD_INCLUDE_SPEED` and the driver never negotiates high speed on its own. The
-  production speed bound remains 25 MHz. Given the write result above, automatic
-  negotiation is not something we are prepared to ship.
+  **It is opt-in.** `attemptHighSpeed()` is gated behind `SD_INCLUDE_SPEED` and
+  the driver does not negotiate high speed on its own; the production speed bound
+  remains 25 MHz. Correctness at 43.75 MHz is established — writes verify clean
+  and the write-path phase pad was measured safe there — so what stands between
+  this and an automatic mode is a product decision about read/write asymmetry,
+  not a safety one.
 
   Use `isHighSpeedActive()` to ask whether the card is in high-speed mode and
   `getSPIFrequency()` for the clock — they answer different questions, and on

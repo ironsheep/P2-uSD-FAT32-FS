@@ -169,6 +169,10 @@ PRI showArm()
     debug("  ARM: writes performed before unmount (scratch file)")
 #endif
 
+#ifdef BAD_PIN_PREFIX
+    debug("  ARM: BAD_PIN_PREFIX -- two rejected mount() calls on wrong pins before each cycle")
+#endif
+
     if SPEED_TARGET_HZ > 0
         debug("  ARM: SPI clamped to ", udec_(SPEED_TARGET_HZ / 1000), " kHz")
     else
@@ -227,6 +231,19 @@ PRI runCycle(cycle) : verdict | status, elapsed_ms, start_ms
 ' @returns verdict - 0 if the cycle completed cleanly, negative if the card wedged
 
     verdict := 0
+
+#ifdef BAD_PIN_PREFIX
+    ' The one thing SD_RT_mount_tests does immediately before the mount whose
+    ' unmount then fails, and that this probe never did: two mount() calls on
+    ' DELIBERATELY WRONG pins (its "Pin offset validation" group, tests #8 and
+    ' #9). Both are expected to be rejected with E_BAD_PIN_CONFIG. Whether the
+    ' driver touches any pin before rejecting is exactly the question -- if it
+    ' configures smart pins on the wrong pins, or clocks the card partially,
+    ' before validating, that is a card-visible event this probe has never
+    ' reproduced.
+    debug("    bad-pin mount #1 (MOSI=10 SCK=15): ", sdec_(sd.mount(SD_CS, 10, SD_MISO, 15)))
+    debug("    bad-pin mount #2 (MISO=20 SCK=16): ", sdec_(sd.mount(SD_CS, SD_MOSI, 20, 16)))
+#endif
 
     status := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)
     if status < 0
