@@ -3245,3 +3245,20 @@ container wants before repair/reformat.
 
 **State at pause:** steps 0 ✓, 1 ✓ (534/534), 2 deferred, 4 run with the above,
 5-6 not started. Tree clean. Bench resumes on container hand-back.
+
+---
+
+# Round 16 (bench session 4, 2026-08-19) — attribution steps 4a-4d
+
+Resume gates green: source `9cff9ac` verified, tree clean at `94e167c`,
+check_doc_version exit 0.
+
+## 4a — the object is named: RTDIRTY.BIN, from SD_RT_seek_tests
+
+Read-only audit on the preserved Lerdisk (`logs/SD_FAT32_audit_260819-205844.log`):
+"chain unterminated at cluster 19 -- next ref 0 is a free/reserved entry,
+in: **RTDIRTY.BIN**". Same two repairs as the closing audit, unchanged by the
+wait — the evidence held. `RTDIRTY.BIN` is `testDirty` in
+`SD_RT_seek_tests.spin2:42` — that suite scored **38 pass / 0 fail** on this
+card in the failing sweep, so whatever dropped the FAT write was invisible to
+the suite's own checks. Not `(root)`, so not the worse story.
