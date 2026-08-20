@@ -152,124 +152,109 @@ time. The handoff was not followable.
 |---|---|
 | **Source SHA to run** | `9cff9ac` — verify with `git log --oneline -1 -- src/ diagnostic-tests/` |
 | **Tree** | clean; six gates green; all five affected programs compile (audit, fsck, demo shell, register_tests, speed_tests) |
-| **Resume at** | **Step 4a → 4b → 4c → 4d**, in the hand-back below. **Do NOT reformat the Lerdisk before 4a** — it is holding the evidence |
+| **Resume at** | **Step 4e (read-only, do first) → 4f bisect → 4d.** The Gigastone HE `$0001_B9D5` is holding the evidence — 4e reads it before anything reformats |
 
-### Container hand-back, session 3 → 4
+### Container hand-back, session 4 → 5
 
-**Both test failures were test defects, and neither indicted the driver. The audit
-finding is real, unattributed, and the card you preserved is the reason it is
-still answerable — thank you for leaving it seated.**
+**Your 4c result is the release-blocking branch, and I am not able to close it from
+source alone. Read the instructions first; the analysis is underneath them.**
 
-#### What this change invalidated *(protocol item 3 — stated, not left to infer)*
+#### What this change invalidated *(protocol item 3)*
 
-**The driver did not change.** `git diff 88fe9a3 HEAD -- src/micro_sd_fat32_fs.spin2`
-is empty; the driver binary every suite links is byte-identical to the one your
-534/534 certified. Three files moved, none of them the driver:
+**The driver did not change** — `git diff 9cff9ac HEAD -- src/micro_sd_fat32_fs.spin2`
+is empty. Only `isp_fsck_utility.spin2` moved, and only its **findings output**: a
+chain finding now also prints `start=` and `dirSize=`. No suite results are
+invalidated; your 534/534 on both cards stands. **Step 4d is still owed** and is
+unaffected by this edit.
 
-| File | Effect |
-|---|---|
-| `SD_RT_register_tests.spin2` | that suite's results are stale |
-| `SD_RT_speed_tests.spin2` | that suite's results are stale |
-| `isp_fsck_utility.spin2` | changes audit/fsck **output text only**; no driver path |
+#### ⚠ Do not "fix" SD_RT_seek_tests yet — it is our only reproducer
 
-So this is **not** the atomic-restart case the protocol describes for a driver
-change — the 25 untouched suites ran the same driver under the same test code and
-those results stand. What is genuinely unverified is the two edited suites.
+I found a real test defect in it (below) and deliberately have **not** fixed it.
+Repairing it now would very likely make the corruption disappear while the driver
+bug that produces it stays in the shipped code. That is a false green, and this
+finding is a release blocker.
 
-**Still owed, and it is six minutes:** a full sweep on the **regression card** to
-restore v1.8.0 gate condition A on the current suite content. Step 4b runs on the
-Lerdisk, which is a different card and does not substitute for it. Both edits are
-expected to be no-ops there — the removed CRC7 sub-check only ever failed on
-non-conforming silicon, and the Amazon Basics answers TRUE to both capability
-queries so speed_tests #8 takes the same branch as before — but "expected" is not
-"measured", and this suite roster is our certification mechanism.
+#### Step 4e — re-audit the seated card *(read-only, free, do first)*
 
-#### The audit finding: one defect, not two, and FSInfo is the honest party
-
-A directory entry points at cluster 19 and `FAT[19]` is 0 — the FAT calls the
-file's own first cluster free. That single state produces both lines: the chain
-walk hits a free next-pointer, and the counted free total comes out one *higher*
-than FSInfo claims.
-
-**Your Amazon Basics comparator is what made this readable.** It ended `CLEAN` with
-the *same* `Dirs: 1  Files: 1` survivor — so the leftover file is normal — but with
-**two** clusters allocated, root plus the file. The Lerdisk has one. The allocation
-happened; the FAT entry never stuck.
-
-**I am not calling it a driver defect, because the evidence does not separate
-"driver failed to write `FAT[19]`" from "counterfeit card accepted the write and
-discarded it".** The asdfg class already carries a punch-listed LBA-failure item.
-Three steps settle it, and they must run in this order.
-
-#### Step 4a — name the object *(read-only, do this first)*
+The Gigastone HE `$0001_B9D5` is still seated and unrepaired.
 
 ```bash
 ./run_test.sh ../src/UTILS/SD_FAT32_audit.spin2
 ```
 
-A chain finding now prints a second line, `in: <8.3 name>`. **That name identifies
-the file, the suite that made it, and the code path.** Read-only; the card is not
-modified. If it comes back `(root)`, say so — that would mean the root directory
-chain itself, which is a different and worse story.
+The finding line now carries two more fields:
+`in: RTDIRTY.BIN  start=<n>  dirSize=<n>`.
 
-#### Step 4b — does it reproduce?
+**`dirSize` is the question.** The file was written 600 bytes and never closed.
+`dirSize=600` means the handle's flush reached the directory entry; `dirSize=0`
+means it never did and the entry is still as `createFileNew` left it. Those point at
+different code, so capture it before the card is reformatted.
 
-```bash
-./run_regression.sh
-```
+#### Step 4f — bisect: which suite frees the chain?
 
-Deterministic or not is the first fork: a one-off points at the card, a repeat
-points at the code. Expect **534/534** — the two reds from your run are fixed
-below. This reformats the card, so 4a must be done first.
-
-#### Step 4c — hold the geometry, change the silicon
-
-The clean card has 64 sectors/cluster; the failing one has 8. Run the same roster
-on a **genuine** card that formats to 8 sectors/cluster — an 8 GB or smaller unit.
-Passes ⇒ the counterfeit dropped the write. Fails ⇒ a real driver defect gated on
-small-cluster geometry, and a release blocker. Tell me which card you used.
-
-#### Step 4d — restore gate condition A on the regression card
+`SD_RT_seek_tests` creates `RTDIRTY.BIN` (suite 16) and eleven suites run after it.
+Nothing in my reading of the source explains why the chain ends up free, so the next
+move is to find the operation that does it.
 
 ```bash
-./run_regression.sh          # regression card, not the Lerdisk
+./run_regression.sh --reformat-only                              # clean baseline
+./run_test.sh ../src/regression-tests/SD_RT_seek_tests.spin2
+./run_test.sh ../src/UTILS/SD_FAT32_audit.spin2
 ```
 
-Two suites were edited, so the roster that certifies v1.8.0 has not been run in its
-current form on the regression card. **Expect 534/534.** Six minutes. Do it before
-step 5, so the sweep that follows is measuring a certified state.
+- **Audit already dirty** ⇒ `seek_tests` alone reproduces it. Stop there and hand
+  back; that is a one-suite reproducer and it is all I need.
+- **Audit clean** ⇒ a later suite does it. Keep going *without reformatting*, one
+  suite at a time, auditing after each, in roster order: `volume`, `subdir_ops`,
+  `directory`, `dirhandle`, `fifo`, `multicog`, `cogcwd`, `timestamp`, `stress`,
+  `async`, `defrag`. **Stop at the first audit that turns dirty** and hand back with
+  that suite named. Expect it to stop early rather than run all eleven.
 
-#### The two reds — both test-side, both fixed
+`run_test.sh` does not reformat, so the card carries state forward between suites —
+which is exactly what this bisect needs.
 
-**`register_tests` #11, CRC7 stop bit — test defect.** The driver's contract is
-faithful register transport, not card conformance, and this test says so itself one
-check below the failing one, where PNM printability is informational for exactly
-this reason. The Lerdisk's whole CID byte 15 is `$00`, already characterized in its
-card record as a scored counterfeit indicator. Demoted to an informational
-transcript line. **No coverage lost:** a misaligned CID read is what the stop bit
-might have caught, and the surviving checks catch it more directly on every card —
-MID must equal `getManufacturerID()`, MDT must decode to a plausible date. Both held
-here, which is how we know the transport was sound.
+#### Step 4d — still owed, run it after the bisect
 
-**`speed_tests` #8 — my defect, introduced in the session 1 → 2 fix.** You reported
-the two capability paths disagreeing, and that was exactly right. The driver is not
-confused by it: `probeHighSpeed()` gates on the **SCR first** and only asks function
-group 1 for SD 2.0+ cards, so an SD 1.x card is a definite "no" and the clean
-decline with `ERROR() == SUCCESS` is correct. `checkHighSpeedCapability()` even
-documents the precondition — *"call checkCMD6Support() first"* — and my test was the
-party not honouring it. It now mirrors the driver's gate: capable means **both**
-answers.
+Unchanged from the last hand-back: a full `./run_regression.sh` on the **regression
+card** to restore gate A on the edited suites. Expect **534/534**. It is six minutes
+and it is not urgent relative to the bisect.
 
-**Neither changes the test count. Still 534.**
+---
 
-#### Also fixed — the audit was describing the wrong thing
+#### What your three steps established
 
-`"chain runs past the file size at cluster 19"` never consults the file size at that
-site; the genuine size check lives elsewhere and emits its own warning. The wording
-arrived with a rename from the accurate `Truncated at cluster %d`, and it sent my
-first reading of your finding down a length-mismatch path. Both chain sites now
-report what they actually found, and the `ERROR:` line that was counted as a repair
-rather than an error is gone.
+**4c is decisive and it eliminates the card.** Three sweeps, two silicon vendors,
+same file and same cluster, clean only at 64 sectors/cluster. The counterfeit
+hypothesis is dead. This is a **driver defect that only shows on small-cluster
+geometry**, and small clusters are what every card of a few GB gets — this is not an
+exotic configuration.
+
+**What I confirmed in source:**
+
+- `RTDIRTY.BIN` comes from `SD_RT_seek_tests.spin2:417`. On the **success** path the
+  handle is **never closed** — `closeFileHandle()` sits only in the `else` branch at
+  line 436 — and line 437 then calls `deleteFile()` on the still-open file.
+- That delete is **correctly refused**: `deleteFile()` documents and returns
+  `E_FILE_OPEN` when any handle references the entry, and the test ignores the
+  return. So a leftover `Files: 1` is *expected on every card*, which is why the
+  Amazon Basics closing audit shows the same survivor and still reads CLEAN.
+- `do_create()` allocates the first cluster eagerly, writes the EOC to **both** FATs
+  before any bookkeeping, and records `h_dir_sector`/`h_dir_offset` correctly, so
+  the `isFileOpen()` guard has what it needs to match.
+- The `do_close()` at the top of `do_delete()` is only the legacy staged-entry
+  flush; it does not touch handles.
+
+**What I ruled out:** an operator-precedence bug in `allocateCluster()`'s
+unparenthesized `fat_sec + result >> 7`. Checked against P2KB rather than recalled —
+in Spin2 shifts are priority 3 and `+`/`-` are priority 8, so shifts bind *tighter*
+and the expression already means `fat_sec + (result >> 7)`. The neighbouring
+parenthesised form is redundant, not a correction.
+
+**What I could not establish:** which operation frees the chain. The end state —
+a live directory entry pointing at a cluster the FAT calls free — is precisely what
+`do_delete()`'s header says its ordering exists to prevent, and both FATs agree, so
+something wrote 0 to that entry after `do_create` wrote the EOC. Static reading has
+run out; step 4f names the suite and turns this into a fixable defect.
 
 ### Earlier hand-backs — completed, and deliberately not kept here
 
@@ -402,7 +387,14 @@ unnecessary. The decision rule and the full cost estimate are in the punch-list 
 
 ---
 
-## Step 4 — 16b: the Lerdisk in the EDGE socket — ✅ RAN; attribution owed
+## Step 4 — 16b: the Lerdisk in the EDGE socket — ✅ RAN; 🔴 DRIVER DEFECT FOUND
+
+**Attribution is settled and it is the bad branch.** 4a named the file
+(`RTDIRTY.BIN`, from `SD_RT_seek_tests`), 4b reproduced it deterministically, and
+4c reproduced it on **genuine** Gigastone High Endurance 8 GB silicon. Clean only at
+64 sectors/cluster. The counterfeit is exonerated; this is a driver defect gated on
+small-cluster geometry, and it is a **release blocker**. Root-causing continues at
+steps 4e and 4f in the hand-back above.
 
 **⚠ Do NOT start this step with `./run_regression.sh`. That reformats the card, and
 the card is currently holding evidence.** The ordered continuation is **4a → 4b →
@@ -489,10 +481,14 @@ spanning two driver versions.
 - [~] Step 2: **deferred** — cell unreachable on the shipped driver; funding the campaign is Stephen's call
 - [~] Step 3: **deferred to after step 6** — no default change in v1.8.0 either way
 - [~] Step 4: wedge **GONE** (mount 45/45, raw 14/14 in the Edge socket) — but the Lerdisk verdict is **not** final until the closing-audit chain finding is attributed
-  - [ ] 4a: read-only audit names the file (do first — the card holds the evidence)
-  - [ ] 4b: does it reproduce on the Lerdisk?
-  - [ ] 4c: genuine 8-sectors/cluster card — counterfeit silicon, or a driver defect?
+  - [x] 4a: named it — `RTDIRTY.BIN`, from `SD_RT_seek_tests`
+  - [x] 4b: reproduces deterministically on the Lerdisk
+  - [x] 4c: **reproduces on genuine 8-sec/cluster silicon** — driver defect, release blocker
+  - [ ] 4e: read-only re-audit for `start=` / `dirSize=` (do before any reformat)
+  - [ ] 4f: bisect — which suite frees the chain?
   - [ ] 4d: regression card re-run, **534/534**, restoring gate A on the edited suites
+- [ ] 🔴 The chain-free defect is root-caused and fixed (v1.8.0 blocker)
+- [ ] `SD_RT_seek_tests` handle leak fixed — **only after** the driver defect is understood
 - [ ] Step 5: run variance measured before instance variance; one-shot cards fully captured
 - [ ] Step 6: catalog tables harvested, single driver-version banner
 - [ ] Card records created for the two uncatalogued retained Gigastones

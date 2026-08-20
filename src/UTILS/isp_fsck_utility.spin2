@@ -1029,7 +1029,7 @@ PRI fsckValidateChain(startClus, fSize, isDir) | clus, nextClus, chainLen, expec
             if currentWindow == 0
                 writeFAT(clus, sd.FAT32_EOC_MARK)
                 fifo.putFmt3(@"  %s: chain unterminated at cluster %d -- next ref %d is a free/reserved entry", repairTag(), clus, nextClus)
-                fifo.putFmt1(@"      in: %s", @entryName)
+                fifo.putFmt3(@"      in: %s  start=%d  dirSize=%d", @entryName, startClus, fSize)
                 v_repairCount++
             quit
 
@@ -1038,7 +1038,7 @@ PRI fsckValidateChain(startClus, fSize, isDir) | clus, nextClus, chainLen, expec
                 if currentWindow == 0
                     writeFAT(clus, sd.FAT32_EOC_MARK)
                     fifo.putFmt3(@"  %s: chain leaves the volume at cluster %d -- next ref %d is past the last cluster", repairTag(), clus, nextClus)
-                    fifo.putFmt1(@"      in: %s", @entryName)
+                    fifo.putFmt3(@"      in: %s  start=%d  dirSize=%d", @entryName, startClus, fSize)
                     v_repairCount++
                 quit
 
