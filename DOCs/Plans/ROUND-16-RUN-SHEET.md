@@ -150,7 +150,7 @@ time. The handoff was not followable.
 
 | | |
 |---|---|
-| **Source SHA to run** | `623a891` — verify with `git log --oneline -1 -- src/ diagnostic-tests/` |
+| **Source SHA to run** | `00a8d45` — verify with `git log --oneline -1 -- src/ diagnostic-tests/` |
 | **Tree** | clean; six gates green; all five affected programs compile (audit, fsck, demo shell, register_tests, speed_tests) |
 | **Resume at** | **Step 4g (verify the fix) → 4h (re-certify).** DRIVER CHANGED — 4d's 534/534 is stale and the roster restarts |
 
