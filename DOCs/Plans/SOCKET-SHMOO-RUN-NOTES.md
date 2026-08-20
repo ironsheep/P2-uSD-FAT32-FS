@@ -3327,3 +3327,29 @@ Per the hand-back's discriminator: dirSize=600 (not 0) — the entry carries the
 written size and start cluster while FAT[19]=0. The dir entry is complete; the
 FAT entry was zeroed by something AFTER the entry was flushed. Evidence now
 fully harvested from this card state; 4f may reformat.
+
+## 4f — BISECT COMPLETE: SD_RT_defrag_tests frees the chain
+
+Baseline reformat, then `SD_RT_seek_tests` alone → audit **CLEAN** (the chain
+survives its creator intact). Then the eleven later suites one at a time, no
+reformat, audit after each:
+
+    volume ✓ subdir_ops ✓ directory ✓ dirhandle ✓ fifo ✓ multicog ✓
+    cogcwd ✓ timestamp ✓ stress ✓ async ✓  →  defrag ✗ DIRTY
+
+After `SD_RT_defrag_tests`: "chain unterminated at cluster 5 -- next ref 0 is a
+free/reserved entry, in: RTDIRTY.BIN  start=5  dirSize=600"
+(`logs/SD_FAT32_audit_260819-234131.log`) plus the FSInfo off-by-one. Cluster
+number differs from the sweep (5 vs 19) with the different allocation history;
+file, dirSize, and shape identical.
+
+**Bench observation for the analysis:** every suite is its own program
+download, so no open handle crosses suite boundaries — by the time defrag runs,
+`RTDIRTY.BIN` is quiescent on-card state: a valid 600-byte entry whose chain is
+a single EOC cluster. Whatever the defrag pass did, it ended with that entry's
+start cluster freed in both FATs while the entry (start + size) still stands.
+All eleven suite runs exited rc=0 — the state change is invisible to the suites
+themselves, as in every prior instance.
+
+One-suite-pair reproducer for the container: reformat → seek_tests → defrag_tests
+→ audit dirty. **4e+4f complete; proceeding to 4d (full sweep, regression card).**
