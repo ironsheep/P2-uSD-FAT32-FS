@@ -3273,3 +3273,39 @@ free/reserved entry, in: RTDIRTY.BIN" plus the matching FSInfo off-by-one
 (`logs/SD_FAT32_audit_260819-210523.log`). Same file, same cluster, two
 consecutive sweeps. Per the 4b fork: **a repeat points at the code** — or at a
 deterministic card behavior; 4c separates those.
+
+## 4c — SAME FINDING ON GENUINE SILICON → the fork's "release blocker" branch. BENCH PAUSED
+
+Full sweep on the genuine **Gigastone High Endurance 8 GB `$0001_B9D5`**
+(preflight L1: SharedOEM 00000 SDHC 7GB, SD 3.x, 2021/09 — 8 sectors/cluster
+geometry). **TOTAL 534/534, 0 fail** — and the closing audit reports the
+IDENTICAL state a third time: "chain unterminated at cluster 19 -- next ref 0
+is a free/reserved entry, in: RTDIRTY.BIN", FSInfo free count one high
+(says 1897592, actually 1897593). `logs/SD_FAT32_audit_260819-230146.log`;
+sweep transcript is the newest `sweep_*.txt` of 2026-08-19 23:0x.
+
+**The observation set is now complete across the 4a-4c design:**
+
+| Card | Silicon | Geometry | Closing audit |
+|---|---|---|---|
+| Amazon Basics `$3584_1E2E` | genuine | 64 sec/cluster | CLEAN (both sweeps) |
+| Lerdisk `$0000_01F4` | counterfeit | 8 sec/cluster | RTDIRTY.BIN @ cluster 19, twice |
+| Gigastone HE `$0001_B9D5` | genuine | 8 sec/cluster | RTDIRTY.BIN @ cluster 19 |
+
+Deterministic: same file, same cluster number, three sweeps, two different
+silicon vendors. Counterfeit-dropped-write is eliminated; the correlate is
+**8 sectors/cluster geometry**. `SD_RT_seek_tests` (creator of RTDIRTY.BIN via
+`testDirty`, line 42) scores 38/38 everywhere — the state it leaves is invisible
+to its own checks and to every later suite; only the closing audit sees it.
+
+**Evidence preserved: `$0001_B9D5` remains SEATED, unrepaired, fsck NOT run** —
+genuine-silicon forensics available on request (FAT + dir-entry reads are
+read-only). The container's fork wording for this branch: "a real driver defect
+gated on small-cluster geometry, and a release blocker" — classification stays
+the container's; the bench notes only that the 4c discriminator came back on
+the failing side.
+
+**4d NOT run** (hard stop; and if a driver change follows, the atomic-restart
+rule re-runs the roster anyway). Steps: 4a ✓ named, 4b ✓ reproduces, 4c ✓
+genuine-silicon fail, 4d blocked. Tree clean. Bench resumes on container
+hand-back.
