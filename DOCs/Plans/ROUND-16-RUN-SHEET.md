@@ -122,7 +122,7 @@ contract, not against output.
 | | |
 |---|---|
 | **Source SHA to run** | `9cff9ac` — verify with `git log --oneline -1 -- src/ diagnostic-tests/` |
-| **Tree** | clean; six gates green; all four touched programs compile |
+| **Tree** | clean; six gates green; all five affected programs compile (audit, fsck, demo shell, register_tests, speed_tests) |
 | **Resume at** | **Step 4a below (name the file), then 4b, then 4c.** Do NOT reformat the Lerdisk before 4a |
 
 ### Container hand-back, session 3 → 4
@@ -448,18 +448,27 @@ unnecessary. The decision rule and the full cost estimate are in the punch-list 
 
 ---
 
-## Step 4 — 16b: the Lerdisk in the EDGE socket
+## Step 4 — 16b: the Lerdisk in the EDGE socket — ✅ RAN; attribution owed
 
-```bash
-./run_regression.sh
-```
+**⚠ Do NOT start this step with `./run_regression.sh`. That reformats the card, and
+the card is currently holding evidence.** The ordered continuation is **4a → 4b →
+4c** in the session 3 → 4 hand-back at the top of this sheet; 4a is read-only and
+must go first.
 
-The card the whole campaign was about. Its record says "External connector only" —
-**that restriction *was* the #3240 defect**, now fixed. Round 15b already showed
-`mount_tests` 43/43 there with the quiesce.
+**Ran 2026-08-19** on the Lerdisk asdfg 1GB `$0000_01F4`, transcript
+`tools/logs/sweep_260819-180530.txt`.
 
-**If the full suite passes:** its card record and `CARD-CATALOG.md` need rewriting
-and a documented incompatibility disappears.
+**The wedge is GONE.** `mount_tests` 45/45 and `raw_sector_tests` 14/14 in the Edge
+socket, on the card whose record says "External connector only" — and that
+restriction *was* the #3240 defect. Round 15b had already shown 43/43 with the
+quiesce; this is the full-suite confirmation.
+
+**Still owed before the incompatibility can be withdrawn:** the closing audit
+reported an unterminated cluster chain (a directory entry pointing at cluster 19
+whose FAT entry is 0) with all 27 suites green. Until 4a-4c attribute that to the
+counterfeit's silicon or to driver code, the card record and `CARD-CATALOG.md`
+rewrite waits — a card that mounts cleanly but may leave a damaged filesystem has
+not earned an unqualified endorsement.
 
 ---
 
