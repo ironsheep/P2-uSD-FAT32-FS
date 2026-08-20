@@ -13,6 +13,18 @@ behave alike, and high-speed mode can be left without stranding the card.
 
 ### Bug Fixes
 
+- **Compacting a file no longer damages an unrelated file.** `compactFile()` looks
+  for a run of free clusters to move a file into, and that search read the first
+  512 entries of the allocation table from stale memory instead of from the card.
+  On a card whose clusters are small enough that files span several of them — which
+  is typical of cards up to a few gigabytes — it could therefore treat clusters
+  belonging to another file as free, move data across them, and leave that other
+  file pointing at space the card considers unused. The file's own directory entry
+  still looked correct, so the damage was silent until the volume was checked, and
+  the same fault made the free-space total reported at unmount unreliable.
+  Cards formatted with large clusters were unaffected, because a file that fits in
+  one cluster is never compacted.
+
 - **A card that fails high-speed verification now reports why.** `attemptHighSpeed()`
   documents that `ERROR()` distinguishes a card that declined the feature from one
   that could not be asked or failed verification. One path did not follow it: when

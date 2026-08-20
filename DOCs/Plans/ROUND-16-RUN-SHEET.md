@@ -152,109 +152,96 @@ time. The handoff was not followable.
 |---|---|
 | **Source SHA to run** | `623a891` — verify with `git log --oneline -1 -- src/ diagnostic-tests/` |
 | **Tree** | clean; six gates green; all five affected programs compile (audit, fsck, demo shell, register_tests, speed_tests) |
-| **Resume at** | **Step 4e (read-only, do first) → 4f bisect → 4d.** The Gigastone HE `$0001_B9D5` is holding the evidence — 4e reads it before anything reformats |
+| **Resume at** | **Step 4g (verify the fix) → 4h (re-certify).** DRIVER CHANGED — 4d's 534/534 is stale and the roster restarts |
 
-### Container hand-back, session 4 → 5
+### Container hand-back, session 5 → 6
 
-**Your 4c result is the release-blocking branch, and I am not able to close it from
-source alone. Read the instructions first; the analysis is underneath them.**
+**Your bisect closed it. The defect is root-caused and fixed in the driver; step 4g
+verifies it with your own two-suite reproducer.**
 
-#### What this change invalidated *(protocol item 3)*
+#### ⚠ What this change invalidated *(protocol item 3)*
 
-**The driver did not change** — `git diff 9cff9ac HEAD -- src/micro_sd_fat32_fs.spin2`
-is empty. Only `isp_fsck_utility.spin2` moved, and only its **findings output**: a
-chain finding now also prints `start=` and `dirSize=`. No suite results are
-invalidated; your 534/534 on both cards stands. **Step 4d is still owed** and is
-unaffected by this edit.
+**This one IS a driver change** — `micro_sd_fat32_fs.spin2`, three sites. A
+certification run is atomic, so **your 4d 534/534 is stale and the roster restarts.**
+That is step 4h below. Nothing about the suites changed, so the expected total is
+still **534**.
 
-#### ⚠ Do not "fix" SD_RT_seek_tests yet — it is our only reproducer
-
-I found a real test defect in it (below) and deliberately have **not** fixed it.
-Repairing it now would very likely make the corruption disappear while the driver
-bug that produces it stays in the shipped code. That is a false green, and this
-finding is a release blocker.
-
-#### Step 4e — re-audit the seated card *(read-only, free, do first)*
-
-The Gigastone HE `$0001_B9D5` is still seated and unrepaired.
+#### Step 4g — verify the fix with your reproducer *(do this first)*
 
 ```bash
-./run_test.sh ../src/UTILS/SD_FAT32_audit.spin2
-```
-
-The finding line now carries two more fields:
-`in: RTDIRTY.BIN  start=<n>  dirSize=<n>`.
-
-**`dirSize` is the question.** The file was written 600 bytes and never closed.
-`dirSize=600` means the handle's flush reached the directory entry; `dirSize=0`
-means it never did and the entry is still as `createFileNew` left it. Those point at
-different code, so capture it before the card is reformatted.
-
-#### Step 4f — bisect: which suite frees the chain?
-
-`SD_RT_seek_tests` creates `RTDIRTY.BIN` (suite 16) and eleven suites run after it.
-Nothing in my reading of the source explains why the chain ends up free, so the next
-move is to find the operation that does it.
-
-```bash
-./run_regression.sh --reformat-only                              # clean baseline
+./run_regression.sh --reformat-only
 ./run_test.sh ../src/regression-tests/SD_RT_seek_tests.spin2
+./run_test.sh ../src/regression-tests/SD_RT_defrag_tests.spin2
 ./run_test.sh ../src/UTILS/SD_FAT32_audit.spin2
 ```
 
-- **Audit already dirty** ⇒ `seek_tests` alone reproduces it. Stop there and hand
-  back; that is a one-suite reproducer and it is all I need.
-- **Audit clean** ⇒ a later suite does it. Keep going *without reformatting*, one
-  suite at a time, auditing after each, in roster order: `volume`, `subdir_ops`,
-  `directory`, `dirhandle`, `fifo`, `multicog`, `cogcwd`, `timestamp`, `stress`,
-  `async`, `defrag`. **Stop at the first audit that turns dirty** and hand back with
-  that suite named. Expect it to stop early rather than run all eleven.
+On the **8-sectors/cluster** card (Gigastone HE `$0001_B9D5` — reformat it freely,
+its evidence is fully harvested). **Expect `STATUS: CLEAN`.** Anything else and the
+fix is wrong or incomplete: hand back with the audit log and do not continue.
 
-`run_test.sh` does not reformat, so the card carries state forward between suites —
-which is exactly what this bisect needs.
+Run it **twice** if the first is clean. This defect needed the allocator to climb
+past cluster 128 before it bit, so one clean pass is weaker evidence than it looks.
 
-#### Step 4d — still owed, run it after the bisect
+#### Step 4h — re-certify (the driver moved)
 
-Unchanged from the last hand-back: a full `./run_regression.sh` on the **regression
-card** to restore gate A on the edited suites. Expect **534/534**. It is six minutes
-and it is not urgent relative to the bisect.
+```bash
+./run_regression.sh          # regression card
+```
+
+**Expect 534/534 with a clean closing audit.** Then, if you still have the
+8-sec/cluster card handy, a full sweep on *it* is the strongest single check we can
+make — it is the geometry that exposed this, and it has never had a full green
+roster with a clean audit.
+
+#### Then
+
+Step 5 (16e) is unblocked. Its first-light requirement still stands: one throwaway
+benchmark through `harvest_catalog.sh` before any one-shot card is seated.
+
+#### ⚠ Still do not fix `SD_RT_seek_tests`
+
+It is still the seed for the reproducer, and 4g needs it exactly as it is. It gets
+fixed after 4g is green, together with the regression test that is owed for this
+defect.
 
 ---
 
-#### What your three steps established
+#### The root cause
 
-**4c is decisive and it eliminates the card.** Three sweeps, two silicon vendors,
-same file and same cluster, clean only at 64 sectors/cluster. The counterfeit
-hypothesis is dead. This is a **driver defect that only shows on small-cluster
-geometry**, and small clusters are what every card of a few GB gets — this is not an
-exotic configuration.
+`findContiguousRun()` **never loaded the first FAT sector.**
 
-**What I confirmed in source:**
+```spin2
+fat_idx := ROOT_CLUSTER * 4        ' = 8
+repeat
+  if fat_idx & SECTOR_OFFSET_MASK == 0     ' 8 & 511 = 8 -> FALSE on the first pass
+    ...readSector(BUF_FAT)...
+  entry := LONG[@fat_buf + (fat_idx & SECTOR_OFFSET_MASK)]
+```
 
-- `RTDIRTY.BIN` comes from `SD_RT_seek_tests.spin2:417`. On the **success** path the
-  handle is **never closed** — `closeFileHandle()` sits only in the `else` branch at
-  line 436 — and line 437 then calls `deleteFile()` on the still-open file.
-- That delete is **correctly refused**: `deleteFile()` documents and returns
-  `E_FILE_OPEN` when any handle references the entry, and the test ignores the
-  return. So a leftover `Files: 1` is *expected on every card*, which is why the
-  Amazon Basics closing audit shows the same survivor and still reads CLEAN.
-- `do_create()` allocates the first cluster eagerly, writes the EOC to **both** FATs
-  before any bookkeeping, and records `h_dir_sector`/`h_dir_offset` correctly, so
-  the `isFileOpen()` guard has what it needs to match.
-- The `do_close()` at the top of `do_delete()` is only the legacy staged-entry
-  flush; it does not touch handles.
+The scan starts at cluster 2, so its first sector load happened at `fat_idx` 512, and
+**every verdict for clusters 2..127 came from whatever the previous FAT operation left
+in the buffer.** `allocateCluster()` has always pre-loaded for this exact reason.
 
-**What I ruled out:** an operator-precedence bug in `allocateCluster()`'s
-unparenthesized `fat_sec + result >> 7`. Checked against P2KB rather than recalled —
-in Spin2 shifts are priority 3 and `+`/`-` are priority 8, so shifts bind *tighter*
-and the expression already means `fat_sec + (result >> 7)`. The neighbouring
-parenthesised form is redundant, not a correction.
+It reports *allocated* clusters as **free** — the dangerous direction.
+`do_compact_file()` then builds its contiguous chain across a live bystander's
+cluster, and when that chain is later freed the bystander is left with a directory
+entry pointing at a cluster both FATs call free. Your `dirSize=600` reading is what
+made this legible: the entry was complete and untouched, so nothing was wrong with the
+file — something else came along and freed its cluster.
 
-**What I could not establish:** which operation frees the chain. The end state —
-a live directory entry pointing at a cluster the FAT calls free — is precisely what
-`do_delete()`'s header says its ordering exists to prevent, and both FATs agree, so
-something wrote 0 to that entry after `do_create` wrote the EOC. Static reading has
-run out; step 4f names the suite and turns this into a fixable defect.
+**Two of your observations are now explained rather than just recorded.** The damaged
+cluster moved between runs (19, then 5) because the fault follows allocation history,
+which a fixed-offset bug would not. And the geometry gate is exact:
+`do_compact_file()` returns early at `frag_count == 1`, so with 64-sector clusters the
+fixtures are single-cluster and this code never runs — `SD_RT_defrag_tests` says so
+itself in its CLUSTER-SIZE CAVEAT comment.
+
+**Fixed at three sites.** `findContiguousRun()` and `countFreeClusters()` carry the
+identical defect — same shape, same missing pre-load, same trailing invalidate
+guarding the wrong end — and are fixed together so neither survives as the example.
+In `countFreeClusters()` the consequence was quieter: a wrong free-cluster total
+written to FSInfo on unmount. The third is the `allocateCluster()` test-hook wrap
+path, which reset the index to cluster 2 without reloading the sector holding it.
 
 ### Earlier hand-backs — completed, and deliberately not kept here
 
@@ -322,15 +309,15 @@ has none.
 
 ---
 
-## Step 1 — 16a: certify the driver — ✅ PASSED, re-run owed as step 4d
+## Step 1 — 16a: certify the driver — ✅ PASSED TWICE, ⚠ now stale again
 
-**Session 2: 534/534, 27 suites, 0 fail** on the regression card (Amazon Basics
-`$3584_1E2E`), closing audit clean. Transcript `tools/logs/sweep_260819-155926.txt`.
+**Session 2: 534/534** on the regression card (Amazon Basics `$3584_1E2E`).
+**Session 5 (step 4d): 534/534 with a clean closing audit**, restoring the gate after
+two suites were edited. Transcript `tools/logs/sweep_260819-234405.txt`.
 
-**Two test suites were edited on 2026-08-20**, so this roster has not been run in
-its current form on the regression card. That re-run is **step 4d** in the
-hand-back — the driver itself is unchanged, so this is restoring the gate on the
-current suite content, not re-certifying the driver.
+**The driver changed on 2026-08-20** (the `findContiguousRun` fix), and a
+certification run is atomic — so both of those are stale and the roster restarts.
+That re-run is **step 4h** in the hand-back. Expected total is unchanged at **534**.
 
 ```bash
 ./run_regression.sh
@@ -394,14 +381,13 @@ unnecessary. The decision rule and the full cost estimate are in the punch-list 
 (`RTDIRTY.BIN`, from `SD_RT_seek_tests`), 4b reproduced it deterministically, and
 4c reproduced it on **genuine** Gigastone High Endurance 8 GB silicon. Clean only at
 64 sectors/cluster. The counterfeit is exonerated; this is a driver defect gated on
-small-cluster geometry, and it is a **release blocker**. Root-causing continues at
-steps 4e and 4f in the hand-back above.
+small-cluster geometry, and it was a **release blocker**. **ROOT-CAUSED AND FIXED
+2026-08-20** — `findContiguousRun()` never loaded FAT sector 0, so it reported
+allocated clusters as free. Verification is step 4g.
 
-**⚠ Do NOT re-run this step, and do not start anything here with
-`./run_regression.sh`.** The evidence now sits on the **Gigastone HE `$0001_B9D5`**,
-seated and unrepaired, and a reformat destroys it. The ordered continuation is
-**4e → 4f** in the session 4 → 5 hand-back at the top of this sheet; 4e is read-only
-and must go first.
+**⚠ Do NOT re-run this step.** It is complete, and its evidence has been fully
+harvested — the Gigastone HE `$0001_B9D5` is now free to reformat. The ordered
+continuation is **4g → 4h** in the session 5 → 6 hand-back at the top of this sheet.
 
 **Ran 2026-08-19** on the Lerdisk asdfg 1GB `$0000_01F4`, transcript
 `tools/logs/sweep_260819-180530.txt`.
@@ -488,8 +474,13 @@ spanning two driver versions.
   - [x] 4c: **reproduces on genuine 8-sec/cluster silicon** — driver defect, release blocker
   - [ ] 4e: read-only re-audit for `start=` / `dirSize=` (do before any reformat)
   - [ ] 4f: bisect — which suite frees the chain?
-  - [ ] 4d: regression card re-run, **534/534**, restoring gate A on the edited suites
-- [ ] 🔴 The chain-free defect is root-caused and fixed (v1.8.0 blocker)
+  - [x] 4e: `dirSize=600` — entry complete while the FAT called its cluster free
+  - [x] 4f: bisect named `SD_RT_defrag_tests`; two-suite reproducer in hand
+  - [x] 4d: gate A restored — **534/534**, closing audit clean
+  - [ ] 4g: **verify the fix** on 8-sec/cluster silicon — audit CLEAN, run twice
+  - [ ] 4h: re-certify — driver changed, so the roster restarts
+- [x] 🔴 The chain-free defect is root-caused and fixed — `findContiguousRun()` never loaded FAT sector 0
+- [ ] Regression coverage owed for it: bystander file survives a compact (no suite catches this today)
 - [ ] `SD_RT_seek_tests` handle leak fixed — **only after** the driver defect is understood
 - [ ] Step 5: run variance measured before instance variance; one-shot cards fully captured
 - [ ] Step 6: catalog tables harvested, single driver-version banner

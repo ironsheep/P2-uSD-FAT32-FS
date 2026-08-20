@@ -6537,6 +6537,14 @@ PRI allocateCluster(cluster) : result | fat_idx, buf_idx, high_bits, start_fat_i
         if fat_idx >= start_fat_idx                                              '   started at cluster 2? nowhere left to scan
           result := E_DISK_FULL
           quit
+        ' Same missing-load as the two production scans fixed 2026-08-20: this wrap
+        ' moves the index back to cluster 2 but the sector holding it is not the one
+        ' in fat_buf, so the cell below would be read from the wrong sector. The
+        ' non-test wrap at the end of this loop already reloads; this one did not.
+        if readSector(fat_sec, BUF_FAT) < 0
+          DEBUG[CH_SECTOR]("  [allocateCluster] test-hook wrap pre-load FAILED")
+          result := E_IO_ERROR
+          quit
 #endif
       result := LONG[@fat_buf + buf_idx]                                         '  read a cluster cell
       if (result & FAT32_ENTRY_MASK) == $0000_0000                               '  if cluster cell is empty (check only low 28 bits)
@@ -6714,6 +6722,18 @@ PRI countFreeClusters() : count | fat_idx, entry
 
   count := 0
   fat_idx := ROOT_CLUSTER * 4                                                   '  start at cluster 2 (skip reserved entries 0,1)
+
+  ' PRE-LOAD THE FIRST FAT SECTOR (2026-08-20) -- same defect, same shape, and the
+  ' same fix as findContiguousRun(): the boundary test below is FALSE at fat_idx 8,
+  ' so clusters 2..127 were counted out of whatever the previous FAT operation left
+  ' in fat_buf. Here the consequence is a wrong free-cluster total written to
+  ' FSInfo on unmount rather than a corrupted chain, which is why it never
+  ' announced itself -- but the two routines are the same bug and are fixed
+  ' together so neither is left as the surviving example of the pattern.
+  if readSector(fat_sec, BUF_FAT) < 0
+    DEBUG[CH_SECTOR]("  [countFreeClusters] FAT pre-load FAILED, count is 0")
+    return 0
+
   repeat
     if fat_idx & SECTOR_OFFSET_MASK == 0                                        '  if at sector boundary
       if fat_idx >> SECTOR_SHIFT >= sec_per_fat                                 '  if past end of FAT
@@ -7052,6 +7072,26 @@ PRI findContiguousRun(cluster_count) : first_cluster | fat_idx, entry, run_start
   run_start := ROOT_CLUSTER
   run_length := 0
   fat_idx := ROOT_CLUSTER * 4                                                   '  start at cluster 2
+
+  ' PRE-LOAD THE FIRST FAT SECTOR (2026-08-20). The scan starts at cluster 2, so
+  ' fat_idx is 8 and the sector-boundary test below is FALSE on the first pass --
+  ' the loop therefore reached its first readSector at fat_idx 512, and every
+  ' verdict for clusters 2..127 was read from whatever the PREVIOUS FAT operation
+  ' happened to leave in fat_buf. allocateCluster() has always pre-loaded for this
+  ' reason; this scan did not, and the trailing fat_sec_in_buf invalidate below
+  ' guarded the wrong end of the same problem.
+  '
+  ' It reported ALLOCATED clusters as free, which is the worst direction for this
+  ' routine: do_compact_file() then built a contiguous chain across a live file's
+  ' cluster, and when that chain was later freed the bystander file was left with a
+  ' directory entry pointing at a cluster both FATs call free. Found by round 16b,
+  ' reproduced on two silicon vendors, and gated on small-cluster geometry only
+  ' because do_compact_file() returns early at frag_count == 1 -- with 64-sector
+  ' clusters the test files are single-cluster and this code never runs.
+  if readSector(fat_sec, BUF_FAT) < 0
+    DEBUG[CH_SECTOR]("  [findContiguousRun] FAT pre-load FAILED")
+    return E_IO_ERROR
+
   repeat
     if fat_idx & SECTOR_OFFSET_MASK == 0                                        '  at sector boundary?
       if fat_idx >> SECTOR_SHIFT >= sec_per_fat                                 '   past end of FAT?
