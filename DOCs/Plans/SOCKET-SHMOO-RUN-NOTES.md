@@ -3353,3 +3353,51 @@ themselves, as in every prior instance.
 
 One-suite-pair reproducer for the container: reformat → seek_tests → defrag_tests
 → audit dirty. **4e+4f complete; proceeding to 4d (full sweep, regression card).**
+
+## 4d — gate A restored: 534/534, closing audit CLEAN
+
+Full sweep on Amazon Basics `$3584_1E2E`, tree `23e3576`, source `623a891`:
+**534/534, 27 suites, 0 fail, closing audit 23/23 clean**
+(`tools/logs/sweep_260819-234405.txt`). The edited suites (register, speed) are
+now certified on the regression card. Defrag stayed clean a THIRD time at
+64 sectors/cluster — the geometry gating of the defect sharpens.
+
+---
+
+# Round 16 (bench session 5) — hand-back summary
+
+| Step | Question | Answer |
+|---|---|---|
+| 4e | Did the flush reach the directory entry? | **YES — dirSize=600**, start=19, while FAT[19]=0. Entry complete; the FAT entry was zeroed after the entry was flushed |
+| 4f | Which suite frees the chain? | **`SD_RT_defrag_tests`.** seek_tests alone: CLEAN. Ten later suites: CLEAN. Defrag: DIRTY (cluster 5, same file/dirSize/shape). Minimal reproducer: reformat → seek_tests → defrag_tests → audit |
+| 4d | Gate A on current roster? | **RESTORED — 534/534, audit clean** on `$3584_1E2E` |
+
+## Observations of record
+
+1. **The defect is now a named interaction**: defrag processing a valid,
+   quiescent 600-byte file (created by seek_tests' unclosed-handle path,
+   chain = single EOC cluster) ends with the entry's start cluster freed in
+   both FATs while the entry still carries start and size. No open handle is
+   involved — suites are separate downloads.
+2. **Geometry correlation holds through five sweeps + bisect**: dirty only at
+   8 sectors/cluster (Lerdisk ×2, Gigastone HE ×2 incl. bisect); clean at
+   64 sectors/cluster (Amazon ×3).
+3. All bisect suite runs exited green — the freeing is invisible to every
+   in-suite check; only the closing audit sees it.
+
+## Container-side items from this session
+
+1. Root-cause the defrag interaction (reproducer above; forensic audit logs:
+   `SD_FAT32_audit_260819-232153.log` pre-bisect, `..._234131.log` post-defrag).
+2. seek_tests' unclosed-handle/ignored-return defect remains deliberately
+   unfixed as the reproducer seed — fix both together when defrag is closed.
+3. Bench is READY for step 5 (16e) on hand-back — but note step 5's first-light
+   requirement: one throwaway benchmark through harvest_catalog.sh before any
+   one-shot card.
+
+## Bench scope
+
+4e: one read-only audit. 4f: one reformat, 12 suite runs, 12 audits. 4d: one
+full sweep. Cards touched: Gigastone HE `$0001_B9D5` (bisect vehicle, ends
+holding post-defrag dirty state — reformattable at will), Amazon Basics
+`$3584_1E2E` (seated, clean, gate-green). No incidents.
