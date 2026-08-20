@@ -150,7 +150,7 @@ time. The handoff was not followable.
 
 | | |
 |---|---|
-| **Source SHA to run** | `9cff9ac` — verify with `git log --oneline -1 -- src/ diagnostic-tests/` |
+| **Source SHA to run** | `623a891` — verify with `git log --oneline -1 -- src/ diagnostic-tests/` |
 | **Tree** | clean; six gates green; all five affected programs compile (audit, fsck, demo shell, register_tests, speed_tests) |
 | **Resume at** | **Step 4e (read-only, do first) → 4f bisect → 4d.** The Gigastone HE `$0001_B9D5` is holding the evidence — 4e reads it before anything reformats |
 
