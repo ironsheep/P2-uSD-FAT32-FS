@@ -111,7 +111,36 @@ contract, not against output.
 2. **What changed and why.**
 3. **Where to resume, and what the change invalidated.** A driver change
    invalidates every completed suite — a certification run is atomic, so it
-   restarts. Say so explicitly rather than leaving it to be inferred.
+   restarts. Say so explicitly rather than leaving it to be inferred. An edit
+   confined to test suites or a support vehicle does *not* restart it; say that
+   explicitly too, because the bench cannot tell which it is holding.
+
+### 🚪 The container's handoff GATE — finish this before saying "ready"
+
+**The instructions are the deliverable, not the paperwork after it.** The bench is
+idle until they exist and Stephen is the one carrying the message, so a handoff
+announced before it can be acted on costs a round trip every time.
+
+*This gate exists because it was missed three times running.* Each miss was found by
+Stephen asking rather than by the container checking, and each question turned up
+something real: a step that would have reformatted the card holding the only copy of
+the evidence; a superseded hand-back still ending "continue at **step 2**" when step
+2 had become the one step that must not run; and 136 lines of completed instructions
+sitting at heading level, indistinguishable from live ones. The code was fine every
+time. The handoff was not followable.
+
+- [ ] The resume states **all four** of SHA, what changed, where to resume, **and
+      what it invalidated** — the fourth is the one that gets dropped
+- [ ] The **whole sheet** was read, not just the edited section — all three misses
+      were outside the part that had just been changed
+- [ ] Every **completed step carries its status**; an unmarked finished step is an
+      instruction to do it again
+- [ ] **No superseded directive survives at heading level** — spent hand-backs are
+      deleted, not demoted; git and `SOCKET-SHMOO-RUN-NOTES.md` hold the history
+- [ ] Tree **clean and committed**, six gates **green**, every affected program
+      **compiles** — including indirect consumers
+- [ ] Anything **perishable is protected by ordering**, and the warning sits where
+      the destructive command used to be, not only in the resume
 
 ---
 
@@ -432,9 +461,15 @@ Working stock gets **no card record** — its numbers go in this round's run not
 
 **Two-armed: standard and high-speed, same session, same card, same instrument.**
 
-Two arms produce the release numbers for *whichever* policy step 3 chose, answer
-the policy question across the whole fleet rather than three cards, and satisfy the
-same-instrument comparator rule. One long afternoon instead of one.
+Two arms produce the release numbers for *whichever* policy is eventually chosen —
+step 3 is deferred, and two arms are precisely what lets this sweep run without it —
+answer the policy question across the whole fleet rather than three cards, and
+satisfy the same-instrument comparator rule. One long afternoon instead of two.
+
+**This sweep is also the input to the deferred step 3 decision.** It measures both
+arms on every working card, which is what says whether the high-speed write
+regression is a fleet property or a single controller family's quirk. Capture both
+arms on every card even where the standard arm looks uninteresting.
 
 Procedure: [../cards/CATALOG-PROCEDURE.md](../cards/CATALOG-PROCEDURE.md).
 
