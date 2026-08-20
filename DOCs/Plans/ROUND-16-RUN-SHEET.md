@@ -150,11 +150,11 @@ time. The handoff was not followable.
 
 | | |
 |---|---|
-| **Source SHA to run** | set at commit — verify with `git log --oneline -1 -- src/ diagnostic-tests/` |
+| **Source SHA to run** | **`35ca016`** — verify with `git log --oneline -1 -- src/ diagnostic-tests/` |
 | **THE DRIVER DID NOT MOVE** | `micro_sd_fat32_fs.spin2` is **untouched** since `00a8d45`. Confirm with `git log --oneline -1 -- src/micro_sd_fat32_fs.spin2` — it must still read `00a8d45`. Your 4h certification is **not** invalidated as a *driver* certification |
 | **What changed** | three regression suites only: `SD_RT_mount_tests` (#39 precondition), `SD_RT_seek_tests` (handle leak), `SD_RT_defrag_tests` (**+1 new test**) — plus docs |
 | **Expected roster** | **535**, not 534. The defrag suite gains one test (13 → 14) |
-| **Tree** | Source committed for this sweep. **Correction to the previous hand-back:** `run_regression.sh` does **not** abort on a dirty tree — it prints the `-dirty` stamp and the warning *"this result is not reproducible from any commit"* and runs anyway (script §GIT_STAMP). The rule is a judgement, not a gate: a certifying sweep wants the source committed. Doc work on the case studies stays uncommitted pending a voicing decision, so expect `-dirty` in the header — annotate it as documentation-only, exactly as session 6 did. Six gates green; all three changed suites compile in both shapes |
+| **Tree** | **Source committed — `35ca016`, sweep is clear to run.** **Correction to the previous hand-back:** `run_regression.sh` does **not** abort on a dirty tree — it prints the `-dirty` stamp and the warning *"this result is not reproducible from any commit"* and runs anyway (script §GIT_STAMP). The rule is a judgement, not a gate: a certifying sweep wants the source committed. Doc work on the case studies stays uncommitted pending a voicing decision, so expect `-dirty` in the header — annotate it as documentation-only, exactly as session 6 did. Six gates green; all three changed suites compile in both shapes |
 | **Resume at** | **Step 4j — re-certify the suite changes.** Then step 5 remains ON HOLD per Stephen's gate-ordering instruction |
 
 ### Container hand-back, session 6 → 7
