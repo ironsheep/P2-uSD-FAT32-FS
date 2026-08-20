@@ -121,7 +121,7 @@ contract, not against output.
 
 | | |
 |---|---|
-| **Source SHA to run** | **NEW — verify with `git log --oneline -1 -- src/ diagnostic-tests/`** |
+| **Source SHA to run** | `9cff9ac` — verify with `git log --oneline -1 -- src/ diagnostic-tests/` |
 | **Tree** | clean; six gates green; all four touched programs compile |
 | **Resume at** | **Step 4a below (name the file), then 4b, then 4c.** Do NOT reformat the Lerdisk before 4a |
 
