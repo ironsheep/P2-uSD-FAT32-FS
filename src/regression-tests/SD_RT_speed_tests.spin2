@@ -235,9 +235,23 @@ PUB go() | result, handle, spiFreq, maxSpeed, hsActive, cmd6Sup, hsCap, hsResult
       ' The capability answer already in hand is what disambiguates: a card that
       ' said it CAN and then did not is a failure and must carry an error code; a
       ' card that said it cannot is a clean decline and must not.
+      '
+      ' "SAID IT CAN" IS BOTH ANSWERS, NOT JUST THE SECOND (fixed 2026-08-20).
+      ' This used hsCap alone and failed on the Lerdisk counterfeit in round 16b,
+      ' where the two capability queries DISAGREE: checkCMD6Support() reads the SCR
+      ' spec version and says SD 1.x (FALSE), while checkHighSpeedCapability() puts
+      ' the CMD6 inquiry to the card and gets an affirmative (TRUE). The driver is
+      ' not confused by that and neither should this test be -- probeHighSpeed()
+      ' gates on the SCR FIRST and only asks function group 1 for SD 2.0+ cards, so
+      ' an SD 1.x card is a definite, correctly-obtained "no" and the clean-decline
+      ' path with ERROR() == SUCCESS is exactly right. checkHighSpeedCapability()'s
+      ' own docstring states the precondition -- "Requires CMD6 support - call
+      ' checkCMD6Support() first" -- and the test was the party not honouring it.
+      ' Mirror the driver's gate: capable means BOTH answers, which is what makes a
+      ' later refusal a genuine failure rather than a card that was never eligible.
       utils.setCheckCountPerTest(2)
       utils.evaluateSubBool(hsActive == false, @"HS inactive after failure", true)
-      if hsCap
+      if cmd6Sup AND hsCap
         utils.evaluateSubBool(errCode <> sd.SUCCESS, @"capable card that did not switch reports an error", true)
       else
         utils.evaluateSubValue(errCode, @"card declined cleanly, no error", sd.SUCCESS)

@@ -121,11 +121,94 @@ contract, not against output.
 
 | | |
 |---|---|
-| **Source SHA to run** | `88fe9a3` — **unchanged**; verify with `git log --oneline -1 -- src/ diagnostic-tests/` |
-| **Tree** | clean; six gates green |
-| **Resume at** | **Step 4.** Step 2 is deferred — do not run it; see below |
+| **Source SHA to run** | **NEW — verify with `git log --oneline -1 -- src/ diagnostic-tests/`** |
+| **Tree** | clean; six gates green; all four touched programs compile |
+| **Resume at** | **Step 4a below (name the file), then 4b, then 4c.** Do NOT reformat the Lerdisk before 4a |
 
-### Container hand-back, session 2 → 3
+### Container hand-back, session 3 → 4
+
+**Both test failures were test defects, and neither indicted the driver. The audit
+finding is real, unattributed, and the card you preserved is the reason it is
+still answerable — thank you for leaving it seated.**
+
+#### The audit finding: one defect, not two, and FSInfo is the honest party
+
+A directory entry points at cluster 19 and `FAT[19]` is 0 — the FAT calls the
+file's own first cluster free. That single state produces both lines: the chain
+walk hits a free next-pointer, and the counted free total comes out one *higher*
+than FSInfo claims.
+
+**Your Amazon Basics comparator is what made this readable.** It ended `CLEAN` with
+the *same* `Dirs: 1  Files: 1` survivor — so the leftover file is normal — but with
+**two** clusters allocated, root plus the file. The Lerdisk has one. The allocation
+happened; the FAT entry never stuck.
+
+**I am not calling it a driver defect, because the evidence does not separate
+"driver failed to write `FAT[19]`" from "counterfeit card accepted the write and
+discarded it".** The asdfg class already carries a punch-listed LBA-failure item.
+Three steps settle it, and they must run in this order.
+
+#### Step 4a — name the object *(read-only, do this first)*
+
+```bash
+./run_test.sh ../src/UTILS/SD_FAT32_audit.spin2
+```
+
+A chain finding now prints a second line, `in: <8.3 name>`. **That name identifies
+the file, the suite that made it, and the code path.** Read-only; the card is not
+modified. If it comes back `(root)`, say so — that would mean the root directory
+chain itself, which is a different and worse story.
+
+#### Step 4b — does it reproduce?
+
+```bash
+./run_regression.sh
+```
+
+Deterministic or not is the first fork: a one-off points at the card, a repeat
+points at the code. Expect **534/534** — the two reds from your run are fixed
+below. This reformats the card, so 4a must be done first.
+
+#### Step 4c — hold the geometry, change the silicon
+
+The clean card has 64 sectors/cluster; the failing one has 8. Run the same roster
+on a **genuine** card that formats to 8 sectors/cluster — an 8 GB or smaller unit.
+Passes ⇒ the counterfeit dropped the write. Fails ⇒ a real driver defect gated on
+small-cluster geometry, and a release blocker. Tell me which card you used.
+
+#### The two reds — both test-side, both fixed
+
+**`register_tests` #11, CRC7 stop bit — test defect.** The driver's contract is
+faithful register transport, not card conformance, and this test says so itself one
+check below the failing one, where PNM printability is informational for exactly
+this reason. The Lerdisk's whole CID byte 15 is `$00`, already characterized in its
+card record as a scored counterfeit indicator. Demoted to an informational
+transcript line. **No coverage lost:** a misaligned CID read is what the stop bit
+might have caught, and the surviving checks catch it more directly on every card —
+MID must equal `getManufacturerID()`, MDT must decode to a plausible date. Both held
+here, which is how we know the transport was sound.
+
+**`speed_tests` #8 — my defect, introduced in the session 1 → 2 fix.** You reported
+the two capability paths disagreeing, and that was exactly right. The driver is not
+confused by it: `probeHighSpeed()` gates on the **SCR first** and only asks function
+group 1 for SD 2.0+ cards, so an SD 1.x card is a definite "no" and the clean
+decline with `ERROR() == SUCCESS` is correct. `checkHighSpeedCapability()` even
+documents the precondition — *"call checkCMD6Support() first"* — and my test was the
+party not honouring it. It now mirrors the driver's gate: capable means **both**
+answers.
+
+**Neither changes the test count. Still 534.**
+
+#### Also fixed — the audit was describing the wrong thing
+
+`"chain runs past the file size at cluster 19"` never consults the file size at that
+site; the genuine size check lives elsewhere and emits its own warning. The wording
+arrived with a rename from the accurate `Truncated at cluster %d`, and it sent my
+first reading of your finding down a length-mismatch path. Both chain sites now
+report what they actually found, and the `ERROR:` line that was counted as a repair
+rather than an error is gone.
+
+### Container hand-back, session 2 → 3 *(historical — completed)*
 
 **No source changed, so your 534/534 still certifies the driver steps 4-6 will run
 on.** The whole of this hand-back is a decision and a correction.
@@ -436,6 +519,7 @@ spanning two driver versions.
 - [x] Step 1: **534/534** (session 2, sweep `260819-155926`)
 - [~] Step 2: **deferred** — cell unreachable on the shipped driver; funding the campaign is Stephen's call
 - [~] Step 3: **deferred to after step 6** — no default change in v1.8.0 either way
+- [~] Step 4: wedge **GONE** (mount 45/45, raw 14/14 in the Edge socket); closing audit found an unterminated chain — attribution owed via 4a/4b/4c
 - [ ] Step 4: Lerdisk verdict in the Edge socket
 - [ ] Step 5: run variance measured before instance variance; one-shot cards fully captured
 - [ ] Step 6: catalog tables harvested, single driver-version banner

@@ -189,11 +189,20 @@ cog_guard   LONG    0[STACK_GUARD_LONGS]
 
 tmpStr      BYTE    0[32]                ' temp buffer for string extraction
 
+' The 8.3 name of the directory entry whose chain is being validated, so a chain
+' finding can say WHICH object it is about. Added 2026-08-20: round 16b reported
+' an unterminated chain at cluster 19 and nothing in the transcript could tie it
+' to a file, which left "re-run the whole roster and guess" as the only way to
+' reach the code path that produced it. Set immediately before each
+' fsckValidateChain() call; "(root)" while the root directory is being walked.
+entryName   BYTE    0[16]
+
 ' Repair-line voice. Each message names the PROBLEM, never the action, so the
 ' one text reads correctly under either tag: "needs repair: 2 lost clusters"
 ' (audit) and "repaired: 2 lost clusters" (fsck). See repairTag().
 tagRepair   BYTE    "repaired", 0
 tagWould    BYTE    "needs repair", 0
+nameRoot    BYTE    "(root)", 0          ' entryName while the root chain is validated
 
 
 '' =========================================================================
@@ -802,6 +811,7 @@ PRI fsckPass2() | startRepairs
 
         ' CRITICAL: Validate root chain BEFORE scanning directories
         ' This prevents pass 3 from freeing root directory clusters
+        bytemove(@entryName, @nameRoot, strsize(@nameRoot) + 1)
         fsckValidateChain(rootCluster, 0, true)
 
         ' Scan directory tree
@@ -904,6 +914,8 @@ PRI fsckScanDir(dirCluster) | dirDone, sector, entSector, entIdx, pEntry, attr, 
                 startClus := WORD[pEntry + sd.DE_CLUS_LO_OFFSET] | (WORD[pEntry + sd.DE_CLUS_HI_OFFSET] << 16)
                 fSize := LONG[pEntry + sd.DE_FILESIZE_OFFSET]
 
+                captureEntryName(pEntry)                    '  so a chain finding can name this object
+
                 if attr & sd.ATTR_DIRECTORY
                     ' --- Subdirectory ---
                     if startClus >= 2
@@ -998,20 +1010,35 @@ PRI fsckValidateChain(startClus, fSize, isDir) | clus, nextClus, chainLen, expec
             quit
 
         ' Bad cluster reference?
+        '
+        ' THESE TWO SITES SAY WHAT THEY FOUND, NOT WHAT A DIFFERENT CHECK FINDS.
+        ' Until 2026-08-20 both reported "chain runs past the file size", which is
+        ' the language of the genuine size-vs-length check further down -- the one
+        ' that compares chainLen against expectedLen and emits a WARNING. Neither
+        ' site here looks at fSize at all; they fire on a malformed next-pointer.
+        ' The wording came in with a rename (the advice-doc mapping table still
+        ' records the accurate original, "Truncated at cluster %d") and it cost real
+        ' time: a round 16b finding was first read as a length mismatch when the
+        ' actual state was a chain whose next-pointer the FAT calls free.
+        '
+        ' The "ERROR:" line that preceded each of these is gone with them. It was
+        ' never counted -- these increment v_repairCount, not v_errorCount -- so a
+        ' log could print ERROR and then summarise "Errors: 0". One line now carries
+        ' the cluster, the bad reference and the repair state together.
         if nextClus < 2
             if currentWindow == 0
-                fifo.putFmt1(@"  ERROR: Bad ref %d in chain", nextClus)
                 writeFAT(clus, sd.FAT32_EOC_MARK)
-                fifo.putFmt2(@"  %s: chain runs past the file size at cluster %d", repairTag(), clus)
+                fifo.putFmt3(@"  %s: chain unterminated at cluster %d -- next ref %d is a free/reserved entry", repairTag(), clus, nextClus)
+                fifo.putFmt1(@"      in: %s", @entryName)
                 v_repairCount++
             quit
 
         if nextClus >= (totalClusters + 2)
             if nextClus <> FAT_BAD
                 if currentWindow == 0
-                    fifo.putFmt1(@"  ERROR: Bad ref %d in chain", nextClus)
                     writeFAT(clus, sd.FAT32_EOC_MARK)
-                    fifo.putFmt2(@"  %s: chain runs past the file size at cluster %d", repairTag(), clus)
+                    fifo.putFmt3(@"  %s: chain leaves the volume at cluster %d -- next ref %d is past the last cluster", repairTag(), clus, nextClus)
+                    fifo.putFmt1(@"      in: %s", @entryName)
                     v_repairCount++
                 quit
 
@@ -1333,6 +1360,44 @@ PRI isDot(pEntry) : bIsDot
             bIsDot := true
         if BYTE[pEntry + 1] == "."
             bIsDot := true
+
+
+PRI captureEntryName(pEntry) | idx, outIdx
+' Render a directory entry's 8.3 name into entryName for use in chain findings.
+'
+' The on-disk form is 11 space-padded bytes with no dot (NAME    EXT), which is
+' not what a reader is looking for in a log line, so the padding comes out and the
+' dot goes in. Non-printable bytes become '?' rather than being passed through --
+' OEM and counterfeit cards do ship them, and a raw control byte in a transcript
+' corrupts the line for whoever reads it later.
+'
+' @param pEntry - Pointer to a 32-byte directory entry
+
+    outIdx := 0
+    repeat idx from 0 to 7                                  '  base name, trailing spaces dropped
+        if BYTE[pEntry + idx] == " "
+            quit
+        entryName[outIdx++] := printableOr(BYTE[pEntry + idx])
+
+    if BYTE[pEntry + 8] <> " "                              '  extension only when present
+        entryName[outIdx++] := "."
+        repeat idx from 8 to 10
+            if BYTE[pEntry + idx] == " "
+                quit
+            entryName[outIdx++] := printableOr(BYTE[pEntry + idx])
+
+    entryName[outIdx] := 0
+
+
+PRI printableOr(bChar) : bOut
+' One byte as itself when printable ASCII, '?' otherwise. See captureEntryName.
+'
+' @param bChar - Byte from a directory entry name field
+' @returns bOut - The byte, or "?" if it would corrupt a transcript line
+
+    bOut := bChar
+    if bChar < $20 or bChar > $7E
+        bOut := "?"
 
 
 CON { license }
