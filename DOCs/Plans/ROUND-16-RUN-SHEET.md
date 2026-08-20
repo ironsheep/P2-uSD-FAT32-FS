@@ -123,13 +123,37 @@ contract, not against output.
 |---|---|
 | **Source SHA to run** | `9cff9ac` — verify with `git log --oneline -1 -- src/ diagnostic-tests/` |
 | **Tree** | clean; six gates green; all five affected programs compile (audit, fsck, demo shell, register_tests, speed_tests) |
-| **Resume at** | **Step 4a below (name the file), then 4b, then 4c.** Do NOT reformat the Lerdisk before 4a |
+| **Resume at** | **Step 4a → 4b → 4c → 4d**, in the hand-back below. **Do NOT reformat the Lerdisk before 4a** — it is holding the evidence |
 
 ### Container hand-back, session 3 → 4
 
 **Both test failures were test defects, and neither indicted the driver. The audit
 finding is real, unattributed, and the card you preserved is the reason it is
 still answerable — thank you for leaving it seated.**
+
+#### What this change invalidated *(protocol item 3 — stated, not left to infer)*
+
+**The driver did not change.** `git diff 88fe9a3 HEAD -- src/micro_sd_fat32_fs.spin2`
+is empty; the driver binary every suite links is byte-identical to the one your
+534/534 certified. Three files moved, none of them the driver:
+
+| File | Effect |
+|---|---|
+| `SD_RT_register_tests.spin2` | that suite's results are stale |
+| `SD_RT_speed_tests.spin2` | that suite's results are stale |
+| `isp_fsck_utility.spin2` | changes audit/fsck **output text only**; no driver path |
+
+So this is **not** the atomic-restart case the protocol describes for a driver
+change — the 25 untouched suites ran the same driver under the same test code and
+those results stand. What is genuinely unverified is the two edited suites.
+
+**Still owed, and it is six minutes:** a full sweep on the **regression card** to
+restore v1.8.0 gate condition A on the current suite content. Step 4b runs on the
+Lerdisk, which is a different card and does not substitute for it. Both edits are
+expected to be no-ops there — the removed CRC7 sub-check only ever failed on
+non-conforming silicon, and the Amazon Basics answers TRUE to both capability
+queries so speed_tests #8 takes the same branch as before — but "expected" is not
+"measured", and this suite roster is our certification mechanism.
 
 #### The audit finding: one defect, not two, and FSInfo is the honest party
 
@@ -176,6 +200,16 @@ on a **genuine** card that formats to 8 sectors/cluster — an 8 GB or smaller u
 Passes ⇒ the counterfeit dropped the write. Fails ⇒ a real driver defect gated on
 small-cluster geometry, and a release blocker. Tell me which card you used.
 
+#### Step 4d — restore gate condition A on the regression card
+
+```bash
+./run_regression.sh          # regression card, not the Lerdisk
+```
+
+Two suites were edited, so the roster that certifies v1.8.0 has not been run in its
+current form on the regression card. **Expect 534/534.** Six minutes. Do it before
+step 5, so the sweep that follows is measuring a certified state.
+
 #### The two reds — both test-side, both fixed
 
 **`register_tests` #11, CRC7 stop bit — test defect.** The driver's contract is
@@ -208,141 +242,18 @@ first reading of your finding down a length-mismatch path. Both chain sites now
 report what they actually found, and the `ERROR:` line that was counted as a repair
 rather than an error is gone.
 
-### Container hand-back, session 2 → 3 *(historical — completed)*
+### Earlier hand-backs — completed, and deliberately not kept here
 
-**No source changed, so your 534/534 still certifies the driver steps 4-6 will run
-on.** The whole of this hand-back is a decision and a correction.
+Sessions 1 → 2 and 2 → 3 are done and their instructions are spent. They were
+removed on 2026-08-20 because a superseded hand-back is not harmless: the session
+1 → 2 block still ended "continue at **step 2**", which is now the one step that
+must **not** run, and a bench agent skimming for its next command could act on it.
+This sheet carries the current hand-back only.
 
-#### Step 2 is DEFERRED. Do not run it.
-
-**The cell it asks for cannot be built with the driver you are holding, and that is
-a fault in the run sheet, not in your reading of it.** Three facts, in the order that
-matters:
-
-1. **`setSPISpeed()` leaves high-speed mode on the way through.** The
-   `CMD_SET_SPI_SPEED` handler calls `applyDefaultSpeedMode()` — a CMD6 switch back
-   to default mode — *before* it applies any hand-set clock. So `attemptHighSpeed()`
-   followed by `setSPISpeed(25_000_000)` lands in **default mode at 25 MHz**: round
-   10b's arm, already measured, not the missing cell. Your search found no
-   instrument for the cell because the driver has no way to reach it.
-
-2. **The cell was tried once and failed hard — though *why* is not established.**
-   Round 8a run 2 built this exact cell by accident — a verified high-speed switch,
-   then a hand-set 25 MHz,
-   before that exit was hooked — and every operation after it returned `-7`
-   (`SD_RT_speed_tests` #9/#12). Hooking that exit is item 5 of the bundle you just
-   certified.
-
-   **The `-7` is measured; the explanation for it is not.** It was attributed to the
-   card sitting on high-speed output timing while the host sampled on default-mode
-   timing, and that inference is shakier than it looked: the round 9b read band at
-   hp=7 is `[-1..12]` — 13 to 14 ticks of a 14-tick bit period, essentially the whole
-   period — and a mode shift the size of the one seen at hp=4 should not strand a
-   band that wide. The write side is a live alternative: test #9 was a
-   `createFileNew`, and the tx teeth at hp=7 sit at `≡ 1 (mod 7)`.
-
-3. **Reaching the cell is a campaign, not an arm.** It needs a debug-only knob that
-   sets the clock without the switch-back, *and* — because we do not know which side
-   failed — both a read-band phase sweep and a tx tooth map at hp=7 *inside* verified
-   high-speed mode. Round 12d showed bands do move with the card's mode (hp=4 inside
-   high speed is `[-3..+4]` centre 0, against `[2..8]` centre +5 outside it), so
-   neither map transfers from the default-mode measurements we hold.
-
-#### Why deferred rather than built now
-
-- **A driver change invalidates your 534/534.** A certification run is atomic. The
-  knob would be debug-only and would not alter what ships, but it would still cost a
-  full re-sweep before steps 4-6 could start.
-- **The scarce resource this round is the deployment-bound cards.** They are
-  one-shot. The Samsung EVO is retained and will be on the shelf whenever we come
-  back to it. Unrepeatable work goes first.
-- **Nothing downstream needs the answer.** Step 6 is two-armed *by design*, so the
-  sweep produces release numbers for whichever policy is eventually chosen. That is
-  precisely the job two arms were added to do.
-- **v1.8.0 does not change the high-speed default.** It ships high speed opt-in with
-  correct mode bookkeeping. The policy belongs to a later release.
-
-The punch-list entry is corrected — it had claimed "the driver already supports it",
-which is what put an unreachable step on this sheet — and re-classified from release
-gate to open product decision, carrying the three-step design for the real
-experiment.
-
-#### Settled without bench time — do not spend a slot on it
-
-The Samsung EVO PSN question (catalog row keyed `C0305565`, the campaign card reads
-`$4AC8_5F42`) is **not** a transcription error: `DOCs/cards/samsung-gd4qt-128gb.md`
-already documents two physical units of the same model. The sweep's per-card
-`CARD-ID:` line keys whichever unit is in the socket, so this resolves mechanically
-when you get there.
-
-#### Then
-
-Resume at **step 4** (16b, the Lerdisk in the Edge socket), then step 5, then step 6.
-The Samsung EVO can be unstaged.
-
-### Container hand-back, session 1 → 2 *(historical — completed)*
-
-**Both work items are done, and one of them was a near miss.**
-
-**Item A — Test #8 fixed. Your classification was right, and I verified it against
-the contract independently before touching anything.** `attemptHighSpeed()`
-documents three outcomes; the test modelled two and called the third a defect. It
-now uses the capability answer already in hand: a card that said it *can* and then
-did not must carry an error code; a card that said it *cannot* is a clean decline
-and must not. **Sub-check count is unchanged, so the total is still 534.**
-
-The driver half of item A was **already fixed before your handback arrived**
-(`9f22a44`) — same defect, found independently. All five failure exits in
-`do_attempt_high_speed()` now set `hs_query_error`. Punch-listed and changelogged.
-The path still cannot be reached by injection; the recommended
-`setTestCorruptReadAfter()` facility is punch-listed, decision pending.
-
-**Item B — all three emitters fixed, and this one nearly cost the sweep.** Your
-diagnosis was exact. Confirmed from the transcripts: `$$AD`, `$3584_1E2E` inside a
-key, `mdt=2_02507`, `sysclk=350_000_000`. The grouping was the dangerous part —
-`awk`'s `+0` reads `kbps=2_500` as **2**, so a swept catalog would have carried
-numbers truncated to their leading digits with nothing looking wrong anywhere.
-
-All machine lines in `SD_card_identify`, `SD_performance_benchmark` and
-`SD_speed_characterize` are now composed with `fmt.sFormatStr*` and emitted as one
-plain string, per the demo-shell precedent you cited. PNM trailing spaces trimmed.
-Human-readable lines keep `debug()`'s formatters — grouping helps a reader.
-
-**Plus a hardening you did not ask for:** `harvest_catalog.sh` now *refuses* a
-non-integer numeric field instead of silently coercing it. A grouped value is a
-hard error naming the field and telling you to re-run the instrument. The fix
-stopped this instance; the guard stops the class.
-
-### Verify on hardware before trusting the sweep
-
-Your resume step 3 is right and now has a sharper acceptance test:
-
-```bash
-./run_test.sh ../src/UTILS/SD_card_identify.spin2
-./harvest_catalog.sh logs/SD_card_identify_<newest>.log
-```
-
-Expect `SILICON-KEY: $AD_USD00_2.0` and
-`CARD-ID: $AD_USD00_2.0_35841E2E_202507` — single `$`, contiguous hex, `YYYYMM`.
-The harvester should report a clean parse. **If it refuses a field, stop** — that
-is item B not fully fixed, and it must be right before any one-shot capture.
-
-### Then
-
-1. Re-run **step 1** in full (Amazon Basics still seated). Expect **534/534**.
-2. Re-identify both retained 64 GB cards for clean record-source transcripts
-   (records owed for `$0000_0E2F` and the 32 GB `$0000_01C7`).
-3. Continue at **step 2** (16d, Samsung EVO `$4AC8_5F42`).
-
-### Noted from your session
-
-- The unconditional CMD12 quiesce passed its first full-suite exposure, 27 suites,
-  every mount, two mid-sweep reformats, 23/23 closing audit. That is the release's
-  headline fix certified in practice.
-- One-shot population corrected to 6 cards; purchase provenance recorded.
-- Aborting the sweep because uncommitted notes made the banner unprovable was
-  **correct behaviour**, and it is now written into the protocol above rather than
-  left as a judgement call.
+The history is in git (`git log --oneline DOCs/Plans/ROUND-16-RUN-SHEET.md`) and in
+the bench's own record, `SOCKET-SHMOO-RUN-NOTES.md`. What survived from those
+sessions is already live elsewhere on this page: the step 2 deferral has its own
+step section, and the first-light status is under **Before you start**.
 
 ## Before you start
 
@@ -364,7 +275,13 @@ before any one-shot card goes in the socket.
 
 ---
 
-## Step 0 — Identify and mark the two retained 64 GB cards  *(one time, no driver dependency)*
+## Step 0 — Identify and mark the two retained 64 GB cards — ✅ DONE
+
+**Completed session 1, re-captured with canonical keys in session 2. Do not repeat —
+the cards are marked and the transcripts are keyed.** Card A (unmarked, record still
+owed) is `$12_ASTC_2.0_00000E2F_202306`; card B (green, catalogued) is
+`$12_ASTC_2.0_00000F14_202306`. Same silicon key on both: one product, one silicon.
+Kept below for the reasoning, which the two owed card records will need.
 
 **Do this before the five Camera Plus units are handled together.**
 
@@ -391,7 +308,15 @@ has none.
 
 ---
 
-## Step 1 — 16a: certify the driver
+## Step 1 — 16a: certify the driver — ✅ PASSED, re-run owed as step 4d
+
+**Session 2: 534/534, 27 suites, 0 fail** on the regression card (Amazon Basics
+`$3584_1E2E`), closing audit clean. Transcript `tools/logs/sweep_260819-155926.txt`.
+
+**Two test suites were edited on 2026-08-20**, so this roster has not been run in
+its current form on the regression card. That re-run is **step 4d** in the
+hand-back — the driver itself is unchanged, so this is restoring the gate on the
+current suite content, not re-certifying the driver.
 
 ```bash
 ./run_regression.sh
@@ -528,10 +453,14 @@ spanning two driver versions.
 - [x] Step 1: **534/534** (session 2, sweep `260819-155926`)
 - [~] Step 2: **deferred** — cell unreachable on the shipped driver; funding the campaign is Stephen's call
 - [~] Step 3: **deferred to after step 6** — no default change in v1.8.0 either way
-- [~] Step 4: wedge **GONE** (mount 45/45, raw 14/14 in the Edge socket); closing audit found an unterminated chain — attribution owed via 4a/4b/4c
-- [ ] Step 4: Lerdisk verdict in the Edge socket
+- [~] Step 4: wedge **GONE** (mount 45/45, raw 14/14 in the Edge socket) — but the Lerdisk verdict is **not** final until the closing-audit chain finding is attributed
+  - [ ] 4a: read-only audit names the file (do first — the card holds the evidence)
+  - [ ] 4b: does it reproduce on the Lerdisk?
+  - [ ] 4c: genuine 8-sectors/cluster card — counterfeit silicon, or a driver defect?
+  - [ ] 4d: regression card re-run, **534/534**, restoring gate A on the edited suites
 - [ ] Step 5: run variance measured before instance variance; one-shot cards fully captured
 - [ ] Step 6: catalog tables harvested, single driver-version banner
 - [ ] Card records created for the two uncatalogued retained Gigastones
+- [ ] Lerdisk card record + `CARD-CATALOG.md` rewritten (blocked on 4a-4c)
 
 **Then and only then** the v1.8.0 release gate is satisfied.
