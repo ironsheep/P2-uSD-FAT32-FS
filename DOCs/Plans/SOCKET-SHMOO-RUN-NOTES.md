@@ -3309,3 +3309,21 @@ the failing side.
 rule re-runs the roster anyway). Steps: 4a ✓ named, 4b ✓ reproduces, 4c ✓
 genuine-silicon fail, 4d blocked. Tree clean. Bench resumes on container
 hand-back.
+
+---
+
+# Round 16 (bench session 5, 2026-08-19/20) — 4e/4f: dirSize answered, then the bisect
+
+Resume gates green: source `623a891`, tree clean at `47e5de9`, doc_version 0.
+
+## 4e — dirSize=600: the flush REACHED the directory entry
+
+Read-only audit on the still-seated Gigastone HE `$0001_B9D5`
+(`logs/SD_FAT32_audit_260819-232153.log`):
+
+    in: RTDIRTY.BIN  start=19  dirSize=600
+
+Per the hand-back's discriminator: dirSize=600 (not 0) — the entry carries the
+written size and start cluster while FAT[19]=0. The dir entry is complete; the
+FAT entry was zeroed by something AFTER the entry was flushed. Evidence now
+fully harvested from this card state; 4f may reformat.
