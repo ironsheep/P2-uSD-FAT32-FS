@@ -349,7 +349,8 @@ version constant.
 ## Step 2 — 16d: the speed-policy cell — ⏸ DEFERRED, DO NOT RUN
 
 **Deferred 2026-08-19, before it ran. The cell is unreachable with the shipped
-driver; the full reasoning is in the session 2 → 3 hand-back above.**
+driver; the full reasoning is in the punch-list entry "Read/write speed policy is
+undecided", which also carries the decision rule and the cost estimate.**
 
 In one line: `setSPISpeed()` CMD6-switches the card *out* of high-speed mode before
 applying any hand-set clock, so "high speed negotiated, writes at 25 MHz" cannot be
@@ -396,10 +397,11 @@ unnecessary. The decision rule and the full cost estimate are in the punch-list 
 small-cluster geometry, and it is a **release blocker**. Root-causing continues at
 steps 4e and 4f in the hand-back above.
 
-**⚠ Do NOT start this step with `./run_regression.sh`. That reformats the card, and
-the card is currently holding evidence.** The ordered continuation is **4a → 4b →
-4c** in the session 3 → 4 hand-back at the top of this sheet; 4a is read-only and
-must go first.
+**⚠ Do NOT re-run this step, and do not start anything here with
+`./run_regression.sh`.** The evidence now sits on the **Gigastone HE `$0001_B9D5`**,
+seated and unrepaired, and a reformat destroys it. The ordered continuation is
+**4e → 4f** in the session 4 → 5 hand-back at the top of this sheet; 4e is read-only
+and must go first.
 
 **Ran 2026-08-19** on the Lerdisk asdfg 1GB `$0000_01F4`, transcript
 `tools/logs/sweep_260819-180530.txt`.
