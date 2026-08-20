@@ -3198,3 +3198,50 @@ and end per the run sheet, and a `CATALOG-ROW`-visible marker of which arm ran
 Run-sheet steps complete: 0 ✓ (plus clean re-identify of the retained pair),
 1 ✓ **534/534**. Edge socket EMPTY — Samsung EVO `$4AC8_5F42` staged but NOT
 seated. Bench resumes at step 2 when the container hands back an arm to run.
+
+## Step 4 (16b) — Lerdisk in the EDGE socket: the wedge is GONE; 532/534; closing audit says REPAIRS NEEDED → BENCH PAUSED (hard stop rule 3)
+
+**The campaign headline first: the #3240 signature did not reproduce.** Mount
+tests 45/45 and raw_sector_tests 14/14 in the EDGE socket on the card whose
+record says "External connector only". Full transcript
+`tools/logs/sweep_260819-180530.txt`, tree `e932838`, source `88fe9a3`,
+preflight identify clean (`asdfg` SDSC 960MB, SN `$0000_01F4`, detuned SPI
+21_875_000 Hz per its class), sweep-start fsck **clean, nothing to reclaim**.
+
+**TOTAL 532/534, 2 failing suites, and the closing audit flagged 2 repairs.**
+Observations only — classification is the container's:
+
+1. **`SD_RT_register_tests` #11** (`readCIDRaw() returns valid CID`), sub-check
+   "CRC7 stop bit set": got 0, expected TRUE. The card's CID final byte has
+   bit0 (the spec's always-1 stop bit) = 0. PNM bytes read `asdfg` as always.
+   Log `tools/logs/SD_RT_register_tests_260819-180853.log` (~line 91).
+2. **`SD_RT_speed_tests` #8**, sub-check "capable card that did not switch
+   reports an error": got 0, expected TRUE. The two capability paths DISAGREE
+   on this card: #6 `checkCMD6Support()` (SCR spec version) = 0 not supported;
+   #7 `checkHighSpeedCapability()` (CMD6 inquiry) = -1 CAPABLE; attempt = FALSE
+   with ERROR() = 0 (clean-decline path). The #8 invariant assumes the two
+   answers agree; this counterfeit answers a CMD6 inquiry affirmatively while
+   its SCR says SD 1.x. Log `tools/logs/SD_RT_speed_tests_260819-180858.log`
+   (~line 75).
+3. **Closing audit `STATUS: REPAIRS NEEDED`** (hard blocker per harness):
+   Pass 2 "ERROR: Bad ref 0 in chain" + "chain runs past the file size at
+   cluster 19"; Pass 4 FSInfo free count off by one (says 244252, actually
+   244253 — consistent with one over-hanging cluster). 23/23 structural checks
+   pass, FATs in sync, no lost clusters. Dirs: 1, Files: 1 (audit does not name
+   the file). Sweep-start was clean and the harness reformatted twice
+   mid-sweep, so the state was created DURING this sweep, after the last
+   reformat (suites 14-27 window; defrag_tests ran last).
+   Log `tools/logs/SD_FAT32_audit_260819-181101.log`.
+4. **Comparator:** the identical roster on Amazon Basics `$3584_1E2E` earlier
+   today ended 534/534 with a CLEAN closing audit (`sweep_260819-155926.txt`).
+5. Cosmetic, noted in passing: test-side human debug lines still use the
+   doubled-sigil style (`CID: MID=$$5` in the register failure dump) — human
+   lines only, not machine lines.
+
+**EVIDENCE PRESERVED: fsck was NOT run; nothing was repaired; the Lerdisk
+remains SEATED in the Edge socket untouched.** The over-long chain, its dir
+entry, and the unnamed file are still on the card for any forensics the
+container wants before repair/reformat.
+
+**State at pause:** steps 0 ✓, 1 ✓ (534/534), 2 deferred, 4 run with the above,
+5-6 not started. Tree clean. Bench resumes on container hand-back.
