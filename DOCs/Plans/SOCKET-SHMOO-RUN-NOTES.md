@@ -3262,3 +3262,14 @@ wait — the evidence held. `RTDIRTY.BIN` is `testDirty` in
 `SD_RT_seek_tests.spin2:42` — that suite scored **38 pass / 0 fail** on this
 card in the failing sweep, so whatever dropped the FAT write was invisible to
 the suite's own checks. Not `(root)`, so not the worse story.
+
+## 4b — REPRODUCES, deterministically: 534/534 tests green, closing audit 2 repairs again
+
+Second full sweep on the Lerdisk (sweep-start fsck reclaimed the prior damage —
+"clean after 1 repairs"). **TOTAL 534/534, 0 fail** — both 2026-08-20 test fixes
+verified on the card that exposed them. But the closing audit reports the
+IDENTICAL state again: "chain unterminated at cluster 19 -- next ref 0 is a
+free/reserved entry, in: RTDIRTY.BIN" plus the matching FSInfo off-by-one
+(`logs/SD_FAT32_audit_260819-210523.log`). Same file, same cluster, two
+consecutive sweeps. Per the 4b fork: **a repeat points at the code** — or at a
+deterministic card behavior; 4c separates those.
