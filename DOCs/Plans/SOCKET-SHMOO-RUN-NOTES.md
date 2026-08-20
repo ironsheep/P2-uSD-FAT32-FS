@@ -3401,3 +3401,276 @@ now certified on the regression card. Defrag stayed clean a THIRD time at
 full sweep. Cards touched: Gigastone HE `$0001_B9D5` (bisect vehicle, ends
 holding post-defrag dirty state — reformattable at will), Amazon Basics
 `$3584_1E2E` (seated, clean, gate-green). No incidents.
+
+---
+
+## 4g — the defrag fix VERIFIED on the reproducer, twice
+
+**Run date:** 2026-08-20. **Source SHA:** `00a8d45` (verified scoped to
+`src/ diagnostic-tests/` before the first run). Card: Gigastone High Endurance
+8 GB `$0001_B9D5`, Edge socket, 8 sectors/cluster.
+
+The two-suite reproducer from 4f, run end to end twice from a fresh reformat:
+
+| Pass | reformat | seek_tests | defrag_tests | closing audit |
+|---|---|---|---|---|
+| 1 | OK 15s | 38 / 0 | 13 / 0 | **STATUS: CLEAN**, 23/23, 0 errors, 0 repairs |
+| 2 | OK 15s | 38 / 0 | 13 / 0 | **STATUS: CLEAN**, 23/23, 0 errors, 0 repairs |
+
+Both audits report FAT1/FAT2 in sync, FSInfo free count correct, no lost
+clusters, `Dirs: 1  Files: 1`, free clusters 1,897,592 — which independently
+confirms the 8 sectors/cluster geometry that produced the defect.
+
+The second pass was run because 4f showed the defect needed the allocator to
+climb past cluster 128 before it bit; one clean pass would have been weaker
+evidence than it looks.
+
+**Verdict: the `findContiguousRun()` first-FAT-sector fix holds.** The failure
+mode of 4b/4f — `RTDIRTY.BIN`'s start cluster freed in both FATs with the
+directory entry intact — did not recur in either pass.
+
+*Harness note, not a defect:* the first manual audit invocation timed out at
+`run_test.sh`'s 60 s default while still inside Pass 4. This card's audit takes
+~70 s. Re-run with `-t 300` and it completes. `run_regression.sh` already sets
+`AUDIT_TIMEOUT=300`, so sweeps were never affected — only a hand-run audit is.
+
+## 4h — re-certification after the driver change: BOTH geometries green
+
+A certification run is atomic and the driver moved, so the roster restarted.
+Both arms run at `00a8d45`.
+
+| Card | Geometry | Suites | Result | Closing audit |
+|---|---|---|---|---|
+| Gigastone HE 8 GB `$0001_B9D5` | 8 sec/cluster | 27 | **534 / 0** (565 s) | clean, 23/23 (70 s) |
+| Amazon Basics 64 GB `$3584_1E2E` | 64 sec/cluster | 27 | **534 / 0** (361 s) | clean |
+
+Transcripts: `tools/logs/sweep_HE8GB_260820.txt`,
+`tools/logs/sweep_AmazonBasics64_260820.txt`.
+
+**This is the 8-sectors/cluster card's first full green roster with a clean
+closing audit** — the geometry that exposed the defect had never had one. It is
+the strongest single check available on this fix, and it passed.
+
+Amazon Basics identity confirmed by the sweep's own preflight, not by a separate
+identify: `Longsys/Lexar USD00 SDXC 58GB [FAT32] SD 6.x rev2.0 SN:$3584_1E2E
+2025/07`.
+
+*Tree state at run time:* the sweep header records
+`v1.7.0-53-gfb034d7-dirty`. The dirty flag is **documentation only** — case-study
+write-ups in flight on the container side, deliberately left uncommitted at
+Stephen's instruction. No source file was modified; the scoped source SHA was
+`00a8d45` for every run above.
+
+## 4i — control arm does NOT exist at this SHA
+
+Checked before starting 4i, as the step asks: the quiesce is unconditional in
+`initCard()` at `src/micro_sd_fat32_fs.spin2:7665` (STEP 3.9). There is no
+`SD_INIT_QUIESCE`, no `#ifdef`, no guard of any kind — the round-15b flag is
+still gone. Per the step's own instruction the three arms are run anyway, and
+the outcome therefore **weakens** the case-study §11 caveat to *"consistent on
+both twins, controlled on one"* rather than deleting it.
+
+**Container decision still open:** whether to add a debug-only way to disable
+the quiesce so the interleaved control arm becomes buildable. Until it lands,
+§11 cannot be deleted no matter how many clean warm runs the twins produce.
+
+### For the record — physical card markings changed colour (2026-08-20)
+
+Stephen has re-marked the card library: **what these notes call GREEN is now
+VIOLET on the physical cards.** The meaning is unchanged — *marked = catalogued*,
+*unmarked = card record owed*. Every "GREEN `$xxxx_xxxx`" reference above and in
+`ROUND-16-RUN-SHEET.md` should be read as the violet-marked unit of that pair.
+
+Affected pairs known to these notes: Gigastone 32 GB (`$0000_01C9` marked /
+`$0000_01C7` unmarked), Gigastone 64 GB (`$0000_0F14` marked / `$0000_0E2F`
+unmarked), Cloudisk 2 GB (`$0000_1680` marked / `$0001_9B39` unmarked).
+
+## 4i / 16f — the Cloudisk twins on the quiesce build: NO WEDGE on either
+
+**Run date:** 2026-08-20. Source SHA `00a8d45`. Edge socket, adapter empty.
+Switches left in the **wedging** configuration for every run — `* Hi! from FLASH *`
+verified present in all 12 transcripts. No transcript was accepted without it.
+
+Protocol per card, per power cycle: cold `mount_tests` (priming) → warm
+`mount_tests` (the measurement) → warm `raw_sector_tests`. Two power cycles each,
+so **four warm runs per card**; the step asked for three.
+
+### Cloudisk `$0000_1680` (violet / catalogued) — CLEAN, 45/45 and 14/14 throughout
+
+| Cycle | cold mount | warm mount | warm raw |
+|---|---|---|---|
+| 1 | 45 / 0 | **45 / 0** | **14 / 0** |
+| 2 | 45 / 0 | **45 / 0** | **14 / 0** |
+
+This is the card that wedged **19/24** in round 9a (2026-08-18) with `unmount()`
+`-7` and `mount()` #2 `-8`, pre-fix. On the quiesce build it does not wedge, in
+either polarity of the boot configuration that produced the wedge.
+
+Identity confirmed **after** the cold arm, per the step's instruction (an identify
+is itself a driver session and would have destroyed the cold arm):
+`Unknown asdfg SDSC 1GB [FAT32] SD 1.x rev2.2 SN:$0000_1680 2025/11`.
+
+### Cloudisk `$0001_9B39` (unmarked / uncatalogued) — no wedge, but ONE deterministic test failure
+
+| Cycle | cold mount | warm mount | warm raw |
+|---|---|---|---|
+| 1 | 44 / **1** | 44 / **1** | 14 / 0 |
+| 2 | 44 / **1** | 44 / **1** | 14 / 0 |
+
+**On the wedge axis this card is clean too** — no `-7`, no `-8`, raw init green on
+every warm run, mount succeeds every time. The single failure is a different
+finding and is written up below. Per rule 5 a *wedge* is a hard stop; this is not
+a wedge, so the arms were completed.
+
+Identity (bonus capture, clears the punch-list card-record debt):
+`Unknown asdfg SDSC 1GB [FAT32] SD 1.x rev2.2 SN:$0001_9B39 2025/11`,
+`CSD claims TRAN_SPEED = 25 MHz; cardWarnings() = $04`.
+
+> **Round 9's note on this card is contradicted.** It recorded that `$0001_9B39`
+> "scores `crc = 0` unlike its twins, so it may not be `CW_NO_DATA_CRC` silicon at
+> all." Today it reports `cardWarnings() = $04`, which **is** `CW_NO_DATA_CRC` —
+> the same flag as the catalogued twin. Whatever round 9 measured, the warning
+> word today says same class.
+
+### Verdict on the §11 caveat
+
+Both twins now run clean on the quiesce build. **No control arm existed at this
+SHA** — the quiesce is unconditional in `initCard()`
+(`src/micro_sd_fat32_fs.spin2:7665`, STEP 3.9); there is no `SD_INIT_QUIESCE` and
+no guard of any kind. So per the step's own table this result **weakens** the
+case-study §11 caveat to *"consistent on both twins, controlled on one"* — it does
+not delete it. Deleting it still requires a debug-only way to disable the quiesce,
+which remains an open container decision.
+
+---
+
+## 4i finding — `mount_tests` #39 fails deterministically on Cloudisk `$0001_9B39`
+
+**4 / 4 runs, both power cycles, cold and warm alike.** Never seen on the violet
+twin (4/4 clean today), never seen on either regression card (both swept 534/534
+today, and #39 is in that roster). It is specific to this card.
+
+```
+* Test #39: Corrupt FSInfo: tolerated at mount, E_BAD_FSINFO at unmount
+  Sub-Test: unmount reports E_BAD_FSINFO
+  Value: 0 (expected -24)
+   -> Sub-FAIL
+```
+
+### What the other five sub-checks prove
+
+The test declares six checks. `showSubTestResults()` prints **records, not
+checks** — `count=1` is one six-check record, and a partial record would have
+raised `SUB-CHECK SHORTFALL` and failed the test. It did not. **So all six ran,
+and five passed:**
+
+| # | Sub-check | Result | What it establishes |
+|---|---|---|---|
+| 1 | FSInfo sector located | pass | VBR parsed, FSInfo LBA valid |
+| 2 | **FSInfo corruption landed while mounted** | **pass** | The corrupting `writeSectorRaw` **succeeded and was proven by readback** — both signatures read back `0` |
+| 3 | unmount reports E_BAD_FSINFO | **FAIL** | got `0`, expected `-24` |
+| 4 | mount with bad FSInfo returns SUCCESS | pass | tolerance contract holds |
+| 5 | FSInfo restored | pass | raw restore verified by readback |
+| 6 | (group operational close) | pass | card mounts green afterwards |
+
+Check 2 matters most: **this card does not silently refuse the write.** The
+counterfeit-class silent-write-refusal signature from
+`COUNTERFEIT-ASDFG-SDSC-INVESTIGATION.md` is *not* what is happening here.
+
+### Two mechanisms fit, and they need different fixes
+
+1. **Unscored test precondition.** To force `unmount()` to write FSInfo back, the
+   test does `createFileNew` → `writeHandle` → `closeFileHandle` → `deleteFile`,
+   guarded by `if handle >= 0`. **None of that is scored.** If file creation fails
+   on this silicon the free count never changes, `unmount()` takes the documented
+   "no allocation, hint unknown" clean path, and `0` is the *correct* driver
+   answer to an assumption the test never verified. Test-side defect.
+2. **`unmount()`'s FSInfo validation genuinely misses on this silicon.** A real,
+   user-affecting defect under the release gate.
+
+**The discriminator is one cheap run:** `SD_RT_file_ops_tests` on this card. If
+file create/write/delete works, mechanism 1 is dead and this is a driver defect.
+Not run this session — it writes to the card, and 4i's card-handling rule says
+nothing is written to these retained twins. **Container's call**, per Stephen
+(2026-08-20): record it here and let the container side decide.
+
+*Related instrument note:* this is the second time a test's setup path has been
+found unscored (cf. the `lesson_new_test_first_hardware_run` pattern). The
+`if handle >= 0` idiom hides exactly this. Worth a sweep for the idiom across the
+suites when someone is in there.
+
+### Also worth correcting in the run sheet
+
+Step 4i says the reproducer *"only mounts and reads — nothing written."* **That is
+not accurate.** `mount_tests` #39 writes raw sectors to the FSInfo LBA, creates a
+file, writes to it, and deletes it — all on the retained twins. It restores what
+it corrupts (check 5 verified), and no harm resulted, but the step's card-handling
+promise and what the suite actually does are two different things. Anyone reading
+that line to decide what is safe to run on a precious card would be misled.
+
+### Bench scope, this session
+
+4g: 2 reformats, 4 suite runs, 2 audits. 4h: 2 full sweeps (54 suite runs, 2
+closing audits, 4 reformats). 4i: 12 suite runs, 2 identifies, 0 reformats, 4
+power cycles by Stephen. Cards touched: Gigastone HE 8 GB `$0001_B9D5`
+(reformatted, ends clean), Amazon Basics 64 GB `$3584_1E2E` (ends clean, sweep
+baseline), Cloudisk `$0000_1680` and `$0001_9B39` (no reformat; #39 corrupts and
+restores FSInfo on each, verified restored). No incidents, no card left dirty.
+
+---
+
+## ⏸ BENCH PAUSED — hand-back to container, 2026-08-20
+
+**Stephen's instruction, verbatim in intent:** hand back now and pause. **Do not
+run the step 5 / 16c catalog pass until the container side has specified every
+remaining fix and its tests, and everything else is release-ready.**
+
+The reasoning is a gate-ordering one and it is correct: the catalog sweep is the
+**release gate**, and a certification run is atomic. Any driver change landing
+after it invalidates it wholesale — the same way this session's defrag fix
+invalidated 4d's 534/534. Running the parade early buys nothing and risks burning
+one-shot card handling on a build that will move again.
+
+### State at pause
+
+| | |
+|---|---|
+| Source SHA run all session | `00a8d45` (scoped `src/ diagnostic-tests/`, verified before first run) |
+| Gates | **534 / 0** on **both** geometries, closing audits clean — 8 sec/cluster and 64 sec/cluster |
+| #3240 wedge | **not reproducible on either twin** on the quiesce build; controlled on one card only |
+| Open defect | `mount_tests` #39 on Cloudisk `$0001_9B39`, 4/4 deterministic — mechanism undecided |
+| Cards | all four unloaded and clean; nothing left dirty |
+| Tree | notes updated on disk. Uncommitted doc work belongs to Stephen's case-study write-ups and is **deliberately** untouched |
+
+### What the bench needs from the container side before step 5
+
+Specify these as *fix + the test that proves it*, so the next bench session is one
+uninterrupted run rather than a conversation:
+
+1. **`mount_tests` #39 on `$0001_9B39` — decide the mechanism.** Either authorise
+   the `SD_RT_file_ops_tests` discriminator on that card (it writes; that is why
+   the bench did not run it), or fix the unscored precondition so the test
+   reports *which* assumption failed. Under the release gate this is
+   user-affecting until shown otherwise: `unmount()` returning `0` where the
+   contract says `-24` is a wrong result a user could act on.
+2. **The control-arm decision.** A debug-only way to disable the quiesce is the
+   only thing that deletes the case-study §11 caveat. If it lands, 4i becomes one
+   extra arm per twin — cheap, and the cards are here.
+3. **Release the deliberate hold on `SD_RT_seek_tests`.** 4g is green, so the
+   unclosed-handle/ignored-return defect no longer needs preserving as reproducer
+   seed. It is owed a fix *and* the regression test for the defrag defect itself —
+   there is currently no suite that would have caught a freed live chain; only the
+   closing audit saw it.
+4. **Card-record debts.** `$0001_9B39` identity is captured above and can be
+   catalogued from these notes without further card handling. Still owed:
+   `$0000_0E2F` (64 GB) and `$0000_01C7` (32 GB).
+5. **Catalog claims that are now dead.** Both `asdfg` records still say
+   *"External only — same Edge-socket wedge as Lerdisk."* Step 4 killed that for
+   the Lerdisk and 4i kills it for both Cloudisks. `CARD-CATALOG.md:165` and both
+   card docs need the rewrite, not just the superseded-mechanism banner they
+   carry now.
+6. **Run-sheet correction** — 4i's "nothing written" claim (detailed above).
+
+**And the standing rule this session re-proved twice:** any driver change means an
+atomic re-certification — 534/534 on **both** geometries with clean closing
+audits — *before* the catalog parade, not after.

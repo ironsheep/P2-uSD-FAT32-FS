@@ -5,13 +5,35 @@
 **Unique ID:** `Unknown_asdfg_2.2_00001680_202511`
 **Test Date:** 2026-05-18 (initial Edge characterization), 2026-05-27 (External re-characterization)
 **Reporter:** stephen@ironsheep.biz
-**Status:** Characterized. Supported on External SD header **only** until Edge-socket wedge is resolved.
+**Status:** Characterized. **Edge-socket restriction WITHDRAWN 2026-08-20** — runs clean in both sockets on v1.8.0.
 
-### ⚠️ Temporary Support Restriction (2026-05-27)
+### Support Restriction — WITHDRAWN (raised 2026-05-27, withdrawn 2026-08-20)
 
-This card is currently **supported on the External SD header only** (build flag `SD_PINS_EXTERNAL`, pins CS=20 / MOSI=19 / MISO=18 / SCK=21). On the P2 Edge module's onboard SD socket the card exhibits the same reproducible flash-commit-pipeline wedge as its twin Lerdisk: any single-block write after mount permanently wedges subsequent operations until power-cycle. The wedge does **not** fire on the External SD header — believed to be electrical-margin (trace length / capacitance) at the Edge socket exacerbating already-buggy counterfeit silicon.
+> **⚠ Superseded mechanism — update pending (2026-08-20).** The wedge described
+> below was root-caused in August 2026 and it is **not** an electrical-margin
+> effect and **not** about single-block writes. It is boot-time traffic on the
+> pins the Edge socket shares with the boot flash; the External header is clean
+> because it sits on ordinary GPIO, not because its wiring is kinder. The CMD25
+> workaround referenced below was never implemented and is not needed. v1.8.0
+> fixes it with a CMD12 before CMD0 at card initialization, and this card's twin
+> has since run the full reproducer clean in the Edge socket.
+>
+> Full account: [`../SD-CARD-WEDGE-CASE-STUDY.md`](../SD-CARD-WEDGE-CASE-STUDY.md).
+>
+> **The restriction is now WITHDRAWN.** This card ran the Edge-socket reproducer
+> clean on the v1.8.0 build on 2026-08-20 — `SD_RT_mount_tests` **45/45** and
+> `SD_RT_raw_sector_tests` **14/14**, on four warm runs across two power cycles,
+> with boot-time access left ENABLED (the configuration that produced the wedge;
+> the flash banner was verified present in every transcript). Pre-fix, this same
+> card wedged 19/24 with `unmount()` `-7` and `mount()` #2 `-8`.
+>
+> **Use either socket.** The historical text below is kept as the record of what
+> was believed between May and August 2026; its mechanism is wrong and its
+> recommendation no longer applies.
 
-A driver workaround that routes single-block writes through multi-block CMD25 protocol on `CW_NO_DATA_CRC` cards has been designed (see `DOCs/Analysis/COUNTERFEIT-ASDFG-SDSC-INVESTIGATION.md` experiment 7 sequence) but is not yet implemented. Until that workaround ships, **use the External SD header for this card class**.
+*(Historical, superseded — see the banner above.)* This card was **supported on the External SD header only** (build flag `SD_PINS_EXTERNAL`, pins CS=20 / MOSI=19 / MISO=18 / SCK=21). On the P2 Edge module's onboard SD socket the card exhibited the same reproducible wedge as its twin Lerdisk: operations after a mount wedged until power-cycle. The wedge did **not** fire on the External SD header — believed at the time to be electrical margin (trace length / capacitance) at the Edge socket exacerbating already-buggy counterfeit silicon. That reading was wrong: the External header simply sits on ordinary GPIO rather than on the boot pins.
+
+*(Historical, superseded.)* A driver workaround routing single-block writes through multi-block CMD25 on `CW_NO_DATA_CRC` cards was designed (see `DOCs/Analysis/COUNTERFEIT-ASDFG-SDSC-INVESTIGATION.md` experiment 7 sequence). **It was never implemented and is not needed** — raw single-block writes were later shown not to wedge these cards at all.
 
 ### Card Designator (post-format, FAT32, External connector, settled SPI from probe-fix)
 

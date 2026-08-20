@@ -274,7 +274,7 @@ Unknown asdfg SDSC 1GB [FAT32] SD 1.x rev2.2 SN:$0000_1680 2025/11
 Class 4, U0, V0, SPI 21 MHz  [P2FMTER]
 ```
 
-> Silicon twin of the Lerdisk: same CID layout, sequential MDT and PSN, same probe-settled SPI ceiling, same dummy-CRC handling, same Edge-socket wedge. `cardWarnings() = $04` (`CW_NO_DATA_CRC`). Counterfeit classifier score 12-16. **External connector only** — see `cloudisk-asdfg-2gb.md`.
+> Silicon twin of the Lerdisk: same CID layout, sequential MDT and PSN, same probe-settled SPI ceiling, same dummy-CRC handling, same Edge-socket wedge (fixed in v1.8.0; the External-only restriction was withdrawn 2026-08-20 and this card runs clean in both sockets). `cardWarnings() = $04` (`CW_NO_DATA_CRC`). Counterfeit classifier score 12-16. See `cloudisk-asdfg-2gb.md`.
 
 ---
 

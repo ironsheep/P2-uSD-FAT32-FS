@@ -38,7 +38,9 @@ CON
      ' WRITE_SIZE): 3 of them alive at once -- DEFRAG_A, SPACER, and the 64 KB
      ' appended to DEFRAG_A -- plus 2 more for the contiguous copy compactFile()
      ' builds of the 128 KB result before releasing the fragmented original.
-     PEAK_BYTES      = 5 * FILL_WRITES * WRITE_SIZE
+     ' The 6th is the BYSTANDER of the chain-integrity group: it is alive across
+     ' a compaction by design, so it adds to the peak rather than reusing it.
+     PEAK_BYTES      = 6 * FILL_WRITES * WRITE_SIZE
 
 ' Enable defrag, debug, and the test hooks the fragmentation setup arms
 ' (setTestMaxClusters)
@@ -68,6 +70,7 @@ DAT
 ' Test filenames
 fileA           BYTE    "DEFRAG_A.TXT", 0
 spacerFile      BYTE    "SPACER.TXT", 0
+bystander       BYTE    "BYSTAND.TXT", 0
 fileContig      BYTE    "CONTIG.TXT", 0
 fileEmpty       BYTE    "EMPTY.TXT", 0
 fileSeqA        BYTE    "SEQ_A.TXT", 0
@@ -83,7 +86,7 @@ readBuffer      BYTE    0[WRITE_SIZE]
 readBuffer_guard BYTE   0[GUARD_SIZE]
 
 
-PUB go() | result, handle, h2, frags, bytesWritten, bytesRead, idx, secPerClus, cBytes, freeSec, freeClus, needClus
+PUB go() | result, handle, h2, frags, bytesWritten, bytesRead, idx, secPerClus, cBytes, freeSec, freeClus, needClus, bystandOk, bystandBytes
 '' Main entry point for defragmentation regression tests
 
     debug(" ")
@@ -328,11 +331,112 @@ PUB go() | result, handle, h2, frags, bytesWritten, bytesRead, idx, secPerClus, 
     sd.deleteFile(@fileEmpty)
 
     ' =========================================================================
-    ' TEST GROUP 3: createFileContiguous API
+    ' TEST GROUP 3: Compaction Does Not Touch Other Files
+    ' =========================================================================
+    ' REGRESSION COVERAGE for the round-16 defect (fixed 2026-08-20). The FAT
+    ' free-run scan behind compactFile() never loaded the first FAT sector, so
+    ' every verdict for clusters 2..127 came from whatever the previous FAT
+    ' operation had left in the buffer -- and it reported ALLOCATED clusters as
+    ' FREE, which is the dangerous direction. compactFile() then built its
+    ' contiguous chain straight across a live file's clusters, and freeing the
+    ' old chain later left that file's directory entry pointing at a cluster
+    ' both FATs called free.
+    '
+    ' Nothing in this suite caught it. Every suite scored GREEN on cards that
+    ' ended the run damaged; only the closing filesystem audit ever saw it. So
+    ' the invariant is asserted here directly: a file that is not being compacted
+    ' must come through another file's compaction byte-for-byte intact.
+    '
+    ' This does NOT reproduce the original stale-buffer condition on demand --
+    ' that needed the allocator to have climbed past cluster 128 first, which is
+    ' allocation history, not something a test can stage. It asserts the property
+    ' the defect violated, which is what a regression test is for.
+    utils.startTestGroup(@"Compaction Does Not Touch Other Files")
+
+    ' --- Test 10: a bystander file survives another file's compaction ---
+    utils.startTest(@"Bystander file intact after compacting a fragmented file")
+    utils.setCheckCountPerTest(5)
+    sd.deleteFile(@bystander)
+    sd.deleteFile(@fileA)
+    sd.deleteFile(@spacerFile)
+
+    ' BYSTANDER first, so it occupies low clusters -- the range the defective
+    ' scan mis-read. Distinct pattern byte so a stolen cluster shows up as data,
+    ' not just as a count.
+    bystandOk := false
+    handle := sd.createFileNew(@bystander)
+    if handle >= 0
+        bytefill(@writeBuffer, $5C, WRITE_SIZE)
+        repeat FILL_WRITES
+            sd.writeHandle(handle, @writeBuffer, WRITE_SIZE)
+        sd.closeFileHandle(handle)
+        bystandOk := (sd.fileFragments(@bystander) >= 1)
+    utils.evaluateSubBool(bystandOk, @"bystander created and allocated", true)
+
+    ' Now fragment a victim around a spacer, exactly as test 3 does, then free
+    ' the spacer so the compaction has a hole to search into.
+    handle := sd.createFileNew(@fileA)
+    if handle >= 0
+        bytefill(@writeBuffer, PATTERN_BYTE, WRITE_SIZE)
+        repeat FILL_WRITES
+            sd.writeHandle(handle, @writeBuffer, WRITE_SIZE)
+        sd.closeFileHandle(handle)
+    h2 := sd.createFileNew(@spacerFile)
+    if h2 >= 0
+        bytefill(@writeBuffer, $BB, WRITE_SIZE)
+        repeat FILL_WRITES
+            sd.writeHandle(h2, @writeBuffer, WRITE_SIZE)
+        sd.closeFileHandle(h2)
+    handle := sd.openFileWrite(@fileA)
+    if handle >= 0
+        bytefill(@writeBuffer, PATTERN_BYTE + 1, WRITE_SIZE)
+        repeat FILL_WRITES
+            sd.writeHandle(handle, @writeBuffer, WRITE_SIZE)
+        sd.closeFileHandle(handle)
+    sd.deleteFile(@spacerFile)
+    frags := sd.fileFragments(@fileA)
+    utils.evaluateSubBool(frags >= 2, @"victim really is fragmented going in", true)
+
+    result := sd.compactFile(@fileA)
+    utils.evaluateSubValue(result, @"compactFile(victim)", sd.SUCCESS)
+
+    ' THE ASSERTION. Read the bystander back in full and compare every byte.
+    ' A chain freed under it fails here as a short read; a cluster overwritten by
+    ' the victim's copy fails as a pattern mismatch.
+    bystandOk := true
+    bystandBytes := 0
+    handle := sd.openFileRead(@bystander)
+    if handle >= 0
+        repeat FILL_WRITES
+            bytefill(@readBuffer, 0, WRITE_SIZE)
+            bytesRead := sd.readHandle(handle, @readBuffer, WRITE_SIZE)
+            if bytesRead <> WRITE_SIZE
+                bystandOk := false
+                quit
+            bystandBytes += bytesRead
+            repeat idx from 0 to WRITE_SIZE - 1
+                if readBuffer[idx] <> $5C
+                    bystandOk := false
+                    quit
+            if not bystandOk
+                quit
+        sd.closeFileHandle(handle)
+    else
+        bystandOk := false
+    utils.evaluateSubValue(bystandBytes, @"bystander readable in full", FILL_WRITES * WRITE_SIZE)
+    utils.evaluateSubBool(bystandOk, @"bystander bytes unchanged by the compaction", true)
+    utils.showSubTestResults()
+    utils.setCheckCountPerTest(1)
+
+    sd.deleteFile(@bystander)
+    sd.deleteFile(@fileA)
+
+    ' =========================================================================
+    ' TEST GROUP 4: createFileContiguous API
     ' =========================================================================
     utils.startTestGroup(@"createFileContiguous API")
 
-    ' --- Test 10: createFileContiguous() basic ---
+    ' --- Test 11: createFileContiguous() basic ---
     utils.startTest(@"createFileContiguous() creates contiguous file")
     utils.setCheckCountPerTest(3)
     handle := sd.createFileContiguous(@fileContig, 4096)
@@ -351,7 +455,7 @@ PUB go() | result, handle, h2, frags, bytesWritten, bytesRead, idx, secPerClus, 
     utils.showSubTestResults()
     sd.deleteFile(@fileContig)
 
-    ' --- Test 11: createFileContiguous() with insufficient space ---
+    ' --- Test 12: createFileContiguous() with insufficient space ---
     ' Use test_max_clusters to constrain the FAT to 20 clusters, then request
     ' more contiguous clusters than available. Clusters 0-1 reserved, 2 is root dir,
     ' so only clusters 3-19 are usable = 17 clusters. Request 18 clusters worth.
@@ -364,7 +468,7 @@ PUB go() | result, handle, h2, frags, bytesWritten, bytesRead, idx, secPerClus, 
         sd.deleteFile(@fileContig)
     sd.clearTestErrors()                                                         ' Reset test_max_clusters
 
-    ' --- Test 12: duplicate name allocates nothing (leak witness) ---
+    ' --- Test 13: duplicate name allocates nothing (leak witness) ---
     ' createFileContiguous checks the name BEFORE reserving the chain, so a
     ' duplicate-name reject must leave free space untouched. Before the
     ' check-then-allocate reorder, every duplicate call leaked the whole
@@ -391,11 +495,11 @@ PUB go() | result, handle, h2, frags, bytesWritten, bytesRead, idx, secPerClus, 
     sd.deleteFile(@fileContig)
 
     ' =========================================================================
-    ' TEST GROUP 4: Next-Fit Allocation
+    ' TEST GROUP 5: Next-Fit Allocation
     ' =========================================================================
     utils.startTestGroup(@"Next-Fit Allocation")
 
-    ' --- Test 13: Sequential creates are contiguous ---
+    ' --- Test 14: Sequential creates are contiguous ---
     utils.startTest(@"Sequential file creates are contiguous")
     utils.setCheckCountPerTest(3)
     ' Create three files in sequence - next-fit should keep them contiguous
@@ -440,6 +544,7 @@ PRI cleanupAllFiles()
 
     sd.deleteFile(@fileA)
     sd.deleteFile(@spacerFile)
+    sd.deleteFile(@bystander)
     sd.deleteFile(@fileContig)
     sd.deleteFile(@fileEmpty)
     sd.deleteFile(@fileSeqA)

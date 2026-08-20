@@ -411,7 +411,7 @@ PUB go() | result, bytesRead, bytesWritten, idx, fileSize, actualByte, handle, n
     utils.startTestGroup(@"Dirty-Buffer Seek Integrity")
 
     utils.startTest(@"Unsynced write survives cross-sector seek")
-    utils.setCheckCountPerTest(5)
+    utils.setCheckCountPerTest(6)
     sd.deleteFile(@testDirty)
     nonce := utils.perRunNonce()
     handle := sd.createFileNew(@testDirty)
@@ -426,15 +426,23 @@ PUB go() | result, bytesRead, bytesWritten, idx, fileSize, actualByte, handle, n
         bytesRead := sd.readHandle(handle, @writeBuffer, 600)
         utils.evaluateSubValue(bytesRead, @"read-back 600 bytes", 600)
         utils.evaluateSubBool(utils.verifyBufferPattern(@writeBuffer, 600, nonce), @"data intact after dirty seek", true)
+        sd.closeFileHandle(handle)                       ' the success path owns the close (see below)
     else
-        ' Without this the 4 gated checks short the record and the failure reads as
+        ' Without this the 5 gated checks short the record and the failure reads as
         ' "SUB-CHECK SHORTFALL" rather than naming the create that actually failed.
         utils.evaluateSubValue(-1, @"write 600 bytes", 600)
         utils.evaluateSubValue(-1, @"seek to 0 with dirty buffer", sd.SUCCESS)
         utils.evaluateSubValue(-1, @"read-back 600 bytes", 600)
         utils.evaluateSubBool(false, @"data intact after dirty seek", true)
-        sd.closeFileHandle(handle)
-    sd.deleteFile(@testDirty)
+        utils.evaluateSubValue(-1, @"cleanup deleteFile()", sd.SUCCESS)
+
+    ' The close used to sit in the ELSE branch, where the handle is invalid by
+    ' definition -- so the SUCCESS path never closed and this delete came back
+    ' E_FILE_OPEN into a discarded return value. The file survived the suite, and
+    ' a leftover RTDIRTY.BIN is what seeded the round-16 defrag investigation.
+    ' Scoring the delete is the part that stops it happening silently again.
+    if handle >= 0
+        utils.evaluateSubValue(sd.deleteFile(@testDirty), @"cleanup deleteFile()", sd.SUCCESS)
 
     ' ----------------------------------
     ' Cleanup

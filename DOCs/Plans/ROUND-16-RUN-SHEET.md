@@ -150,98 +150,107 @@ time. The handoff was not followable.
 
 | | |
 |---|---|
-| **Source SHA to run** | `00a8d45` — verify with `git log --oneline -1 -- src/ diagnostic-tests/` |
-| **Tree** | clean; six gates green; all five affected programs compile (audit, fsck, demo shell, register_tests, speed_tests) |
-| **Resume at** | **Step 4g (verify the fix) → 4h (re-certify).** DRIVER CHANGED — 4d's 534/534 is stale and the roster restarts |
+| **Source SHA to run** | set at commit — verify with `git log --oneline -1 -- src/ diagnostic-tests/` |
+| **THE DRIVER DID NOT MOVE** | `micro_sd_fat32_fs.spin2` is **untouched** since `00a8d45`. Confirm with `git log --oneline -1 -- src/micro_sd_fat32_fs.spin2` — it must still read `00a8d45`. Your 4h certification is **not** invalidated as a *driver* certification |
+| **What changed** | three regression suites only: `SD_RT_mount_tests` (#39 precondition), `SD_RT_seek_tests` (handle leak), `SD_RT_defrag_tests` (**+1 new test**) — plus docs |
+| **Expected roster** | **535**, not 534. The defrag suite gains one test (13 → 14) |
+| **Tree** | Source committed for this sweep. **Correction to the previous hand-back:** `run_regression.sh` does **not** abort on a dirty tree — it prints the `-dirty` stamp and the warning *"this result is not reproducible from any commit"* and runs anyway (script §GIT_STAMP). The rule is a judgement, not a gate: a certifying sweep wants the source committed. Doc work on the case studies stays uncommitted pending a voicing decision, so expect `-dirty` in the header — annotate it as documentation-only, exactly as session 6 did. Six gates green; all three changed suites compile in both shapes |
+| **Resume at** | **Step 4j — re-certify the suite changes.** Then step 5 remains ON HOLD per Stephen's gate-ordering instruction |
 
-### Container hand-back, session 5 → 6
+### Container hand-back, session 6 → 7
 
-**Your bisect closed it. The defect is root-caused and fixed in the driver; step 4g
-verifies it with your own two-suite reproducer.**
+**Your 4g / 4h / 4i session closed three things and opened one. The one it opened
+is fixed here — in the test suites, not in the driver.**
 
 #### ⚠ What this change invalidated *(protocol item 3)*
 
-**This one IS a driver change** — `micro_sd_fat32_fs.spin2`, three sites. A
-certification run is atomic, so **your 4d 534/534 is stale and the roster restarts.**
-That is step 4h below. Nothing about the suites changed, so the expected total is
-still **534**.
+**This is NOT a driver change.** `micro_sd_fat32_fs.spin2` is untouched; the source
+SHA moves only because the regression suites live under `src/`. So:
 
-#### Step 4g — verify the fix with your reproducer *(do this first)*
+- Your **4h 534/534 on both geometries stands** as the driver certification of
+  `00a8d45`. Nothing about the driver's behaviour is in question.
+- But the **suite set changed**, so the number 534 no longer describes it. Two tests
+  changed behaviour and one test is new. **The new expected total is 535.**
+- That means one more sweep to re-baseline — step 4j — not a fresh investigation.
 
-```bash
-./run_regression.sh --reformat-only
-./run_test.sh ../src/regression-tests/SD_RT_seek_tests.spin2
-./run_test.sh ../src/regression-tests/SD_RT_defrag_tests.spin2
-./run_test.sh ../src/UTILS/SD_FAT32_audit.spin2
-```
+#### What was fixed, and why
 
-On the **8-sectors/cluster** card (Gigastone HE `$0001_B9D5` — reformat it freely,
-its evidence is fully harvested). **Expect `STATUS: CLEAN`.** Anything else and the
-fix is wrong or incomplete: hand back with the audit log and do not continue.
+**1. `mount_tests` #39 on Cloudisk `$0001_9B39` — root-caused as a TEST defect.**
+You handed back two candidate mechanisms and asked the container to decide. Decided
+from source, no hardware needed, and **both of your candidates were near misses**:
 
-Run it **twice** if the first is clean. This defect needed the allocator to climb
-past cluster 128 before it bit, so one clean pass is weaker evidence than it looks.
+- Your mechanism 1 (the unscored `createFileNew` precondition) is **dead**.
+  `do_unmount()` calls `updateFSInfo()` **unconditionally** — there is no dirty gate
+  anywhere in the path — so whether that file got created changes nothing about
+  whether the write-back is attempted. The block was decorative.
+- Your mechanism 2 (a real `unmount()` validation miss) is **also dead**, and this
+  is the important half: the driver is behaving **correctly**.
 
-#### Step 4h — re-certify (the driver moved)
+The actual gate is in `updateFSInfo()`: it returns early when
+`fsi_free_count == $FFFF_FFFF`, and `do_mount()` sets exactly that sentinel whenever
+the FSInfo sector is absent, sits outside the reserved region, cannot be read, or
+carries bad signatures. On such a card there is genuinely nothing to write back, so
+`SUCCESS` is the right answer — and `E_BAD_FSINFO` is unreachable by construction.
 
-```bash
-./run_regression.sh          # regression card
-```
+**That card's own FSInfo is one the driver does not accept.** The test asserted an
+outcome whose precondition it never established: locating the FSInfo sector through
+the VBR pointer (which it did score) is *not* the same as the driver having accepted
+it. On the two regression cards the precondition happened to hold, so the test passed
+for four months without ever being right.
 
-**Expect 534/534 with a clean closing audit.** Then, if you still have the
-8-sec/cluster card handy, a full sweep on *it* is the strongest single check we can
-make — it is the geometry that exposed this, and it has never had a full green
-roster with a clean audit.
+**The fix plants the precondition instead of assuming it** — the test now writes a
+known-good FSInfo (valid signatures, a real free count) before mounting, and scores
+that plant as a new sub-check. It saves and restores the card's original sector
+exactly as before. Sub-checks go 6 → 7; the test count does not change.
 
-#### Then
+*Also removed:* the unscored `createFileNew` / `writeHandle` / `deleteFile` block.
+It was setup for a gate that does not exist — and dropping it means this test no
+longer writes files to whatever card it lands on.
 
-Step 5 (16e) is unblocked. Its first-light requirement still stands: one throwaway
-benchmark through `harvest_catalog.sh` before any one-shot card is seated.
+**2. `SD_RT_seek_tests` handle leak — the hold is released.** 4g is green, so the
+leak no longer needs preserving as reproducer seed. `closeFileHandle()` sat in the
+`else` branch, where the handle is invalid by definition, so the success path never
+closed and the following `deleteFile()` returned `E_FILE_OPEN` into a discarded
+value. That is what left `RTDIRTY.BIN` on the card and seeded your whole round-16
+investigation. The close moved to the success path **and the delete is now scored**,
+which is the part that stops it recurring silently. Sub-checks 5 → 6.
 
-#### ⚠ Still do not fix `SD_RT_seek_tests`
+**3. The owed regression test for the defrag defect — written.** `SD_RT_defrag_tests`
+gains **Test 10, "Bystander file intact after compacting a fragmented file"** (new
+TEST GROUP 3; the later groups renumbered). It creates a bystander file in low
+clusters with a distinct pattern, fragments a victim around a spacer, frees the
+spacer, compacts the victim, then reads the bystander back **in full and byte-for-byte**.
+A chain freed under it fails as a short read; a stolen cluster fails as a pattern
+mismatch.
 
-It is still the seed for the reproducer, and 4g needs it exactly as it is. It gets
-fixed after 4g is green, together with the regression test that is owed for this
-defect.
+It does **not** reproduce the original stale-buffer condition on demand — that needed
+the allocator to have climbed past cluster 128 first, which is allocation history and
+not something a test can stage. It asserts the property the defect violated, which is
+what a regression test is for. It is cluster-geometry independent: 64 KB fills span
+multiple clusters at both 8 and 64 sectors/cluster.
 
----
+*Space:* `PEAK_BYTES` rose from 5 to 6 × 64 KB because the bystander is alive across
+a compaction by design. The suite's existing preflight gate covers it.
 
-#### The root cause
+#### Still open — and both are Stephen's calls, not the bench's
 
-`findContiguousRun()` **never loaded the first FAT sector.**
+1. **The control-arm decision.** A debug-only way to disable the quiesce is the only
+   thing that lets the case study drop its §11 caveat. Not implemented — see
+   *Decisions* below.
+2. **Card record for `$0001_9B39`.** Its identity is captured in your notes and needs
+   no further handling, but a new record needs a `CARD-LABELS.md` entry, and whether
+   card #2's printed text is identical to the catalogued Cloudisk's is a question for
+   a human with the card in hand. One look, then the container writes it.
 
-```spin2
-fat_idx := ROOT_CLUSTER * 4        ' = 8
-repeat
-  if fat_idx & SECTOR_OFFSET_MASK == 0     ' 8 & 511 = 8 -> FALSE on the first pass
-    ...readSector(BUF_FAT)...
-  entry := LONG[@fat_buf + (fat_idx & SECTOR_OFFSET_MASK)]
-```
+#### Done on the container side since your handback
 
-The scan starts at cluster 2, so its first sector load happened at `fat_idx` 512, and
-**every verdict for clusters 2..127 came from whatever the previous FAT operation left
-in the buffer.** `allocateCluster()` has always pre-loaded for this exact reason.
-
-It reports *allocated* clusters as **free** — the dangerous direction.
-`do_compact_file()` then builds its contiguous chain across a live bystander's
-cluster, and when that chain is later freed the bystander is left with a directory
-entry pointing at a cluster both FATs call free. Your `dirSize=600` reading is what
-made this legible: the entry was complete and untouched, so nothing was wrong with the
-file — something else came along and freed its cluster.
-
-**Two of your observations are now explained rather than just recorded.** The damaged
-cluster moved between runs (19, then 5) because the fault follows allocation history,
-which a fixed-offset bug would not. And the geometry gate is exact:
-`do_compact_file()` returns early at `frag_count == 1`, so with 64-sector clusters the
-fixtures are single-cluster and this code never runs — `SD_RT_defrag_tests` says so
-itself in its CLUSTER-SIZE CAVEAT comment.
-
-**Fixed at three sites.** `findContiguousRun()` and `countFreeClusters()` carry the
-identical defect — same shape, same missing pre-load, same trailing invalidate
-guarding the wrong end — and are fixed together so neither survives as the example.
-In `countFreeClusters()` the consequence was quieter: a wrong free-cluster total
-written to FSInfo on unmount. The third is the `allocateCluster()` test-hook wrap
-path, which reset the index to cluster 2 without reloading the sector holding it.
+- **The External-only restriction is WITHDRAWN** in all four places it was asserted:
+  both `asdfg` card records, `CARD-CATALOG.md` and `CARD-REFERENCE.md`. Your 4i result
+  is what closed it. The historical text is kept, marked superseded, rather than
+  deleted — it carries the wrong mechanism and that is worth preserving as a record.
+- **The run sheet's "nothing written" claim for 4i is corrected** where it appeared,
+  in both places. You were right and it mattered: `mount_tests` #39 writes.
+- Suite README + both top-level READMEs re-stamped 589 → **590** documented tests.
 
 ### Earlier hand-backs — completed, and deliberately not kept here
 
@@ -309,22 +318,24 @@ has none.
 
 ---
 
-## Step 1 — 16a: certify the driver — ✅ PASSED TWICE, ⚠ now stale again
+## Step 1 — 16a: certify the driver — ✅ PASSED; re-certified at `00a8d45` (step 4h)
 
 **Session 2: 534/534** on the regression card (Amazon Basics `$3584_1E2E`).
 **Session 5 (step 4d): 534/534 with a clean closing audit**, restoring the gate after
 two suites were edited. Transcript `tools/logs/sweep_260819-234405.txt`.
 
-**The driver changed on 2026-08-20** (the `findContiguousRun` fix), and a
-certification run is atomic — so both of those are stale and the roster restarts.
-That re-run is **step 4h** in the hand-back. Expected total is unchanged at **534**.
+**Session 6 (step 4h): 534/0 on BOTH geometries** with clean closing audits, at
+source SHA `00a8d45` — the re-certification the `findContiguousRun` driver fix
+required. That is the current driver certification and it stands.
 
-```bash
-./run_regression.sh
-```
+> **⚠ The roster number moved after that run.** The suite set changed on 2026-08-20
+> (regression suites only — the driver did not move), so **the current expected total
+> is 535**, not 534. Re-baselining it is **step 4j**, which is where the bench
+> resumes. Do not re-run this step; 4j supersedes it.
 
-**Expect 534/534.** Anything below that is a stale binary — 530 predates the
-speed-tests group, 532 predates the driver-identity group added 2026-08-19.
+Anything *below* the expected total is usually a stale binary — 530 predates the
+speed-tests group, 532 predates the driver-identity group added 2026-08-19, and 534
+predates the bystander test added 2026-08-20.
 
 Certifies the CMD12 quiesce (now unconditional on every driver start) and the new
 version constant.
@@ -383,7 +394,16 @@ unnecessary. The decision rule and the full cost estimate are in the punch-list 
 64 sectors/cluster. The counterfeit is exonerated; this is a driver defect gated on
 small-cluster geometry, and it was a **release blocker**. **ROOT-CAUSED AND FIXED
 2026-08-20** — `findContiguousRun()` never loaded FAT sector 0, so it reported
-allocated clusters as free. Verification is step 4g.
+allocated clusters as free.
+
+> **✅ VERIFIED AND CLOSED 2026-08-20.** Step 4g ran the two-suite reproducer twice
+> from a fresh reformat on the 8-sectors/cluster card: `seek_tests` 38/0,
+> `defrag_tests` 13/0, closing audit **CLEAN** 23/23 both passes. Step 4h then
+> re-certified the driver at `00a8d45` — **534/0 on both geometries** with clean
+> closing audits, including the 8-sectors/cluster card's first ever full green
+> roster. 4g and 4h are spent; their instructions were removed with the session
+> 5 → 6 hand-back. The regression test that was owed for this defect is now written
+> and is re-certified in **step 4j**.
 
 **⚠ Do NOT re-run this step.** It is complete, and its evidence has been fully
 harvested — the Gigastone HE `$0001_B9D5` is now free to reformat. The ordered
@@ -406,7 +426,204 @@ not earned an unqualified endorsement.
 
 ---
 
+## Step 4i — 16f: the Cloudisk twins on a quiesce build — ✅ RAN 2026-08-20
+
+> **✅ COMPLETE. DO NOT RE-RUN.** Both twins came back clean on the quiesce build:
+> `$0000_1680` 45/45 mount + 14/14 raw on four warm runs across two power cycles;
+> `$0001_9B39` clean on the wedge axis with one unrelated test failure (#39, since
+> root-caused as a test defect and fixed — see step 4j). Boot access was left
+> ENABLED and the flash banner verified in all 12 transcripts. **No control arm
+> existed at that SHA**, so the case-study §11 caveat is weakened to *"consistent on
+> both twins, controlled on one"* and NOT deleted. The section below is kept for its
+> protocol and its "what a clean result proves" reasoning, both of which apply again
+> if the control arm is ever built.
+
+**Why this exists.** The CMD12 quiesce that fixed the #3240 wedge was proven on
+**one** card. Round 15's scope line says so in as many words — *"One card
+throughout: Lerdisk `asdfg` `$0000_01F4`, Edge socket, adapter empty"* — and that
+covers 15a, 15b **and** step 4's full-suite confirmation. The Cloudisk
+`$0000_1680` has only ever been run **pre-fix**: round 9a, 2026-08-18, where it
+wedged 19/24 with `-7` / `-8`, indistinguishable from its twin.
+
+Cross-checked two ways before this step was written: no round-15 or round-16
+section names a Cloudisk, and the newest Cloudisk transcript in `tools/logs/` is
+`260818-142849` — a day before the quiesce build existed.
+
+So the shipped claim rests on one of the two cards known to carry the defect.
+`DOCs/SD-CARD-WEDGE-CASE-STUDY.md` §11 states that limitation in print, for
+readers to weigh. **This step is what deletes it.**
+
+**Cards — all three of the `asdfg` class, all `retained`:**
+
+| Card | Serial | Standing |
+|---|---|---|
+| Cloudisk 2 GB | `$0000_1680` | wedged pre-fix (9a); **never run on a quiesce build** |
+| Cloudisk #2 2 GB | `$0001_9B39` | **uncatalogued**; round 9 found it scores `crc = 0` unlike its twins, so it may not be `CW_NO_DATA_CRC` silicon at all |
+| Lerdisk 1 GB | `$0000_01F4` | the proven card — needed here only if a control arm exists |
+
+**Edge socket. No reformat.** Cheap step; the cost is card handling, not bench time.
+
+> **CORRECTION (2026-08-20, from the bench).** An earlier version of this line said
+> "nothing written — the reproducer only mounts and reads." **That is wrong, and it
+> mattered:** `SD_RT_mount_tests` #39 writes raw sectors over the FSInfo LBA, and
+> (before the 2026-08-20 test fix) also created, wrote and deleted a file. It
+> restores what it corrupts and verifies the restore, and no harm came of it — but
+> anyone reading that line to decide what is safe to run on a precious one-shot card
+> would have been misled. `mount_tests` writes. `raw_sector_tests` writes to its
+> scratch LBAs. Neither reformats.
+
+### The protocol, per card
+
+Warm is the entire point: the wedge needs a prior driver session **and** a P2
+reset, with no power cycle between.
+
+```bash
+# power cycle the board first (a serial-download reset does NOT drop the SD rail)
+./run_test.sh ../src/regression-tests/SD_RT_mount_tests.spin2       # cold - priming session
+./run_test.sh ../src/regression-tests/SD_RT_mount_tests.spin2       # WARM - the measurement
+./run_test.sh ../src/regression-tests/SD_RT_raw_sector_tests.spin2  # WARM - raw init after
+```
+
+Power cycle, repeat. **Three warm runs across two power cycles per card.**
+
+Expect **45/45** on every `mount_tests` and **14/14** on `raw_sector_tests`.
+Pre-fix the warm run gives **19/24**, `unmount()` `-7`, `mount()` #2 `-8`.
+
+**⚠ Switches stay in the WEDGING configuration** — the `* Hi! from FLASH *` banner
+must be present in every transcript. Check it. A missing banner means the boot
+sequence never ran, and the run is void: it would produce clean results for the
+wrong reason, which is worse than a failure.
+
+**⚠ Do not run `SD_card_identify` before the cold run.** An identify is itself a
+driver session and destroys the cold arm. Confirm identity *after* the first run,
+exactly as round 12a did.
+
+### What a clean result does and does not prove
+
+A clean result here is **consistent with** the fix and does not on its own
+establish it — a card that does not wedge today may be having a quiet day. That is
+precisely the failure mode round 15b was built to exclude, and it excluded it with
+an **interleaved control**: an unmodified build run warm on the same card minutes
+later, which wedged both times.
+
+**That control is not buildable today.** The quiesce is unconditional in
+`initCard()` with no way to compile it out (checked: no `SD_INIT_QUIESCE`, no
+guard of any kind — the round-15b flag is gone).
+
+| | Outcome |
+|---|---|
+| **Without a control arm** | Three clean warm runs per card **weakens** the §11 caveat to *"consistent on both twins, controlled on one."* It does not delete it |
+| **With a control arm** | The caveat is deleted |
+
+**This is a container decision, not the bench's:** whether to add a debug-only way
+to disable the quiesce so the control arm exists. If it lands before this session
+the protocol gains one line per card and the step becomes conclusive. **If it does
+not, run the three arms anyway** — partial evidence on a retained card costs one
+card swap, and the cards are already here.
+
+### Bonus while the socket is loaded
+
+Cloudisk #2 `$0001_9B39` is owed a card record (punch list). One
+`SD_card_identify` capture *after* its warm runs clears that debt at no extra card
+handling.
+
+### Hand back
+
+Append to `SOCKET-SHMOO-RUN-NOTES.md` as usual. State per card: warm-run counts,
+flash-banner presence, and whether a control arm was available. **If any card
+wedges, stop** — that is a hard-stop finding under rule 5, not a caveat to record
+and continue past.
+
+---
+
+## Step 4j — re-certify the suite changes ◀ **START HERE**
+
+**This is a test-suite re-baseline, not a driver re-certification.** The driver did
+not move (verify: `git log --oneline -1 -- src/micro_sd_fat32_fs.spin2` must still
+read `00a8d45`). Your 4h result stands for the driver; what changed underneath it is
+the suite set, so the roster number has to be re-established.
+
+**Expected total is 535, not 534.** `SD_RT_defrag_tests` goes 13 → 14.
+
+### 4j.1 — the three changed suites first, individually
+
+Cheap, and it catches an authoring error before you spend a sweep on it. Any
+regression card, either geometry.
+
+```bash
+cd tools
+./run_test.sh ../src/regression-tests/SD_RT_mount_tests.spin2
+./run_test.sh ../src/regression-tests/SD_RT_seek_tests.spin2
+./run_test.sh ../src/regression-tests/SD_RT_defrag_tests.spin2 -t 120
+```
+
+| Suite | Expect | What specifically to look at |
+|---|---|---|
+| `SD_RT_mount_tests` | **45 / 0** | Test #39 now reports **7** sub-checks, not 6. The new one is `valid FSInfo planted (precondition)` and it must PASS — if it FAILS, the raw write to the FSInfo LBA did not land and nothing after it is meaningful |
+| `SD_RT_seek_tests` | **38 / 0** | The dirty-seek test now reports **6** sub-checks. The new one is `cleanup deleteFile()` and it must return SUCCESS — a `-45 E_FILE_OPEN` there means the handle is still leaking |
+| `SD_RT_defrag_tests` | **14 / 0** | New Test 10 `Bystander file intact after compacting a fragmented file`, 5 sub-checks. **All five must pass.** `bystander bytes unchanged by the compaction` is the one that carries the defect |
+
+**If the bystander test fails, STOP and hand back.** That is a hard-stop finding — it
+means a compaction is touching another file's chain, which is the release blocker all
+over again. Capture the transcript and run `SD_FAT32_audit` (`-t 300`) before touching
+anything else on that card.
+
+### 4j.2 — the defect card
+
+This is the actual retest of the reported bench issue. **Cloudisk `$0001_9B39`**,
+Edge socket, no reformat.
+
+```bash
+./run_test.sh ../src/regression-tests/SD_RT_mount_tests.spin2
+```
+
+**Expect 45 / 0** — where you measured **44 / 1** four times running. Test #39 must
+now pass on this card, because the test no longer depends on the card's own FSInfo
+being one the driver accepts.
+
+*Card handling:* this suite **writes** — raw sectors over the FSInfo LBA, restored and
+verified. It does not reformat. (It no longer creates files; that block was removed.)
+
+**If #39 still fails here**, the diagnosis was wrong and it hands back as a driver
+question after all. Send the full sub-check list for #39 — specifically whether
+`valid FSInfo planted (precondition)` passed, because that one check separates
+"the card won't take our planted FSInfo" from "the driver isn't validating it".
+
+### 4j.3 — one full sweep to set the new baseline
+
+```bash
+./run_regression.sh
+```
+
+**Expect 535 / 0** with a clean closing audit.
+
+**Both geometries if the cards are still to hand** — and it is worth it this time,
+because the new bystander test is the one thing in this change whose *value* depends
+on cluster geometry, and it has never run on hardware. The 8-sectors/cluster card is
+where the original defect lived.
+
+| Card | Geometry | Expect |
+|---|---|---|
+| Gigastone HE 8 GB `$0001_B9D5` | 8 sec/cluster | 535 / 0, closing audit clean |
+| Amazon Basics 64 GB `$3584_1E2E` | 64 sec/cluster | 535 / 0, closing audit clean |
+
+### Hand back
+
+Append to `SOCKET-SHMOO-RUN-NOTES.md`: the three suite results, the `$0001_9B39`
+mount_tests result with #39's sub-check list, and the sweep totals per geometry.
+**Then stop** — step 5 stays on hold (below).
+
+---
+
 ## Step 5 — 16e: multi-card, run variance BEFORE instance variance
+
+> **⏸ ON HOLD — Stephen's instruction, 2026-08-20.** Do not run the catalog
+> pass until every remaining fix and its tests are specified and everything else is
+> release-ready. The reasoning is gate ordering and it is correct: the catalog sweep
+> **is** the release gate, a certification run is atomic, and any driver change
+> landing after it invalidates it wholesale. Running the parade early buys nothing
+> and risks burning one-shot card handling on a build that will move again.
+
 
 **Order is not optional.** One physical card has moved up to 3× between rounds, so
 a card-to-card delta means nothing until the same-card spread is known.
@@ -465,7 +682,7 @@ spanning two driver versions.
 ## What "done" looks like
 
 - [x] Step 0: both 64 GB PSNs recorded, `00000F14` marked green
-- [x] Step 1: **534/534** (session 2, sweep `260819-155926`)
+- [x] Step 1: **534/0 on both geometries** at `00a8d45` (session 6, step 4h) — superseded by 4j's 535 re-baseline
 - [~] Step 2: **deferred** — cell unreachable on the shipped driver; funding the campaign is Stephen's call
 - [~] Step 3: **deferred to after step 6** — no default change in v1.8.0 either way
 - [~] Step 4: wedge **GONE** (mount 45/45, raw 14/14 in the Edge socket) — but the Lerdisk verdict is **not** final until the closing-audit chain finding is attributed
@@ -477,14 +694,18 @@ spanning two driver versions.
   - [x] 4e: `dirSize=600` — entry complete while the FAT called its cluster free
   - [x] 4f: bisect named `SD_RT_defrag_tests`; two-suite reproducer in hand
   - [x] 4d: gate A restored — **534/534**, closing audit clean
-  - [ ] 4g: **verify the fix** on 8-sec/cluster silicon — audit CLEAN, run twice
-  - [ ] 4h: re-certify — driver changed, so the roster restarts
+  - [x] 4g: fix **verified** on 8-sec/cluster silicon — audit CLEAN, both passes
+  - [x] 4h: re-certified — **534/0 on both geometries**, closing audits clean
+  - [x] 4i: Cloudisk twins clean on the quiesce build — caveat weakened, not deleted (no control arm existed)
 - [x] 🔴 The chain-free defect is root-caused and fixed — `findContiguousRun()` never loaded FAT sector 0
-- [ ] Regression coverage owed for it: bystander file survives a compact (no suite catches this today)
-- [ ] `SD_RT_seek_tests` handle leak fixed — **only after** the driver defect is understood
-- [ ] Step 5: run variance measured before instance variance; one-shot cards fully captured
+- [x] Regression coverage written for it: `SD_RT_defrag_tests` Test 10, bystander file survives a compact
+- [x] `SD_RT_seek_tests` handle leak fixed — hold released once 4g was green; the cleanup delete is now scored
+- [x] `mount_tests` #39 on `$0001_9B39` root-caused as a **test** defect (unestablished precondition) and fixed
+- [ ] **Step 4j: re-certify the suite changes — 535/0, and #39 green on `$0001_9B39`** ◀ next
+- [ ] Control-arm decision (debug-only quiesce disable) — Stephen's call; only thing that deletes case-study §11
+- [ ] Step 5: run variance measured before instance variance; one-shot cards fully captured *(ON HOLD)*
 - [ ] Step 6: catalog tables harvested, single driver-version banner
-- [ ] Card records created for the two uncatalogued retained Gigastones
-- [ ] Lerdisk card record + `CARD-CATALOG.md` rewritten (blocked on 4a-4c)
+- [ ] Card records created for the two uncatalogued retained Gigastones, plus `$0001_9B39` (needs one label look)
+- [x] `asdfg` External-only restriction withdrawn in all four places (both card records, catalog, quick reference)
 
 **Then and only then** the v1.8.0 release gate is satisfied.

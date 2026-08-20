@@ -1,5 +1,17 @@
 # Counterfeit "asdfg" SDSC class — Investigation
 
+> **⚠ Read the outcome first.** This is the *running log* of the May–June 2026
+> investigation, preserved unedited — including hypotheses that were later
+> refuted on hardware. In particular, the "single-block packaging" conclusion at
+> the end of this document and the CMD25 workaround designed from it were **wrong**:
+> raw single-block writes do not wedge these cards. The defect was root-caused in
+> August 2026 to boot-time traffic on pins the microSD socket shares with the boot
+> flash, and is fixed by a CMD12 before CMD0 at card initialization.
+>
+> **The finished account is [`../SD-CARD-WEDGE-CASE-STUDY.md`](../SD-CARD-WEDGE-CASE-STUDY.md).**
+> Read this log for the evidence and the false trails; read the case study for what
+> is true.
+
 **Scope:** Running investigation log + measured ground truth for the counterfeit
 "asdfg" SDSC silicon class. Cards in this class share PNM `"asdfg"`, MID `$05`,
 PRV `2.2`, and present as SDSC (CSD v1.0) with a dummy `$0000` data-block CRC.

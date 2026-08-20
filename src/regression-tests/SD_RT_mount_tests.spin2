@@ -19,6 +19,12 @@ CON
      DEBUG_MASK      = (1 << 0) | (1 << 1) | (1 << 9)
      DEBUG_BAUD      = 2_000_000
 
+     ' FSInfo precondition plant (test #39). Any values the driver will accept:
+     ' the free count must not be $FFFF_FFFF (its "unknown" sentinel) or the
+     ' write-back this test depends on is never attempted.
+     PLANTED_FREE_COUNT = 1_000
+     PLANTED_NEXT_FREE  = 2
+
      ' SD card pin assignments
      ' Default: P2 Edge module SD slot. Build with -D SD_PINS_EXTERNAL
      ' to use the external SD header (base pin 16).
@@ -417,20 +423,46 @@ PUB go() | result, pLabel, freeSpace, handle, bytesRead, vbrSec, fsiSec, vMajor,
     ' change forces unmount/sync to write it back and the signatures fail the
     ' pre-write verify.
     utils.startTest(@"Corrupt FSInfo: tolerated at mount, E_BAD_FSINFO at unmount")
-    utils.setCheckCountPerTest(6)
+    utils.setCheckCountPerTest(7)
     ' FSInfo LBA parsed from the VBR (WORD at $30, relative to the VBR)
     fsiSec := 0
     if vbrSec > 0 AND sd.readSectorRaw(vbrSec, @sectorBuffer) == 0
         fsiSec := vbrSec + rd16(@sectorBuffer, $30)
     utils.evaluateSubBool(fsiSec > vbrSec, @"FSInfo sector located", true)
 
-    result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)  ' clean mount reads the VALID free count
+    ' PRECONDITION -- PLANTED, NOT ASSUMED (2026-08-20).
+    ' E_BAD_FSINFO at unmount is reachable ONLY when the driver cached a real
+    ' free count at mount: updateFSInfo() gates on fsi_free_count <> $FFFF_FFFF,
+    ' and do_mount sets exactly that sentinel whenever the FSInfo sector is
+    ' absent, out of the reserved region, unreadable, or carries bad signatures.
+    ' On such a card unmount() correctly returns SUCCESS -- there is nothing to
+    ' write back -- and this test would fail for a reason that is not a driver
+    ' defect. That is not hypothetical: it failed 4/4 on a counterfeit SDSC card
+    ' whose own FSInfo the driver never accepted. Locating the sector via the VBR
+    ' pointer (scored above) does NOT establish that the driver accepted it.
+    ' So plant a known-good FSInfo here and stop depending on how the card under
+    ' test happens to have been formatted. The card's original sector is saved
+    ' first and restored at the end of the test, exactly as before.
+    result := -1
+    if fsiSec > vbrSec
+        result := sd.readSectorRaw(fsiSec, @sectorBuffer)
+    if result == 0
+        bytemove(@saveBuffer, @sectorBuffer, 512)        ' the card's ORIGINAL -- restored below
+        wr32(@sectorBuffer, 0, sd.FSINFO_LEAD_SIG)       ' lead signature 'RRaA'
+        wr32(@sectorBuffer, 484, sd.FSINFO_STRUCT_SIG)   ' struct signature 'rrAa'
+        wr32(@sectorBuffer, 488, PLANTED_FREE_COUNT)     ' anything but $FFFF_FFFF ("unknown")
+        wr32(@sectorBuffer, 492, PLANTED_NEXT_FREE)      ' next-free hint, sane and unused here
+        result := sd.writeSectorRaw(fsiSec, @sectorBuffer)
+    if result == 0
+        result := sd.readSectorRaw(fsiSec, @sectorBuffer)  ' prove the plant landed
+    utils.evaluateSubBool(result == 0 AND rd32(@sectorBuffer, 0) == sd.FSINFO_LEAD_SIG AND rd32(@sectorBuffer, 484) == sd.FSINFO_STRUCT_SIG AND rd32(@sectorBuffer, 488) <> $FFFF_FFFF, @"valid FSInfo planted (precondition)", true)
+
+    result := sd.mount(SD_CS, SD_MOSI, SD_MISO, SD_SCK)  ' clean mount caches the PLANTED free count
     if fsiSec <= vbrSec
         result := -1                                     ' bad locate (scored above) -- touch nothing
     if result == 0
         result := sd.readSectorRaw(fsiSec, @sectorBuffer)
     if result == 0
-        bytemove(@saveBuffer, @sectorBuffer, 512)
         bytefill(@sectorBuffer, 0, 4)                    ' lead signature 'RRaA'
         bytefill(@sectorBuffer + 484, 0, 4)              ' struct signature 'rrAa'
         result := sd.writeSectorRaw(fsiSec, @sectorBuffer)
@@ -438,12 +470,13 @@ PUB go() | result, pLabel, freeSpace, handle, bytesRead, vbrSec, fsiSec, vMajor,
         result := sd.readSectorRaw(fsiSec, @sectorBuffer)  ' prove it landed
     utils.evaluateSubBool(result == 0 AND sectorBuffer[0] == 0 AND sectorBuffer[484] == 0, @"FSInfo corruption landed while mounted", true)
 
-    ' Force a free-count change so unmount MUST write FSInfo back
-    handle := sd.createFileNew(@testfile1)
-    if handle >= 0
-        sd.writeHandle(handle, @"S9!!", 4)
-        sd.closeFileHandle(handle)
-    sd.deleteFile(@testfile1)
+    ' No free-count change is staged here on purpose. do_unmount() calls
+    ' updateFSInfo() unconditionally -- there is no dirty gate -- so the write-back
+    ' is attempted on every unmount and the corrupted signatures are what it trips
+    ' over. The create/write/delete that used to sit here was unscored setup for a
+    ' gate that does not exist: it could fail silently and change nothing about
+    ' what this test proves. Removing it also stops this test writing files to
+    ' whatever card it lands on.
     result := sd.unmount()
     utils.evaluateSubValue(result, @"unmount reports E_BAD_FSINFO", sd.E_BAD_FSINFO)
 
@@ -568,6 +601,14 @@ PRI rd32(pBuf, offset) : value
 ' Little-endian 32-bit read, byte-assembled (no alignment assumption).
 
     value := BYTE[pBuf][offset] | BYTE[pBuf][offset+1] << 8 | BYTE[pBuf][offset+2] << 16 | BYTE[pBuf][offset+3] << 24
+
+PRI wr32(pBuf, offset, value)
+' Little-endian 32-bit write, byte-assembled (no alignment assumption).
+
+    BYTE[pBuf][offset]   := value
+    BYTE[pBuf][offset+1] := value >> 8
+    BYTE[pBuf][offset+2] := value >> 16
+    BYTE[pBuf][offset+3] := value >> 24
 
 PRI rd16(pBuf, offset) : value
 ' Little-endian 16-bit read, byte-assembled (no alignment assumption).
