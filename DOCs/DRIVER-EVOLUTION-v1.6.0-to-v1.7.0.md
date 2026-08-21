@@ -334,7 +334,7 @@ Two methodological notes worth keeping:
 
 `writeSectorsRaw()`/`readSectorsRaw()` pass the caller's buffer pointer through to `RDFAST #0, p_buf` / `WRFAST #0, p_buf`, so the streamer's hub address can be swept at runtime. `diagnostic-tests/SD_buffer_alignment_sweep.spin2` walks byte offsets 0,4,8..28 — eight long-aligned positions, one full 32-byte period, addresses `$0000_93F4` through `$0000_9410` — in two phases: write buffer swept to isolate `RDFAST`, read buffer swept to isolate `WRFAST`. Two patterns at each point, classified by the same bit-shift classifier `SD_tx_phase_shmoo` uses.
 
-Every one of the 32 points returned `CORRECT`. Transcript: `tools/logs/SD_buffer_alignment_sweep_260813-155251.log`.
+Every one of the 32 points returned `CORRECT`, measured by a buffer-alignment sweep on 2026-08-13.
 
 **What this does and does not establish.** It establishes that, post-fix, the streamer's data-to-clock phase is independent of the buffer's hub address across every long-aligned position — which is exactly what the fix claims. It does **not** retroactively confirm the withdrawn pre-fix attribution in §4.3: with `RDFAST` now outside the phase window, buffer address would not matter under either competing hypothesis, so this result cannot discriminate between them. That question stays open and unmeasured.
 
@@ -447,7 +447,7 @@ Claims this document previously made and has withdrawn. Kept so a reader who saw
 earlier revision, or who finds the same claim still repeated elsewhere, can tell what
 changed. **Nothing here describes current driver behaviour** — the body does that.
 
-Full working: `DOCs/Plans/2026-08-13-EVOLUTION-DOC-PROVENANCE-AUDIT.md`.
+The working behind it is retained in the project's internal audit notes.
 
 ### A.1 — RDFAST's latency attributed to the buffer's hub address (2026-08-13)
 

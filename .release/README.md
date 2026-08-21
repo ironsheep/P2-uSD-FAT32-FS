@@ -21,6 +21,8 @@ sd-card-driver/
 │   ├── MIGRATION-GUIDE-v1.2.0.md          Upgrading from v1.0/v1.1
 │   ├── SPI-PHASE-MARGIN-API.md            Diagnostic timing knobs
 │   ├── DRIVER-EVOLUTION-v1.6.0-to-v1.7.0.md  What was wrong, and what fixed it
+│   ├── SD-CARD-WEDGE-CASE-STUDY.md        Root-cause study: cards wedged by boot-time bus traffic
+│   ├── SD-SOCKET-TIMING-CASE-STUDY.md     Socket timing characterization: read/write phase maps
 │   └── images/                            Card photos for purchase recommendations
 │
 └── src/                                Driver and application source
@@ -144,7 +146,7 @@ The microSD add-on board connects to any 8-pin header group on the P2. Pins are 
 
 The default configuration uses base pin 56 (P2 Edge Module), giving pins P58-P61.
 
-> **Socket timing:** Two sockets wired to the same P2 can differ measurably in signal timing — on our bench, an external header-wired adapter adds a ~3 ns-class round-trip delay over the P2 Edge module's onboard socket. At the standard 25 MHz both carry wide margin, but a card that is itself timing-marginal may misbehave in one socket and work in the other. If you see socket-dependent card behavior, see the Socket Timing Differences section of the [Card Performance](DOCs/SD-CARD-PERFORMANCE.md) guide and the *Receive Alignment and Socket Timing* section of the [Theory of Operations](DOCs/SD-CARD-DRIVER-THEORY.md). Since v1.8.0 the read-path alignment sits at the centre of its measured passing band rather than the lower edge, which equalises read margin between sockets. The one socket-dependent failure we had under investigation turned out not to be a timing effect at all: it was a card left mid-transfer by the boot sequence on shared flash/microSD pins, and v1.8.0 fixes it at card initialisation.
+> **Socket timing:** Two sockets wired to the same P2 can differ measurably in signal timing — on our bench, an external header-wired adapter adds a ~3 ns-class round-trip delay over the P2 Edge module's onboard socket. At the standard 25 MHz both carry wide margin, but a card that is itself timing-marginal may misbehave in one socket and work in the other. If you see socket-dependent card behavior, see the Socket Timing Differences section of the [Card Performance](DOCs/SD-CARD-PERFORMANCE.md) guide and the *Receive Alignment and Socket Timing* section of the [Theory of Operations](DOCs/SD-CARD-DRIVER-THEORY.md); the full characterization — how the two sockets were measured, the read and write phase maps, and the recipe for measuring your own board — is in [Case Study: What a Socket Costs](DOCs/SD-SOCKET-TIMING-CASE-STUDY.md). Since v1.8.0 the read-path alignment sits at the centre of its measured passing band rather than the lower edge, which equalises read margin between sockets. The one socket-dependent failure we had under investigation turned out not to be a timing effect at all: it was a card left mid-transfer by the boot sequence on shared flash/microSD pins, and v1.8.0 fixes it at card initialisation. The full investigation is written up in [Case Study: The Card That Would Not Start](DOCs/SD-CARD-WEDGE-CASE-STUDY.md).
 
 ## Documentation
 
@@ -160,6 +162,8 @@ The default configuration uses base pin 56 (P2 Edge Module), giving pins P58-P61
 | [Migration to v1.2.0](DOCs/MIGRATION-GUIDE-v1.2.0.md) | Moving from v1.0/v1.1 error-code patterns |
 | [SPI Phase-Margin API](DOCs/SPI-PHASE-MARGIN-API.md) | Diagnostic timing knobs for unfamiliar boards and sockets |
 | [Driver Evolution v1.6.0–v1.7.0](DOCs/DRIVER-EVOLUTION-v1.6.0-to-v1.7.0.md) | Technical account of the defects fixed across three releases |
+| [Case Study: The Card That Would Not Start](DOCs/SD-CARD-WEDGE-CASE-STUDY.md) | Root-cause study of cards wedged by boot-time traffic on shared pins, and the one-command fix |
+| [Case Study: What a Socket Costs](DOCs/SD-SOCKET-TIMING-CASE-STUDY.md) | Measuring two microSD sockets against each other: the read and write phase maps, and the defaults they set |
 
 ## Regression Tests
 

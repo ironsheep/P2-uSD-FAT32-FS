@@ -26,25 +26,25 @@ Measurements across three levels: raw single-sector, raw multi-sector (CMD18/CMD
 
 ### Cross-Card Comparison (350 MHz, 15 Cards)
 
-All throughput values in KB/s. Ranked by composite score (see [SD-CARD-PERFORMANCE.md](../release-check/DOCs/SD-CARD-PERFORMANCE.md) for scoring methodology).
+All throughput values in KB/s. Ranked by composite score (see [SD-CARD-PERFORMANCE.md](../SD-CARD-PERFORMANCE.md) for scoring methodology).
 
 | Card | Score | File Rd | File Wr | Rd 64x | Wr 64x | Rd 1x | Wr 1x | Detail |
 |------|------:|--------:|--------:|-------:|-------:|------:|------:|--------|
-| Amazon Basics 64GB | **99** | 1,386 | **774** | 2,425 | 2,305 | 1,245 | **846** | [card](cards/amazon-basics-usd00-64gb.md) |
-| Samsung PRO Endurance 128GB | **98** | 1,419 | 758 | **2,427** | **2,319** | **1,283** | 617 | [card](cards/samsung-jd1y7-128gb.md) |
-| Lexar Blue 128GB | **91** | **1,444** | 616 | 2,420 | 2,275 | 819 | 680 | [card](cards/lexar-mssd0-128gb.md) |
-| Lexar V30 64GB | **88** | 1,378 | 433 | 2,376 | 2,251 | 1,239 | 674 | [card](cards/lexar-mssd0-64gb.md) |
-| SanDisk Extreme PRO 64GB | **80** | 1,101 | 437 | 2,408 | 2,210 | 998 | 428 | [card](cards/sandisk-aggce-64gb.md) |
-| SanDisk Extreme PRO 128GB | **78** | 1,103 | 445 | 2,408 | 2,140 | 842 | 427 | [card](cards/sandisk-aggcf-128gb.md) |
-| SanDisk Extreme 64GB | **76** | 1,040 | 378 | 2,408 | 2,150 | 1,005 | 331 | [card](cards/sandisk-sn64g-64gb.md) |
-| SanDisk MAX Endurance 32GB | **76** | 1,036 | 367 | 2,407 | 2,154 | 998 | 330 | [card](cards/sandisk-sh32g-32gb.md) |
-| SanDisk Switch 128GB | **75** | 1,016 | 378 | 2,406 | 2,152 | 887 | 332 | [card](cards/sandisk-sn128-128gb.md) |
-| WD Purple 64GB | **74** | 990 | 362 | 2,403 | 2,148 | 920 | 333 | [card](cards/sandisk-wx64g-64gb.md) |
-| Gigastone Camera+ 64GB | **72** | 1,091 | 293 | 2,134 | 2,142 | 915 | 349 | [card](cards/gigastone-astc-64gb.md) |
-| Samsung EVO 128GB | **70** | 835 | 323 | 2,348 | 2,110 | 914 | 425 | [card](cards/samsung-gd4qt-128gb.md) |
-| SanDisk Industrial 16GB | **68** | 869 | 264 | 2,387 | 2,166 | 824 | 235 | [card](cards/sandisk-sa16g-16gb.md) |
-| Gigastone HE 16GB | **53** | 659 | 109 | 2,090 | 1,868 | 576 | 143 | [card](cards/gigastone-sd16g-16gb.md) |
-| PNY 16GB | **52** | 747 | 192 | 2,376 | 1,037 | 734 | 50 | [card](cards/pny-sd16g-16gb.md) |
+| Amazon Basics 64GB | **99** | 1,386 | **774** | 2,425 | 2,305 | 1,245 | **846** | [card](../cards/amazon-basics-usd00-64gb.md) |
+| Samsung PRO Endurance 128GB | **98** | 1,419 | 758 | **2,427** | **2,319** | **1,283** | 617 | [card](../cards/samsung-jd1y7-128gb.md) |
+| Lexar Blue 128GB | **91** | **1,444** | 616 | 2,420 | 2,275 | 819 | 680 | [card](../cards/lexar-mssd0-128gb.md) |
+| Lexar V30 64GB | **88** | 1,378 | 433 | 2,376 | 2,251 | 1,239 | 674 | [card](../cards/lexar-mssd0-64gb.md) |
+| SanDisk Extreme PRO 64GB | **80** | 1,101 | 437 | 2,408 | 2,210 | 998 | 428 | [card](../cards/sandisk-aggce-64gb.md) |
+| SanDisk Extreme PRO 128GB | **78** | 1,103 | 445 | 2,408 | 2,140 | 842 | 427 | [card](../cards/sandisk-aggcf-128gb.md) |
+| SanDisk Extreme 64GB | **76** | 1,040 | 378 | 2,408 | 2,150 | 1,005 | 331 | [card](../cards/sandisk-sn64g-64gb.md) |
+| SanDisk MAX Endurance 32GB | **76** | 1,036 | 367 | 2,407 | 2,154 | 998 | 330 | [card](../cards/sandisk-sh32g-32gb.md) |
+| SanDisk Switch 128GB | **75** | 1,016 | 378 | 2,406 | 2,152 | 887 | 332 | [card](../cards/sandisk-sn128-128gb.md) |
+| WD Purple 64GB | **74** | 990 | 362 | 2,403 | 2,148 | 920 | 333 | [card](../cards/wd-wx64g-64gb.md) |
+| Gigastone Camera+ 64GB | **72** | 1,091 | 293 | 2,134 | 2,142 | 915 | 349 | [card](../cards/gigastone-astc-64gb.md) |
+| Samsung EVO 128GB | **70** | 835 | 323 | 2,348 | 2,110 | 914 | 425 | [card](../cards/samsung-gd4qt-128gb.md) |
+| SanDisk Industrial 16GB | **68** | 869 | 264 | 2,387 | 2,166 | 824 | 235 | [card](../cards/sandisk-sa16g-16gb.md) |
+| Gigastone HE 16GB | **53** | 659 | 109 | 2,090 | 1,868 | 576 | 143 | [card](../cards/gigastone-sd16g-16gb.md) |
+| PNY 16GB | **52** | 747 | 192 | 2,376 | 1,037 | 734 | 50 | [card](../cards/pny-sd16g-16gb.md) |
 
 **Best Read**: Samsung PRO Endurance 128GB — fastest single-sector (1,283 KB/s) and raw multi-sector reads (2,427 KB/s); Lexar Blue 128GB — fastest file-level reads (1,444 KB/s).
 **Best Write**: Amazon Basics 64GB — fastest single-sector writes (846 KB/s) and file-level writes (774 KB/s); Samsung PRO Endurance 128GB — fastest raw multi-sector writes (2,319 KB/s).

@@ -333,49 +333,49 @@ Each card has a dedicated page with full register dumps, field-by-field decode, 
 
 **Rating A** - Video-optimized:
 
-**SanDisk Extreme 64GB SDXC** — [sandisk-sn64g-64gb.md](cards/sandisk-sn64g-64gb.md)
+**SanDisk Extreme 64GB SDXC** — [sandisk-sn64g-64gb.md](sandisk-sn64g-64gb.md)
 ```
 SanDisk SN64G SDXC 59GB [FAT32] SD 6.x rev8.6 SN:$7E65_0771 2022/11
 Class 10, U3, A2, V30, SPI 25 MHz  [P2FMTER]
 ```
 
-**SanDisk Nintendo Switch 128GB SDXC** — [sandisk-sn128-128gb.md](cards/sandisk-sn128-128gb.md)
+**SanDisk Nintendo Switch 128GB SDXC** — [sandisk-sn128-128gb.md](sandisk-sn128-128gb.md)
 ```
 SanDisk SN128 SDXC 119GB [FAT32] SD 6.x rev8.0 SN:F79E34F6 2019/12
 Class 10, U3, A2, V30, SPI 25 MHz  [P2FMTER]
 ```
 
-**Lexar MicroSD XC A1 V30 U3 64GB** — [lexar-mssd0-64gb.md](cards/lexar-mssd0-64gb.md)
+**Lexar MicroSD XC A1 V30 U3 64GB** — [lexar-mssd0-64gb.md](lexar-mssd0-64gb.md)
 ```
 Lexar MSSD0 SDXC 58GB [FAT32] SD 6.x rev6.1 SN:33549024 2024/11
 Class 10, U3, A2, V30, SPI 25 MHz  [P2FMTER]
 ```
 
-**Lexar PLAY A2 128GB SDXC** — [lexar-mssd0-128gb.md](cards/lexar-mssd0-128gb.md)
+**Lexar PLAY A2 128GB SDXC** — [lexar-mssd0-128gb.md](lexar-mssd0-128gb.md)
 ```
 Lexar MSSD0 SDXC 117GB [FAT32] SD 6.x rev6.1 SN:34490F1E 2025/04
 Class 10, U3, A2, V30, SPI 25 MHz  [formatted by P2FMTER]
 ```
 
-**Samsung PRO Endurance 128GB SDXC** — [samsung-jd1y7-128gb.md](cards/samsung-jd1y7-128gb.md)
+**Samsung PRO Endurance 128GB SDXC** — [samsung-jd1y7-128gb.md](samsung-jd1y7-128gb.md)
 ```
 Samsung JD1Y7 SDXC 119GB [FAT32] SD 6.x rev3.0 SN:D27654A6 2025/12
 Class 10, U3, A2, V30, SPI 25 MHz  [P2FMTER]
 ```
 
-**Amazon Basics 64GB SDXC** — [amazon-basics-usd00-64gb.md](cards/amazon-basics-usd00-64gb.md)
+**Amazon Basics 64GB SDXC** — [amazon-basics-usd00-64gb.md](amazon-basics-usd00-64gb.md)
 ```
 Longsys/Lexar USD00 SDXC 58GB [FAT32] SD 6.x rev2.0 SN:$3584_1E2E 2025/07
 Class 10, U3, A2, V30, SPI 25 MHz  [P2FMTER]
 ```
 
-**SanDisk MAX Endurance 32GB SDHC** — [sandisk-sh32g-32gb.md](cards/sandisk-sh32g-32gb.md)
+**SanDisk MAX Endurance 32GB SDHC** — [sandisk-sh32g-32gb.md](sandisk-sh32g-32gb.md)
 ```
 SanDisk SH32G SDHC 29GB [FAT32] SD 6.x rev8.0 SN:$5BFE_CCD8 2025/08
 Class 10, U3, A2, V30, SPI 25 MHz  [P2FMTER]
 ```
 
-**Western Digital WD Purple QD101 64GB SDXC** — [wd-wx64g-64gb.md](cards/wd-wx64g-64gb.md)
+**Western Digital WD Purple QD101 64GB SDXC** — [wd-wx64g-64gb.md](wd-wx64g-64gb.md)
 ```
 SanDisk WX64G SDXC 59GB [FAT32] SD 6.x rev8.0 SN:$EEBA_D6C0 2024/03
 Class 10, U1, A2, V10, SPI 25 MHz  [P2FMTER]
@@ -383,37 +383,37 @@ Class 10, U1, A2, V10, SPI 25 MHz  [P2FMTER]
 
 **Rating B** - Fast:
 
-**Silicon Power Elite 64GB SDXC** — [siliconpower-spcc-64gb.md](cards/siliconpower-spcc-64gb.md)
+**Silicon Power Elite 64GB SDXC** — [siliconpower-spcc-64gb.md](siliconpower-spcc-64gb.md)
 ```
 SharedOEM SPCC SDXC 57GB [FAT32] SD 6.x rev0.7 SN:00940105 2025/07
 Class 10, U3, A1, V30, SPI 25 MHz  [P2FMTER]
 ```
 
-**Samsung EVO Select 128GB SDXC** — [samsung-gd4qt-128gb.md](cards/samsung-gd4qt-128gb.md)
+**Samsung EVO Select 128GB SDXC** — [samsung-gd4qt-128gb.md](samsung-gd4qt-128gb.md)
 ```
 Samsung GD4QT SDXC 119GB [FAT32] SD 3.x rev3.0 SN:C0305565 2018/05
 Class 10, U3, SPI 25 MHz  [formatted by P2FMTER]
 ```
 
-**SanDisk Extreme PRO 128GB SDXC** — [sandisk-aggcf-128gb.md](cards/sandisk-aggcf-128gb.md)
+**SanDisk Extreme PRO 128GB SDXC** — [sandisk-aggcf-128gb.md](sandisk-aggcf-128gb.md)
 ```
 SanDisk AGGCF SDXC 119GB [FAT32] SD 5.x rev8.0 SN:E05C352B 2017/07
 Class 10, U3, V30, SPI 25 MHz  [formatted by P2FMTER]
 ```
 
-**SanDisk Extreme PRO 64GB SDXC** — [sandisk-aggce-64gb.md](cards/sandisk-aggce-64gb.md)
+**SanDisk Extreme PRO 64GB SDXC** — [sandisk-aggce-64gb.md](sandisk-aggce-64gb.md)
 ```
 SanDisk AGGCE SDXC 59GB [FAT32] SD 5.x rev8.0 SN:DD1C1144 2017/03
 Class 10, U3, V30, SPI 25 MHz  [formatted by P2FMTER]
 ```
 
-**Gigastone "Camera Plus" 64GB SDXC** — [gigastone-astc-64gb.md](cards/gigastone-astc-64gb.md)
+**Gigastone "Camera Plus" 64GB SDXC** — [gigastone-astc-64gb.md](gigastone-astc-64gb.md)
 ```
 Gigastone ASTC SDXC 58GB [FAT32] SD 6.x rev2.0 SN:00000F14 2023/06
 Class 10, U3, V30, SPI 25 MHz  [formatted by P2FMTER]
 ```
 
-**SanDisk Industrial 16GB SDHC** — [sandisk-sa16g-16gb.md](cards/sandisk-sa16g-16gb.md)
+**SanDisk Industrial 16GB SDHC** — [sandisk-sa16g-16gb.md](sandisk-sa16g-16gb.md)
 ```
 SanDisk SA16G SDHC 14GB [FAT32] SD 5.x rev8.0 SN:93E9C0A1 2025/11
 Class 10, U1, V10, SPI 25 MHz
@@ -421,45 +421,45 @@ Class 10, U1, V10, SPI 25 MHz
 
 **Rating C** - Standard:
 
-**Gigastone 32GB SDHC** — [gigastone-00000-32gb.md](cards/gigastone-00000-32gb.md)
+**Gigastone 32GB SDHC** — [gigastone-00000-32gb.md](gigastone-00000-32gb.md)
 ```
 Gigastone 00000 SDHC 29GB [FAT32] SD 3.x rev0.0 SN:000001C9 2023/07
 Class 10, U1, V10, SPI 25 MHz  [formatted by P2FMTER]
 ```
 
-**Gigastone "High Endurance" 8GB SDHC MLC** — [gigastone-00000-8gb.md](cards/gigastone-00000-8gb.md)
+**Gigastone "High Endurance" 8GB SDHC MLC** — [gigastone-00000-8gb.md](gigastone-00000-8gb.md)
 ```
 Gigastone 00000 SDHC 7GB [FAT32] SD 3.x rev0.0 SN:0001B9D5 2021/09
 Class 10, U1, V10, SPI 25 MHz  [formatted by P2FMTER]
 ```
 
-**Gigastone "High Endurance" 16GB SDHC MLC** — [gigastone-sd16g-16gb.md](cards/gigastone-sd16g-16gb.md)
+**Gigastone "High Endurance" 16GB SDHC MLC** — [gigastone-sd16g-16gb.md](gigastone-sd16g-16gb.md)
 ```
 Budget OEM SD16G SDHC 14GB [FAT32] SD 3.x rev2.0 SN:000003FB 2025/02
 Class 10, U1, V10, SPI 25 MHz  [formatted by P2FMTER]
 ```
 
-**Kingston 8GB SDHC** — [kingston-sd8gb-8gb.md](cards/kingston-sd8gb-8gb.md)
+**Kingston 8GB SDHC** — [kingston-sd8gb-8gb.md](kingston-sd8gb-8gb.md)
 ```
 Kingston SD8GB SDHC 7GB [FAT32] SD 3.x rev3.0 SN:43F65DC9 2015/04
 Class 10, U1, SPI 25 MHz
 ```
 
-**"Chinese Made" #1 8GB SDHC (claims SanDisk)** — [sandisk-su08g-8gb.md](cards/sandisk-su08g-8gb.md) — **SUSPECT COUNTERFEIT, needs empirical re-characterization**
+**"Chinese Made" #1 8GB SDHC (claims SanDisk)** — [sandisk-su08g-8gb.md](sandisk-su08g-8gb.md) — **SUSPECT COUNTERFEIT, needs empirical re-characterization**
 ```
 SanDisk SU08G SDHC 7GB [FAT32] SD 3.x rev8.0 SN:0AA81F11 2010/10
 Class 4, SPI 25 MHz
 ```
 > CID alone looks legitimate (MID `$03` SanDisk + PNM `SU08G` matches SanDisk product code conventions). Catalog flag is from physical-card suspicion. Counterfeit classifier requires empirical follow-up (`cardWarnings()`, TRAN_SPEED-vs-probe check) to confirm or refute.
 
-**"Chinese Made" #2 8GB SDHC (Samsung inside)** — [samsung-00000-8gb.md](cards/samsung-00000-8gb.md) — **LIKELY COUNTERFEIT (classifier score 6)**
+**"Chinese Made" #2 8GB SDHC (Samsung inside)** — [samsung-00000-8gb.md](samsung-00000-8gb.md) — **LIKELY COUNTERFEIT (classifier score 6)**
 ```
 Samsung 00000 SDHC 7GB [FAT16] SD 3.x rev1.0 SN:D9FB539C 2014/08
 Class 6, SPI 25 MHz
 ```
 > Counterfeit indicators firing: PNM is `"00000"` placeholder (+2), and **Samsung MID `$1B` with placeholder PNM is brand/PNM mismatch** (+4). Real Samsung cards use real product codes (`GD4QT`, `JD1Y7`). The silicon claims Samsung but the conventions don't match — strong forged-silicon tell.
 
-**SanDisk 8GB SDHC (Taiwan)** — [sandisk-ss08g-8gb.md](cards/sandisk-ss08g-8gb.md)
+**SanDisk 8GB SDHC (Taiwan)** — [sandisk-ss08g-8gb.md](sandisk-ss08g-8gb.md)
 ```
 SanDisk SS08G SDHC 7GB [FAT32] SD 3.x rev3.0 SN:DAAEE8AD 2015/09
 Class 4, SPI 25 MHz
@@ -467,7 +467,7 @@ Class 4, SPI 25 MHz
 
 **Rating D** - Limited:
 
-**PNY 16GB SDHC** — [pny-sd16g-16gb.md](cards/pny-sd16g-16gb.md)
+**PNY 16GB SDHC** — [pny-sd16g-16gb.md](pny-sd16g-16gb.md)
 ```
 Phison SD16G SDHC 14GB [FAT32] SD 3.x rev3.0 SN:$01CD_5CF5 2018/08
 Class 4, U0, V0, SPI 25 MHz  [P2FMTER]
@@ -475,13 +475,13 @@ Class 4, U0, V0, SPI 25 MHz  [P2FMTER]
 
 **Rating E** - SDSC (counterfeit class):
 
-**"Lerdisk" 1GB SDSC (counterfeit twin of Cloudisk)** — [lerdisk-asdfg-1gb.md](cards/lerdisk-asdfg-1gb.md)
+**"Lerdisk" 1GB SDSC (counterfeit twin of Cloudisk)** — [lerdisk-asdfg-1gb.md](lerdisk-asdfg-1gb.md)
 ```
 Unknown asdfg SDSC 960MB [FAT32] SD 1.x rev2.2 SN:$0000_01F4 2025/12
 Class 10, U1, V0, SPI 21 MHz  [P2FMTER]
 ```
 
-**"Cloudisk" 2GB SDSC (counterfeit twin of Lerdisk)** — [cloudisk-asdfg-2gb.md](cards/cloudisk-asdfg-2gb.md)
+**"Cloudisk" 2GB SDSC (counterfeit twin of Lerdisk)** — [cloudisk-asdfg-2gb.md](cloudisk-asdfg-2gb.md)
 ```
 Unknown asdfg SDSC 1GB [FAT32] SD 1.x rev2.2 SN:$0000_1680 2025/11
 Class 4, U0, V0, SPI 21 MHz  [P2FMTER]

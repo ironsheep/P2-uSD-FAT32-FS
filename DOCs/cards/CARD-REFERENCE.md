@@ -155,7 +155,7 @@ SharedOEM SPCC SDXC 57GB [FAT32] SD 6.x rev0.7 SN:00940105 2025/07
 Class 10, U3, A1, V30, SPI 25 MHz  [P2FMTER]
 ```
 
-**STATUS: BLOCKED** — CMD18 multi-block read times out; mount fails. See [card file](cards/siliconpower-spcc-64gb.md) and PUNCH-LIST.md.
+**STATUS: BLOCKED** — CMD18 multi-block read times out; mount fails. See [card file](siliconpower-spcc-64gb.md) and PUNCH-LIST.md.
 
 ---
 

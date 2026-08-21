@@ -6,7 +6,7 @@
 - PNY 16GB SDHC (Phison controller, MID=$27, CID: Phison SD16G) — **FAILS at hp=8**
 - Gigastone 32GB SDHC (Transcend controller, MID=$74, CID: Transcend 00000, SN:$0000_01C7) — **FAILS at hp=8**
 - Silicon Power Elite 64GB SDXC (SharedOEM, MID=$9F, CID: SPCC 0.7, SN:$0094_0105) — **PASSES hp=8**
-**Related**: [PNY-MICROSD-SPI-ISSUES.md](PNY-MICROSD-SPI-ISSUES.md), [TX-TRANSITION-INVESTIGATION](Archive/TX-TRANSITION-INVESTIGATION.md), [STREAMER-SPI-TIMING](../Decisions/STREAMER-SPI-TIMING.md), CARD-CATALOG.md
+**Related**: [PNY-MICROSD-SPI-ISSUES.md](../PNY-MICROSD-SPI-ISSUES.md), TX-TRANSITION-INVESTIGATION (2026-02-16, retained locally), [STREAMER-SPI-TIMING](../../Decisions/STREAMER-SPI-TIMING.md), CARD-CATALOG.md
 
 ---
 
@@ -211,7 +211,7 @@ Key parameters:
 
 ## 5. Prior Art: TX-TRANSITION-INVESTIGATION (2026-02-16)
 
-The `align_delay = spi_period - 2` formula was established in the [TX Transition Investigation](Archive/TX-TRANSITION-INVESTIGATION.md) to fix a **1-bit right-shift** on SanDisk Industrial cards. The timing model from that investigation:
+The `align_delay = spi_period - 2` formula was established in the TX Transition Investigation (2026-02-16, retained locally) to fix a **1-bit right-shift** on SanDisk Industrial cards. The timing model from that investigation:
 
 ```
 First data bit appears at: T = 2 * spi_period  (from xinit)

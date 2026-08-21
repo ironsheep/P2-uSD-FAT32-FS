@@ -36,6 +36,7 @@ src/HARDWARE_AUDIT/
 DOCs/Plans/archive/
 DOCs/Plans/ext-agents/
 DOCs/Analysis/Archive/
+DOCs/Archive/
 DOCs/Decisions/archive/
 DOCs/Research/Archive/
 
@@ -257,3 +258,4 @@ DOCs/Plans/archive/*Closeout*.md
 DOCs/Plans/archive/SPRINT-*.md
 DOCs/Plans/PLAN-AUTHORING-GUIDE-AUDIT.md
 DOCs/Archive/BENCHMARK-RESULTS-AGENT.md
+DOCs/REF-NO-COMMIT/

@@ -412,7 +412,7 @@ So: top-level = 4 B, driver = 8 B, stack checker = 0 B, utilities = 32 B of VAR.
 
 ## 8. Sizing Audit Methodology
 
-This section describes the process used to produce the [Driver Memory Footprint Analysis](../Plans/DRIVER-MEMORY-FOOTPRINT.md) for this project. Follow this methodology to audit any Spin2 project.
+This section describes the process used to produce the Driver Memory Footprint Analysis (archived working document, retained locally) for this project. Follow this methodology to audit any Spin2 project.
 
 ### Step 1: Isolate the Object Under Study
 

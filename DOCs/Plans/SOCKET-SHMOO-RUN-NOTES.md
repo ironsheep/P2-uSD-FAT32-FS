@@ -3674,3 +3674,97 @@ uninterrupted run rather than a conversation:
 **And the standing rule this session re-proved twice:** any driver change means an
 atomic re-certification — 534/534 on **both** geometries with clean closing
 audits — *before* the catalog parade, not after.
+
+---
+
+## 4j — suite re-baseline to 535: GREEN on both geometries, and the #39 diagnosis CONFIRMED on hardware
+
+**Run date:** 2026-08-20. **Tree:** `v1.7.0-55-g2c84bad`, **clean stamp on both
+sweeps** — no `-dirty`, so both results tie to a commit. Suites at `35ca016`;
+**driver still `00a8d45`**, verified per the step
+(`git log --oneline -1 -- src/micro_sd_fat32_fs.spin2`). The 4h driver
+certification therefore stands; this is a suite re-baseline only.
+
+### 4j.1 — the three changed suites, individually (Gigastone HE 8 GB)
+
+| Suite | Result | The check the step asked about |
+|---|---|---|
+| `SD_RT_mount_tests` | **45 / 0** | #39 declares **7** sub-checks; `valid FSInfo planted (precondition)` present and passing |
+| `SD_RT_seek_tests` | **38 / 0** | `cleanup deleteFile()` returns SUCCESS — no `-45 E_FILE_OPEN`, handle no longer leaks |
+| `SD_RT_defrag_tests` | **14 / 0** | New Test #10 `Bystander file intact after compacting a fragmented file` ran; all five sub-checks passed, including `bystander bytes unchanged by the compaction` |
+
+No `SUB-CHECK SHORTFALL` in any of the three transcripts — the framework's own
+proof that every declared check executed, so the silent passes are real passes
+and not skipped ones. **The hard-stop condition (bystander failing) did not fire.**
+
+### 4j.2 — the defect card: `$0001_9B39` now passes, 45 / 0
+
+The card that returned **44 / 1 on four consecutive runs** this morning returns
+**45 / 0**. Test #39 passes as a single 7-check record with no `Sub-FAIL` and no
+shortfall. Identity re-confirmed after the run:
+`Unknown asdfg SDSC 1GB [FAT32] SD 1.x rev2.2 SN:$0001_9B39 2025/11`,
+`cardWarnings() = $04`. Flash banner present.
+
+**The container's diagnosis is confirmed on hardware, and both bench-side
+candidate mechanisms were wrong.** For the record, because the near-miss is the
+instructive part:
+
+- *Bench mechanism 1* (unscored `createFileNew` precondition) — dead.
+  `do_unmount()` calls `updateFSInfo()` unconditionally; there is no dirty gate,
+  so that block never influenced the outcome.
+- *Bench mechanism 2* (a real `unmount()` validation miss) — dead, and this is
+  the half that matters: **the driver was correct throughout.**
+
+The real gate is `updateFSInfo()` returning early on the `fsi_free_count ==
+$FFFF_FFFF` sentinel, which `do_mount()` sets whenever it will not accept the
+FSInfo sector. On this card there was genuinely nothing to write back, so
+`SUCCESS` was right and `E_BAD_FSINFO` was **unreachable by construction**.
+
+> **Lesson worth keeping:** the test *did* score "FSInfo sector located" and the
+> bench read that as the precondition being established. It is not the same
+> thing. Locating a sector through the VBR pointer says nothing about whether the
+> driver accepted it. A precondition is only established when the thing that
+> consumes it agrees — and on two regression cards it happened to agree, which is
+> why this test passed for four months without ever being right.
+
+### 4j.3 — the new baseline, both geometries
+
+| Card | Geometry | Total | Time | Closing audit |
+|---|---|---|---|---|
+| Gigastone HE 8 GB `$0001_B9D5` | 8 sec/cluster | **535 / 0** | 573 s | clean |
+| Amazon Basics 64 GB `$3584_1E2E` | 64 sec/cluster | **535 / 0** | 364 s | clean |
+
+Transcripts `tools/logs/sweep535_HE8GB_260820.txt`,
+`tools/logs/sweep535_AmazonBasics64_260820.txt`; both cards confirmed by the
+sweeps' own preflight identify. **535 is the roster from here.**
+
+The new bystander test has now run on the 8-sectors/cluster geometry — the one
+where the freed-live-chain defect actually lived — which was the reason the step
+asked for both arms.
+
+### Correction to the run sheet's SESSION STATE
+
+It says `run_regression.sh` *"enforces a pristine tree and will abort."* **It does
+not abort.** It stamps `Tree: …-dirty` and prints *"Commit before a certifying
+run"*, then proceeds (see the TREE PROVENANCE block, `run_regression.sh:700`).
+The distinction matters: nothing mechanically stops a dirty certifying sweep, so
+the discipline has to come from the operator. Stephen committed before both
+sweeps here and both stamps are clean. Note also that `git describe --dirty`
+sees **tracked** files only — untracked drafts in the tree do not dirty the stamp.
+
+---
+
+## ⏸ BENCH PAUSED again — 4j closed, step 5 still ON HOLD
+
+Standing instruction from Stephen (2026-08-20) is unchanged and was not
+re-litigated: **the step 5 / 16c catalog parade does not run until every remaining
+fix and its tests are specified and everything else is release-ready.** 4j closed
+the last open bench finding; nothing here changes that ordering.
+
+| | |
+|---|---|
+| Roster | **535 / 0**, both geometries, clean closing audits, clean tree stamp |
+| Driver | `00a8d45`, untouched — 4h certification intact |
+| Open bench findings | **none** |
+| Cards | all unloaded and clean; `$0001_9B39` FSInfo written and restored by #39, verified |
+| Still owed (container) | card records for `$0000_0E2F`, `$0000_01C7`; `$0001_9B39` catalogable from these notes; the dead "External only" claims on both `asdfg` records; the control-arm decision that gates case-study §11 |
