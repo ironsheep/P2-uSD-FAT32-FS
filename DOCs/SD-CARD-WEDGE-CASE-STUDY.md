@@ -358,9 +358,19 @@ Five clean warm runs across two power cycles. In both pairs the unmodified build
 
 ## 7. Limitations
 
-**Limitation:** the fix is controlled on one card and consistent on three. The interleaved controls of §6.2 were run on the Lerdisk. By the time both Cloudisks were run, the quiesce was unconditional in `initCard()` with no compile-time or debug-time means of omitting it, so no same-session unmodified arm could be built. Nothing in those runs demonstrates that those two cards still retained the capacity to wedge that day. Read the claim as *controlled on one card, consistent on two more that demonstrably carry the same defect*.
+**Limitation:** the strength of the evidence differs by card, and the difference is worth stating rather than averaging.
 
-**More to do:** the controls in §6.2 worked by running the *unfixed* build on the same card, minutes later, in the same session — which proved the card still had the capacity to wedge and simply did not. That comparison cannot be built on the two Cloudisks, because by the time they ran, the quiesce was unconditional in `initCard()` with no way to compile it out. A diagnostic-only switch to disable it would restore the comparison: run each twin clean with the quiesce, then immediately again without it, and watch it wedge. Both cards are retained and it is one extra run each. Nothing about the fix depends on this — §6.2's controls are what establish it — but it is the only thing that would let this paragraph be deleted.
+| Card | What establishes it would have wedged | |
+|---|---|---|
+| Lerdisk `$0000_01F4` | the interleaved controls of §6.2 — the unfixed build run on the same card, minutes later, in the same session | strongest |
+| Cloudisk `$0000_1680` | wedged 19/24 under the reproducer before the fix, clean 45/45 across four warm runs and two power cycles after it, with the boot configuration verified armed on both occasions | strong |
+| Cloudisk `$0001_9B39` | silicon identity with the two above: same PNM, MID and PRV, same `$00` CRC7 anomaly, same `CW_NO_DATA_CRC` flag, manufactured the same month | weakest |
+
+The third card was never put through the reproducer before the fix. Its earlier appearances were a read-only frequency sweep and a write probe, and round 5 established that the write probe does not reproduce this fault on any card, including the proven wedger. So the missing "before" is a gap in what was run, not an observation that the card behaves differently.
+
+One residual applies to `$0000_1680`: the driver gained more than the quiesce between its pre-fix and post-fix runs, so its before/after establishes that *this build* does not wedge it. Attributing that to the quiesce specifically rests on the Lerdisk's same-session control and on the mechanism in §4.3.
+
+A same-session control arm remains buildable at any time — the quiesce is one call at `initCard()` step 3.9, and a scratch build with it commented out gives a true single-variable comparison. It is not recorded here as owed work, because a third instance of one controller design would test the mechanism no further than the first two did. What is missing from this report is not another card of this class; it is a wedging card of a *different* class, and that is the limitation below.
 
 **Limitation:** the boot-time traffic has not been captured. The mechanism in §4.2 is inferred from the pin-role table and the behavioral evidence, not observed on a wire. The Edge module's socket has no exposed test points, and a logic analyzer can attach only to the external header, which is the side that does not fail. The card controller's actual state — mid-read, mid-write, or a state a conforming card would not enter — is unknown; what is known is that CMD12 is what leaves it.
 
