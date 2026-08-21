@@ -71,8 +71,12 @@ jobs:
           cp DOCs/ERROR-HANDLING-GUIDE.md "${DEST}/DOCs/"
           cp DOCs/SPI-PHASE-MARGIN-API.md "${DEST}/DOCs/"
           cp DOCs/DRIVER-EVOLUTION-v1.6.0-to-v1.7.0.md "${DEST}/DOCs/"
-          cp DOCs/SD-CARD-WEDGE-CASE-STUDY.md "${DEST}/DOCs/"
-          cp DOCs/SD-SOCKET-TIMING-CASE-STUDY.md "${DEST}/DOCs/"
+
+          # DOCs/Research/ - findings that outlive this driver; enumerated,
+          # not wholesale: support/ and the working material stay out of the bundle
+          mkdir -p "${DEST}/DOCs/Research"
+          cp DOCs/Research/SD-CARD-WEDGE-CASE-STUDY.md "${DEST}/DOCs/Research/"
+          cp DOCs/Research/SD-SOCKET-TIMING-CASE-STUDY.md "${DEST}/DOCs/Research/"
 
           # DOCs/images/ - card photos for purchase recommendations
           mkdir -p "${DEST}/DOCs/images"

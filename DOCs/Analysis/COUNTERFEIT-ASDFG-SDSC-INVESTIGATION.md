@@ -8,7 +8,7 @@
 > August 2026 to boot-time traffic on pins the microSD socket shares with the boot
 > flash, and is fixed by a CMD12 before CMD0 at card initialization.
 >
-> **The finished account is [`../SD-CARD-WEDGE-CASE-STUDY.md`](../SD-CARD-WEDGE-CASE-STUDY.md).**
+> **The finished account is [`../Research/SD-CARD-WEDGE-CASE-STUDY.md`](../Research/SD-CARD-WEDGE-CASE-STUDY.md).**
 > Read this log for the evidence and the false trails; read the case study for what
 > is true.
 

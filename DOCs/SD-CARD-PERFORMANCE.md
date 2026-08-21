@@ -460,7 +460,7 @@ What this means in practice:
 Measurement conditions: 350 MHz sysclk (plus a 290–336 MHz sysclk ladder to
 place cells between the 350 MHz frequency grid points), sector reads scored by
 CRC and byte-compare against a low-speed reference, ±1 sysclk tick (2.857 ns)
-resolution. The full account, including the method and its limits, is in [Socket Timing Characterization](SD-SOCKET-TIMING-CASE-STUDY.md).
+resolution. The full account, including the method and its limits, is in [Socket Timing Characterization](Research/SD-SOCKET-TIMING-CASE-STUDY.md).
 
 ---
 

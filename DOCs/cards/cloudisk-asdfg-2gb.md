@@ -18,7 +18,7 @@
 > fixes it with a CMD12 before CMD0 at card initialization, and this card's twin
 > has since run the full reproducer clean in the Edge socket.
 >
-> Full account: [`../SD-CARD-WEDGE-CASE-STUDY.md`](../SD-CARD-WEDGE-CASE-STUDY.md).
+> Full account: [`../Research/SD-CARD-WEDGE-CASE-STUDY.md`](../Research/SD-CARD-WEDGE-CASE-STUDY.md).
 >
 > **The restriction is now WITHDRAWN.** This card ran the Edge-socket reproducer
 > clean on the v1.8.0 build on 2026-08-20 — `SD_RT_mount_tests` **45/45** and

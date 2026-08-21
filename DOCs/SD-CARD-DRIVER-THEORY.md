@@ -648,7 +648,7 @@ characterized in the card state where it actually occurs.
 
 **CRC does not referee this failure on every card.** Cards in the dummy-data-CRC quirk class (`CW_NO_DATA_CRC`) return a constant in the CRC position, so a one-bit-shifted payload from such a card raises no CRC error — the corruption is silent. Detecting misalignment on these cards requires comparing a streamer read against a byte-by-byte smart-pin read of the same sector, which is how the characterization instruments (`diagnostic-tests/SD_socket_shmoo.spin2`, `SD_phase_sweep_test.spin2`) score them. This is why any alignment mitigation must be proactive (measure the band, sit inside it) rather than reactive to CRC errors.
 
-Measurement conditions for all numbers above: 350 MHz sysclk except where noted, sector reads scored by CRC compare and byte-compare against a low-speed reference, ±1 sysclk tick resolution. The full account, including the method and its limits, is in [Socket Timing Characterization](SD-SOCKET-TIMING-CASE-STUDY.md).
+Measurement conditions for all numbers above: 350 MHz sysclk except where noted, sector reads scored by CRC compare and byte-compare against a low-speed reference, ±1 sysclk tick resolution. The full account, including the method and its limits, is in [Socket Timing Characterization](Research/SD-SOCKET-TIMING-CASE-STUDY.md).
 
 ## Card Identification and Adaptive Timing
 
