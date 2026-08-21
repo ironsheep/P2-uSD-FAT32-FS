@@ -2,7 +2,7 @@
 
 **Label:** [`gigastone-microsd-hc-a1-u1-32gb`](CARD-LABELS.md#gigastone-microsd-hc-a1-u1-32gb) — printed text is mastered there, not here
 **Disposition:** `retained`
-**Physical mark:** `green` — highlighter mark on the card body. PSN-confirmed as GREEN across the socket campaign (its unmarked twin is PSN `$0000_01C7`, which has no record yet).
+**Physical mark:** `violet` — permanent marker on the card body (re-marked 2026-08-20; the earlier green highlighter rubbed off). PSN-confirmed as the marked unit across the socket campaign (its unmarked twin is PSN `$0000_01C7`, which has no record yet).
 **Unique ID:** `Transcend_00000_0.0_000001C9_202307`
 **Test Date:** 2026-02-02 (characterization)
 

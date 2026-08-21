@@ -59,23 +59,48 @@ from a card that has left is an experiment datapoint. Keeping the two apart is w
 keeps the card-record population exactly equal to the re-sweepable population, which
 is what makes the check mechanical.
 
-### Marking identical units: green means catalogued
+### Marking identical units: a violet mark means catalogued
 
 Two units of one product are indistinguishable by eye, and a card record is useless
 if nobody can tell which card in the hand it describes. The convention, already in
 effect for the 32 GB Gigastone pair and now deliberate:
 
-> **A green highlighter mark means: this is the retained, catalogued unit.**
+> **A violet permanent-marker mark means: this is the retained, catalogued unit.**
+
+**Use permanent marker, not highlighter.** The convention was green highlighter
+until 2026-08-20, when a mark rubbed off in handling. A do-not-deploy signal that
+can be wiped away by a thumb is not a signal — a catalogued card reading as
+unmarked is a retained card in the deploy pile. The cards were re-marked in violet
+permanent marker; the colour changed only because the medium had to.
 
 That makes the mark carry information rather than being an arbitrary tiebreak, and
-it doubles as a **do-not-deploy** signal — green is a card committed to the project,
+it doubles as a **do-not-deploy** signal — a marked card is committed to the project,
 and retained cards leave the population only by dying. Cards bearing a mark record
 it in a **`Physical mark:`** line, so the hand-to-record mapping survives outside
 the run notes where it currently lives.
 
 Confirm the mark against the PSN once, in a transcript, and state it in the record.
-The 32 GB pair is the worked example: GREEN is `$0000_01C9`, unmarked is
+The 32 GB pair is the worked example: the marked unit is `$0000_01C9`, unmarked is
 `$0000_01C7`, PSN-confirmed in every socket-campaign run.
+
+### Naming the second unit's record
+
+One record per physical card, not per product — a record that cannot be matched to
+a card in the hand is the thing this section exists to prevent. Record *filenames*,
+however, are product-level (`gigastone-00000-32gb.md`), so a second unit of the same
+product needs a distinguishing name.
+
+> **Suffix the serial: `gigastone-00000-32gb-01C7.md`.**
+
+The serial is what every transcript keys on, it is already the disambiguator this
+section relies on, and unlike the physical mark it cannot change — the mark's colour
+and medium have both changed once already. Do not suffix with the mark or with
+"unmarked" for that reason. A dated suffix means something else and is taken:
+`gigastone-00000-32gb-recert-2026-05-24.md` is the *same* unit re-measured.
+
+Both records of a pair reference the same `CARD-LABELS.md` entry; the label master
+is product-level and `tools/check_card_labels.sh` requires only that each entry be
+referenced by at least one record.
 
 Every card record therefore carries a **`Disposition:`** line, validated by
 `tools/check_card_labels.sh`:

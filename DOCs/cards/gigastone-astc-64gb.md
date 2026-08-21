@@ -2,7 +2,7 @@
 
 **Label:** [`gigastone-camera-plus-64gb`](CARD-LABELS.md#gigastone-camera-plus-64gb) — printed text is mastered there, not here
 **Disposition:** `retained`
-**Physical mark:** `green` — highlighter mark to be applied 2026-08-19, following the same convention as the 32 GB pair. Its unmarked twin is also retained and has no record yet.
+**Physical mark:** `violet` — permanent marker, following the same convention as the 32 GB pair (applied 2026-08-19 in green highlighter, re-marked in violet 2026-08-20 after the highlighter proved wipeable). Its unmarked twin is also retained and has no record yet.
 **Unique ID:** `GigastoneOEM_ASTC_2.0_00000F14_202306`
 **Test Date:** 2026-02-25 (characterization + benchmark)
 
