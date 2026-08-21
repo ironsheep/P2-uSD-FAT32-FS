@@ -287,9 +287,18 @@ before any one-shot card goes in the socket.
 
 ## Step 0 — Identify and mark the two retained 64 GB cards — ✅ DONE
 
+> **⚠ MARKING COLOUR CHANGED, 2026-08-20.** The physical cards were re-marked:
+> **what this sheet and the run notes call GREEN is now VIOLET.** The meaning is
+> unchanged — *marked = catalogued and do-not-deploy*, *unmarked = card record
+> owed*. Read every "green" below, and every `GREEN $xxxx_xxxx` in
+> `SOCKET-SHMOO-RUN-NOTES.md`, as the violet-marked unit of that pair. Affected
+> pairs: Gigastone 32 GB (`$0000_01C9` marked / `$0000_01C7` unmarked),
+> Gigastone 64 GB (`$0000_0F14` marked / `$0000_0E2F` unmarked), Cloudisk 2 GB
+> (`$0000_1680` marked / `$0001_9B39` unmarked).
+
 **Completed session 1, re-captured with canonical keys in session 2. Do not repeat —
 the cards are marked and the transcripts are keyed.** Card A (unmarked, record still
-owed) is `$12_ASTC_2.0_00000E2F_202306`; card B (green, catalogued) is
+owed) is `$12_ASTC_2.0_00000E2F_202306`; card B (marked, catalogued) is
 `$12_ASTC_2.0_00000F14_202306`. Same silicon key on both: one product, one silicon.
 Kept below for the reasoning, which the two owed card records will need.
 
@@ -302,16 +311,16 @@ Kept below for the reasoning, which the two owed card records will need.
 
 **READ FIRST, MARK SECOND.**
 
-1. One card reads PSN `$0000_0F14` — the catalogued `GigastoneOEM_ASTC_2.0_00000F14_202306`. **Mark that one green.**
+1. One card reads PSN `$0000_0F14` — the catalogued `GigastoneOEM_ASTC_2.0_00000F14_202306`. **Mark that one** (violet, as of 2026-08-20).
 2. The other is the second retained unit. Its `CARD-ID:` line keys its new card record.
 
-Green then means *catalogued* by construction, matching the 32 GB pair, and it
+The mark then means *catalogued* by construction, matching the 32 GB pair, and it
 doubles as a **do-not-deploy** mark.
 
 **STOP if neither reads `$0000_0F14`** — the catalogued unit is then somewhere in
 the set of five, and marking the wrong card puts a retained card in the deploy pile.
 
-**Record:** both PSNs, which is now green, purchase date/source of each unit.
+**Record:** both PSNs, which one is now marked, purchase date/source of each unit.
 **Owed afterwards:** card records for the unmarked 64 GB *and* for the unmarked
 32 GB `$0000_01C7`, which has carried socket-campaign data since round 5 and still
 has none.
@@ -681,7 +690,7 @@ spanning two driver versions.
 
 ## What "done" looks like
 
-- [x] Step 0: both 64 GB PSNs recorded, `00000F14` marked green
+- [x] Step 0: both 64 GB PSNs recorded, `00000F14` marked (violet since 2026-08-20)
 - [x] Step 1: **534/0 on both geometries** at `00a8d45` (session 6, step 4h) — superseded by 4j's 535 re-baseline
 - [~] Step 2: **deferred** — cell unreachable on the shipped driver; funding the campaign is Stephen's call
 - [~] Step 3: **deferred to after step 6** — no default change in v1.8.0 either way
